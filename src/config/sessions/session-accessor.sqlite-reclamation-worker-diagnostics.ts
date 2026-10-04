@@ -9,6 +9,33 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 const log = createSubsystemLogger("session-sqlite");
 const SLOW_RECLAMATION_WORKER_MS = 1_000;
 
+export type SqliteReclamationWorkerRetirementReason =
+  | "matches-mismatch"
+  | "revoked"
+  | "exclusive-handoff"
+  | "idle-ttl"
+  | "failure"
+  | "pressure";
+
+export function logSqliteReclamationWorkerRetirement(params: {
+  reason: SqliteReclamationWorkerRetirementReason;
+  kind: string;
+  startedAt: number;
+  opsServed: number;
+  workerThreadId?: number;
+}): void {
+  try {
+    const { startedAt, ...details } = params;
+    const ageMs = Math.round(performance.now() - startedAt);
+    log.info(
+      `reclamation worker retired reason=${params.reason} kind=${params.kind} ageMs=${ageMs} opsServed=${params.opsServed}`,
+      { ...details, ageMs },
+    );
+  } catch {
+    // Diagnostics cannot turn settled native cleanup into a failure.
+  }
+}
+
 /** A commit guard saw newer inputs; the caller owns the retry, so the Worker did not fail. */
 export class SqliteReclamationInputsChangedError extends Error {
   constructor(message: string) {

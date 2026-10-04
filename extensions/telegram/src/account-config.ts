@@ -34,3 +34,12 @@ export function mergeTelegramAccountConfig(
     preserveRootAllowFrom: true,
   });
 }
+
+export function resolveTelegramLegacyWebhookListener(
+  configured: TelegramAccountConfig["legacyWebhook"],
+): { port: number; host: string } | undefined {
+  if (!configured) {
+    return undefined;
+  }
+  return { port: configured.port, host: configured.host ?? "127.0.0.1" };
+}

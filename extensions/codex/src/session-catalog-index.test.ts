@@ -196,9 +196,14 @@ describe("resident Codex catalog", () => {
     const f = fixture(3_000);
     const control = await f.make();
     let page = await control.listPage({ limit: 100 });
+    expect(page.sessions).toHaveLength(64);
+    const second = await control.listPage({ limit: 100, cursor: page.nextCursor });
+    expect(second.sessions[0]?.threadId).toBe("thread-064");
     while (page.nextCursor) {
       page = await control.listPage({ limit: 100, cursor: page.nextCursor });
     }
+    expect(f.fetched.flat()).toHaveLength(3_000);
+    expect(Math.max(...f.fetched.map((rows) => rows.length))).toBe(64);
     f.expire();
     const readFile = vi.spyOn(fs, "readFile");
     const open = vi.spyOn(fs, "open");
@@ -213,10 +218,12 @@ describe("resident Codex catalog", () => {
   it.each(["larger limit", "removed rows"])(
     "ends a backward page before its anchor after %s",
     async (change) => {
-      const control = await fixture(90).make();
+      const f = fixture(90);
+      const control = await f.make();
       const limit = change === "larger limit" ? 20 : 64;
       const first = await control.listPage({ limit });
       const second = await control.listPage({ limit, cursor: first.nextCursor });
+      f.fetched.length = 0;
       const removed = change === "removed rows" ? first.sessions.slice(0, 24) : [];
       for (const session of removed) {
         await control.archiveThread(session.threadId);
@@ -225,22 +232,14 @@ describe("resident Codex catalog", () => {
       expect(previous.sessions.map((session) => session.threadId)).toEqual(
         first.sessions.slice(removed.length).map((session) => session.threadId),
       );
+      expect(f.fetched).toEqual([]);
+      expect(
+        commandRpcMocks.codexControlRequest.mock.calls.filter(
+          (call) => call[1] === "thread/archive",
+        ),
+      ).toHaveLength(removed.length);
     },
   );
-
-  it("hydrates the complete home once while retaining 64-row wire pages", async () => {
-    const f = fixture();
-    const control = await f.make();
-    const first = await control.listPage({ limit: 100 });
-    expect(first.sessions).toHaveLength(64);
-    expect(f.fetched.flat()).toHaveLength(160);
-    expect(Math.max(...f.fetched.map((rows) => rows.length))).toBe(64);
-    const calls = f.fetched.length;
-    const second = await control.listPage({ limit: 100, cursor: first.nextCursor });
-    expect(second.sessions).toHaveLength(64);
-    expect(second.sessions[0]?.threadId).toBe("thread-064");
-    expect(f.fetched).toHaveLength(calls);
-  });
 
   it("retains only display-sized previews from large native responses", async () => {
     const f = fixture(80, 1024 * 1024);
@@ -308,21 +307,6 @@ describe("resident Codex catalog", () => {
       (await control.listPage({ cwd: "/workspace/1", searchTerm: " NATIVE " })).sessions,
     ).toHaveLength(4);
     expect(f.fetched).toEqual([]);
-  });
-
-  it("removes an archived thread before the next list without a native re-walk", async () => {
-    const f = fixture();
-    const control = await f.make();
-    await control.listPage({ limit: 100 });
-    f.fetched.length = 0;
-    await control.archiveThread("thread-000");
-    const page = await control.listPage({ limit: 100 });
-    expect(page.sessions[0]?.threadId).toBe("thread-001");
-    expect(page.sessions.some((row) => row.threadId === "thread-000")).toBe(false);
-    expect(f.fetched).toEqual([]);
-    expect(
-      commandRpcMocks.codexControlRequest.mock.calls.filter((call) => call[1] === "thread/archive"),
-    ).toHaveLength(1);
   });
 
   it("reconciles a new rollout with only bounded reads of that file", async () => {

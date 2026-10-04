@@ -3,7 +3,11 @@ import type {
   AgentHarnessSessionDeletionParams,
   AgentHarness,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
+import {
+  wrapNativeSessionDeletionMutation,
+  isNativeSessionDeletionUnresolved,
+} from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -40,7 +44,8 @@ async function releaseSessionSubscription(
   assertCurrent?.();
   // End child ownership before the parent subscription, so late completions
   // cannot deliver into a replacement OpenClaw session generation.
-  codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  await codexNativeSubagentMonitorRuntime.retireParent(client, binding.threadId);
+  assertCurrent?.();
   const released = await releaseCodexAppServerLiveThread(client, binding.threadId, assertCurrent);
   assertCurrent?.();
   if (!released && isIncognitoSessionKey(sessionKey)) {
@@ -124,17 +129,17 @@ export async function withCodexAppServerSessionDeletion<T>(
       let committed = false;
       try {
         assertUnclaimed();
-        return await run({
-          commit() {
-            assertUnclaimed();
-            mutation.commit();
-            committed = true;
-          },
-          rollback() {
-            mutation.rollback();
-            committed = false;
-          },
-        });
+        return await run(
+          wrapNativeSessionDeletionMutation(mutation, {
+            assertCurrent: assertUnclaimed,
+            committed() {
+              committed = true;
+            },
+            rolledBack() {
+              committed = false;
+            },
+          }),
+        );
       } finally {
         try {
           if (committed && rollbackInitialization) {
@@ -168,7 +173,9 @@ export async function withCodexAppServerSessionDeletion<T>(
             });
           }
         } finally {
-          await clientLease?.release();
+          if (!isNativeSessionDeletionUnresolved(mutation)) {
+            await clientLease?.release();
+          }
         }
       }
     });

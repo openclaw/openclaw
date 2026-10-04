@@ -14,6 +14,7 @@ import {
 import { persistedSteerTargetRunId } from "../stream-causal-boundary.ts";
 import {
   readLiveTerminalDisposition,
+  readLiveTerminalRevision,
   readLiveTerminalRunId,
 } from "../terminal-message-identity.ts";
 import {
@@ -64,7 +65,7 @@ function terminalOutcome(message: unknown): "successful" | "settled" | null {
 }
 
 /** Reminders age out of the dock, not out of the conversation or the user's authority. */
-function questionHistory(messages: readonly unknown[]) {
+function readQuestionHistory(messages: readonly unknown[]) {
   const runs = new Map<string, { first: number; last: number; settled?: number }>();
   const userTurns = new Map<string, number>();
   const recoveryStarts = new Map<string, number>();
@@ -212,6 +213,23 @@ function questionHistory(messages: readonly unknown[]) {
     return { question, boundary: boundary?.key };
   });
   return { history, resolved };
+}
+
+// History arrays are replaced, never mutated, but live terminal outcomes land
+// beside them. Rescan only for a new array or terminal outcome, not per render.
+const questionHistories = new WeakMap<
+  readonly unknown[],
+  { revision: number; history: ReturnType<typeof readQuestionHistory> }
+>();
+function questionHistory(messages: readonly unknown[]) {
+  const revision = readLiveTerminalRevision();
+  const cached = questionHistories.get(messages);
+  if (cached?.revision === revision) {
+    return cached.history;
+  }
+  const history = readQuestionHistory(messages);
+  questionHistories.set(messages, { revision, history });
+  return history;
 }
 
 export function createAsyncQuestionPresentation(
@@ -429,7 +447,10 @@ export function createAsyncQuestionPresentation(
       [...resolved].map(([itemId, draft]) => [
         itemId,
         draft.unparsedText,
-        [...draft.answers].map(([questionId, answer]) => [questionId, questionDraftValues(answer)]),
+        [...draft.answers].map(([questionId, answer]) => [
+          questionId,
+          questionDraftValues(answer, {}),
+        ]),
       ]),
       [...delivery].map(([itemId, item]) => [
         itemId,

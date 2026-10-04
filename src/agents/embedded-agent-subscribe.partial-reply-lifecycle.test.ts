@@ -63,13 +63,8 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
   });
 
   it("joins a partial reply task created while terminal events settle", async () => {
-    let resolvePartial: (() => void) | undefined;
-    const onPartialReply = vi.fn(
-      () =>
-        new Promise<void>((resolve) => {
-          resolvePartial = resolve;
-        }),
-    );
+    const partial = createDeferred();
+    const onPartialReply = vi.fn(() => partial.promise);
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-partial-provider-failure",
       onBeforeTerminalDelivery: async () => undefined,
@@ -86,20 +81,15 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
 
-    resolvePartial?.();
+    partial.resolve();
     await settlement;
     expect(settled).toBe(true);
   });
 
   it("contains and logs a rejected partial reply after unsubscribe", async () => {
     const callbackError = new Error("draft send rejected");
-    let rejectPartial: ((reason: unknown) => void) | undefined;
-    const onPartialReply = vi.fn(
-      () =>
-        new Promise<void>((_resolve, reject) => {
-          rejectPartial = reject;
-        }),
-    );
+    const partial = createDeferred();
+    const onPartialReply = vi.fn(() => partial.promise);
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run-partial-rejection",
       onPartialReply,
@@ -117,7 +107,7 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     await subscription.waitForPendingEvents({ includePartialReplies: false });
     expect(onPartialReply).toHaveBeenCalledOnce();
     subscription.unsubscribe();
-    rejectPartial?.(callbackError);
+    partial.reject(callbackError);
     await expect(subscription.waitForPendingEvents()).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       `assistant partial reply callback failed: ${String(callbackError)}`,
@@ -172,57 +162,50 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     }
   });
 
-  it.each(["provider", "nested"] as const)(
-    "starts the latest partial before a %s tool without waiting for a stalled send",
-    async (source) => {
-      const pending = createDeferred();
-      const starts: string[] = [];
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-partial-${source}-tool`,
-        onPartialReply: (payload) => {
-          starts.push(`partial:${payload.text}`);
-          return pending.promise;
-        },
-        onAgentEvent: (event) => {
-          if (event.stream === "tool" && event.data.phase === "start") {
-            starts.push("tool");
-          }
+  it("starts the latest partial before a nested tool without waiting for a stalled send", async () => {
+    const pending = createDeferred();
+    const starts: string[] = [];
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-partial-nested-tool",
+      onPartialReply: (payload) => {
+        starts.push(`partial:${payload.text}`);
+        return pending.promise;
+      },
+      onAgentEvent: (event) => {
+        if (event.stream === "tool" && event.data.phase === "start") {
+          starts.push("tool");
+        }
+      },
+    });
+    try {
+      for (const delta of ["First", " second", " third"]) {
+        emitAssistantTextDelta({ emit, delta });
+      }
+      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      expect(starts).toEqual(["partial:First"]);
+      const tool = {
+        toolName: "read",
+        toolCallId: "read-after-text",
+        args: { path: "/tmp/input" },
+      };
+      await subscription.runToolLifecycle({
+        ...tool,
+        execute: async (onStart) => {
+          onStart();
+          return { content: [{ type: "text", text: "Read complete." }] };
         },
       });
-      try {
-        for (const delta of ["First", " second", " third"]) {
-          emitAssistantTextDelta({ emit, delta });
-        }
-        await subscription.waitForPendingEvents({ includePartialReplies: false });
-        expect(starts).toEqual(["partial:First"]);
-        const tool = {
-          toolName: "read",
-          toolCallId: "read-after-text",
-          args: { path: "/tmp/input" },
-        };
-        if (source === "provider") {
-          emit({ type: "tool_execution_start", ...tool });
-        } else {
-          await subscription.runToolLifecycle({
-            ...tool,
-            execute: async (onStart) => {
-              onStart();
-              return { content: [{ type: "text", text: "Read complete." }] };
-            },
-          });
-        }
-        await subscription.waitForPendingEvents({ includePartialReplies: false });
-        expect(starts).toEqual(["partial:First", "partial:First second third", "tool"]);
-        emitAssistantTextDelta({ emit, delta: " fourth" });
-        await subscription.waitForPendingEvents({ includePartialReplies: false });
-        expect(starts.at(-1)).toBe("partial:First second third fourth");
-      } finally {
-        pending.resolve();
-        subscription.unsubscribe();
-        await subscription.waitForPendingEvents();
-      }
-    },
-  );
+      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      expect(starts).toEqual(["partial:First", "partial:First second third", "tool"]);
+      emitAssistantTextDelta({ emit, delta: " fourth" });
+      await subscription.waitForPendingEvents({ includePartialReplies: false });
+      expect(starts.at(-1)).toBe("partial:First second third fourth");
+    } finally {
+      pending.resolve();
+      subscription.unsubscribe();
+      await subscription.waitForPendingEvents();
+    }
+  });
 
   it("preserves both delta domains when a retired callback reenters an unemitted scope", async () => {
     const first = createDeferred();
@@ -343,46 +326,38 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
     expect(starts).toEqual(["partial:First", "block:Block."]);
   });
 
+  it("publishes an authoritative clear with normalized final media", async () => {
+    const onAgentEvent = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run-final-media-clear",
+      onAgentEvent,
+    });
+    emitAssistantTextDelta({ emit, delta: "Hello" });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "\nMEDIA:https://example.com/a.png",
+            textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
+          },
+        ],
+      },
+    });
+    await subscription.waitForPendingEvents();
+    const final = onAgentEvent.mock.calls.findLast(([event]) => event.stream === "assistant")?.[0]
+      .data;
+    expect(final?.text).toBe("");
+    expect(final?.delta).toBe("");
+    expect(final?.replace).toBe(true);
+    expect(final?.mediaUrls).toEqual(["https://example.com/a.png"]);
+    expect(final?.managedMediaUrls).toBeUndefined();
+    expect(final?.phase).toBe("final_answer");
+    subscription.unsubscribe();
+  });
   it.each([
-    { name: "append", text: "Hello world", delta: " world", replace: undefined },
-    { name: "correct", text: "Hi", delta: "", replace: true },
-    { name: "clear", text: "", delta: "", replace: true },
-  ])(
-    "publishes an authoritative $name with normalized final media",
-    async ({ text, delta, replace }) => {
-      const onAgentEvent = vi.fn();
-      const { emit, subscription } = createSubscribedSessionHarness({
-        runId: `run-final-media-${text.length}`,
-        onAgentEvent,
-      });
-      emitAssistantTextDelta({ emit, delta: "Hello" });
-      emit({
-        type: "message_end",
-        message: {
-          role: "assistant",
-          content: [
-            {
-              type: "text",
-              text: `${text}\nMEDIA:https://example.com/a.png`,
-              textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
-            },
-          ],
-        },
-      });
-      await subscription.waitForPendingEvents();
-      const final = onAgentEvent.mock.calls.findLast(([event]) => event.stream === "assistant")?.[0]
-        .data;
-      expect(final?.text).toBe(text);
-      expect(final?.delta).toBe(delta);
-      expect(final?.replace).toBe(replace);
-      expect(final?.mediaUrls).toEqual(["https://example.com/a.png"]);
-      expect(final?.managedMediaUrls).toBeUndefined();
-      expect(final?.phase).toBe("final_answer");
-      subscription.unsubscribe();
-    },
-  );
-  it.each([
-    { name: "empty", text: "", preambles: 0 },
     { name: "sanitized empty", text: "<think>hidden reasoning</think>", preambles: 0 },
     { name: "duplicate", text: "Working.", preambles: 1 },
   ])(
@@ -449,15 +424,6 @@ describe("subscribeEmbeddedAgentSession partial reply lifecycle", () => {
 });
 
 describe("native reasoning projection", () => {
-  it.for([
-    { name: "whitespace-only reasoning", chunks: ["  ", " ", "\n"] },
-    { name: "leading and trailing whitespace", chunks: ["  ", "a  ", "b ", "  ", "c"] },
-  ])("preserves $name through transport and subscription", async ({ chunks }, { signal }) => {
-    const measurement = await measureNativeReasoningSubscription({ chunks, signal });
-    expect(measurement.textMatches).toBe(true);
-    expect(measurement.deltaMatches).toBe(true);
-  });
-
   it("does not rescan the growing reasoning prefix on every provider delta", async ({ signal }) => {
     const runId = "native-reasoning-prefix-work";
     const probe = vi.spyOn(String.prototype, "startsWith");

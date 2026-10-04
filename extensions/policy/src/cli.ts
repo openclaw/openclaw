@@ -1,4 +1,3 @@
-// Policy plugin module implements cli behavior.
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
@@ -12,11 +11,13 @@ import {
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
+import { POLICY_CHECK_IDS } from "./doctor/check-ids.js";
+import { evaluatePolicy } from "./doctor/evaluation.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
-import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
   buildPolicyConformanceReport,
   type PolicyConformanceReport,
@@ -171,7 +172,7 @@ async function buildPolicyCheckReport(
       exitCode: visibleFindings.length === 0 ? 0 : 1,
     };
   }
-  const cfg = snapshot.valid ? policyCommandConfig(snapshot.config) : {};
+  const cfg = policyCommandConfig(snapshot.config);
   const cwd = resolveAgentWorkspaceDir(
     cfg,
     resolvePolicyCommandAgentId(cfg, options.agent, ownerSurface),
@@ -199,7 +200,7 @@ async function buildPolicyCheckReport(
   );
   const jsonFindings = findings.map(toJsonFinding);
   const attestedFindings = evaluation.attestedFindings.map(toAttestedJsonFinding);
-  const ok = exitCodeFromFindings(evaluation.findings, severityMin) === 0;
+  const exitCode = exitCodeFromFindings(evaluation.findings, severityMin);
   const attestation = createPolicyAttestation({
     ok: evaluation.attestedFindings.length === 0,
     checkedAt: new Date().toISOString(),
@@ -209,14 +210,14 @@ async function buildPolicyCheckReport(
     findings: attestedFindings,
   });
   return {
-    ok,
+    ok: exitCode === 0,
     attestation,
     evidence: evaluation.evidence,
     checksRun: POLICY_CHECK_IDS.length,
     checksSkipped: 0,
     findings: jsonFindings,
     expectedAttestationHash: evaluation.expectedAttestationHash,
-    exitCode: exitCodeFromFindings(evaluation.findings, severityMin),
+    exitCode,
   };
 }
 
@@ -410,7 +411,7 @@ function normalizeWatchIntervalMs(value: string | number | undefined): number {
   if (!Number.isSafeInteger(raw) || raw < 250) {
     throw new Error("--interval-ms must be an integer >= 250.");
   }
-  return raw;
+  return Math.min(raw, MAX_TIMER_TIMEOUT_MS);
 }
 
 function toAttestedJsonFinding(finding: HealthFinding): Record<string, unknown> {

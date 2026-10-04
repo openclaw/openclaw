@@ -12,12 +12,8 @@ import {
   type ReplyExpectation,
 } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import {
-  resolveSessionPluginStatusLines,
-  resolveSessionPluginTraceLines,
-  type SessionEntry,
-} from "../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -45,12 +41,14 @@ import {
 } from "./agent-runner-failure-reply.js";
 import { hasBlockReplyDeliveryCustody } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { resolveEffectiveReplyRoute } from "./effective-reply-route.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery-state.js";
 import { type FollowupRun, type QueueSettings, scheduleFollowupDrain } from "./queue.js";
 import { normalizeReplyPayloadDirectives, type DirectBlockDelivery } from "./reply-delivery.js";
 import {
+  buildRestartLifecycleReplyText,
   isReplyOperationSuperseded,
   resolveReplyOperationAbortReason,
 } from "./reply-operation-abort.js";
@@ -59,9 +57,6 @@ import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
 import type { TypingController } from "./typing.js";
 export const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
-
-const RESTART_LIFECYCLE_REPLY_TEXT =
-  "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
 export function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
@@ -278,22 +273,6 @@ export function resolveFallbackOriginModel(params: {
   };
 }
 
-export function buildInlinePluginStatusPayload(params: {
-  entry: SessionEntry | undefined;
-  includeStatusLines: boolean;
-  includeTraceLines: boolean;
-}): ReplyPayload | undefined {
-  const statusLines = params.includeStatusLines
-    ? resolveSessionPluginStatusLines(params.entry)
-    : [];
-  const traceLines = params.includeTraceLines ? resolveSessionPluginTraceLines(params.entry) : [];
-  const lines = [...statusLines, ...traceLines];
-  if (lines.length === 0) {
-    return undefined;
-  }
-  return { text: lines.join("\n") };
-}
-
 export function normalizeAssistantFinalDeliveryText(text: string): string {
   const parsed = normalizeReplyPayloadDirectives({
     payload: { text },
@@ -303,19 +282,19 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
-export function refreshSessionEntryFromStore(params: {
+export async function refreshSessionEntryFromStore(params: {
   storePath?: string;
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
-}): SessionEntry | undefined {
+}): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
   try {
-    const latestEntry = loadSessionEntryReadOnly({
+    const latestEntry = await readSessionEntryReadOnlyInWorker({
       storePath,
       sessionKey,
     });
@@ -343,10 +322,7 @@ export function resolveAdmittedRunSessionFile(params: {
   sessionFile?: string;
   sessionKey?: string;
 }): string | undefined {
-  if (params.sessionKey?.trim()) {
-    return params.sessionKey.trim();
-  }
-  return params.sessionFile;
+  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(
@@ -395,7 +371,7 @@ export async function handleReplyAgentRunError(
     }
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
+        text: buildRestartLifecycleReplyText(),
       }),
     );
   }
@@ -406,7 +382,7 @@ export async function handleReplyAgentRunError(
     );
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: RESTART_LIFECYCLE_REPLY_TEXT,
+        text: buildRestartLifecycleReplyText(),
       }),
     );
   }
@@ -494,7 +470,7 @@ export type RunReplyAgentParams = {
   resolvedQueue: QueueSettings;
   shouldSteer: boolean;
   shouldFollowup: boolean;
-  queueAdmissionState?: "empty" | "steering" | "ready";
+  hasQueuedFollowups?: boolean;
   isActive: boolean;
   isRunActive?: () => boolean;
   opts?: InternalGetReplyOptions;
@@ -509,12 +485,7 @@ export type RunReplyAgentParams = {
   toolProgressDetail?: "explain" | "raw";
   isNewSession: boolean;
   blockStreamingEnabled: boolean;
-  blockReplyChunking?: {
-    minChars: number;
-    maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
-    flushOnParagraph?: boolean;
-  };
+  blockReplyChunking?: ReturnType<typeof resolveBlockStreamingChunking>;
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;

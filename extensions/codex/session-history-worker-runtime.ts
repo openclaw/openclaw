@@ -4,6 +4,7 @@ import {
   SessionTranscriptReadFenceError,
   validateCodexSessionTranscriptReadAdmission,
   validateCodexSessionTranscriptContextVersion,
+  type CodexSessionContextReader,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
 import {
   resolveRuntimeWorkerArgv,
@@ -21,11 +22,13 @@ import {
   type CodexHistoryReadResult,
 } from "./src/app-server/history-rejection.js";
 import type { JsonValue } from "./src/app-server/protocol.js";
+import { consumeCodexHistory } from "./src/app-server/session-history-read.js";
 import {
   resolveCodexHistoryTarget,
   type CodexMirroredSessionHistoryTarget,
 } from "./src/app-server/session-history.js";
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
+import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
 
 const codexHistoryWorkerEntrypoint = {
   currentModuleUrl: import.meta.url,
@@ -61,9 +64,42 @@ const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWor
 export async function projectCodexSettledHistoryInWorker(
   target: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
   signal?: AbortSignal,
+  contextReader?: CodexSessionContextReader,
 ): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
+  if (contextReader && !target.sessionTarget) {
+    throw new Error("Actor history requires a captured sessionTarget");
+  }
   const resolved = resolveCodexHistoryTarget(target);
+  if (contextReader) {
+    if (resolved.kind !== "sqlite") {
+      throw new Error("Actor history requires a complete matching sessionTarget");
+    }
+    let result: CodexHistoryReadResult<JsonValue[]>;
+    try {
+      result = await contextReader(resolved.target, (messages, header) => {
+        signal?.throwIfAborted();
+        try {
+          return {
+            status: "ok",
+            value: consumeCodexHistory(messages, header, target.sessionId, (history) =>
+              projectVerifiedSettledCodexMessages(history, target),
+            ),
+          };
+        } catch (error) {
+          return { status: "rejected", reason: codexHistoryRejectionReason(error) };
+        }
+      });
+    } catch (error) {
+      if (error instanceof SessionTranscriptReadFenceError) {
+        result = { status: "rejected", reason: "snapshot_invalidated" };
+      } else {
+        throw error;
+      }
+    }
+    signal?.throwIfAborted();
+    return result;
+  }
   const receipt =
     resolved.kind === "sqlite"
       ? captureCodexSessionTranscriptReadAdmission(resolved.target)

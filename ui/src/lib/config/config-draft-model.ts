@@ -246,22 +246,12 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
   }
 
   if (type === "number" || type === "integer") {
-    if (typeof value === "string") {
-      const coerced = coerceConfigFormNumberString(value, type === "integer");
-      if (coerced === undefined || typeof coerced === "number") {
-        return coerced;
-      }
-    }
-    return value;
+    return typeof value === "string"
+      ? coerceConfigFormNumberString(value, type === "integer")
+      : value;
   }
   if (type === "boolean") {
-    if (typeof value === "string") {
-      const coerced = coerceBooleanString(value);
-      if (typeof coerced === "boolean") {
-        return coerced;
-      }
-    }
-    return value;
+    return typeof value === "string" ? coerceBooleanString(value) : value;
   }
   if (type === "string") {
     return typeof value === "string" && value.length === 0 && schema.minLength ? undefined : value;
@@ -549,12 +539,9 @@ function mutateConfigForm(
 }
 
 function trackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
-  const pluginIds = autoAllowlistedPluginIdsByState.get(state);
-  if (pluginIds) {
-    pluginIds.add(pluginId);
-  } else {
-    autoAllowlistedPluginIdsByState.set(state, new Set([pluginId]));
-  }
+  const pluginIds = autoAllowlistedPluginIdsByState.get(state) ?? new Set<string>();
+  pluginIds.add(pluginId);
+  autoAllowlistedPluginIdsByState.set(state, pluginIds);
 }
 
 function untrackAutoAllowlistedPluginId(state: RuntimeConfigState, pluginId: string) {
@@ -741,11 +728,6 @@ export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId:
     const entries = asConfigRecord(agents?.entries);
     if (!entries) {
       return;
-    }
-    for (const entry of Object.values(entries)) {
-      if (isRecord(entry)) {
-        delete entry.default;
-      }
     }
     if (Object.keys(entries).length > 1) {
       setPathValue(draft, ["agents", "ownership"], "explicit");

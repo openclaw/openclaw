@@ -8,8 +8,9 @@ import {
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../config/config.js";
+import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { parseSecretRef } from "../config/types.secrets.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
@@ -316,11 +317,11 @@ export function applySecretRefHeaderSentinels<T extends Model>(
   if (!runtimeConfig || !runtimeSourceConfig || !usesRuntimeProvider) {
     return model;
   }
-  const sourceProvider = authConfig.resolveProviderConfig(runtimeSourceConfig, model.provider);
-  const runtimeProvider = authConfig.resolveProviderConfig(runtimeConfig, model.provider);
+  const sourceProvider = resolveMergedModelProviderConfig(runtimeSourceConfig, model.provider);
+  const runtimeProvider = resolveMergedModelProviderConfig(runtimeConfig, model.provider);
   const replacements = new Map<string, { value: string; replacement: string }>();
   const isManagedSecret = (value: unknown) =>
-    coerceSecretRef(value) !== null ||
+    parseSecretRef(value) !== null ||
     (typeof value === "string" && isSecretRefHeaderValueMarker(value));
   const addReplacement = (name: string, value: string, replacement?: string) => {
     replacements.set(name.trim().toLowerCase(), {
@@ -426,30 +427,17 @@ export function applySecretRefHeaderSentinels<T extends Model>(
     : protectedModel;
 }
 
-/**
- * When the provider config sets `authHeader: true`, inject an explicit
- * `Authorization: Bearer <apiKey>` header into the model so downstream SDKs
- * (e.g. `@google/genai`) send credentials via the standard HTTP Authorization
- * header instead of vendor-specific headers like `x-goog-api-key`.
- *
- * This is a no-op when `authHeader` is not `true`, when no API key is
- * available, or when the API key is a synthetic marker (e.g. local-server
- * placeholders) rather than a real credential.
- */
+/** Uses the configured standard bearer header for SDKs with vendor-specific auth defaults. */
 export function applyAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
   cfg: OpenClawConfig | undefined,
 ): T {
   const sentinelModel = applySecretRefHeaderSentinels(model, cfg);
-  if (!auth?.apiKey) {
+  if (!auth?.apiKey || isNonSecretApiKeyMarker(auth.apiKey)) {
     return sentinelModel;
   }
-  // Reject synthetic marker values that are not real credentials.
-  if (isNonSecretApiKeyMarker(auth.apiKey)) {
-    return sentinelModel;
-  }
-  const providerConfig = authConfig.resolveProviderConfig(cfg, sentinelModel.provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, sentinelModel.provider);
   if (!providerConfig?.authHeader) {
     return sentinelModel;
   }

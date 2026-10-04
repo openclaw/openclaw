@@ -15,14 +15,6 @@ type DiscordMember = { user: DiscordUser; nick?: string | null };
 type DiscordChannel = { id: string; name?: string | null };
 type DiscordDirectoryAccess = { token: string; query: string; accountId: string };
 
-function normalizeQuery(value?: string | null): string {
-  return normalizeOptionalLowercaseString(value) ?? "";
-}
-
-function buildUserRank(user: DiscordUser): number {
-  return user.bot ? 0 : 1;
-}
-
 function resolveDiscordDirectoryAccess(
   params: DirectoryConfigParams,
 ): DiscordDirectoryAccess | null {
@@ -31,7 +23,11 @@ function resolveDiscordDirectoryAccess(
   if (!token) {
     return null;
   }
-  return { token, query: normalizeQuery(params.query), accountId: account.accountId };
+  return {
+    token,
+    query: normalizeOptionalLowercaseString(params.query) ?? "",
+    accountId: account.accountId,
+  };
 }
 
 async function listDiscordGuilds(token: string): Promise<DiscordGuild[]> {
@@ -136,7 +132,7 @@ export async function listDiscordDirectoryPeersLive(
         id: `user:${user.id}`,
         name: name || undefined,
         handle: user.username ? `@${user.username}` : undefined,
-        rank: buildUserRank(user),
+        rank: user.bot ? 0 : 1,
         raw: member,
       });
       if (rows.length >= limit) {

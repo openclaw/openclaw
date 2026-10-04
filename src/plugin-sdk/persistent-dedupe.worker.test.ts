@@ -26,37 +26,58 @@ const options = {
 
 afterEach(() => vi.restoreAllMocks());
 
+function pauseWorkerResult() {
+  const ready = createDeferredCore();
+  const gate = createDeferredCore();
+  return {
+    ready,
+    gate,
+    wait: async <T>(operation: Promise<T>) => {
+      const result = await operation;
+      ready.resolve();
+      await gate.promise;
+      return result;
+    },
+  };
+}
+
 describe("persistent dedupe worker", () => {
   it.each([
-    { operation: "release", readFails: false },
-    { operation: "forget", readFails: false },
-    { operation: "release", readFails: true },
-    { operation: "forget", readFails: true },
+    { phase: "lookup", operation: "forget", readFails: false },
+    { phase: "lookup", operation: "release", readFails: true },
+    { phase: "commit", operation: "forget", readFails: false },
   ] as const)(
-    "preserves replaced claim settlement after $operation (readFails=$readFails)",
-    async ({ operation, readFails }) => {
+    "preserves replacement ownership after $phase / $operation",
+    async ({ phase, operation, readFails }) => {
       await withOpenClawTestState({ label: "dedupe-claim-replacement" }, async () => {
-        const lookup = workerClient.lookupPluginStateInWorker;
-        const ready = createDeferredCore();
-        const gate = createDeferredCore();
-        vi.spyOn(workerClient, "lookupPluginStateInWorker").mockImplementationOnce(
-          async (params) => {
-            const result = await lookup(params);
-            ready.resolve();
-            await gate.promise;
-            if (readFails) {
-              throw new Error("late lookup rejected");
-            }
-            return result;
-          },
-        );
+        const { ready, gate, wait } = pauseWorkerResult();
+        if (phase === "lookup") {
+          const lookup = workerClient.lookupPluginStateInWorker;
+          vi.spyOn(workerClient, "lookupPluginStateInWorker").mockImplementationOnce(
+            async (params) => {
+              const result = await wait(lookup(params));
+              if (readFails) {
+                throw new Error("late lookup rejected");
+              }
+              return result;
+            },
+          );
+        } else {
+          const compare = workerClient.comparePluginStateUpdateInWorker;
+          vi.spyOn(workerClient, "comparePluginStateUpdateInWorker").mockImplementationOnce(
+            (params) => wait(compare(params)),
+          );
+        }
         const dedupe = createClaimableDedupe({
           ...options,
           onDiskError: (error: unknown) => {
             throw error;
           },
         });
-        const original = dedupe.claim("shared");
+        if (phase === "commit") {
+          expect(await dedupe.claim("shared")).toEqual({ kind: "claimed" });
+        }
+        const original = phase === "lookup" ? dedupe.claim("shared") : dedupe.commit("shared");
         const outcome = original.then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
@@ -70,17 +91,21 @@ describe("persistent dedupe worker", () => {
         const replacement = dedupe.claim("shared");
         try {
           gate.resolve();
-          const settled = await outcome;
-          expect(settled).toMatchObject({
-            error:
-              operation === "release"
-                ? failure
-                : expect.objectContaining({
-                    message: expect.stringContaining("claim released before commit"),
-                  }),
-          });
-          if (operation === "release" && "error" in settled) {
-            expect(settled.error).toBe(failure);
+          if (phase === "lookup") {
+            const settled = await outcome;
+            expect(settled).toMatchObject({
+              error:
+                operation === "release"
+                  ? failure
+                  : expect.objectContaining({
+                      message: expect.stringContaining("claim released before commit"),
+                    }),
+            });
+            if (operation === "release" && "error" in settled) {
+              expect(settled.error).toBe(failure);
+            }
+          } else {
+            await expect(original).resolves.toBe(true);
           }
           await forgetting;
           expect(await replacement).toEqual({ kind: "claimed" });
@@ -98,39 +123,6 @@ describe("persistent dedupe worker", () => {
       });
     },
   );
-
-  it("does not let an older commit remove a replacement claim", async () => {
-    await withOpenClawTestState({ label: "dedupe-commit-replacement" }, async () => {
-      const compare = workerClient.comparePluginStateUpdateInWorker;
-      const ready = createDeferredCore();
-      const gate = createDeferredCore();
-      vi.spyOn(workerClient, "comparePluginStateUpdateInWorker").mockImplementationOnce(
-        async (params) => {
-          const result = await compare(params);
-          ready.resolve();
-          await gate.promise;
-          return result;
-        },
-      );
-      const dedupe = createClaimableDedupe(options);
-      expect(await dedupe.claim("shared")).toEqual({ kind: "claimed" });
-      const committing = dedupe.commit("shared");
-      await ready.promise;
-      const forgetting = dedupe.forget("shared");
-      const replacement = dedupe.claim("shared");
-      try {
-        gate.resolve();
-        await Promise.all([committing, forgetting]);
-        expect(await replacement).toEqual({ kind: "claimed" });
-        const waiter = await dedupe.claim("shared");
-        expect(waiter.kind).toBe("inflight");
-      } finally {
-        gate.resolve();
-        await Promise.allSettled([committing, forgetting, replacement]);
-        dedupe.release("shared");
-      }
-    });
-  });
 
   it("retains current memory duplicates when an unrelated forget invalidates pending publication", async () => {
     await withOpenClawTestState({ label: "dedupe-current-memory" }, async () => {
@@ -383,15 +375,9 @@ describe("persistent dedupe worker", () => {
     async (legacyAlias) => {
       await withOpenClawTestState({ label: "dedupe-forget-order" }, async (state) => {
         const observe = workerClient.observePluginStateInWorker;
-        const ready = createDeferredCore();
-        const gate = createDeferredCore();
-        vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce(
-          async (params) => {
-            const result = await observe(params);
-            ready.resolve();
-            await gate.promise;
-            return result;
-          },
+        const { ready, gate, wait } = pauseWorkerResult();
+        vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
+          wait(observe(params)),
         );
         const createDedupe = () =>
           legacyAlias
@@ -483,15 +469,9 @@ describe("persistent dedupe worker", () => {
         { label: "dedupe-next-source", applyEnv: false },
         async (other) => {
           const observe = workerClient.observePluginStateInWorker;
-          const ready = createDeferredCore();
-          const gate = createDeferredCore();
-          vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce(
-            async (params) => {
-              const result = await observe(params);
-              ready.resolve();
-              await gate.promise;
-              return result;
-            },
+          const { ready, gate, wait } = pauseWorkerResult();
+          vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
+            wait(observe(params)),
           );
           const dedupe = createPersistentDedupe(options);
           const first = dedupe.checkAndRecord("first");
@@ -521,15 +501,9 @@ describe("persistent dedupe worker", () => {
   it("refuses queued writes from a closed admission after the same database is reopened", async () => {
     await withOpenClawTestState({ label: "dedupe-queued-close" }, async () => {
       const observe = workerClient.observePluginStateInWorker;
-      const ready = createDeferredCore();
-      const gate = createDeferredCore();
-      vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce(
-        async (params) => {
-          const result = await observe(params);
-          ready.resolve();
-          await gate.promise;
-          return result;
-        },
+      const { ready, gate, wait } = pauseWorkerResult();
+      vi.spyOn(workerClient, "observePluginStateInWorker").mockImplementationOnce((params) =>
+        wait(observe(params)),
       );
       const dedupe = createPersistentDedupe({
         ...options,
@@ -565,14 +539,10 @@ describe("persistent dedupe worker", () => {
         await dedupe.checkAndRecord("stored");
         dedupe.clearMemory();
         const list = workerClient.listPluginStateInWorker;
-        const ready = createDeferredCore();
-        const gate = createDeferredCore();
-        vi.spyOn(workerClient, "listPluginStateInWorker").mockImplementationOnce(async (params) => {
-          const result = await list(params);
-          ready.resolve();
-          await gate.promise;
-          return result;
-        });
+        const { ready, gate, wait } = pauseWorkerResult();
+        vi.spyOn(workerClient, "listPluginStateInWorker").mockImplementationOnce((params) =>
+          wait(list(params)),
+        );
         const warming = dedupe.warmup();
         await ready.promise;
         const clearing = action === "clear" ? dedupe.clearMemory() : dedupe.forget("stored");

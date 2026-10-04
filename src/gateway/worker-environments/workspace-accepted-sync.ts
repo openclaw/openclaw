@@ -6,7 +6,6 @@ import type { SpawnResult } from "../../process/exec.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
 import {
   AcceptedWorkspacePublicationIndeterminateError,
-  isAcceptedWorkspacePublicationIndeterminateError,
   parseAcceptedWorkspaceSettlement,
   type AcceptedWorkspaceSettlementOutcome,
 } from "./workspace-accepted-publication.js";
@@ -58,7 +57,7 @@ export async function recoverAcceptedWorkspacePublication(params: {
   }
 }
 
-function createAcceptedWorkspacePublisher(params: {
+export function createAcceptedWorkspacePublisher(params: {
   runWorkspaceCommand: (command: WorkerWorkspaceCommand) => Promise<SpawnResult>;
   runRsync: (argv: (rsyncSsh: string) => string[]) => Promise<SpawnResult>;
   scpTarget: string;
@@ -66,10 +65,12 @@ function createAcceptedWorkspacePublisher(params: {
   localPath: string;
   remoteWorkspaceDir: string;
   remoteManifest: WorkerWorkspaceManifest;
+  initialRemoteRef: string;
   hashMemo: WorkspaceHashMemo;
   metrics: WorkspaceReconcileMetrics;
 }) {
-  return async (accepted: {
+  let expectedRemoteRef = params.initialRemoteRef;
+  const publish = async (accepted: {
     manifestRef: string;
     manifest: WorkerWorkspaceManifest;
     conflictPaths: string[];
@@ -123,7 +124,10 @@ function createAcceptedWorkspacePublisher(params: {
     }
 
     const transactionNonce = randomBytes(16).toString("hex");
-    const transactionCommand = async (action: "apply" | "rollback" | "commit" | "settle") =>
+    const transactionCommand = async (
+      action: "begin" | "apply" | "rollback" | "commit" | "settle",
+      input?: string,
+    ) =>
       await params.runWorkspaceCommand({
         transportRetry: "never",
         argv: [
@@ -134,6 +138,7 @@ function createAcceptedWorkspacePublisher(params: {
           params.remoteWorkspaceDir,
           transactionNonce,
         ],
+        ...(input === undefined ? {} : { input }),
       });
     const settleIndeterminatePublication = async (
       operation: "apply" | "commit",
@@ -185,18 +190,7 @@ function createAcceptedWorkspacePublisher(params: {
     };
     let transactionBegun = false;
     try {
-      const begun = await params.runWorkspaceCommand({
-        transportRetry: "never",
-        argv: [
-          "node",
-          "-e",
-          REMOTE_WORKSPACE_ACCEPTED_TRANSACTION_JS,
-          "begin",
-          params.remoteWorkspaceDir,
-          transactionNonce,
-        ],
-        input: JSON.stringify([...changed]),
-      });
+      const begun = await transactionCommand("begin", JSON.stringify([...changed]));
       if (!workerWorkspaceCommandSucceeded(begun)) {
         throw workspaceSyncError(begun);
       }
@@ -286,7 +280,7 @@ function createAcceptedWorkspacePublisher(params: {
     } catch (error) {
       // Transport or settlement timeouts are observation evidence, never authority
       // for an inverse operation; recovery owns restoring both sides.
-      if (isAcceptedWorkspacePublicationIndeterminateError(error)) {
+      if (error instanceof AcceptedWorkspacePublicationIndeterminateError) {
         throw error;
       }
       if (transactionBegun) {
@@ -302,24 +296,11 @@ function createAcceptedWorkspacePublisher(params: {
       throw error;
     }
   };
-}
-
-export function createAcceptedWorkspacePublisherFactory(
-  params: Omit<Parameters<typeof createAcceptedWorkspacePublisher>[0], "remoteManifest">,
-) {
-  return (remoteManifest: WorkerWorkspaceManifest, initialRemoteRef: string) => {
-    let expectedRemoteRef = initialRemoteRef;
-    const publish = createAcceptedWorkspacePublisher({ ...params, remoteManifest });
-    return {
-      expectedRemoteRef: () => expectedRemoteRef,
-      publishAcceptedManifest: async (accepted: {
-        manifestRef: string;
-        manifest: WorkerWorkspaceManifest;
-        conflictPaths: string[];
-      }) => {
-        await publish(accepted);
-        expectedRemoteRef = accepted.manifestRef;
-      },
-    };
+  return {
+    expectedRemoteRef: () => expectedRemoteRef,
+    publishAcceptedManifest: async (accepted: Parameters<typeof publish>[0]) => {
+      await publish(accepted);
+      expectedRemoteRef = accepted.manifestRef;
+    },
   };
 }

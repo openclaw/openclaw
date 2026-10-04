@@ -25,12 +25,13 @@ import {
   type WebSearchProviderSetupContext,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-search";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { XAI_DEFAULT_MODEL_ID } from "../model-definitions.js";
+import { resolveXaiResponsesEndpoint } from "./responses-tool-shared.js";
+import { resolveNormalizedXaiToolModel } from "./tool-config-shared.js";
 import {
   buildXaiWebSearchPayload,
   requestXaiWebSearch,
-  resolveXaiInlineCitations,
-  resolveXaiWebSearchEndpoint,
-  resolveXaiWebSearchModel,
   wrapXaiWebSearchError,
 } from "./web-search-shared.js";
 import { resolveEffectiveXSearchConfig, setPluginXSearchConfigValue } from "./x-search-config.js";
@@ -119,7 +120,7 @@ export async function runXaiSearchProviderSetup(
   return next;
 }
 
-function runXaiWebSearch(params: {
+async function runXaiWebSearch(params: {
   query: string;
   model: string;
   endpoint: string;
@@ -135,35 +136,21 @@ function runXaiWebSearch(params: {
   );
   const cached = readCache(XAI_WEB_SEARCH_CACHE, cacheKey, params.cacheTtlMs);
   if (cached) {
-    return Promise.resolve({ ...cached.value, cached: true });
+    return { ...cached.value, cached: true };
   }
 
-  return (async () => {
-    const startedAt = Date.now();
-    const result = await requestXaiWebSearch({
-      query: params.query,
-      model: params.model,
-      apiKey: params.apiKey,
-      endpoint: params.endpoint,
-      timeoutSeconds: params.timeoutSeconds,
-      inlineCitations: params.inlineCitations,
-      ...(params.signal ? { signal: params.signal } : {}),
-    });
-    params.signal?.throwIfAborted();
-    const payload = buildXaiWebSearchPayload({
-      query: params.query,
-      provider: "grok",
-      model: params.model,
-      tookMs: Date.now() - startedAt,
-      content: result.content,
-      citations: result.citations,
-      inlineCitations: result.inlineCitations,
-      truncated: result.truncated,
-    });
-
-    writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
-    return payload;
-  })();
+  const startedAt = Date.now();
+  const result = await requestXaiWebSearch(params);
+  params.signal?.throwIfAborted();
+  const payload = buildXaiWebSearchPayload({
+    query: params.query,
+    provider: "grok",
+    model: params.model,
+    tookMs: Date.now() - startedAt,
+    ...result,
+  });
+  writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+  return payload;
 }
 
 function resolveXaiToolSearchConfig(ctx: {
@@ -401,12 +388,13 @@ export async function executeXaiWebSearchProviderTool(
       message: "count must be an integer from 1 to 10.",
     });
 
+    const grok = asNonArrayRecord(searchConfig?.grok);
     const request = {
       query,
-      model: resolveXaiWebSearchModel(searchConfig),
-      endpoint: resolveXaiWebSearchEndpoint(searchConfig),
+      model: resolveNormalizedXaiToolModel({ config: grok, defaultModel: XAI_DEFAULT_MODEL_ID }),
+      endpoint: resolveXaiResponsesEndpoint(grok.baseUrl),
       timeoutSeconds,
-      inlineCitations: resolveXaiInlineCitations(searchConfig),
+      inlineCitations: grok.inlineCitations === true,
       cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
       signal,
     };

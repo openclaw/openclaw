@@ -1,5 +1,3 @@
-// MCP loopback HTTP server.
-// Exposes Gateway-scoped tools to local MCP clients over bearer-auth loopback.
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -85,22 +83,14 @@ function keepMcpResponseAlive(res: ServerResponse, contentType: string, frame: s
 let closeActiveMcpLoopbackServer: (() => Promise<void>) | undefined;
 let activeMcpLoopbackServerPromise: Promise<void> | null = null;
 
-function createMcpJsonParseError(error: unknown): Error & { code: "mcp_json_parse_error" } {
-  return Object.assign(new Error("MCP JSON parse error"), {
-    cause: error,
-    code: "mcp_json_parse_error" as const,
-  });
-}
-
-function isMcpJsonParseError(error: unknown): error is Error & { code: "mcp_json_parse_error" } {
-  return isRecord(error) && error.code === "mcp_json_parse_error";
-}
-
 function parseMcpJsonBody(body: string): unknown {
   try {
     return JSON.parse(body) as unknown;
   } catch (error) {
-    throw createMcpJsonParseError(error);
+    throw Object.assign(new Error("MCP JSON parse error"), {
+      cause: error,
+      code: "mcp_json_parse_error",
+    });
   }
 }
 
@@ -145,9 +135,14 @@ async function startMcpLoopbackServer(
   work: AsyncWorkScope,
 ): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
-  const [{ handleMcpJsonRpc }, { McpLoopbackToolCache }] = await Promise.all([
+  const [
+    { handleMcpJsonRpc },
+    { McpLoopbackToolCache },
+    { createCompletionGrantLineageAdmission },
+  ] = await Promise.all([
     import("./mcp-http.handlers.js"),
     import("./mcp-http.runtime.js"),
+    import("./tool-resolution-completion.js"),
   ]);
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
@@ -244,10 +239,16 @@ async function startMcpLoopbackServer(
         }
         const cfg = getRuntimeConfig();
         const requestContext = resolveMcpRequestContext(req, cfg, auth);
+        // A completion grant is current only while its requester lineage verifies. The
+        // child entry can go away while preparation, hooks or approvals await, so the
+        // dispatch authorization and the tools' source-effect guard both re-check it.
+        const lineage = createCompletionGrantLineageAdmission({ cfg, context: requestContext });
+        const isGrantAndLineageCurrent = () =>
+          (boundClientGrant?.isCurrent() ?? true) && lineage.isCurrent();
         const authorizeToolCall = () =>
           !work.isClosing &&
           getActiveMcpLoopbackRuntime()?.ownerToken === ownerToken &&
-          (boundClientGrant?.isCurrent() ?? true);
+          isGrantAndLineageCurrent();
         const harnessEntry = isAgentHarnessSessionKey(requestContext.sessionKey)
           ? resolveSessionEntryAccessTarget({ cfg, sessionKey: requestContext.sessionKey }).entry
           : undefined;
@@ -277,35 +278,47 @@ async function startMcpLoopbackServer(
         }
         const yieldContext = resolveMcpLoopbackYieldContext(cliRequestCaptureHandle);
         // Tools capture their creator at construction, not the later HTTP execution scope.
-        const scopedTools = await withAgentQuestionAnswerAuthority(
-          boundClientGrant?.questionAnswerAuthority,
-          () =>
-            toolCache.resolve({
-              context: requestContext,
-              rootedExecution: boundClientGrant?.rootedExecution,
-              messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
-              cfg,
-              signal: requestAbort.signal,
-              ...(boundClientGrant?.toolAuth
-                ? {
-                    authProfileStore: boundClientGrant.toolAuth.store,
-                    ...(boundClientGrant.toolAuth.agentDir
-                      ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
-                      : {}),
-                  }
-                : {}),
-              ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
-              // Same liveness check `authorizeToolCall` applies after the hook,
-              // handed to run-contract tools so a revocation that lands while a
-              // call is in flight also fails the durable write.
-              isGrantCurrent: authorizeToolCall,
-              yieldContextCacheKey: yieldContext?.cacheKey,
-              onYield: yieldContext?.onYield,
-              ...(boundClientGrant?.skillLibraryAuthoring
-                ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
-                : {}),
-            }),
-        );
+        let scopedTools: Awaited<ReturnType<typeof toolCache.resolve>>;
+        try {
+          scopedTools = await withAgentQuestionAnswerAuthority(
+            boundClientGrant?.questionAnswerAuthority,
+            () =>
+              toolCache.resolve({
+                context: requestContext,
+                admittedRunContext: boundClientGrant?.admittedRunContext,
+                rootedExecution: boundClientGrant?.rootedExecution,
+                messageActionTurnCapability: boundClientGrant?.messageActionTurnCapability,
+                cfg,
+                signal: requestAbort.signal,
+                ...(boundClientGrant?.toolAuth
+                  ? {
+                      authProfileStore: boundClientGrant.toolAuth.store,
+                      ...(boundClientGrant.toolAuth.agentDir
+                        ? { authProfileStoreAgentDir: boundClientGrant.toolAuth.agentDir }
+                        : {}),
+                    }
+                  : {}),
+                ...(boundGrantToken ? { grantToken: boundGrantToken } : {}),
+                // Same liveness check `authorizeToolCall` applies after the hook,
+                // handed to run-contract tools so a revocation that lands while a
+                // call is in flight also fails the durable write.
+                isGrantCurrent: authorizeToolCall,
+                yieldContextCacheKey: yieldContext?.cacheKey,
+                onYield: yieldContext?.onYield,
+                ...(boundClientGrant?.skillLibraryAuthoring
+                  ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
+                  : {}),
+              }),
+          );
+        } catch (error) {
+          requestAbort.signal.throwIfAborted();
+          if (boundClientGrant && !boundClientGrant.isCurrent()) {
+            res.writeHead(401, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "unauthorized" }));
+            return;
+          }
+          throw error;
+        }
 
         // Discovery may outlive the requesting connection or grant.
         requestAbort.signal.throwIfAborted();
@@ -401,7 +414,8 @@ async function startMcpLoopbackServer(
             const callerIdentity = boundClientGrant
               ? createAdmittedGatewayToolCallerIdentity({
                   admittedRunContext: boundClientGrant.admittedRunContext,
-                  receiptAuthority: boundClientGrant.isCurrent,
+                  receiptAuthority: isGrantAndLineageCurrent,
+                  receiptAdmission: lineage.admission,
                   cronAuthorityCheck: boundClientGrant.cronAuthorityCheck,
                   mintCronRequesterGrant: boundClientGrant.mintCronRequesterGrant,
                   agentId: scopedTools.agentId,
@@ -417,6 +431,9 @@ async function startMcpLoopbackServer(
                   turnSourceThreadId: requestContext.currentThreadTs,
                 })
               : undefined;
+            if (callerIdentity && boundClientGrant?.personalToolParticipants) {
+              callerIdentity.personalToolParticipants = boundClientGrant.personalToolParticipants;
+            }
             response = await withGatewayToolCallerIdentity(callerIdentity, () =>
               runWithTrackedCancellation(requestAbort.signal, handleRequest),
             );
@@ -471,23 +488,19 @@ async function startMcpLoopbackServer(
           res.end(JSON.stringify(jsonRpcInternalError(parsed)));
         } else if (!res.headersSent) {
           // Capture settles when rejection is queued; the transport owner joins socket cleanup.
-          if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+          if (
+            isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE") ||
+            isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")
+          ) {
+            const tooLarge = error.code === "PAYLOAD_TOO_LARGE";
             void sendHttpRequestRejection(
               req,
               res,
-              413,
-              JSON.stringify({ error: "payload_too_large" }),
+              tooLarge ? 413 : 408,
+              JSON.stringify({ error: tooLarge ? "payload_too_large" : "request_body_timeout" }),
               "application/json",
             );
-          } else if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
-            void sendHttpRequestRejection(
-              req,
-              res,
-              408,
-              JSON.stringify({ error: "request_body_timeout" }),
-              "application/json",
-            );
-          } else if (isMcpJsonParseError(error)) {
+          } else if (isRecord(error) && error.code === "mcp_json_parse_error") {
             res.writeHead(400, { "Content-Type": "application/json" });
             res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
           } else {

@@ -754,7 +754,6 @@ export function createTabAccessPolicy({ chromeApi = chrome, isSelectedTab, getGr
     addTabToGroup,
     inspectTab,
     requireTab,
-    requireTabAfterNavigation: (tabId, epoch) => requireTab(tabId, epoch, true),
     listAccessibleTabs,
     canPublishTab: (tabId) => !createdTabs.has(tabId) || createdTabs.get(tabId).handedOff,
     pause,

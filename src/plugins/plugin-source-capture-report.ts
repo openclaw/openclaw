@@ -160,6 +160,10 @@ export async function pruneLegacyPluginSourceCaptures(
           skipped.push({ path: root.path, reason: "capture inspection is incomplete" });
           continue;
         }
+        if (process.getuid && current.identity.uid !== process.getuid()) {
+          skipped.push({ path: root.path, reason: "owned by another UID" });
+          continue;
+        }
         if (current.changedAtMs >= performance.timeOrigin) {
           skipped.push({
             path: root.path,
@@ -197,6 +201,7 @@ export async function pruneUnreferencedPluginNativeCaptures(
   stateDir: string,
   assertCurrent: () => void,
   env?: NodeJS.ProcessEnv,
+  options: { startup?: boolean } = {},
 ) {
   try {
     assertCurrent();
@@ -232,7 +237,12 @@ export async function pruneUnreferencedPluginNativeCaptures(
         }
       }
     }
-    return await prunePluginNativeCaptureDirectories(stateDir, retainedPaths, assertCurrent);
+    return await prunePluginNativeCaptureDirectories(
+      stateDir,
+      retainedPaths,
+      assertCurrent,
+      options,
+    );
   } catch (error) {
     return { removed: [], warnings: [`Native capture cleanup skipped: ${String(error)}`] };
   }

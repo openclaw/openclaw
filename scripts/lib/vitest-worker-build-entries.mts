@@ -2,9 +2,12 @@ import { quickJsWorkerTestEntrypoint } from "../../extensions/code-mode-quickjs/
 import { codexCatalogPageWorkerEntrypoint } from "../../extensions/codex/catalog-page-worker-entrypoint.ts";
 import { discordAudioTestEntrypoints } from "../../extensions/discord/src/voice/audio-worker-entrypoints.test-support.ts";
 import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sqlite-backend-entrypoint.test-support.ts";
+import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
+import { memoryForgetPlanningObserverEntrypoint } from "../../extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
 import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
+import { identityRepeatedTurnEntrypoint } from "../../extensions/qa-lab/src/agent-run-identity-runtime.test-support.ts";
 import { busServerShutdownEntrypoint } from "../../extensions/qa-lab/src/bus-server-runtime.test-support.ts";
 import { qaGatewayCleanupRuntimeEntrypoint } from "../../extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts";
 import { teamReportsSqliteBackendEntrypoint } from "../../extensions/team-reports/src/sqlite-backend-entrypoint.test-support.ts";
@@ -22,12 +25,16 @@ import {
 } from "../../src/agents/code-mode-retention-entrypoint.test-support.ts";
 import { cliCompactionBackendEntrypoints } from "../../src/agents/command/cli-compaction-runtime.test-support.ts";
 import { agentProcessTestEntrypoints } from "../../src/agents/process-runtime.test-support.ts";
+import { sdkStateOwnerFixtureEntrypoint } from "../../src/agents/sandbox/sdk-state-owner-runtime.test-support.ts";
 import { bashOutputSpillEntrypoints } from "../../src/agents/sessions/bash-output-spill-entrypoints.test-support.ts";
 import { managedWorktreeGcEntrypoint } from "../../src/agents/worktrees/service-gc-runtime.test-support.ts";
 import { clawProjectBuildEntrypoint } from "../../src/claws/project-runtime.test-support.ts";
 import {
+  adminStateOwnerFixtureEntrypoint,
+  cliMessageExitEntrypoints,
   cliRecoveryEntrypoints,
   gatewayDirectStopEntrypoints,
+  localStateOwnerFixtureEntrypoint,
   updateExecutorEntrypoints,
   stateDirGatewayFixtureEntrypoint,
   updateCandidateExitEntrypoints,
@@ -53,6 +60,10 @@ import {
   triageTestRuntimeEntrypoints,
   triageMaintenanceRuntimeEntrypoints,
 } from "../../src/infra/triage-runtime.test-support.ts";
+import {
+  nativeWorkerLifecycleEntrypoint,
+  nativeWorkerResourceEntrypoint,
+} from "../../src/infra/worker-native-lifecycle.runtime.test-support.ts";
 import { workerTaskPoolEntrypoints } from "../../src/infra/worker-task-pool-runtime.test-support.ts";
 import { diagnosticProfileEntrypoints } from "../../src/logging/diagnostic-profile-runtime.test-support.ts";
 import { mediaNativeProcessEntrypoints } from "../../src/media/native-process-runtime.test-support.ts";
@@ -131,6 +142,7 @@ export const preservedModuleBuildSources = [
   "scripts/run-additional-boundary-checks.mts",
   "scripts/run-with-env.mts",
   "scripts/plugin-sdk-api-diff.mts",
+  "scripts/lib/native-declaration-subprocess.mts",
   "scripts/test-projects.mts",
   "scripts/lib/vitest-build-prerequisites.mts",
   "scripts/lib/vitest-batch-runner.mts",
@@ -189,6 +201,7 @@ export const preservedModuleBuildSources = [
   "src/worker/embedded-agent.runtime.ts",
   "src/worker/inference-stream.runtime.ts",
   "src/cli/mcp-cli.ts",
+  "src/cli/exec-approvals-local.ts",
   "src/agents/agent-bundle-mcp-materialize.ts",
   "src/plugins/tool-metadata.ts",
   "src/plugins/tools.ts",
@@ -247,6 +260,7 @@ export const preservedModuleBuildAssets = [
   "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins-feishu.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/plugins.json",
   "scripts/e2e/lib/upgrade-survivor/config-recipe/skills.json",
+  "scripts/e2e/lib/upgrade-survivor/config-recipe/tools-tool-search.json",
   ".github/workflows/plugin-npm-release.yml",
   "scripts/lib/vitest-worker-bootstrap.mts",
 ];
@@ -262,6 +276,7 @@ export const vitestWorkerBuildEntries = {
     ...Object.values(sqliteMaintenanceEntrypoints),
     ...Object.values(processProbeEntrypoints),
     busServerShutdownEntrypoint,
+    identityRepeatedTurnEntrypoint,
     vectorKnnParentEntrypoint,
     qaOtelSmokeEntrypoint,
     ...Object.values(nativeBoundaryTestEntrypoints),
@@ -285,14 +300,19 @@ export const vitestWorkerBuildEntries = {
     codexCatalogPageWorkerEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
+    memoryForgetFaultEntrypoint,
+    memoryForgetPlanningObserverEntrypoint,
     sqliteReadOnlyCompileCacheParentEntrypoint,
     ...Object.values(sqliteSnapshotStagingEntrypoints),
     sqliteWorkerStoreCompileCacheParentEntrypoint,
     ...Object.values(nativeProcessTestEntrypoints),
     ...Object.values(storageProcessTestEntrypoints),
     ...Object.values(workerTaskPoolEntrypoints),
+    nativeWorkerLifecycleEntrypoint,
+    nativeWorkerResourceEntrypoint,
     ...Object.values(stateNativeProcessEntrypoints),
     ...Object.values(agentProcessTestEntrypoints),
+    sdkStateOwnerFixtureEntrypoint,
     ...Object.values(pluginProcessRuntimeEntrypoints),
     ...Object.values(pluginRetentionEntrypoints),
     execOutputRetentionEntrypoint,
@@ -316,11 +336,14 @@ export const vitestWorkerBuildEntries = {
     pluginRuntimeRetentionEntrypoint,
     ...groqSetupSdkEntrypoints,
     ...Object.values(cliRecoveryEntrypoints),
+    ...Object.values(cliMessageExitEntrypoints),
     ...Object.values(updateCandidateExitEntrypoints),
     ...Object.values(updateExecutorNativeEntrypoints),
     ...Object.values(updateExecutorEntrypoints),
     ...Object.values(gatewayDirectStopEntrypoints),
     stateDirGatewayFixtureEntrypoint,
+    localStateOwnerFixtureEntrypoint,
+    adminStateOwnerFixtureEntrypoint,
     ...Object.values(doctorConfigRuntimeEntrypoints),
     ...Object.values(cronOwnerHardeningEntrypoints),
     ...(nativeSchtasksIntegrationEnabled
@@ -350,6 +373,8 @@ export const vitestWorkerBuildEntries = {
   ]),
   // The real ulimit fixture must import its parent before imposing a file-size limit.
   "infra/sqlite-snapshot-source": "src/infra/sqlite-snapshot-source.ts",
+  "infra/package-update-activation.process.test-support":
+    "src/infra/package-update-activation.process.test-support.ts",
   // Keep provider preparation in the same compiled graph as payload rendering;
   // a source-injected plugin would miss duplicated registry scope state.
   "plugins/provider-hook-runtime": "src/plugins/provider-hook-runtime.ts",

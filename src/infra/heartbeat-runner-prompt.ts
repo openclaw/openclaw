@@ -5,7 +5,7 @@ import {
 } from "../auto-reply/heartbeat.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readHeartbeatMonitorScratch } from "../cron/scratch-store.js";
+import { readCronScratchSnapshot } from "../cron/scratch-read.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import { SESSION_CREATED_NOTICE_CONTEXT_PREFIX } from "../sessions/session-state-event-kinds.js";
 import { formatErrorMessage } from "./errors.js";
@@ -50,7 +50,6 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   session: ReturnType<typeof resolveHeartbeatSessionSelection>;
   pendingEventEntries: ReturnType<typeof peekSystemEventEntries>;
   turnSourceDeliveryContext: ReturnType<typeof resolveSystemEventDeliveryContext>;
-  hasTaggedCronEvents: boolean;
   shouldInspectPendingEvents: boolean;
   authoritativeScheduledTick: boolean;
   skipReason?: HeartbeatSkipReason;
@@ -90,6 +89,15 @@ export async function resolveHeartbeatPreflight(params: {
   scheduledEveryMs?: number;
   scheduledTasks?: readonly HeartbeatScheduledTask[];
 }): Promise<HeartbeatPreflight> {
+  let monitorScratch: Awaited<ReturnType<typeof readCronScratchSnapshot>>;
+  try {
+    monitorScratch = await readCronScratchSnapshot(resolveCronJobsStorePathFromConfig(params.cfg), {
+      kind: "heartbeat",
+      agentId: params.agentId,
+    });
+  } catch (error) {
+    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
+  }
   const wakeFlags = resolveHeartbeatWakePayloadFlags({
     source: params.source,
     reason: params.reason,
@@ -119,22 +127,12 @@ export async function resolveHeartbeatPreflight(params: {
     wakeFlags.isCronWake ||
     wakeFlags.isWakePayload ||
     hasTaggedCronEvents;
-  let monitorScratch: ReturnType<typeof readHeartbeatMonitorScratch>;
-  try {
-    monitorScratch = readHeartbeatMonitorScratch(
-      resolveCronJobsStorePathFromConfig(params.cfg),
-      params.agentId,
-    );
-  } catch (error) {
-    log.warn(`heartbeat: scratch read failed: ${formatErrorMessage(error)}`);
-  }
   const heartbeatScratchContent = monitorScratch?.state.scratch?.content;
   const basePreflight = {
     ...wakeFlags,
     session,
     pendingEventEntries,
     turnSourceDeliveryContext,
-    hasTaggedCronEvents,
     shouldInspectPendingEvents,
     authoritativeScheduledTick:
       typeof params.scheduledEveryMs === "number" &&
@@ -168,17 +166,12 @@ export async function resolveHeartbeatPreflight(params: {
       skipReason: HEARTBEAT_SKIP_NO_PENDING_EVENT,
     };
   }
-  if (shouldBypassScratchGates) {
-    return basePreflight;
-  }
-  // Cron owns task due-ness. Task wakes still receive ordinary scratch prose,
-  // but empty or missing scratch must never suppress the independently scheduled job.
-  if (params.scheduledTasks?.length) {
-    return basePreflight;
-  }
-  if (heartbeatScratchContent === undefined) {
-    // Without scratch, the model still gets the generic monitor prompt and
-    // decides whether anything needs attention.
+  // Payload/task wakes bypass the empty-scratch gate; absent scratch uses the generic prompt.
+  if (
+    shouldBypassScratchGates ||
+    params.scheduledTasks?.length ||
+    heartbeatScratchContent === undefined
+  ) {
     return basePreflight;
   }
   if (isHeartbeatContentEffectivelyEmpty(heartbeatScratchContent)) {
@@ -217,7 +210,6 @@ export function resolveHeartbeatRunPrompt(params: {
   heartbeat?: HeartbeatConfig;
   preflight: HeartbeatPreflight;
   canRelayToUser: boolean;
-  startedAt: number;
   scheduledTasks: readonly HeartbeatScheduledTask[];
   heartbeatScratchContent?: string;
   useHeartbeatResponseTool: boolean;

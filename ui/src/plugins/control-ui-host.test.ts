@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { ControlUiSessionListSnapshot } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
+import { AssistantDock, type AssistantDockOwner } from "../app/assistant-dock.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { PLUGIN_PANEL_TOGGLE_EVENT } from "../components/panel-toggle-contract.ts";
+import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { i18n } from "../i18n/index.ts";
 import { createAgentCapability } from "../lib/agents/index.ts";
 import {
@@ -23,10 +26,13 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
   const sessions = createTestSessionCapability(gateway);
   const context = { gateway, agents, sessions } as unknown as ApplicationContext;
   const abort = new AbortController();
-  const owner = { client, abort, descriptor: { pluginId: "review" }, disposers: new Set() } as Omit<
-    ControlUiPluginOwner,
-    "host"
-  >;
+  const owner = {
+    client,
+    abort,
+    descriptor: { pluginId: "review" },
+    disposers: new Set(),
+    contributions: { navigation: new Map() },
+  } as Omit<ControlUiPluginOwner, "host">;
   const runtime = new ControlUiPluginRuntime(() => context);
   runtime.start();
   return {
@@ -35,7 +41,7 @@ function createRosterHost(request: GatewayBrowserClient["request"]) {
     runtime,
     agents,
     sessions,
-    dispose() {
+    dispose: () => {
       abort.abort();
       owner.disposers.forEach((dispose) => dispose());
       owner.disposers.clear();
@@ -73,98 +79,94 @@ describe("native UI roster refresh", () => {
       .mockResolvedValueOnce(found)
       .mockResolvedValueOnce(research);
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     const linkedListener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
     const researchListener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      await fixture.sessions.refresh({ agentId: "main" });
-      fixture.host.sessions.observe(
-        { search: "linked", archived: "all", configuredAgentsOnly: false, limit: 1 },
-        linkedListener,
-      );
-      fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
-      await vi.waitFor(() => {
-        expect(linkedListener).toHaveBeenLastCalledWith({
-          loading: false,
-          error: null,
-          result: { sessions: found.sessions, hasMore: true, nextOffset: 1, totalCount: 2 },
-        });
-        expect(researchListener).toHaveBeenLastCalledWith({
-          loading: false,
-          error: null,
-          result: { sessions: research.sessions, hasMore: false, nextOffset: null, totalCount: 1 },
-        });
+    await fixture.sessions.refresh({ agentId: "main" });
+    fixture.host.sessions.observe(
+      { search: "linked", archived: "all", configuredAgentsOnly: false, limit: 1 },
+      linkedListener,
+    );
+    fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
+    await vi.waitFor(() => {
+      expect(linkedListener).toHaveBeenLastCalledWith({
+        loading: false,
+        error: null,
+        result: { sessions: found.sessions, hasMore: true, nextOffset: 1, totalCount: 2 },
       });
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-      expect(fixture.sessions.state.agentId).toBe("main");
-      expect(request.mock.calls[1]).toEqual([
-        "sessions.list",
-        {
-          includeGlobal: true,
-          includeUnknown: true,
-          configuredAgentsOnly: false,
-          limit: 1,
-          archived: "all",
-          search: "linked",
-        },
-      ]);
-      const delivered = linkedListener.mock.lastCall?.[0].result?.sessions[0];
-      if (!delivered) {
-        throw new Error("Expected the observer to receive a session row");
-      }
-      Object.assign(delivered, { label: "Plugin-local edit" });
-      expect(
-        fixture.sessions.listSnapshot({
-          search: "linked",
-          archivedFilter: "all",
-          configuredAgentsOnly: false,
-          limit: 1,
-        }).result?.sessions[0]?.label,
-      ).toBe("Linked session");
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-    } finally {
-      fixture.dispose();
+      expect(researchListener).toHaveBeenLastCalledWith({
+        loading: false,
+        error: null,
+        result: { sessions: research.sessions, hasMore: false, nextOffset: null, totalCount: 1 },
+      });
+    });
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
+    expect(fixture.sessions.state.agentId).toBe("main");
+    expect(request.mock.calls[1]).toEqual([
+      "sessions.list",
+      {
+        rowMode: "compact",
+        source: "chat-pane",
+        includeGlobal: true,
+        includeUnknown: true,
+        configuredAgentsOnly: false,
+        limit: 1,
+        archived: "all",
+        search: "linked",
+      },
+    ]);
+    const delivered = linkedListener.mock.lastCall?.[0].result?.sessions[0];
+    if (!delivered) {
+      throw new Error("Expected the observer to receive a session row");
     }
+    Object.assign(delivered, { label: "Plugin-local edit" });
+    expect(
+      fixture.sessions.listSnapshot({
+        search: "linked",
+        archivedFilter: "all",
+        configuredAgentsOnly: false,
+        limit: 1,
+      }).result?.sessions[0]?.label,
+    ).toBe("Linked session");
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
   it("publishes session query errors and rejects failed refreshes while allowing recovery", async () => {
     const found = sessionsResult([{ key: "agent:writer:linked", kind: "direct", updatedAt: 1 }], 1);
     const request = vi.fn().mockRejectedValueOnce(new Error("Query unavailable"));
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
-      await vi.waitFor(() => {
-        expect(listener).toHaveBeenLastCalledWith({
-          result: null,
-          loading: false,
-          error: "Query unavailable",
-        });
-        expect(fixture.runtime.errors).toContainEqual({
-          pluginId: "review",
-          message: "Query unavailable",
-        });
-      });
-      request.mockResolvedValueOnce(found);
-      await observer.refresh();
-      const result = {
-        sessions: found.sessions,
-        hasMore: undefined,
-        nextOffset: undefined,
-        totalCount: undefined,
-      };
-      expect(listener).toHaveBeenLastCalledWith({ result, loading: false, error: null });
-      request.mockRejectedValueOnce(new Error("Refresh unavailable"));
-      await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
+    const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
+    await vi.waitFor(() => {
       expect(listener).toHaveBeenLastCalledWith({
-        result,
+        result: null,
         loading: false,
-        error: "Refresh unavailable",
+        error: "Query unavailable",
       });
-      expect(fixture.sessions.state.result).toBeNull();
-      expect(fixture.sessions.state.error).toBeNull();
-    } finally {
-      fixture.dispose();
-    }
+      expect(fixture.runtime.errors).toContainEqual({
+        pluginId: "review",
+        message: "Query unavailable",
+      });
+    });
+    request.mockResolvedValueOnce(found);
+    await observer.refresh();
+    const result = {
+      sessions: found.sessions,
+      hasMore: undefined,
+      nextOffset: undefined,
+      totalCount: undefined,
+    };
+    expect(listener).toHaveBeenLastCalledWith({ result, loading: false, error: null });
+    request.mockRejectedValueOnce(new Error("Refresh unavailable"));
+    await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
+    expect(listener).toHaveBeenLastCalledWith({
+      result,
+      loading: false,
+      error: "Refresh unavailable",
+    });
+    expect(fixture.sessions.state.result).toBeNull();
+    expect(fixture.sessions.state.error).toBeNull();
   });
 
   it("ends session query callbacks and refresh authority when its view is disposed", async () => {
@@ -249,21 +251,18 @@ describe("native UI roster refresh", () => {
         .mockResolvedValueOnce(surface === "agents" ? firstAgents : firstSessions)
         .mockResolvedValueOnce(surface === "agents" ? nextAgents : nextSessions);
       const fixture = createRosterHost(request);
-      try {
-        if (surface === "agents") {
-          await fixture.agents.ensureList();
-        } else {
-          await fixture.sessions.refresh({ agentId: "research", search: "draft", limit: 5 });
-        }
-        await fixture.host[surface].refresh();
-        expect(fixture.host[surface].rows).toEqual(
-          surface === "agents" ? nextAgents.agents : nextSessions.sessions,
-        );
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(request.mock.calls[1]).toEqual(request.mock.calls[0]);
-      } finally {
-        fixture.dispose();
+      onTestFinished(fixture.dispose);
+      if (surface === "agents") {
+        await fixture.agents.ensureList();
+      } else {
+        await fixture.sessions.refresh({ agentId: "research", search: "draft", limit: 5 });
       }
+      await fixture.host[surface].refresh();
+      expect(fixture.host[surface].rows).toEqual(
+        surface === "agents" ? nextAgents.agents : nextSessions.sessions,
+      );
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(request.mock.calls[1]).toEqual(request.mock.calls[0]);
     },
   );
 
@@ -272,15 +271,12 @@ describe("native UI roster refresh", () => {
     async (surface) => {
       const request = vi.fn().mockRejectedValue(new Error("Roster unavailable"));
       const fixture = createRosterHost(request);
-      try {
-        await expect(fixture.host[surface].refresh()).rejects.toThrow();
-        expect(request).toHaveBeenCalledOnce();
-        expect(
-          surface === "agents" ? fixture.agents.state.agentsError : fixture.sessions.state.error,
-        ).toBe("Roster unavailable");
-      } finally {
-        fixture.dispose();
-      }
+      onTestFinished(fixture.dispose);
+      await expect(fixture.host[surface].refresh()).rejects.toThrow();
+      expect(request).toHaveBeenCalledOnce();
+      expect(
+        surface === "agents" ? fixture.agents.state.agentsError : fixture.sessions.state.error,
+      ).toBe("Roster unavailable");
     },
   );
 });
@@ -349,18 +345,15 @@ describe("native UI session mutations", () => {
   it("rejects a session patch that its session owner could not complete", async () => {
     const request = vi.fn();
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     fixture.sessions.dispose();
-    try {
-      await expect(
-        fixture.host.sessions.patch(
-          { sessionKey: "global", agentId: "writer" },
-          { label: "Updated" },
-        ),
-      ).rejects.toThrow("The session update did not complete");
-      expect(request).not.toHaveBeenCalled();
-    } finally {
-      fixture.dispose();
-    }
+    await expect(
+      fixture.host.sessions.patch(
+        { sessionKey: "global", agentId: "writer" },
+        { label: "Updated" },
+      ),
+    ).rejects.toThrow("The session update did not complete");
+    expect(request).not.toHaveBeenCalled();
   });
 });
 
@@ -403,6 +396,47 @@ describe("native UI locale subscription", () => {
 });
 
 describe("native UI page navigation", () => {
+  it("pins only registered destinations once through sidebar preferences and retires pin handles", () => {
+    const fixture = createRosterHost(vi.fn());
+    onTestFinished(fixture.dispose);
+    let sidebarEntries = ["route:usage", "session:agent:main:existing"];
+    const update = vi.fn((patch: { sidebarEntries: string[] }) => {
+      sidebarEntries = patch.sidebarEntries;
+    });
+    Object.assign(fixture.context, {
+      navigation: {
+        get snapshot() {
+          return { sidebarEntries };
+        },
+        update,
+      },
+    });
+    const view = new AbortController();
+    const pin = scopeControlUiHost(fixture.host, view.signal).ui.pinNavigation;
+    pin("board");
+    expect(update).not.toHaveBeenCalled();
+    const unregister = fixture.host.ui.registerNavigation({
+      id: "board",
+      label: "Board",
+      page: { id: "board" },
+      defaultVisible: false,
+    });
+    pin("foreign/board");
+    pin("board");
+    pin("board");
+    expect(update).toHaveBeenCalledExactlyOnceWith({
+      sidebarEntries: ["route:usage", "session:agent:main:existing", "plugin:review/board"],
+    });
+    unregister();
+    sidebarEntries = ["route:usage"];
+    pin("board");
+    expect(update).toHaveBeenCalledOnce();
+    view.abort();
+    expect(() => pin("board")).toThrow("view has ended");
+    fixture.dispose();
+    expect(() => fixture.host.ui.pinNavigation("board")).toThrow("activation has ended");
+  });
+
   it("opens a queried global session with its owner before changing the selected key", async () => {
     const primary = sessionsResult(
       [{ key: "global", kind: "global", agentId: "main", boardFace: "dashboard" }],
@@ -414,6 +448,7 @@ describe("native UI page navigation", () => {
     );
     const request = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(queried);
     const fixture = createRosterHost(request);
+    onTestFinished(fixture.dispose);
     const selection = createAgentSelectionCapability(
       {
         ...fixture.context.gateway,
@@ -429,30 +464,26 @@ describe("native UI page navigation", () => {
     Object.assign(fixture.context, { basePath: "", agentSelection: selection, navigate });
     Object.assign(fixture.context.gateway, { setSessionKey });
     const listener = vi.fn<(snapshot: ControlUiSessionListSnapshot) => void>();
-    try {
-      await fixture.sessions.refresh({ agentId: "main" });
-      fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
-      await vi.waitFor(() =>
-        expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
-      );
-      const session = listener.mock.lastCall?.[0].result?.sessions[0];
-      if (!session) {
-        throw new Error("Expected the queried global session");
-      }
-
-      fixture.host.sessions.open({ sessionKey: session.key, agentId: session.agentId });
-
-      expect(navigate).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ pathname: "/chat/writer" }),
-      );
-      expect(setSessionKey).toHaveBeenCalledWith("global");
-      expect(selectedWhenKeyChanged).toBe("writer");
-      expect(fixture.sessions.state.agentId).toBe("main");
-      expect(fixture.host.sessions.rows).toEqual(primary.sessions);
-    } finally {
-      fixture.dispose();
+    await fixture.sessions.refresh({ agentId: "main" });
+    fixture.host.sessions.observe({ agentId: "writer", includeGlobal: true }, listener);
+    await vi.waitFor(() =>
+      expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(queried.sessions),
+    );
+    const session = listener.mock.lastCall?.[0].result?.sessions[0];
+    if (!session) {
+      throw new Error("Expected the queried global session");
     }
+
+    fixture.host.sessions.open({ sessionKey: session.key, agentId: session.agentId });
+
+    expect(navigate).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({ pathname: "/chat/writer" }),
+    );
+    expect(setSessionKey).toHaveBeenCalledWith("global");
+    expect(selectedWhenKeyChanged).toBe("writer");
+    expect(fixture.sessions.state.agentId).toBe("main");
+    expect(fixture.host.sessions.rows).toEqual(primary.sessions);
   });
 
   it.each(["native", "generic", "slug"])(
@@ -532,4 +563,169 @@ describe("native UI page navigation", () => {
       }
     },
   );
+});
+
+describe("native UI plugin panels", () => {
+  it("opens only owned panels and retires retained view and activation handles", () => {
+    const navigate = vi.fn();
+    const context = {
+      basePath: "",
+      navigate,
+      gateway: { snapshot: { sessionKey: "agent:main:main", hello: null }, setSessionKey: vi.fn() },
+      agents: { state: { agentsList: null } },
+      agentSelection: { state: { selectedId: "main" }, set: vi.fn() },
+      sessions: { state: { result: null } },
+    } as unknown as ApplicationContext;
+    const abort = new AbortController();
+    const owner = {
+      abort,
+      descriptor: { pluginId: "review" },
+      disposers: new Set(),
+      contributions: { panels: new Map([["document", {}]]) },
+    } as Omit<ControlUiPluginOwner, "host">;
+    const runtime = {
+      isCurrent: () => !abort.signal.aborted,
+    } as unknown as ControlUiPluginRuntime;
+    const host = createControlUiPluginHost(() => context, runtime, owner);
+    const listener = vi.fn();
+    window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
+    try {
+      expect(() => host.ui.openPanel("foreign/document")).toThrow("own registered panel");
+      const view = new AbortController();
+      const open = scopeControlUiHost(host, view.signal).ui.openPanel;
+      open("document", { sessionKey: "global", agentId: "writer" });
+      expect(navigate).toHaveBeenCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/writer" }),
+      );
+      expect(listener).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          detail: {
+            pluginId: "review",
+            panelId: "document",
+            sessionKey: "global",
+            agentId: "writer",
+            open: true,
+          },
+        }),
+      );
+      expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).not.toBeNull();
+      open("document", { sessionKey: "agent:writer:document" });
+      expect(navigate).toHaveBeenLastCalledWith(
+        "chat",
+        expect.objectContaining({ pathname: "/chat/writer/document" }),
+      );
+      expect(context.agentSelection.set).toHaveBeenLastCalledWith("writer");
+      expect(listener).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          detail: expect.objectContaining({
+            sessionKey: "agent:writer:document",
+            agentId: "writer",
+          }),
+        }),
+      );
+      expect(
+        takeSessionPanelToggle("plugin:review/document", "agent:writer:document", "writer"),
+      ).not.toBeNull();
+      view.abort();
+      expect(() => open("document")).toThrow("view has ended");
+      abort.abort();
+      expect(() => host.ui.openPanel("document")).toThrow("activation has ended");
+    } finally {
+      window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
+      abort.abort();
+    }
+  });
+});
+
+describe("native UI conversation dock", () => {
+  it("adapts dock operations, publishes snapshots, and retires activation and view handles", () => {
+    const dock = new AssistantDock();
+    let session: { key: string; activation: object } | null = null;
+    const panel: AssistantDockOwner = {
+      openSession: vi.fn((params, activation) => {
+        session = { key: params.sessionKey, activation };
+        dock.notify();
+      }),
+      closeSession: vi.fn((activation) => {
+        if (!activation || activation === session?.activation) {
+          session = null;
+          dock.notify();
+        }
+      }),
+      get openSessionKey() {
+        return session?.key ?? null;
+      },
+    };
+    const detach = dock.attach(panel);
+    const subscribe = () => () => undefined;
+    const client = new GatewayBrowserClient({ url: "ws://gateway.example.test" });
+    const { gateway } = createGatewayHarness(client);
+    const context = {
+      assistantDock: dock,
+      gateway,
+      sessions: { subscribe },
+      agents: { subscribe },
+      agentSelection: { subscribe },
+      theme: { subscribe },
+    } as unknown as ApplicationContext;
+    const runtime = new ControlUiPluginRuntime(() => context);
+    runtime.start();
+    const makeHost = () => {
+      const owner = {
+        client,
+        abort: new AbortController(),
+        descriptor: { pluginId: "review" },
+        disposers: new Set(),
+      } as Omit<ControlUiPluginOwner, "host">;
+      return {
+        host: createControlUiPluginHost(() => context, runtime, owner),
+        dispose: () => {
+          owner.abort.abort();
+          owner.disposers.forEach((dispose) => dispose());
+          owner.disposers.clear();
+        },
+      };
+    };
+    const first = makeHost();
+    const second = makeHost();
+    const notified = vi.fn(() => second.host.dock?.openSessionKey);
+    const stop = second.host.subscribe(notified);
+    const params = {
+      sessionKey: "agent:research:review",
+      agentId: "research",
+      label: "Review",
+      context: { page: "review:board", detail: { filter: "stuck" } },
+    };
+    try {
+      expect(first.host.dock?.openSessionKey).toBeNull();
+      first.host.dock?.openSession(params);
+      expect(panel.openSession).toHaveBeenCalledWith(params, expect.any(AbortController));
+      expect(notified).toHaveLastReturnedWith(params.sessionKey);
+      first.host.dock?.close();
+      expect(notified).toHaveLastReturnedWith(null);
+      first.host.dock?.openSession(params);
+      const view = new AbortController();
+      const scoped = scopeControlUiHost(second.host, view.signal);
+      const retainedOpen = scoped.dock!.openSession;
+      retainedOpen({ ...params, sessionKey: "agent:research:second" });
+      view.abort();
+      // Navigation retires a view's handles, but the activation still owns its dock.
+      expect(second.host.dock?.openSessionKey).toBe("agent:research:second");
+      expect(() => retainedOpen(params)).toThrow("view has ended");
+      first.dispose();
+      expect(second.host.dock?.openSessionKey).toBe("agent:research:second");
+      const close = second.host.dock!.close;
+      second.dispose();
+      expect(dock.openSessionKey).toBeNull();
+      expect(() => close()).toThrow("activation has ended");
+    } finally {
+      stop();
+      first.dispose();
+      second.dispose();
+      detach();
+      runtime.dispose();
+      client.stop();
+    }
+  });
 });

@@ -34,18 +34,15 @@ extension AgentProTab {
         .accessibilityValue(agentRosterFilter.title)
     }
 
-    @ViewBuilder
     var gatewayToolbarButton: some View {
-        if let openSettings {
-            Button(action: openSettings) {
-                Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
-            }
-            .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
-            .accessibilityLabel(self.gatewayConnected
-                ? String(localized: "Gateway online")
-                : String(localized: "Gateway offline"))
-            .accessibilityHint("Opens Settings / Gateway")
+        Button(action: self.openSettings) {
+            Image(systemName: self.gatewayConnected ? "antenna.radiowaves.left.and.right" : "wifi.slash")
         }
+        .tint(self.gatewayConnected ? OpenClawBrand.ok : .secondary)
+        .accessibilityLabel(self.gatewayConnected
+            ? String(localized: "Gateway online")
+            : String(localized: "Gateway offline"))
+        .accessibilityHint("Opens Settings / Gateway")
     }
 
     var agentFiltersActive: Bool {
@@ -156,7 +153,7 @@ extension AgentProTab {
             let haystack = [
                 self.agentName(for: agent),
                 agent.id,
-                self.normalized(agent.workspace),
+                agent.workspace?.trimmedNonEmpty,
                 RootSidebar.agentModelLabel(agent),
             ]
                 .compactMap(\.self)
@@ -166,8 +163,8 @@ extension AgentProTab {
     }
 
     var activeAgentID: String {
-        normalized(appModel.selectedAgentId)
-            ?? normalized(appModel.gatewayDefaultAgentId)
+        appModel.selectedAgentId?.trimmedNonEmpty
+            ?? appModel.gatewayDefaultAgentId?.trimmedNonEmpty
             ?? "main"
     }
 

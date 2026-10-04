@@ -6,6 +6,7 @@ import type { FileLockHandle } from "@openclaw/fs-safe/file-lock";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WithDistArtifactOwnership } from "../../../scripts/lib/runtime-artifact-contract.js";
 import { loadSourceRuntimePreparation } from "../../../scripts/lib/source-update-artifact-preflight.mts";
+import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
 import { resolveUpdateInstallKind } from "../../infra/update-check.js";
 import type { PluginLifecycleLeaseContext } from "../../plugins/plugin-lifecycle-lease.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
@@ -60,20 +61,38 @@ export async function completeSourceUpdateRuntime(params: {
       if (prepared.changed) {
         await params.beforePublication?.();
         params.lease.assertOwned();
-        await withGatewayRuntimeArtifactPublication(
-          {
-            root,
-            env: process.env,
-            timeoutMs: params.timeoutMs,
-            assertCurrent: () => params.lease.assertOwned(),
-          },
-          async (assertPublicationCurrent) => {
-            await prepared.publish(async () => {
-              await params.beforePersistentEffect?.();
-              await assertPublicationCurrent();
-              params.lease.assertOwned();
-            });
-          },
+        const publicationFailures: unknown[] = [];
+        try {
+          await withGatewayRuntimeArtifactPublication(
+            {
+              root,
+              env: process.env,
+              timeoutMs: params.timeoutMs,
+              assertCurrent: () => params.lease.assertOwned(),
+            },
+            async (assertPublicationCurrent) => {
+              params.lease.renew?.();
+              await prepared.publish(async () => {
+                await params.beforePersistentEffect?.();
+                await assertPublicationCurrent();
+                params.lease.assertOwned();
+              });
+            },
+          );
+        } catch (error) {
+          publicationFailures.push(error);
+        }
+        try {
+          // Publication has settled rollback and released its temporary authority.
+          params.lease.renew?.();
+        } catch (error) {
+          if (!publicationFailures.includes(error)) {
+            publicationFailures.push(error);
+          }
+        }
+        throwSqliteLifecycleErrors(
+          publicationFailures,
+          "Runtime publication and plugin lease renewal restoration failed.",
         );
       }
     } catch (error) {

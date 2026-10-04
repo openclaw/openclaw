@@ -195,7 +195,7 @@ describe("loopback ask_user Telegram channel transport", () => {
           await withQuestionGateway(async (gateway) => {
             const config: OpenClawConfig = {
               ...expectDefined(getRuntimeConfigSnapshot(), "isolated question gateway config"),
-              agents: { defaults: { workspace: dir }, entries: { main: { default: true } } },
+              agents: { defaults: { workspace: dir }, entries: { main: {} } },
               plugins: { enabled: false },
               tools: { profile: "full" },
               channels: {

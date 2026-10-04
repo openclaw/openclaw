@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
-import type { SessionInitResult } from "./session.js";
+import type { SessionInitResult } from "./session-init.types.js";
 
 export async function prepareReplySessionDiffBaseline(params: {
   agentId: string;

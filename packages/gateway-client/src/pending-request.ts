@@ -283,7 +283,7 @@ export class GatewayPendingRequests {
     errorCode?: string,
   ): void {
     const endedAtMs = this.opts.nowMs();
-    try {
+    this.invoke("request timing", () =>
       this.opts.onTiming?.({
         id,
         method: pending.method,
@@ -292,10 +292,8 @@ export class GatewayPendingRequests {
         startedAtMs: pending.startedAtMs,
         endedAtMs,
         errorCode,
-      });
-    } catch (error) {
-      this.opts.onCallbackError?.("request timing", error);
-    }
+      }),
+    );
   }
 
   private invoke(label: string, callback: () => void): void {

@@ -1,20 +1,19 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { html, svg, nothing } from "lit";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { createMsFormatter, formatTimeMs } from "../../lib/format.ts";
 import { formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.ts";
-import type { TimeSeriesPoint } from "./types.ts";
+import type { UsageProps } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
 
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
 const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
-const CHART_SELECTION_OPACITY = 0.06; // Opacity of range selection overlay
+const CHART_SELECTION_OPACITY = 0.06;
 const HANDLE_WIDTH = 5; // Width of drag handle in SVG units
-const HANDLE_HEIGHT = 12; // Height of drag handle
+const HANDLE_HEIGHT = 12;
 const HANDLE_GRIP_OFFSET = 0.7; // Offset of grip lines inside handle
 
 function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 1): number {
@@ -26,21 +25,24 @@ function dateBoundaryMs(date: string, timeZone: "local" | "utc", dayOffset: 0 | 
 }
 
 export function renderTimeSeriesCompact(
-  timeSeries: { points: TimeSeriesPoint[] } | null,
-  loading: boolean,
-  status: PanelRefreshStatus,
-  mode: "cumulative" | "per-turn",
-  onModeChange: (mode: "cumulative" | "per-turn") => void,
-  breakdownMode: "total" | "by-type",
-  onBreakdownChange: (mode: "total" | "by-type") => void,
-  startDate?: string,
-  endDate?: string,
-  selectedDays?: string[],
-  timeZone: "local" | "utc" = "local",
-  cursorStart?: number | null,
-  cursorEnd?: number | null,
-  onCursorRangeChange?: (start: number | null, end: number | null) => void,
+  detail: UsageProps["detail"],
+  callbacks: UsageProps["callbacks"]["details"],
+  {
+    startDate,
+    endDate,
+    selectedDays,
+    timeZone,
+  }: Pick<UsageProps["filters"], "startDate" | "endDate" | "selectedDays" | "timeZone">,
 ) {
+  const {
+    timeSeries,
+    timeSeriesLoading: loading,
+    timeSeriesStatus: status,
+    timeSeriesMode: mode,
+    timeSeriesBreakdownMode: breakdownMode,
+    timeSeriesCursorStart: cursorStart,
+    timeSeriesCursorEnd: cursorEnd,
+  } = detail;
   if ((loading || status.awaitingGateway) && !status.hasLoaded) {
     return html`
       <div class="session-timeseries-compact">
@@ -67,10 +69,10 @@ export function renderTimeSeriesCompact(
   }
 
   let points = timeSeries.points;
-  if (startDate || endDate || (selectedDays && selectedDays.length > 0)) {
+  if (startDate || endDate || selectedDays.length > 0) {
     const startTs = startDate ? dateBoundaryMs(startDate, timeZone, 0) : 0;
     const endTs = endDate ? dateBoundaryMs(endDate, timeZone, 1) : Infinity;
-    const selectedDaySet = selectedDays?.length ? new Set(selectedDays) : undefined;
+    const selectedDaySet = selectedDays.length ? new Set(selectedDays) : undefined;
     points = timeSeries.points.filter((p) => {
       if (p.timestamp < startTs || p.timestamp >= endTs) {
         return false;
@@ -101,7 +103,6 @@ export function renderTimeSeriesCompact(
   const rangeStartTs = hasSelection ? Math.min(cursorStart, cursorEnd) : 0;
   const rangeEndTs = hasSelection ? Math.max(cursorStart, cursorEnd) : Infinity;
 
-  // Find start/end indices for dimming
   let rangeStartIdx = 0;
   let rangeEndIdx = points.length;
   if (hasSelection) {
@@ -146,22 +147,19 @@ export function renderTimeSeriesCompact(
         : p.totalTokens,
   );
   const maxValue = Math.max(...barTotals, 1);
-  // Ensure bars + gaps fit exactly within chartWidth
   const slotWidth = chartWidth / points.length; // space per bar including gap
   const barWidth = Math.min(CHART_MAX_BAR_WIDTH, Math.max(1, slotWidth * CHART_BAR_WIDTH_RATIO));
   const barGap = slotWidth - barWidth;
 
   const leftHandleX = padding.left + rangeStartIdx * (barWidth + barGap);
   const rightHandleX =
-    rangeEndIdx >= points.length
-      ? padding.left + (points.length - 1) * (barWidth + barGap) + barWidth // right edge of last bar
-      : padding.left + (rangeEndIdx - 1) * (barWidth + barGap) + barWidth; // right edge of last selected bar
+    padding.left + (Math.min(rangeEndIdx, points.length) - 1) * (barWidth + barGap) + barWidth;
   const firstTimestamp = expectDefined(points[0], "time series first point").timestamp;
   const lastTimestamp = expectDefined(points.at(-1), "time series last point").timestamp;
   const cursorLeft = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeStartTs));
   const cursorRight = Math.max(firstTimestamp, Math.min(lastTimestamp, rangeEndTs));
   const moveCursor = (side: "left" | "right", timestamp: number) => {
-    onCursorRangeChange?.(
+    callbacks.onTimeSeriesCursorRangeChange(
       side === "left" ? Math.max(firstTimestamp, Math.min(timestamp, cursorRight)) : cursorLeft,
       side === "right" ? Math.min(lastTimestamp, Math.max(timestamp, cursorLeft)) : cursorRight,
     );
@@ -204,7 +202,7 @@ export function renderTimeSeriesCompact(
                   <div class="settings-segmented settings-segmented--accent small">
                     <button
                       class="btn btn--sm settings-segmented__btn settings-segmented__btn--active"
-                      @click=${() => onCursorRangeChange?.(null, null)}
+                      @click=${() => callbacks.onTimeSeriesCursorRangeChange(null, null)}
                     >
                       ${t("usage.details.reset")}
                     </button>
@@ -217,8 +215,8 @@ export function renderTimeSeriesCompact(
             variant: "accent",
             className: "small",
             value: mode,
-            onChange: onModeChange,
-            onReselect: onModeChange,
+            onChange: callbacks.onTimeSeriesModeChange,
+            onReselect: callbacks.onTimeSeriesModeChange,
             options: [
               { value: "per-turn", label: t("usage.details.perTurn") },
               { value: "cumulative", label: t("usage.details.cumulative") },
@@ -231,8 +229,8 @@ export function renderTimeSeriesCompact(
                   variant: "accent",
                   className: "small",
                   value: breakdownMode,
-                  onChange: onBreakdownChange,
-                  onReselect: onBreakdownChange,
+                  onChange: callbacks.onTimeSeriesBreakdownChange,
+                  onReselect: callbacks.onTimeSeriesBreakdownChange,
                   options: [
                     { value: "total", label: t("usage.daily.total") },
                     { value: "by-type", label: t("usage.daily.byType") },
@@ -264,12 +262,10 @@ export function renderTimeSeriesCompact(
             ({ y, text }) =>
               svg`<text x="${padding.left - 4}" y="${y}" text-anchor="end" class="ts-axis-label">${text}</text>`,
           )}
-          <!-- X axis labels (first and last) -->
           ${svg`
-            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(expectDefined(points[0], "time series first point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
-            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(expectDefined(points.at(-1), "time series last point").timestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
+            <text x="${padding.left}" y="${padding.top + chartHeight + 10}" text-anchor="start" class="ts-axis-label">${formatTimeMs(firstTimestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
+            <text x="${width - padding.right}" y="${padding.top + chartHeight + 10}" text-anchor="end" class="ts-axis-label">${formatTimeMs(lastTimestamp, { hour: "2-digit", minute: "2-digit", ...timeZoneOptions }, "")}</text>
           `}
-          <!-- Bars -->
           ${points.map((p, i) => {
             const val = expectDefined(barTotals[i], "time series bar total");
             const x = padding.left + i * (barWidth + barGap);
@@ -332,7 +328,7 @@ export function renderTimeSeriesCompact(
         <!-- Handle drag zones (only on handles, not full chart) -->
         ${(() => {
           const makeDragHandler = (side: "left" | "right") => (e: MouseEvent) => {
-            if (!onCursorRangeChange || !(e.currentTarget instanceof HTMLElement)) {
+            if (!(e.currentTarget instanceof HTMLElement)) {
               return;
             }
             e.preventDefault();

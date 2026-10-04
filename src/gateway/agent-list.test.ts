@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { listGatewayAgentsBasic } from "./agent-list.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -19,20 +19,19 @@ describe("listGatewayAgentsBasic", () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   });
   afterEach(() => vi.unstubAllEnvs());
-  it("projects sole, retained-legacy, and explicit fleet ownership honestly", async () => {
+  it("projects sole, Doctor-migrated, and ownerless fleet ownership honestly", async () => {
     expect(await listGatewayAgentsBasic({ agents: { entries: { ops: {} } } })).toMatchObject({
       defaultId: "ops",
       ownership: "sole",
       selectionRequired: false,
     });
 
-    const legacy = retainLegacyDefaultAgentId(
-      { agents: { entries: { first: {}, retired: {}, research: {} } } },
-      "retired",
-    );
-    expect(await listGatewayAgentsBasic(legacy)).toMatchObject({
+    const { config: migrated } = createCanonicalAgentConfigFixture({
+      agents: { entries: { first: {}, retired: { default: true }, research: {} } },
+    });
+    expect(await listGatewayAgentsBasic(migrated)).toMatchObject({
       defaultId: "retired",
-      ownership: "legacy",
+      ownership: "explicit",
       selectionRequired: false,
     });
 
@@ -72,7 +71,7 @@ describe("listGatewayAgentsBasic", () => {
       throw new Error("Roster inventory must not block the Gateway thread");
     });
     onTestFinished(() => syncRead.mockRestore());
-    const cfg = { agents: { entries: { main: { default: true } } } };
+    const cfg = { agents: { entries: { main: {} } } };
     const result = await listGatewayAgentsBasic(cfg);
 
     expect(result.agents).toEqual([
@@ -92,7 +91,7 @@ describe("listGatewayAgentsBasic", () => {
     expect(
       (
         await listGatewayAgentsBasic({
-          agents: { entries: { main: { default: true } } },
+          agents: { entries: { main: {} } },
         })
       ).agents,
     ).toEqual([{ id: "main", kind: "agent", name: undefined }]);
@@ -102,10 +101,9 @@ describe("listGatewayAgentsBasic", () => {
     await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "openclaw", name: "OpenClaw" },
-        ],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, openclaw: { name: "OpenClaw" } },
       },
     };
 
@@ -119,7 +117,7 @@ describe("listGatewayAgentsBasic", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },
       agents: {
-        list: [{ id: "main", default: true, identity: { name: "小金" } }],
+        entries: { main: { identity: { name: "小金" } } },
       },
     };
 
@@ -132,32 +130,17 @@ describe("listGatewayAgentsBasic", () => {
     const cfg: OpenClawConfig = {
       session: { mainKey: "main" },
       agents: {
-        list: [
-          {
-            id: "main",
-            default: true,
+        entries: {
+          main: {
             name: "Ops",
             identity: { name: "开发助手" },
           },
-        ],
+        },
       },
     };
 
     const result = await listGatewayAgentsBasic(cfg);
 
     expect(result.agents).toEqual([{ id: "main", kind: "agent", name: "Ops" }]);
-  });
-
-  it("leaves the name unset when neither agents.list[].name nor identity.name is present", async () => {
-    const cfg: OpenClawConfig = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true, identity: {} }],
-      },
-    };
-
-    const result = await listGatewayAgentsBasic(cfg);
-
-    expect(result.agents).toEqual([{ id: "main", kind: "agent", name: undefined }]);
   });
 });

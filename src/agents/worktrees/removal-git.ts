@@ -6,7 +6,13 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
-import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import {
+  commandError,
+  listGitWorktrees,
+  requireGit,
+  resolveGitMetadataPath,
+  runGit,
+} from "./git.js";
 import { canonicalPathKey } from "./orphan-paths.js";
 import { WorktreeBranchMovedError } from "./removal-errors.js";
 import type { ExactStateRetirement } from "./snapshot-exact-state-contract.js";
@@ -159,13 +165,7 @@ export async function withExactStateGitLocks<T>(
   const held: { path: string; handle: FileHandle; dev: number; ino: number }[] = [];
   try {
     for (const name of ["index", "HEAD", `refs/heads/${record.branch}`, ...additionalRefs]) {
-      const target =
-        path.resolve(
-          record.path,
-          normalizeGitPathForFilesystem(
-            await requireGit(record.path, ["rev-parse", "--git-path", name], options),
-          ),
-        ) + ".lock";
+      const target = (await resolveGitMetadataPath(record.path, name, options)) + ".lock";
       // Packed branches can have no loose-ref parent yet. Git still locks this
       // exact loose-ref path before updating or deleting a packed branch.
       assertCurrent();
@@ -304,12 +304,7 @@ export async function hasExactWorktreeIndex(
   metadata: ExactStateSnapshot,
   options: GitOptions,
 ): Promise<boolean> {
-  const index = path.resolve(
-    sourcePath,
-    normalizeGitPathForFilesystem(
-      await requireGit(sourcePath, ["rev-parse", "--git-path", "index"], options),
-    ),
-  );
+  const index = await resolveGitMetadataPath(sourcePath, "index", options);
   const original = await fs.readFile(index).catch(missingPathOrThrow);
   if (!original) {
     return false;
@@ -340,6 +335,7 @@ export async function restoreRetiredExactWorktree<T>(params: {
   metadata: ExactStateSnapshot;
   options: GitOptions;
   assertCurrent: () => void;
+  admitCapacity: (requiredPaths: readonly string[]) => Promise<void>;
   finalize: () => Promise<T>;
 }): Promise<T | undefined> {
   const { record, metadata, options, assertCurrent } = params;
@@ -405,6 +401,7 @@ export async function restoreRetiredExactWorktree<T>(params: {
       assertCurrent();
       assertExactStateSourceIdentity(sourcePath, metadata);
     };
+    await params.admitCapacity([record.repoRoot, record.path, sourcePath]);
     beforeMove();
     // Native move never overlays a recreated live path. Once admitted, join it;
     // cancellation must not strand a partially completed filesystem rename.

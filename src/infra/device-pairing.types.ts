@@ -2,6 +2,9 @@
 // Leaf contract shared by the domain modules (device-pairing.ts,
 // device-bootstrap.ts) and the SQLite row mapper (device-pairing-store.ts);
 // keeping it import-free of both sides prevents module cycles.
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type { DevicePairRequestedEventSchema } from "../../packages/gateway-protocol/src/schema/devices.js";
 import type {
   DeviceBootstrapProfile,
   PairingSetupAccess,
@@ -9,24 +12,9 @@ import type {
 import type { NodeHostStats } from "../shared/node-host-stats.js";
 
 /** Pending device pairing request awaiting owner approval. */
-export type DevicePairingPendingRequest = {
-  requestId: string;
-  deviceId: string;
-  publicKey: string;
-  displayName?: string;
-  platform?: string;
-  deviceFamily?: string;
-  clientId?: string;
-  clientMode?: string;
-  browserOrigin?: string;
-  role?: string;
-  roles?: string[];
-  scopes?: string[];
-  remoteIp?: string;
-  silent?: boolean;
-  isRepair?: boolean;
-  ts: number;
-};
+export type DevicePairingPendingRequest = SchemaContract<
+  Static<typeof DevicePairRequestedEventSchema>
+>;
 
 // Internal pending record. refreshedAtMs is a TTL keepalive stamped on refresh so an
 // actively retrying device keeps one pending request (and requestId) alive instead of

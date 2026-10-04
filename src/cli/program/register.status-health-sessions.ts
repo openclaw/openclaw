@@ -1,4 +1,3 @@
-// Status, health, sessions, and task/flow command registration.
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
@@ -7,7 +6,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
-import { registerTasksCommand } from "./register.tasks.js";
+import type { SessionsImportOptions } from "../sessions-import.js";
 
 type SessionsListCliOptions = {
   json?: boolean;
@@ -207,7 +206,7 @@ async function runWithVerboseAndTimeout(
   });
 }
 
-/** Register status/health plus persistent session/task inspection command groups. */
+/** Register status/health plus persistent session inspection command groups. */
 export function registerStatusHealthSessionsCommands(program: Command) {
   program
     .command("status")
@@ -447,6 +446,66 @@ export function registerStatusHealthSessionsCommands(program: Command) {
   registerSessionsLifecycleCommand(sessionsCmd, "archive");
   registerSessionsLifecycleCommand(sessionsCmd, "delete");
 
+  addSessionsGatewayOptions(sessionsCmd.command("import [catalogId] [threadId]"))
+    .description("Preserve native catalog transcripts in ordinary OpenClaw sessions")
+    .option("--all", "Import every visible catalog session, paging each source", false)
+    .option("--catalog <id>", "Catalog to import with --all (for example: claude or codex)")
+    .option("--host <hostId>", "Source host (single transcript default: discover the Gateway host)")
+    .option("--source-home <id>", "Source home for a single transcript")
+    .option("--limit <n>", "Maximum number of sessions to import with --all")
+    .option("--dry-run", "List the transcripts that would be imported without writing", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ["openclaw sessions import claude <thread-id>", "Preserve a Claude Code transcript."],
+          ["openclaw sessions import codex <thread-id>", "Preserve a Codex transcript."],
+          ["openclaw sessions import --all --json", "Import or sync every visible transcript."],
+          [
+            "openclaw sessions import --all --catalog claude --limit 20 --dry-run",
+            "Preview a bounded Claude Code import.",
+          ],
+        ])}`,
+    )
+    .action(
+      async (
+        catalogId: string | undefined,
+        threadId: string | undefined,
+        opts: SessionsImportOptions,
+        command: Command,
+      ) => {
+        const parentOpts = command.parent?.opts<SessionsListCliOptions>();
+        rejectUnsupportedSessionsParentOptions(
+          "import",
+          parentOpts,
+          ["store", "allAgents", "active", "limit", "verbose"],
+          "catalog imports use Gateway sources; pass --limit after import to bound --all",
+        );
+        await runCommandWithRuntime(defaultRuntime, async () => {
+          const { sessionsImportCommand } = await import("../sessions-import.js");
+          await sessionsImportCommand(
+            {
+              catalogId,
+              threadId,
+              all: Boolean(opts.all),
+              catalog: opts.catalog,
+              host: opts.host,
+              sourceHome: opts.sourceHome,
+              agent: opts.agent ?? parentOpts?.agent,
+              limit: opts.limit,
+              dryRun: Boolean(opts.dryRun),
+              timeout: opts.timeout,
+              url: opts.url,
+              token: opts.token,
+              password: opts.password,
+              json: Boolean(opts.json || parentOpts?.json),
+            },
+            defaultRuntime,
+          );
+        });
+      },
+    );
+
   addSessionsGatewayOptions(sessionsCmd.command("compact <key>"))
     .description("Compact a stored session transcript via the running gateway")
     .option(
@@ -507,6 +566,4 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         );
       });
     });
-
-  registerTasksCommand(program);
 }

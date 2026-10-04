@@ -1,5 +1,6 @@
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
 import { UPDATE_PREFLIGHT_DETAILS } from "../infra/update-preflight-details.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 
 /** Native probe facts are diagnostic only; they never grant lifecycle authority. */
 const SERVICE_INSPECTION_MESSAGES = {
@@ -138,6 +139,17 @@ export function findServiceOwnershipRefusal(
   return undefined;
 }
 
+/** Diagnostic fallback cannot hide unsettled native work or an ownership refusal. */
+export function assertServiceInspectionFallbackAllowed(error: unknown): void {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  const refusal = findServiceOwnershipRefusal(error);
+  if (refusal) {
+    throw refusal;
+  }
+}
+
 export class ServiceDefinitionInspectionError extends Error {
   constructor(pathname: string) {
     super(
@@ -148,10 +160,7 @@ export class ServiceDefinitionInspectionError extends Error {
 }
 
 export class GatewayServiceStopUnsafeError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "GatewayServiceStopUnsafeError";
-  }
+  override name = "GatewayServiceStopUnsafeError";
 }
 
 /** Native preparation can wrap a custody refusal alongside an authority or cleanup failure. */

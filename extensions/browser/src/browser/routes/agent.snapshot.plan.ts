@@ -1,9 +1,3 @@
-/**
- * Snapshot planning for browser route handlers.
- *
- * Resolves requested snapshot mode, format, limits, refs, labels, and driver
- * choice before the route talks to Playwright or Chrome MCP.
- */
 import {
   parseStrictNonNegativeInteger,
   parseStrictPositiveInteger,
@@ -20,29 +14,11 @@ import { resolveDefaultSnapshotFormat } from "../profile-capabilities.js";
 import { normalizeBrowserTimerDelayMs } from "../timer-delay.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
-type BrowserSnapshotPlan = {
-  format: "ai" | "aria";
-  mode?: "efficient";
-  labels?: boolean;
-  urls?: boolean;
-  limit?: number;
-  resolvedMaxChars?: number;
-  interactive?: boolean;
-  compact?: boolean;
-  depth?: number;
-  refsMode?: "aria" | "role";
-  selectorValue?: string;
-  frameSelectorValue?: string;
-  timeoutMs?: number;
-  wantsRoleSnapshot: boolean;
-};
-
-/** Resolve a normalized snapshot plan from query parameters and profile caps. */
 export function resolveSnapshotPlan(params: {
   profile: ResolvedBrowserProfile;
   query: Record<string, unknown>;
   hasPlaywright: boolean;
-}): BrowserSnapshotPlan {
+}) {
   const mode = params.query.mode === "efficient" ? "efficient" : undefined;
   const labels = toBoolean(params.query.labels) ?? undefined;
   const urls = toBoolean(params.query.urls) ?? undefined;

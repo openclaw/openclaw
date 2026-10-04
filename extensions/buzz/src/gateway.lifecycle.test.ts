@@ -1,6 +1,7 @@
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuzzBus } from "./buzz-bus.js";
 
@@ -102,6 +103,7 @@ function startTestGateway(
   const setStatus = options.setStatus ?? vi.fn();
   const lifecycle = startBuzzGatewayAccount({
     ...createStartAccountContext({ account, abortSignal: abortController.signal, cfg }),
+    scheduler: createTestPluginServiceScheduler(),
     log: options.omitLog
       ? undefined
       : { info: options.logInfo ?? vi.fn(), warn: vi.fn(), error: options.logError ?? vi.fn() },
@@ -120,6 +122,7 @@ function createMockBus(): BuzzBus {
       channelIds: [CHANNEL_ID],
     }),
     refreshDirectory: vi.fn(async () => {}),
+    isBotOwnedThread: vi.fn(async () => false),
     sendText: gatewayMocks.busSendText,
     sendTyping: gatewayMocks.busSendTyping,
     close: gatewayMocks.close,
@@ -235,9 +238,10 @@ describe("Buzz gateway lifecycle", () => {
       const account = resolveBuzzAccount({ cfg, accountId });
       const abortController = new AbortController();
       await expect(
-        startBuzzGatewayAccount(
-          createStartAccountContext({ account, cfg, abortSignal: abortController.signal }),
-        ),
+        startBuzzGatewayAccount({
+          ...createStartAccountContext({ account, cfg, abortSignal: abortController.signal }),
+          scheduler: createTestPluginServiceScheduler(),
+        }),
       ).rejects.toThrow(`Buzz requires at least one enabled ${path}.groups entry`);
       expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
       expect(gatewayMocks.recoveryEntries).not.toHaveBeenCalled();
@@ -408,7 +412,10 @@ describe("Buzz gateway lifecycle", () => {
     const account = resolveBuzzAccount({ cfg });
 
     await expect(
-      startBuzzGatewayAccount(createStartAccountContext({ account, cfg })),
+      startBuzzGatewayAccount({
+        ...createStartAccountContext({ account, cfg }),
+        scheduler: createTestPluginServiceScheduler(),
+      }),
     ).rejects.toThrow(/configured.*unavailable|unresolved/i);
     expect(gatewayMocks.startBuzzBus).not.toHaveBeenCalled();
   });
@@ -700,9 +707,10 @@ describe("Buzz gateway lifecycle", () => {
       };
       const account = resolveBuzzAccount({ cfg });
       const controller = new AbortController();
-      const lifecycle = startBuzzGatewayAccount(
-        createStartAccountContext({ account, cfg, abortSignal: controller.signal }),
-      );
+      const lifecycle = startBuzzGatewayAccount({
+        ...createStartAccountContext({ account, cfg, abortSignal: controller.signal }),
+        scheduler: createTestPluginServiceScheduler(),
+      });
       try {
         await vi.waitFor(() => expect(getActiveBuzzBus("ada")).toBeDefined());
         await sendBuzzTyping({ cfg, to: CHANNEL_ID, threadId: "root-id" });

@@ -1,7 +1,6 @@
 // Protects per-invocation terminal errors in a persistent automation transcript.
 import path from "node:path";
-import { assert, afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { assert, afterAll, beforeEach, describe, expect, it } from "vitest";
 import { createAssistantErrorTranscript } from "../../agents/assistant-error-transcript.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { FailoverError } from "../../agents/failover-error.js";
@@ -9,7 +8,7 @@ import { guardSessionManager } from "../../agents/session-tool-result-guard-wrap
 import { SessionManager } from "../../agents/sessions/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -22,12 +21,7 @@ import {
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    cleanup();
-  }),
-);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cron-terminal-identity-");
 
 describe("persistent automation terminal error identity", () => {
   beforeEach(() => {
@@ -36,7 +30,7 @@ describe("persistent automation terminal error identity", () => {
   });
 
   it("retains distinct provider failures from sequential invocations without weakening replay guards", async () => {
-    const root = tempDirs.make("openclaw-cron-terminal-identity-");
+    const root = sessionDirs.make();
     const target = {
       agentId: "main",
       sessionId: "persistent-transcript",

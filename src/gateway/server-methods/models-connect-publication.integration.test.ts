@@ -36,13 +36,7 @@ vi.mock("../server-runtime-services.js", async (importOriginal) => {
     activateGatewayScheduledServices: (
       params: Parameters<typeof actual.activateGatewayScheduledServices>[0],
     ) => actual.activateGatewayScheduledServices({ ...params, minimalTestGateway: true }),
-    scheduleGatewayPostReadyMaintenance: (
-      ...args: Parameters<typeof actual.scheduleGatewayPostReadyMaintenance>
-    ) => {
-      const timer = actual.scheduleGatewayPostReadyMaintenance(...args);
-      clearTimeout(timer);
-      return timer;
-    },
+    scheduleGatewayPostReadyMaintenance: () => {},
   };
 });
 

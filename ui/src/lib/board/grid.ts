@@ -138,10 +138,7 @@ export function previewDrag(
     return canonical;
   }
 
-  const [moving] = canonical.splice(movingIndex, 1);
-  if (!moving) {
-    return canonical;
-  }
+  const moving = canonical.splice(movingIndex, 1);
   const occupiedTarget = currentRects.find((rect) => rect.name !== name && contains(rect, cell));
   const nextRect =
     occupiedTarget ??
@@ -154,7 +151,7 @@ export function previewDrag(
   const insertionIndex = nextRect
     ? canonical.findIndex((item) => item.name === nextRect.name)
     : canonical.length;
-  canonical.splice(Math.max(0, insertionIndex), 0, moving);
+  canonical.splice(Math.max(0, insertionIndex), 0, ...moving);
   return canonical.map(withOrder);
 }
 
@@ -191,10 +188,7 @@ export function nudge(
   const delta = direction === "left" || direction === "up" ? -1 : 1;
   const target = Math.min(canonical.length - 1, Math.max(0, index + delta));
   if (target !== index) {
-    const [moving] = canonical.splice(index, 1);
-    if (moving) {
-      canonical.splice(target, 0, moving);
-    }
+    canonical.splice(target, 0, ...canonical.splice(index, 1));
   }
   return canonical.map(withOrder);
 }

@@ -388,7 +388,11 @@ export function createChannelProgressDraftCompositor(params: ChannelProgressDraf
     // Approvals require a user decision; intermediate tool failures belong to the tool log.
     const shouldStoreLine =
       !quietProgress || (typeof progressLine === "object" && progressLine.kind === "approval");
-    const needsAttention = shouldStoreLine && isChannelProgressPriorityLine(progressLine);
+    // Failure visibility does not grant protected capacity in the rolling tool log.
+    const needsAttention =
+      shouldStoreLine &&
+      (isChannelProgressPriorityLine(progressLine) ||
+        (typeof progressLine === "object" && progressLine.status?.toLowerCase() === "failed"));
     const shouldStartImmediately = shouldStoreLine && isChannelProgressAttentionLine(progressLine);
     const nextLines = shouldStoreLine ? mergeLine(progressLine) : lines;
     const lineChanged = nextLines !== lines;

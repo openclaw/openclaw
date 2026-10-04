@@ -16,6 +16,14 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const observer = resolve("scripts/e2e/lib/upgrade-survivor/diagnostics.mjs");
 
+function runNode(args: string[], env: NodeJS.ProcessEnv) {
+  return spawnSync(process.execPath, args, {
+    env: { ...process.env, ...env },
+    encoding: "utf8",
+    timeout: 10_000,
+  });
+}
+
 function rollbackSuccessSummary() {
   const hash = "a".repeat(64);
   return {
@@ -178,29 +186,7 @@ describe("upgrade survivor rollback publication", () => {
     expect(JSON.parse(receipt.logs["backup-rollback-create.json"])).toEqual(created);
     expect(JSON.parse(receipt.logs["backup-rollback-restore.json"])).toEqual(restored);
     expect(JSON.parse(receipt.logs["backup-rollback.json"])).toEqual(rawProof);
-  });
-
-  it("retains restored-index result evidence through host publication", async () => {
-    const { artifacts, publish, published } = await publishSuccess(rollbackSuccessSummary());
-    writeFileSync(
-      join(artifacts, "restored-index-post-update.json"),
-      JSON.stringify({ status: "passed", current: { label: "Renamed session", pinnedAt: 1234 } }),
-    );
-    publish();
-    const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
-    expect(JSON.parse(receipt.logs["restored-index-post-update.json"])).toEqual({
-      status: "passed",
-      current: { label: "Renamed session", pinnedAt: 1234 },
-    });
-  });
-
-  it("publishes the validated rollback schema, session counts and hashes without private state", async () => {
-    const { publish, published } = await publishSuccess(rollbackSuccessSummary());
-    publish();
-    const text = readFileSync(join(published, "summary.json"), "utf8");
-    expect(text).not.toMatch(/PRIVATE_|\/private\/host/);
-    const proof = JSON.parse(text).backupRollback;
-    expect(proof).toMatchObject({
+    expect(receipt.backupRollback).toMatchObject({
       status: "passed",
       baselineVersion: "2026.9.4",
       candidateVersion: "2026.9.5",
@@ -233,7 +219,10 @@ describe("upgrade survivor rollback publication", () => {
         },
         { kind: "agent", agentId: "ops", present: false },
       ],
-      files: [{ kind: "legacy-store", sha256: "a".repeat(64) }],
+      files: [
+        { kind: "legacy-store", sha256: "a".repeat(64) },
+        { kind: "transcript", sha256: omission.sha256 },
+      ],
     });
     expect(readdirSync(published)).toEqual(["summary.json"]);
   });
@@ -271,18 +260,8 @@ describe("upgrade survivor rollback publication", () => {
   );
 
   it.each([
-    { kind: "missing", value: undefined },
-    { kind: "null", value: null },
-  ])("rejects $kind required rollback evidence before publishing success", async ({ value }) => {
-    const { publish, published } = await publishSuccess({
-      ...rollbackSuccessSummary(),
-      backupRollback: value,
-    });
-    expect(publish).toThrow("Invalid backup rollback evidence");
-    expect(existsSync(join(published, "summary.json"))).toBe(false);
-  });
-
-  it.each([
+    "missing",
+    "null",
     "unfinished",
     "wrong-candidate",
     "missing-preflight",
@@ -351,8 +330,13 @@ describe("upgrade survivor rollback publication", () => {
     if (kind === "invalid-volatile-count") {
       Object.assign(proof, { backupCreate: { skippedVolatileCount: -1 } });
     }
-    const { publish, published } = await publishSuccess(summary);
-    expect(publish).toThrow();
+    const { publish, published } = await publishSuccess({
+      ...summary,
+      backupRollback: kind === "missing" ? undefined : kind === "null" ? null : proof,
+    });
+    expect(publish).toThrow(
+      kind === "missing" || kind === "null" ? "Invalid backup rollback evidence" : undefined,
+    );
     expect(existsSync(join(published, "summary.json"))).toBe(false);
   });
 });
@@ -400,35 +384,6 @@ function seedSessionMigration(root: string, issueCount = 1) {
 }
 
 describe("upgrade survivor first-hop process evidence", () => {
-  it("retains CLI receipt and transport witnesses in the opt-in report recovery proof", async () => {
-    const { artifacts, publish, published } = await publishSuccess({
-      status: "passed",
-      baseline: { spec: "openclaw@2026.9.6", version: "2026.9.6" },
-      candidate: { kind: "tarball", version: "2026.9.5" },
-      scenario: "update-report-recovery",
-      installedVersion: "2026.9.5",
-      candidateInstallMode: "updater",
-      updateRestartMode: "manual",
-      updateOutcome: "success",
-      phases: [],
-    });
-    const witnesses = {
-      "update-report-recovery.json": JSON.stringify({ postCounts: [2, 1] }),
-      "update-report-baseline.json": JSON.stringify({ version: "2026.9.6" }),
-      "update-report-retry-status.log": JSON.stringify({ runId: "retry-run" }),
-      "update-report-pending-status.log": JSON.stringify({ runId: "pending-run" }),
-      "update-report-retry.gh.jsonl": JSON.stringify({ kind: "create", status: 422 }),
-      "update-report-pending.gh.jsonl": JSON.stringify({ kind: "lookup", matches: [] }),
-    };
-    for (const [name, contents] of Object.entries(witnesses)) {
-      writeFileSync(join(artifacts, name), contents);
-    }
-    publish();
-    expect(JSON.parse(readFileSync(join(published, "summary.json"), "utf8")).logs).toMatchObject(
-      witnesses,
-    );
-  });
-
   it.each([0, 1])("retains first-hop identities and Doctor IPC on exit %i", async (code) => {
     const root = realpathSync(tempDirs.make("survivor-first-hop-"));
     const artifacts = join(root, "artifacts");
@@ -468,20 +423,14 @@ if (process.argv[2] === 'update') {
 }
 `,
     );
-    const result = spawnSync(
-      process.execPath,
+    const result = runNode(
       ["--import", observer, entrypoint, "update", "--tag", "private-argument-value"],
       {
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
-          OPENCLAW_GATEWAY_TOKEN: "private-environment-value",
-          TMPDIR: tmp,
-          TEMP: tmp,
-          TMP: tmp,
-        },
+        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts,
+        OPENCLAW_GATEWAY_TOKEN: "private-environment-value",
+        TMPDIR: tmp,
+        TEMP: tmp,
+        TMP: tmp,
       },
     );
     expect(result.status, result.stderr).toBe(code);
@@ -517,18 +466,9 @@ if (process.argv[2] === 'update') {
         },
       ],
     });
-    const capture = spawnSync(
-      process.execPath,
+    const capture = runNode(
       [observer, "capture", artifacts, "update-candidate", String(code), "", artifacts],
-      {
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: root,
-          OPENCLAW_CONFIG_PATH: join(root, "missing-config.json"),
-        },
-      },
+      { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: join(root, "missing-config.json") },
     );
     expect(capture.status, capture.stderr).toBe(0);
     if (migration) {
@@ -643,14 +583,9 @@ if (process.argv[2] === 'update') {
       writeFileSync(external, migration.failureReport);
       symlinkSync(external, failurePath);
     }
-    const captured = spawnSync(process.execPath, [observer, "capture", artifacts, "doctor", "1"], {
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: root,
-        OPENCLAW_CONFIG_PATH: join(root, "absent.json"),
-      },
+    const captured = runNode([observer, "capture", artifacts, "doctor", "1"], {
+      OPENCLAW_STATE_DIR: root,
+      OPENCLAW_CONFIG_PATH: join(root, "absent.json"),
     });
     expect(captured.status, captured.stderr).toBe(0);
     const raw = JSON.parse(readFileSync(join(artifacts, "diagnostics/raw.json"), "utf8"));
@@ -668,9 +603,38 @@ if (process.argv[2] === 'update') {
     expect(report.omissions["session migration failure report"]).toBe(reason);
   });
 
-  it.each(["available", "unavailable", "absent", "invalid"])(
-    "publishes %s baseline companion coverage in successful receipts",
-    async (availability) => {
+  it.each([
+    { name: "available companion", availability: "available", missingLoadPath: null },
+    { name: "unavailable companion", availability: "unavailable", missingLoadPath: null },
+    { name: "invalid companion", availability: "invalid", missingLoadPath: null },
+    {
+      name: "supported missing path",
+      availability: "absent",
+      missingLoadPath: { applicability: "supported", reason: null },
+    },
+    {
+      name: "unsupported missing path",
+      availability: "absent",
+      missingLoadPath: {
+        applicability: "unsupported-driver",
+        reason: "published-cli-rejects-invalid-config-before-staging",
+      },
+    },
+    {
+      name: "invalid missing-path applicability",
+      availability: "absent",
+      missingLoadPath: { applicability: "private-invalid-value", reason: null },
+      invalid: true,
+    },
+    {
+      name: "invalid missing-path reason",
+      availability: "absent",
+      missingLoadPath: { applicability: "unsupported-driver", reason: "private-invalid-value" },
+      invalid: true,
+    },
+  ])(
+    "publishes $name coverage in successful receipts",
+    async ({ availability, missingLoadPath, invalid }) => {
       const root = realpathSync(tempDirs.make("survivor-companion-receipt-"));
       const baselineCompanion =
         availability === "absent"
@@ -697,6 +661,7 @@ if (process.argv[2] === 'update') {
           updateOutcome: "success",
           phases: [],
           baselineCompanion,
+          missingLoadPath,
         }),
       );
       const { publishDiagnostics } = await import(observer);
@@ -708,15 +673,15 @@ if (process.argv[2] === 'update') {
           (text: string) => text.replaceAll("E404", "redacted"),
           "passed",
         );
-      if (availability === "invalid") {
+      if (availability === "invalid" || invalid) {
         expect(publish).toThrow();
         expect(existsSync(join(published, "summary.json"))).toBe(false);
         return;
       }
       publish();
-      expect(
-        JSON.parse(readFileSync(join(published, "summary.json"), "utf8")).baselineCompanion,
-      ).toEqual(
+      const receipt = JSON.parse(readFileSync(join(published, "summary.json"), "utf8"));
+      expect(receipt.missingLoadPath).toEqual(missingLoadPath);
+      expect(receipt.baselineCompanion).toEqual(
         baselineCompanion
           ? {
               ...baselineCompanion,
@@ -765,17 +730,12 @@ if (process.argv[2] === 'update') {
     if (kind === "symlink") {
       symlinkSync(target, ipc);
     }
-    const result = spawnSync(process.execPath, ["--import", observer, entrypoint, "doctor"], {
-      encoding: "utf8",
-      timeout: 10_000,
-      env: {
-        ...process.env,
-        TMPDIR: tmp,
-        TEMP: tmp,
-        TMP: tmp,
-        OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
-        OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: ipc,
-      },
+    const result = runNode(["--import", observer, entrypoint, "doctor"], {
+      TMPDIR: tmp,
+      TEMP: tmp,
+      TMP: tmp,
+      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
+      OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH: ipc,
     });
     expect(result.status, result.stderr).toBe(7);
     expect(result.stdout + result.stderr).toBe("");
@@ -800,10 +760,8 @@ if (process.argv[2] === 'update') {
     );
     const entrypoint = join(root, "openclaw.mjs");
     writeFileSync(entrypoint, 'process.kill(process.pid, "SIGTERM");');
-    const result = spawnSync(process.execPath, ["--import", observer, entrypoint, "update"], {
-      encoding: "utf8",
-      timeout: 10_000,
-      env: { ...process.env, OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root },
+    const result = runNode(["--import", observer, entrypoint, "update"], {
+      OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: root,
     });
     expect(result.status).toBeNull();
     expect(result.signal).toBe("SIGTERM");
@@ -818,18 +776,41 @@ if (process.argv[2] === 'update') {
 });
 
 it.each([
-  { version: "2026.9.4", mode: "manual" },
-  { version: "2026.9.6", mode: "manual" },
-  { version: "2026.9.6", mode: "auto-auth" },
-])(
-  "publishes Cron readback proof after a successful $version $mode upgrade",
-  async ({ version, mode }) => {
-    const summary = rollbackSuccessSummary();
-    summary.baseline = { spec: `openclaw@${version}`, version };
-    summary.backupRollback.baselineVersion = version;
-    summary.backupRollback.runtime.version = version;
-    summary.updateRestartMode = mode;
-    const proofs = Object.fromEntries(
+  {
+    name: "restored-index readback",
+    scenario: "legacy-operator-state",
+    version: "2026.9.4",
+    mode: "manual",
+    logs: {
+      "restored-index-post-update.json": {
+        status: "passed",
+        current: { label: "Renamed session", pinnedAt: 1234 },
+      },
+    },
+  },
+  {
+    name: "report recovery receipts and transport witnesses",
+    scenario: "update-report-recovery",
+    version: "2026.9.6",
+    mode: "manual",
+    logs: {
+      "update-report-recovery.json": { postCounts: [2, 1] },
+      "update-report-baseline.json": { version: "2026.9.6" },
+      "update-report-retry-status.log": { runId: "retry-run" },
+      "update-report-pending-status.log": { runId: "pending-run" },
+      "update-report-retry.gh.jsonl": { kind: "create", status: 422 },
+      "update-report-pending.gh.jsonl": { kind: "lookup", matches: [] },
+    },
+  },
+  ...[
+    { version: "2026.9.4", mode: "manual" },
+    { version: "2026.9.6", mode: "auto-auth" },
+  ].map(({ version, mode }) => ({
+    name: `${version} ${mode} Cron readback`,
+    scenario: "legacy-operator-state",
+    version,
+    mode,
+    logs: Object.fromEntries(
       ["post-update", "candidate"].map((stage) => [
         `legacy-operator-${stage}-cron-history.json`,
         {
@@ -839,12 +820,28 @@ it.each([
           pages: [{ jobId: "synthetic", runId: "retained" }],
         },
       ]),
-    );
-    const publication = await publishSuccess(summary, proofs);
-    publication.publish();
-    const result = JSON.parse(readFileSync(join(publication.published, "summary.json"), "utf8"));
-    for (const [name, proof] of Object.entries(proofs)) {
-      expect(JSON.parse(result.logs[name])).toEqual(proof);
-    }
-  },
-);
+    ),
+  })),
+])("publishes $name after a successful upgrade", async ({ scenario, version, mode, logs }) => {
+  const summary = rollbackSuccessSummary();
+  summary.baseline = { spec: `openclaw@${version}`, version };
+  summary.backupRollback.baselineVersion = version;
+  summary.backupRollback.runtime.version = version;
+  const publication = await publishSuccess(
+    {
+      ...summary,
+      scenario,
+      updateRestartMode: mode,
+      backupRollback: scenario === "legacy-operator-state" ? summary.backupRollback : undefined,
+    },
+    logs,
+  );
+  publication.publish();
+  const result = JSON.parse(readFileSync(join(publication.published, "summary.json"), "utf8"));
+  expect(result.logs).toMatchObject(
+    Object.fromEntries(Object.entries(logs).map(([name, proof]) => [name, JSON.stringify(proof)])),
+  );
+  for (const [name, proof] of Object.entries(logs)) {
+    expect(JSON.parse(result.logs[name])).toEqual(proof);
+  }
+});

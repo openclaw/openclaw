@@ -1,15 +1,19 @@
-// Qa Lab helper module supports qa gateway config behavior.
 import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeQaProviderMode,
+  remapModelRefForForcedRuntime,
   splitQaModelRef,
   type QaProviderMode,
 } from "./model-selection.js";
 import { resolveQaRuntimeModelPair } from "./model-selection.runtime.js";
-import { getQaProvider, DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import {
+  getQaProvider,
+  DEFAULT_QA_PROVIDER_MODE,
+  QA_DEFAULT_IMAGE_MODEL,
+} from "./providers/index.js";
 import { QA_FRONTIER_PROVIDER_IDS } from "./providers/live-frontier/catalog.js";
 import {
   QA_SESSION_OBSERVER_HEADER,
@@ -17,11 +21,11 @@ import {
 } from "./providers/shared/session-observer-registry.js";
 import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
-import type { RuntimeId } from "./runtime-parity.js";
+import type { QaRuntimeSelection, RuntimeId } from "./runtime-id.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
 
-export const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
+const DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS = Object.freeze([
   "http://127.0.0.1:18789",
   "http://localhost:18789",
   "http://127.0.0.1:43124",
@@ -34,16 +38,11 @@ export const QA_CODEX_OPENAI_CATALOG_BASE_URL = "https://api.openai.com/v1";
 const QA_LAB_PLUGIN_ID = "qa-lab";
 const QA_DIRECT_FRONTIER_PLUGIN_IDS = new Set<string>(QA_FRONTIER_PROVIDER_IDS);
 
-export function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
+function mergeQaControlUiAllowedOrigins(extraOrigins?: string[]) {
   const normalizedExtra = (extraOrigins ?? [])
     .map((origin) => origin.trim())
     .filter((origin) => origin.length > 0);
   return uniqueStrings([...DEFAULT_QA_CONTROL_UI_ALLOWED_ORIGINS, ...normalizedExtra]);
-}
-
-function remapQaMockModelRefForCodex(modelRef: string) {
-  const split = splitQaModelRef(modelRef);
-  return split?.provider === "mock-openai" ? `openai/${split.model}` : modelRef;
 }
 
 function buildQaModelSelection(primaryModel: string, alternateModel: string) {
@@ -74,6 +73,7 @@ export function buildQaGatewayConfig(params: {
   fastMode?: boolean;
   thinkingDefault?: QaThinkingLevel;
   forcedRuntime?: RuntimeId;
+  runtimeSelection?: QaRuntimeSelection;
 }): OpenClawConfig {
   const providerBaseUrl = params.providerBaseUrl ?? "http://127.0.0.1:44080/v1";
   const mockSessionObserverUrl =
@@ -87,21 +87,21 @@ export function buildQaGatewayConfig(params: {
       primaryModel: params.primaryModel,
       alternateModel: params.alternateModel,
     });
-  const primaryModel = usesCodexMockAppServer
-    ? remapQaMockModelRefForCodex(normalizedPrimaryModel)
-    : normalizedPrimaryModel;
-  const alternateModel = usesCodexMockAppServer
-    ? remapQaMockModelRefForCodex(normalizedAlternateModel)
-    : normalizedAlternateModel;
+  const remapModel = (modelRef: string) =>
+    remapModelRefForForcedRuntime({ modelRef, providerMode, forcedRuntime: params.forcedRuntime });
+  const primaryModel = remapModel(normalizedPrimaryModel);
+  const alternateModel = remapModel(normalizedAlternateModel);
   const modelProviderIds = [primaryModel, alternateModel]
     .map((ref) => splitQaModelRef(ref)?.provider)
     .filter((providerValue): providerValue is string => Boolean(providerValue));
   const imageGenerationModelRef =
     params.imageGenerationModel !== undefined
       ? params.imageGenerationModel
-      : provider.defaultImageGenerationModel({ modelProviderIds });
+      : modelProviderIds.includes("openai")
+        ? QA_DEFAULT_IMAGE_MODEL
+        : null;
   const selectedProviderIds =
-    provider.usesModelProviderPlugins || usesCodexMockAppServer
+    provider.kind === "live" || usesCodexMockAppServer
       ? [
           ...new Set(
             [...(params.enabledProviderIds ?? []), ...modelProviderIds, imageGenerationModelRef]
@@ -124,7 +124,7 @@ export function buildQaGatewayConfig(params: {
   );
   const providerSelectedPluginIds = usesCodexMockAppServer
     ? uniqueStrings([...configuredPluginIds, ...selectedProviderIds])
-    : provider.usesModelProviderPlugins
+    : provider.kind === "live"
       ? uniqueStrings([...configuredPluginIds, ...inferredProviderPluginIds])
       : configuredPluginIds;
   // A forced Codex cell must stage its harness even when the provider owner is
@@ -172,6 +172,9 @@ export function buildQaGatewayConfig(params: {
     // Codex owns its app-server transport. OpenClaw provider params would make
     // the forced parity cell an authored route that Codex correctly rejects.
     if (params.forcedRuntime === "codex") {
+      if (params.runtimeSelection === "configured") {
+        return { agentRuntime: { id: "codex" as const } };
+      }
       return {};
     }
     return {
@@ -193,7 +196,8 @@ export function buildQaGatewayConfig(params: {
   const gatewayModels: ReturnType<typeof provider.buildGatewayModels> =
     usesCodexMockAppServer && codexMockOpenAiCatalog
       ? {
-          mode: "merge" as const,
+          // Synthetic credentials must not enter live provider catalog discovery.
+          mode: "replace" as const,
           providers: {
             openai: {
               ...codexMockOpenAiCatalog,

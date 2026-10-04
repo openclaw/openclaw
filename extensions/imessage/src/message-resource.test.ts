@@ -64,10 +64,46 @@ afterEach(() => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 });
 
+type Authorization = Parameters<MessageResourceModule["authorizeIMessageResourceReference"]>[0];
+
+function authorize(overrides: Partial<Authorization> = {}) {
+  return authorizeIMessageResourceReference({
+    accountId: "default",
+    chatContext: { chatId: 1 },
+    cliPath,
+    dbPath,
+    hasExclusiveLocalDatabase: true,
+    messageId: "message-guid",
+    ...overrides,
+  });
+}
+
+function check(
+  chatContext: Authorization["chatContext"],
+  messageId = "message-guid",
+  cli = cliPath,
+) {
+  return checkIMessageResourceBinding({ chatContext, messageId, cliPath: cli, dbPath });
+}
+
+function remember(
+  messageId: string,
+  overrides: Partial<Parameters<ReplyCacheModule["rememberIMessageReplyCache"]>[0]> = {},
+) {
+  return rememberIMessageReplyCache({
+    accountId: "work",
+    messageId,
+    chatGuid: "any;-;+15550001111",
+    timestamp: Date.now(),
+    ...overrides,
+  });
+}
+
 describe("iMessage provider resource binding", () => {
   it.each(["action", "reply"] as const)(
-    "authorizes an uncached %s through real SQLite without caller-thread native queries",
+    "authorizes %s through SQLite when cached selectors are incomparable, without caller-thread queries",
     async (entrypoint) => {
+      await remember("message-guid", { accountId: "default", chatGuid: undefined, chatId: 1 });
       const { imessageMessageActions } = await import("./actions.js");
       const { sendMessageIMessage } = await import("./send.js");
       const { setCachedIMessagePrivateApiStatus } = await import("./private-api-status.js");
@@ -93,24 +129,30 @@ describe("iMessage provider resource binding", () => {
       vi.clearAllMocks();
 
       const config = { channels: { imessage: { cliPath, dbPath } } };
-      const invoke = (chatGuid: string) =>
+      const invoke = (
+        chatGuid: string,
+        conversationReadOrigin: "delegated" | "direct-operator" = "delegated",
+      ) =>
         entrypoint === "action"
           ? imessageMessageActions.handleAction!({
               channel: "imessage",
               action: "react",
               cfg: config,
               params: { chatGuid, messageId: "message-guid", emoji: "❤️" },
-              conversationReadOrigin: "delegated",
+              conversationReadOrigin,
             })
           : sendMessageIMessage(`chat_guid:${chatGuid}`, "synthetic reply", {
               config,
               client,
               replyToId: "message-guid",
-              conversationReadOrigin: "delegated",
+              conversationReadOrigin,
             });
       await invoke("iMessage;-;+15550001111");
       expect(entrypoint === "action" ? nativeSend : request).toHaveBeenCalledOnce();
       await expect(invoke("iMessage;+;other")).rejects.toThrow(
+        "does not belong to the selected conversation",
+      );
+      await expect(invoke("iMessage;+;other", "direct-operator")).rejects.toThrow(
         "does not belong to the selected conversation",
       );
       expect(entrypoint === "action" ? nativeSend : request).toHaveBeenCalledOnce();
@@ -180,395 +222,145 @@ describe("iMessage provider resource binding", () => {
   });
 
   it("only treats canonical handles as authoritative chat identifiers", () => {
-    expect(
-      chatContextFromIMessageTarget({ kind: "handle", to: "Jane Appleseed", service: "auto" }),
-    ).toEqual({});
-    expect(
-      chatContextFromIMessageTarget({ kind: "handle", to: "206 555 0100", service: "auto" }),
-    ).toEqual({});
-    expect(
-      chatContextFromIMessageTarget({ kind: "handle", to: "+1 (206) 555-0100", service: "auto" }),
-    ).toEqual({});
-    expect(
-      chatContextFromIMessageTarget(
-        { kind: "handle", to: "+1 (206) 555-0100", service: "auto" },
-        "sms",
-      ),
-    ).toEqual({ chatIdentifier: "SMS;-;+12065550100" });
-    expect(
-      chatContextFromIMessageTarget(
-        { kind: "handle", to: "+1 (206) 555-0100", service: "imessage" },
-        "sms",
-      ),
-    ).toEqual({ chatIdentifier: "iMessage;-;+12065550100" });
-    expect(
-      chatContextFromIMessageTarget({ kind: "handle", to: "User@Example.com", service: "sms" }),
-    ).toEqual({ chatIdentifier: "SMS;-;user@example.com" });
+    const context = (
+      to: string,
+      service: "auto" | "sms" | "imessage" = "auto",
+      effectiveService?: "sms",
+    ) => chatContextFromIMessageTarget({ kind: "handle", to, service }, effectiveService);
+    expect(context("Jane Appleseed")).toEqual({});
+    expect(context("206 555 0100")).toEqual({});
+    expect(context("+1 (206) 555-0100")).toEqual({});
+    expect(context("+1 (206) 555-0100", "auto", "sms")).toEqual({
+      chatIdentifier: "SMS;-;+12065550100",
+    });
+    expect(context("+1 (206) 555-0100", "imessage", "sms")).toEqual({
+      chatIdentifier: "iMessage;-;+12065550100",
+    });
+    expect(context("User@Example.com", "sms")).toEqual({
+      chatIdentifier: "SMS;-;user@example.com",
+    });
   });
 
   it("requires a current positive account and chat cache match", async () => {
-    await rememberIMessageReplyCache({
-      accountId: "work",
-      messageId: "bound-guid",
-      chatGuid: "any;-;+15550001111",
-      chatIdentifier: "+15550001111",
-      chatId: 1,
-      timestamp: Date.now(),
-    });
+    const cached = (
+      messageId: string,
+      context: Authorization["chatContext"] & { accountId?: string },
+    ) => resolveIMessageCachedResourceBinding(messageId, { accountId: "work", ...context });
+    await remember("bound-guid", { chatIdentifier: "+15550001111", chatId: 1 });
+    expect(await cached("bound-guid", { chatIdentifier: "iMessage;-;+15550001111" })).toBe("match");
+    await remember("mixed-case-email-guid", { chatGuid: "any;-;User@Example.com" });
     expect(
-      await resolveIMessageCachedResourceBinding("bound-guid", {
-        accountId: "work",
-        chatIdentifier: "iMessage;-;+15550001111",
-      }),
-    ).toBe("match");
-
-    await rememberIMessageReplyCache({
-      accountId: "work",
-      messageId: "mixed-case-email-guid",
-      chatGuid: "any;-;User@Example.com",
-      timestamp: Date.now(),
-    });
-    expect(
-      await resolveIMessageCachedResourceBinding("mixed-case-email-guid", {
-        accountId: "work",
-        chatIdentifier: "iMessage;-;user@example.com",
-      }),
+      await cached("mixed-case-email-guid", { chatIdentifier: "iMessage;-;user@example.com" }),
     ).toBe("match");
     expect(
-      await resolveIMessageCachedResourceBinding("bound-guid", {
+      await cached("bound-guid", {
         accountId: "personal",
         chatIdentifier: "iMessage;-;+15550001111",
       }),
     ).toBe("mismatch");
-
-    await rememberIMessageReplyCache({
-      accountId: "work",
-      messageId: "guid-only",
-      chatGuid: "any;-;+15550001111",
-      timestamp: Date.now(),
-    });
+    await remember("guid-only");
+    expect(await cached("guid-only", { chatId: 1 })).toBe("unknown");
+    expect(await cached("bound-guid", { chatId: 99 })).toBe("mismatch");
     expect(
-      await resolveIMessageCachedResourceBinding("guid-only", {
-        accountId: "work",
-        chatId: 1,
-      }),
-    ).toBe("unknown");
-    expect(
-      await resolveIMessageCachedResourceBinding("bound-guid", {
-        accountId: "work",
-        chatId: 99,
-      }),
-    ).toBe("mismatch");
-    expect(
-      await resolveIMessageCachedResourceBinding("bound-guid", {
-        accountId: "work",
+      await cached("bound-guid", {
         chatGuid: "iMessage;+;other",
         chatIdentifier: "iMessage;-;+15550001111",
       }),
     ).toBe("mismatch");
-
-    await rememberIMessageReplyCache({
+    await remember("stale-guid", {
       accountId: "default",
-      messageId: "stale-guid",
+      chatGuid: undefined,
       chatId: 42,
       timestamp: Date.now() - 7 * 60 * 60 * 1000,
     });
-    expect(
-      await resolveIMessageCachedResourceBinding("stale-guid", {
-        accountId: "default",
-        chatId: 42,
-      }),
-    ).toBe("unknown");
+    expect(await cached("stale-guid", { accountId: "default", chatId: 42 })).toBe("unknown");
   });
 
   it("matches part-prefixed message ids only in their database chat", async () => {
+    expect(await check({ chatId: 1 }, "p:0/message-guid")).toBe("match");
+    expect(await check({ chatGuid: "imessage;-;+15550001111" })).toBe("match");
+    expect(await check({ chatGuid: "sms;-;+15550002222" }, "sms-message-guid")).toBe("match");
     expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatId: 1 },
-        cliPath,
-        dbPath,
-        messageId: "p:0/message-guid",
+      await check({ chatIdentifier: "iMessage;-;üser@example.com" }, "email-message-guid"),
+    ).toBe("match");
+    expect(await check({ chatGuid: "iMessage;-;üser@example.com" }, "email-message-guid")).toBe(
+      "match",
+    );
+    expect(
+      await check({ chatIdentifier: "iMessage;-;other@example.com" }, "email-message-guid"),
+    ).toBe("mismatch");
+    expect(await check({ chatId: 2 })).toBe("mismatch");
+    expect(await check({ chatGuid: "iMessage;+;+15550001111" })).toBe("mismatch");
+    expect(await check({ chatGuid: "iMessage;+;Some@example.com" }, "other-message-guid")).toBe(
+      "match",
+    );
+    expect(await check({ chatGuid: "iMessage;+;some@example.com" }, "other-message-guid")).toBe(
+      "mismatch",
+    );
+    expect(await check({ chatIdentifier: "SMS;-;+15550001111" })).toBe("mismatch");
+    expect(
+      await check({
+        chatId: 1,
+        chatGuid: "any;-;+15550001111",
+        chatIdentifier: "iMessage;-;+15550001111",
       }),
     ).toBe("match");
     expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatGuid: "imessage;-;+15550001111" },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("match");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatGuid: "sms;-;+15550002222" },
-        cliPath,
-        dbPath,
-        messageId: "sms-message-guid",
-      }),
-    ).toBe("match");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatIdentifier: "iMessage;-;üser@example.com" },
-        cliPath,
-        dbPath,
-        messageId: "email-message-guid",
-      }),
-    ).toBe("match");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatGuid: "iMessage;-;üser@example.com" },
-        cliPath,
-        dbPath,
-        messageId: "email-message-guid",
-      }),
-    ).toBe("match");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatIdentifier: "iMessage;-;other@example.com" },
-        cliPath,
-        dbPath,
-        messageId: "email-message-guid",
-      }),
+      await check({ chatGuid: "iMessage;+;other", chatIdentifier: "iMessage;-;+15550001111" }),
     ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatId: 2 },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatGuid: "iMessage;+;+15550001111" },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatGuid: "iMessage;+;Some@example.com" },
-        cliPath,
-        dbPath,
-        messageId: "other-message-guid",
-      }),
-    ).toBe("match");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatGuid: "iMessage;+;some@example.com" },
-        cliPath,
-        dbPath,
-        messageId: "other-message-guid",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatIdentifier: "SMS;-;+15550001111" },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: {
-          chatId: 1,
-          chatGuid: "any;-;+15550001111",
-          chatIdentifier: "iMessage;-;+15550001111",
-        },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("match");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: {
-          chatGuid: "iMessage;+;other",
-          chatIdentifier: "iMessage;-;+15550001111",
-        },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatId: 1, chatGuid: "iMessage;+;other" },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("mismatch");
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatIdentifier: "unknown;-;+15550001111" },
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("mismatch");
+    expect(await check({ chatId: 1, chatGuid: "iMessage;+;other" })).toBe("mismatch");
+    expect(await check({ chatIdentifier: "unknown;-;+15550001111" })).toBe("mismatch");
   });
 
-  it("accepts an uncached delegated reference only after a local database match", async () => {
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "default",
-        chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "default",
-        chatContext: { chatGuid: "iMessage;+;other" },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).rejects.toThrow("does not belong to the selected conversation");
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "default",
-        chatContext: { chatGuid: "iMessage;+;other" },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-        conversationReadOrigin: "direct-operator",
-      }),
-    ).rejects.toThrow("does not belong to the selected conversation");
-  });
-
-  it("uses the local database when cached chat keys are not comparable", async () => {
-    await rememberIMessageReplyCache({
-      accountId: "default",
-      messageId: "message-guid",
-      chatGuid: "any;-;+15550001111",
-      timestamp: Date.now(),
-    });
-
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "default",
-        chatContext: { chatId: 1 },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).resolves.toBeUndefined();
-  });
+  const remote = {
+    cliPath: "/tmp/remote-imsg-wrapper",
+    hasExclusiveLocalDatabase: false,
+    remoteHost: "qa@example.invalid",
+  };
 
   it("uses positive cache attestation for remote delegated calls", async () => {
-    await rememberIMessageReplyCache({
+    await remember("remote-guid");
+    const params = {
+      ...remote,
       accountId: "work",
+      chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
       messageId: "remote-guid",
-      chatGuid: "any;-;+15550001111",
-      timestamp: Date.now(),
-    });
-
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "work",
-        chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-        cliPath: "/tmp/remote-imsg-wrapper",
-        hasExclusiveLocalDatabase: false,
-        remoteHost: "qa@example.invalid",
-        messageId: "remote-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "work",
-        chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-        cliPath: "/tmp/remote-imsg-wrapper",
-        hasExclusiveLocalDatabase: false,
-        remoteHost: "qa@example.invalid",
-        messageId: "p:0/remote-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "personal",
-        chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-        cliPath: "/tmp/remote-imsg-wrapper",
-        hasExclusiveLocalDatabase: false,
-        remoteHost: "qa@example.invalid",
-        messageId: "remote-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).rejects.toThrow("different account or conversation");
+      conversationReadOrigin: "delegated",
+    };
+    await expect(authorize(params)).resolves.toBeUndefined();
+    await expect(authorize({ ...params, messageId: "p:0/remote-guid" })).resolves.toBeUndefined();
+    await expect(authorize({ ...params, accountId: "personal" })).rejects.toThrow(
+      "different account or conversation",
+    );
   });
 
-  it.each([undefined, "delegated", "unknown-origin"])(
-    "fails unknown remote references closed for origin %s",
-    async (conversationReadOrigin) => {
-      await expect(
-        authorizeIMessageResourceReference({
-          accountId: "default",
-          chatContext: { chatId: 1 },
-          cliPath: "/tmp/remote-imsg-wrapper",
-          hasExclusiveLocalDatabase: false,
-          remoteHost: "qa@example.invalid",
-          messageId: "unknown-guid",
-          conversationReadOrigin,
-        }),
-      ).rejects.toThrow("require a current same-account conversation binding");
-    },
-  );
+  it("fails unknown remote references closed without operator authority", async () => {
+    await expect(authorize({ ...remote, messageId: "unknown-guid" })).rejects.toThrow(
+      "require a current same-account conversation binding",
+    );
+  });
 
   it("preserves direct operators when remote binding evidence is unavailable", async () => {
-    const params = {
-      accountId: "default",
-      chatContext: { chatId: 1 },
-      cliPath: "/tmp/remote-imsg-wrapper",
-      hasExclusiveLocalDatabase: false,
-      remoteHost: "qa@example.invalid",
-      messageId: "unknown-guid",
-    };
-
     await expect(
-      authorizeIMessageResourceReference({
-        ...params,
+      authorize({
+        ...remote,
+        messageId: "unknown-guid",
         conversationReadOrigin: "direct-operator",
       }),
     ).resolves.toBeUndefined();
   });
 
   it("does not use an account-ambiguous local database for delegated authorization", async () => {
+    const params = {
+      accountId: "work",
+      chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
+      hasExclusiveLocalDatabase: false,
+    };
+    await expect(authorize({ ...params, conversationReadOrigin: "delegated" })).rejects.toThrow(
+      "require a current same-account conversation binding",
+    );
     await expect(
-      authorizeIMessageResourceReference({
-        accountId: "work",
-        chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: false,
-        messageId: "message-guid",
-        conversationReadOrigin: "delegated",
-      }),
-    ).rejects.toThrow("require a current same-account conversation binding");
-
-    await expect(
-      authorizeIMessageResourceReference({
-        accountId: "work",
-        chatContext: { chatIdentifier: "iMessage;-;+15550001111" },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: false,
-        messageId: "message-guid",
-        conversationReadOrigin: "direct-operator",
-      }),
+      authorize({ ...params, conversationReadOrigin: "direct-operator" }),
     ).resolves.toBeUndefined();
   });
 
@@ -579,22 +371,11 @@ describe("iMessage provider resource binding", () => {
       if (databaseState === "malformed") {
         fs.writeFileSync(dbPath, "synthetic invalid database");
       }
-      const params = {
-        accountId: "default",
-        chatContext: { chatId: 1 },
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-      };
-      await expect(authorizeIMessageResourceReference(params)).rejects.toThrow(
+      await expect(authorize()).rejects.toThrow(
         "require a current same-account conversation binding",
       );
       await expect(
-        authorizeIMessageResourceReference({
-          ...params,
-          conversationReadOrigin: "direct-operator",
-        }),
+        authorize({ conversationReadOrigin: "direct-operator" }),
       ).resolves.toBeUndefined();
       if (databaseState === "missing") {
         expect(fs.existsSync(dbPath)).toBe(false);
@@ -603,72 +384,31 @@ describe("iMessage provider resource binding", () => {
   );
 
   it("treats provider-resolved handle aliases as unavailable binding evidence", async () => {
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: {},
-        cliPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("unavailable");
+    expect(await check({})).toBe("unavailable");
     await expect(
-      authorizeIMessageResourceReference({
-        accountId: "default",
-        chatContext: {},
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-        conversationReadOrigin: "direct-operator",
-      }),
+      authorize({ chatContext: {}, conversationReadOrigin: "direct-operator" }),
     ).resolves.toBeUndefined();
     await expect(
-      authorizeIMessageResourceReference({
-        accountId: "default",
-        chatContext: {},
-        cliPath,
-        dbPath,
-        hasExclusiveLocalDatabase: true,
-        messageId: "message-guid",
-        conversationReadOrigin: "delegated",
-      }),
+      authorize({ chatContext: {}, conversationReadOrigin: "delegated" }),
     ).rejects.toThrow("require a current same-account conversation binding");
   });
 
   it("does not treat a configured database as local for an SSH imsg wrapper", async () => {
-    const wrapperDir = path.join(tempDir, "wrapper");
-    const wrapperPath = path.join(wrapperDir, "imsg");
-    fs.mkdirSync(wrapperDir);
+    const wrapperPath = path.join(tempDir, "wrapper", "imsg");
+    fs.mkdirSync(path.dirname(wrapperPath));
     fs.writeFileSync(wrapperPath, '#!/bin/sh\nexec ssh qa.example.invalid imsg "$@"\n');
-
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatId: 1 },
-        cliPath: wrapperPath,
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("unavailable");
+    expect(await check({ chatId: 1 }, "message-guid", wrapperPath)).toBe("unavailable");
   });
 
   it("does not trust a PATH wrapper whose remote command is hidden behind variables", async () => {
     const wrapperDir = path.join(tempDir, "path-wrapper");
-    const wrapperPath = path.join(wrapperDir, "imsg");
     fs.mkdirSync(wrapperDir);
     fs.writeFileSync(
-      wrapperPath,
+      path.join(wrapperDir, "imsg"),
       '#!/bin/sh\nhost=qa.example.invalid\nexec ssh "$host" imsg "$@"\n',
       { mode: 0o755 },
     );
     vi.stubEnv("PATH", wrapperDir);
-
-    expect(
-      await checkIMessageResourceBinding({
-        chatContext: { chatId: 1 },
-        cliPath: "imsg",
-        dbPath,
-        messageId: "message-guid",
-      }),
-    ).toBe("unavailable");
+    expect(await check({ chatId: 1 }, "message-guid", "imsg")).toBe("unavailable");
   });
 });

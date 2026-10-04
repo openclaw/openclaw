@@ -25,7 +25,6 @@ import {
   parseReleaseVersion,
 } from "./lib/release-version.mjs";
 import {
-  resolveReleaseToolingIdentity,
   verifyReleaseToolingIdentity,
   verifyReleaseWorkflowRun,
 } from "./release-tooling-identity.mjs";
@@ -83,24 +82,10 @@ function report(message) {
 
 function authorizeWrite(mode, options) {
   const runGh = commandOverride ? (args) => command("gh", args) : undefined;
-  const alphaBranch =
-    mode === "finalize-core" && options["workflow-ref"].startsWith("tideclaw/alpha/");
-  if (alphaBranch) {
-    assert(
-      options.latest === "false" && parseReleaseVersion(options.tag.slice(1))?.channel === "alpha",
-      "Tideclaw branch finalization requires an alpha tag and explicit non-latest intent",
-    );
-    // Reuse the release owner's exact direct-branch grammar before allowing
-    // the validator's live branch/SHA and publisher-attempt checks.
-    resolveReleaseToolingIdentity({
-      workflowContract: "2",
-      workflowRef: options["workflow-ref"],
-      workflowFullRef: options["workflow-full-ref"],
-      workflowSha: options["tooling-sha"],
-    });
+  if (options.tag.includes("-alpha.") || options["workflow-ref"].includes("tideclaw/alpha/")) {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
   }
   verifyReleaseToolingIdentity({
-    allowPrevalidatedRef: alphaBranch,
     repository: REPOSITORY,
     workflowRef: options["workflow-ref"],
     workflowFullRef: options["workflow-full-ref"],
@@ -732,11 +717,12 @@ function mirror(github, publicKey, target) {
 function finalizeCore(github, options) {
   const version = options.tag.slice(1);
   const parsed = parseReleaseVersion(version);
+  if (parsed?.channel === "alpha") {
+    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const train = parsed && classifyReleaseTrain(parsed);
   assert(
-    parsed &&
-      parsed.version === version &&
-      ["stable", "alpha", "beta", "extended-stable"].includes(train),
+    parsed && parsed.version === version && ["stable", "beta", "extended-stable"].includes(train),
     "Unsupported core GitHub release train",
   );
   assert(["true", "false"].includes(options.latest), "Expected explicit core latest intent");

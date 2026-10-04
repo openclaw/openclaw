@@ -1,4 +1,5 @@
-// Workboard contract declarations define the plugin and Control UI data model.
+import type { WorkboardSessionsBoardSpec } from "./sessions-board.js";
+
 export const WORKBOARD_STATUSES = [
   "triage",
   "backlog",
@@ -295,6 +296,8 @@ export type WorkboardAutomation = {
 
 export type WorkboardBoardMetadata = {
   id: string;
+  kind?: "cards" | "sessions";
+  sessions?: WorkboardSessionsBoardSpec;
   name?: string;
   description?: string;
   icon?: string;
@@ -307,21 +310,12 @@ export type WorkboardBoardMetadata = {
   archivedAt?: number;
 };
 
-export type WorkboardBoardSummary = {
-  id: string;
-  name?: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  automationJobId?: string;
-  defaultWorkspace?: WorkboardWorkspace;
-  orchestration?: WorkboardOrchestrationSettings;
+export type WorkboardBoardSummary = Omit<WorkboardBoardMetadata, "createdAt" | "updatedAt"> & {
   total: number;
   active: number;
   archived: number;
   byStatus: Partial<Record<WorkboardStatus, number>>;
   updatedAt?: number;
-  archivedAt?: number;
 };
 
 export type WorkboardOrchestrationSettings = {
@@ -377,7 +371,6 @@ export type WorkboardCard = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  taskId?: string;
   sourceUrl?: string;
   execution?: WorkboardExecution;
   position: number;
@@ -393,3 +386,19 @@ export type WorkboardListResult = {
   cards: WorkboardCard[];
   statuses: readonly WorkboardStatus[];
 };
+export {
+  createDefaultWorkboardSessionsBoardSpec,
+  normalizeWorkboardSessionsBoardSpec,
+  patchWorkboardSessionsBoardSpec,
+} from "./sessions-board.js";
+export type {
+  WorkboardSessionFacts,
+  WorkboardSessionPlacement,
+  WorkboardSessionsBoard,
+  WorkboardSessionsBoardRead,
+  WorkboardSessionsBoardSpec,
+  WorkboardSessionsBoardView,
+  WorkboardSessionsColumn,
+  WorkboardSessionsColumnMatch,
+  WorkboardSessionsObserverHealth,
+} from "./sessions-board.js";

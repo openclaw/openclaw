@@ -4,6 +4,7 @@ import { guard } from "lit/directives/guard.js";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { renderAgentIdentityAvatar } from "../../../components/identity-avatar-view.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
@@ -14,8 +15,48 @@ import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 const PREVIEW_LENGTH = 140;
 
+export function syncPositionRailTabStop(
+  scroller: HTMLElement | undefined,
+  tabStop: HTMLElement | undefined,
+): void {
+  const previousTabStop = scroller?.querySelector<HTMLElement>('[tabindex="0"]');
+  if (tabStop && tabStop !== previousTabStop) {
+    if (previousTabStop) {
+      previousTabStop.tabIndex = -1;
+    }
+    tabStop.tabIndex = 0;
+  }
+}
+
+export function syncPositionRailPreview(
+  preview: HTMLElement | undefined,
+  marker: HTMLElement | undefined,
+  center: number,
+  viewportHeight: number,
+): void {
+  if (!preview || !marker) {
+    return;
+  }
+  const label = preview.querySelector(".chat-position-rail__preview-label")?.textContent?.trim();
+  const copy = preview.querySelector(".chat-position-rail__preview-copy")?.textContent?.trim();
+  const description = `${label ?? ""} ${copy ?? ""}. ${t("chat.thread.positionMarkerHint")}`;
+  if (marker.getAttribute("aria-description") !== description) {
+    marker.setAttribute("aria-description", description);
+  }
+  preview.style.setProperty("--chat-position-preview", `${center}px`);
+  preview.style.visibility = center < 0 || center > viewportHeight ? "hidden" : "";
+}
+
+export type PositionRailAssistant = {
+  id: string;
+  name: string;
+  avatar: string | null;
+  textAvatar: string | null;
+};
+
 type PositionRailViewParams = {
   transcript: ChatTranscriptSession;
+  assistant?: PositionRailAssistant;
   markers: Readonly<ChatPositionIndex["markers"]>;
   renderedIndexes: readonly number[];
   markerHeight: number;
@@ -23,6 +64,7 @@ type PositionRailViewParams = {
   visibleIds: ReadonlySet<string>;
   rovingId: string;
   previewId: string | null | undefined;
+  hoveredId: string | null;
   bindScroller: (element?: Element) => void;
   bindPreview: (element?: Element) => void;
   onScroll: () => void;
@@ -38,6 +80,7 @@ type PositionRailViewParams = {
 /** Presentation only; the directive owns windowing, interaction, and DOM lifetime. */
 export function renderChatPositionRailView({
   transcript,
+  assistant,
   markers: candidates,
   renderedIndexes,
   markerHeight,
@@ -45,6 +88,7 @@ export function renderChatPositionRailView({
   visibleIds,
   rovingId,
   previewId,
+  hoveredId,
   bindScroller,
   bindPreview,
   onScroll,
@@ -58,7 +102,7 @@ export function renderChatPositionRailView({
 }: PositionRailViewParams) {
   const count = candidates.length;
   const userLabel = t("chat.thread.positionUserMessage");
-  const assistantLabel = t("chat.thread.positionAssistantMessage");
+  const assistantLabel = assistant?.name.trim() || t("chat.thread.positionAssistantMessage");
   const markerLabel = (marker: ChatPositionIndex["markers"][number]) =>
     marker.role === "user" ? userLabel : assistantLabel;
   const previewMarker =
@@ -99,6 +143,7 @@ export function renderChatPositionRailView({
               [
                 transcript,
                 count,
+                hoveredId,
                 ...renderedIndexes.flatMap((index) => [
                   index,
                   candidates[index]!.id,
@@ -118,6 +163,7 @@ export function renderChatPositionRailView({
                       ${previous !== undefined && index > previous + 1 ? html`<div aria-hidden="true"></div>` : nothing}
                       <div
                         class="chat-position-rail__item"
+                        ?data-hovered=${marker.id === hoveredId}
                         role="listitem"
                         aria-posinset=${index + 1}
                         aria-setsize=${count}
@@ -152,7 +198,17 @@ export function renderChatPositionRailView({
             ? html`
                 <div ${ref(bindPreview)} class="chat-position-rail__preview" aria-hidden="true">
                   <div class="chat-position-rail__preview-header">
-                    ${renderChatAuthorAvatar(previewSender)}
+                    ${
+                      previewMarker.role === "assistant" && assistant
+                        ? html`<span
+                            class="chat-author-avatar"
+                            role="img"
+                            aria-label=${assistantLabel}
+                          >
+                            ${renderAgentIdentityAvatar(assistant)}
+                          </span>`
+                        : renderChatAuthorAvatar(previewSender)
+                    }
                     <span class="chat-position-rail__preview-label">${previewLabel}</span>
                   </div>
                   <!-- Preview links remain non-interactive; the marker owns keyboard navigation. -->

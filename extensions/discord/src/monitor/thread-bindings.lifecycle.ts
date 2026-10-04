@@ -56,11 +56,7 @@ type AcpThreadBindingHealthProbe = (params: {
 const ACP_STARTUP_HEALTH_PROBE_CONCURRENCY_LIMIT = 8;
 
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
-  const manager = getThreadBindingManager(accountId);
-  if (!manager) {
-    return [];
-  }
-  return manager.listBindings();
+  return getThreadBindingManager(accountId)?.listBindings() ?? [];
 }
 
 export function listThreadBindingsBySessionKey(params: {

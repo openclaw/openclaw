@@ -53,26 +53,6 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     });
   };
 
-  const registerDetachedTaskRuntime = (
-    record: PluginRecord,
-    runtime: Parameters<OpenClawPluginApi["registerDetachedTaskRuntime"]>[0],
-  ) => {
-    const existing = registry.detachedTaskRuntimes[0];
-    if (existing && existing.pluginId !== record.id) {
-      reportRegistrationError(
-        record,
-        `detached task runtime already registered by ${existing.pluginId}`,
-      );
-      return;
-    }
-    const next = { pluginId: record.id, runtime };
-    if (existing) {
-      registry.detachedTaskRuntimes.splice(0, 1, next);
-    } else {
-      registry.detachedTaskRuntimes.push(next);
-    }
-  };
-
   const registerInteractiveHandler = (
     record: PluginRecord,
     registration: Parameters<OpenClawPluginApi["registerInteractiveHandler"]>[0],
@@ -108,6 +88,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `context engine id reserved by core: ${normalizedId}`);
       return;
     }
+    getPluginInstance(record)?.admitFactory(factory);
     const result = registerContextEngineInRegistry(
       registry,
       normalizedId,
@@ -134,10 +115,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     provider: Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0],
   ) => {
-    const id = normalizeOptionalString(
-      (provider as Partial<Parameters<OpenClawPluginApi["registerCompactionProvider"]>[0]> | null)
-        ?.id,
-    );
+    const id = normalizeOptionalString(provider?.id);
     if (!id) {
       reportRegistrationError(record, "compaction provider registration missing id");
       return;
@@ -160,7 +138,6 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
 
   return {
     registerDecisionProvider,
-    registerDetachedTaskRuntime,
     registerInteractiveHandler,
     registerContextEngine,
     registerCompactionProvider,

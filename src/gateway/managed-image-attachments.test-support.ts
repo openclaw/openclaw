@@ -4,6 +4,7 @@ import type { IncomingHttpHeaders } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import {
@@ -30,6 +31,11 @@ export const TINY_PNG_BASE64 =
 export async function createPngDataUrl(width: number, height: number): Promise<string> {
   const buffer = createSolidPngBuffer(width, height, { r: 24, g: 64, b: 128 });
   return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+export async function writeSource(sourcePath: string, body: string | Buffer) {
+  await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+  await fs.writeFile(sourcePath, body);
 }
 
 export async function expectPathMissing(targetPath: string): Promise<void> {
@@ -70,6 +76,19 @@ export async function createManagedOutgoingImageBlocks(params: ManagedOutgoingIm
       );
     }),
   });
+}
+
+export async function createManagedOutgoingImageBlocksWithoutHostSql(
+  params: ManagedOutgoingImageTestParams,
+) {
+  const queries = observeHostDataSql();
+  try {
+    const blocks = await createManagedOutgoingImageBlocks(params);
+    expect(queries.queries).toEqual([]);
+    return blocks;
+  } finally {
+    queries.restore();
+  }
 }
 
 export async function replaceTestSessionEntry(
@@ -217,7 +236,7 @@ export async function createFixture(
   await fs.mkdir(path.dirname(originalPath), { recursive: true });
   const body = options?.body ?? Buffer.from("original-image");
   await fs.writeFile(originalPath, body);
-  insertManagedImageRecord(
+  await insertManagedImageRecord(
     {
       attachmentId,
       sessionKey,

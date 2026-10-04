@@ -199,10 +199,6 @@ function findLiveModelTemplate(
   modelId: string,
   models: readonly ModelDefinitionConfig[],
 ): ModelDefinitionConfig | undefined {
-  const exact = models.find((model) => model.id === modelId);
-  if (exact) {
-    return exact;
-  }
   const normalizedId = modelId.toLowerCase();
   let best: ModelDefinitionConfig | undefined;
   let bestScore = 0;
@@ -279,10 +275,7 @@ function buildOpenAICompatibleLiveModel(
       ? { ...exact, contextWindow: liveContextWindow }
       : exact;
   }
-  // Manifest-published ids returned above are known-good. Everything past this
-  // point is a model the manifest has never described, so an opted-in provider
-  // gate decides whether its request shaping is understood well enough to
-  // surface it at all.
+  // Only unknown ids need the provider's request-shaping gate.
   if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
     return undefined;
   }
@@ -359,14 +352,6 @@ export function buildOpenAICompatibleLiveModels(
   );
 }
 
-function parseUpstreamProviderCatalogUrl(value: string): URL | undefined {
-  try {
-    return new URL(value);
-  } catch {
-    return undefined;
-  }
-}
-
 const UPSTREAM_PROVIDER_API_BY_PACKAGE = new Map<
   string,
   ProjectedUpstreamProviderCatalogModel["api"]
@@ -404,16 +389,13 @@ export function projectUpstreamProviderCatalogModel(params: {
     return undefined;
   }
   const canonicalBaseUrl = params.defaultBaseUrl ?? params.provider.api;
-  const canonicalOrigin = canonicalBaseUrl
-    ? parseUpstreamProviderCatalogUrl(canonicalBaseUrl)?.origin
-    : undefined;
+  const canonicalOrigin = canonicalBaseUrl ? URL.parse(canonicalBaseUrl)?.origin : undefined;
   const providerBaseUrl = params.provider.api ?? params.defaultBaseUrl;
   const modelBaseUrl = readLiveModelCatalogStringField(modelProvider, "api");
   if (
     !canonicalOrigin ||
-    (providerBaseUrl &&
-      parseUpstreamProviderCatalogUrl(providerBaseUrl)?.origin !== canonicalOrigin) ||
-    (modelBaseUrl && parseUpstreamProviderCatalogUrl(modelBaseUrl)?.origin !== canonicalOrigin)
+    (providerBaseUrl && URL.parse(providerBaseUrl)?.origin !== canonicalOrigin) ||
+    (modelBaseUrl && URL.parse(modelBaseUrl)?.origin !== canonicalOrigin)
   ) {
     // Metadata chooses transport, but must never redirect authenticated inference
     // away from the provider endpoint trusted by its owner plugin.
@@ -424,7 +406,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     api === "anthropic-messages"
       ? (params.anthropicBaseUrl ?? upstreamBaseUrl?.replace(/\/v1\/?$/, ""))
       : upstreamBaseUrl;
-  if (!baseUrl || parseUpstreamProviderCatalogUrl(baseUrl)?.origin !== canonicalOrigin) {
+  if (!baseUrl || URL.parse(baseUrl)?.origin !== canonicalOrigin) {
     return undefined;
   }
 

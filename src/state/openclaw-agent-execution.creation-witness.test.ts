@@ -7,7 +7,10 @@ import {
   createSqliteWorkerOperationAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
-import { readOpenClawAgentDatabaseRegistryToken } from "./openclaw-agent-db-registry-listing.js";
+import {
+  prepareOpenClawAgentDatabaseRegistrySnapshotRead,
+  readOpenClawAgentDatabaseRegistryToken,
+} from "./openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -18,6 +21,7 @@ import {
 } from "./openclaw-agent-db.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
+import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -32,6 +36,18 @@ function fixture() {
   const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-creation-witness-")) };
   const options = { agentId: "main", env };
   return { ...options, path: resolveOpenClawAgentSqlitePath(options) };
+}
+
+function aliasedFixture() {
+  const options = fixture();
+  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
+  const directory = path.dirname(options.path);
+  fs.mkdirSync(directory, { recursive: true });
+  fs.symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
+  return {
+    options,
+    aliased: { ...options, path: path.join(alias, path.basename(options.path)) },
+  };
 }
 
 function source(
@@ -54,13 +70,35 @@ function source(
   };
 }
 
-it("shares an execution owner across directory aliases, later turns, and cleanup", async () => {
+it("exposes a prepared generation only after registration publication and keeps its borrower live", async () => {
   const options = fixture();
-  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "alias");
-  const directory = path.dirname(options.path);
-  fs.mkdirSync(directory, { recursive: true });
-  fs.symlinkSync(directory, alias, process.platform === "win32" ? "junction" : "dir");
-  const aliased = { ...options, path: path.join(alias, path.basename(options.path)) };
+  readOpenClawAgentDatabaseRegistryToken({ env: options.env });
+  const execution = captureOpenClawAgentDatabaseExecution(options);
+  let observedUnpublishedIdentity = false;
+  const requestSource = source();
+  requestSource.onRegistryChange = () => {
+    // Registration publishes after the native identity is accepted. Neither boundary
+    // alone permits another borrower to skip the remaining preparation.
+    observedUnpublishedIdentity ||= execution.fileIdentity !== undefined;
+    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+  };
+  try {
+    expect(execution.capturePreparedGenerationClaim()).toBeUndefined();
+    await execution.prepare(requestSource);
+    expect(observedUnpublishedIdentity).toBe(true);
+    const claim = execution.capturePreparedGenerationClaim();
+    expect(claim).toBeDefined();
+    claim!.assertCurrent();
+    await execution.release();
+    expect(() => execution.capturePreparedGenerationClaim()).toThrow(/released/);
+    expect(() => claim!.assertCurrent()).toThrow(/released/);
+  } finally {
+    await execution.release();
+  }
+});
+
+it("shares an execution owner across directory aliases, later turns, and cleanup", async () => {
+  const { options, aliased } = aliasedFixture();
   const creator = captureOpenClawAgentDatabaseExecution(aliased, {
     expectedCreationIdentity: readDatabasePathIdentitySync(aliased.path),
   });
@@ -73,6 +111,9 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
   const existingTranscript = { kind: "session-transcript-initialized", sessionKey };
   try {
     await creator.prepare(source());
+    const registry = await prepareOpenClawAgentDatabaseRegistrySnapshotRead({
+      env: options.env,
+    }).read();
     await expect(creator.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
       {
         ...existingTranscript,
@@ -82,6 +123,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     await expect(sibling.runExisting(source(), (scope) => scope.execute(command))).resolves.toEqual(
       existingTranscript,
     );
+    expect(registry.assertCurrent).not.toThrow();
     expect(sibling.path).toBe(options.path);
     expect(sibling.fileIdentity).toEqual(creator.fileIdentity);
     await Promise.all([creator.release(), sibling.release()]);
@@ -100,6 +142,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
       await expect(
         reopened.runExisting(source(), (scope) => scope.execute(command)),
       ).resolves.toEqual(existingTranscript);
+      expect(registry.assertCurrent).not.toThrow();
       await closeOpenClawAgentDatabaseByPathAsync(aliased.path, options.agentId);
       expect(() => reopened.assertCurrent()).toThrow(/closed/);
     } finally {
@@ -111,6 +154,7 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     });
     try {
       await replacement.prepare(source());
+      expect(registry.assertCurrent).toThrow("registry changed");
       await expect(
         replacement.runExisting(source(), (scope) => scope.execute(command)),
       ).resolves.toEqual({
@@ -124,6 +168,86 @@ it("shares an execution owner across directory aliases, later turns, and cleanup
     await Promise.allSettled([creator.release(), sibling.release()]);
   }
 });
+
+it("retains every execution alias until the shared maintenance scope closes", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  const alias = path.join(options.env.OPENCLAW_STATE_DIR, "maintenance-alias");
+  fs.symlinkSync(
+    path.dirname(options.path),
+    alias,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  const parent = createOpenClawDatabaseMaintenanceScope();
+  const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+  const captured = child.run(() =>
+    captureOpenClawAgentDatabaseExecution({
+      ...options,
+      path: path.join(alias, path.basename(options.path)),
+    }),
+  );
+  const retained = parent.run(() => captureOpenClawAgentDatabaseExecution(options));
+  try {
+    await child.close();
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await parent.close();
+    expect(() => retained.assertCurrent()).toThrow(/closed/);
+  } finally {
+    await Promise.allSettled([
+      captured.release(),
+      retained.release(),
+      child.close(),
+      parent.close(),
+    ]);
+  }
+});
+
+it.each(["child-first", "parent-first"] as const)(
+  "retains executor aliases across %s maintenance borrowing",
+  async (order) => {
+    const { options, aliased } = aliasedFixture();
+    const parent = createOpenClawDatabaseMaintenanceScope();
+    const child = parent.run(() => createOpenClawDatabaseMaintenanceScope());
+    const creator =
+      order === "child-first"
+        ? child.run(() => captureOpenClawAgentDatabaseExecution(aliased))
+        : parent.run(() => captureOpenClawAgentDatabaseExecution(options));
+    const borrower =
+      order === "child-first"
+        ? parent.run(() => captureOpenClawAgentDatabaseExecution(options))
+        : child.run(() => captureOpenClawAgentDatabaseExecution(aliased));
+    const parentBorrower = order === "child-first" ? borrower : creator;
+    const childBorrower = order === "child-first" ? creator : borrower;
+    try {
+      await parent.run(() => creator.prepare(source()));
+      const identity = parentBorrower.fileIdentity;
+      expect(identity).toBeDefined();
+      await childBorrower.release();
+      await child.close();
+      await expect(
+        parent.run(() =>
+          parentBorrower.runExisting(source(), (scope) =>
+            scope.execute({
+              type: "session.transcript.initialize",
+              input: { sessionKey: "agent:main:maintenance-borrow", sessionId: "retained-session" },
+            }),
+          ),
+        ),
+      ).resolves.toEqual({
+        kind: "session-transcript-initialized",
+        sessionKey: "agent:main:maintenance-borrow",
+        placeholder: { sessionId: "retained-session" },
+      });
+      expect(parentBorrower.fileIdentity).toEqual(identity);
+      await parent.close();
+      expect(() => parentBorrower.assertCurrent()).toThrow(/closed/);
+    } finally {
+      await Promise.allSettled([creator.release(), borrower.release()]);
+      await child.close();
+      await parent.close();
+    }
+  },
+);
 
 it.each(["missing", "schema-missing"] as const)(
   "prepares its originally observed %s store and records native birth without changing identity",
@@ -408,6 +532,59 @@ it("joins native creating admission before releasing its original reservation", 
   }
 });
 
+it("keeps another captured borrower live after a caller-specific native open refusal", async () => {
+  const options = fixture();
+  openOpenClawAgentDatabase(options);
+  await closeOpenClawAgentDatabaseByPathAsync(options.path, options.agentId);
+  const physical = readDatabasePathIdentitySync(options.path);
+  expect(physical.key).toMatch(/^file:/);
+  const rejected = captureOpenClawAgentDatabaseExecution(options);
+  const retained = captureOpenClawAgentDatabaseExecution(options, {
+    expectedIdentity: {
+      kind: "file",
+      physicalIdentity: physical.key.slice("file:".length),
+      birthtime: physical.birthtime,
+      nativeLocation: physical.canonicalPath,
+    },
+  });
+  const refusal = new Error("Original caller revoked at native open admission");
+  let current = true;
+  let reachedNativeOpen = false;
+  const revoked = source((request) => {
+    if (request.stage === "open") {
+      reachedNativeOpen = true;
+      current = false;
+    }
+  });
+  revoked.assertCurrent = () => {
+    if (!current) {
+      throw refusal;
+    }
+  };
+  try {
+    await expect(rejected.runExisting(revoked, async () => "not admitted")).rejects.toThrow(
+      refusal,
+    );
+    expect(reachedNativeOpen).toBe(true);
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await expect(
+      retained.runExisting(source(), (scope) =>
+        scope.execute({
+          type: "session.transcript.initialize",
+          input: { sessionKey: "agent:main:after-open-refusal", sessionId: "retained-borrower" },
+        }),
+      ),
+    ).resolves.toEqual({
+      kind: "session-transcript-initialized",
+      sessionKey: "agent:main:after-open-refusal",
+      placeholder: { sessionId: "retained-borrower" },
+    });
+    expect(readDatabasePathIdentitySync(options.path)).toEqual(physical);
+  } finally {
+    await Promise.allSettled([rejected.release(), retained.release()]);
+  }
+});
+
 it("rechecks source authority after registration notification before authorizing native open", async () => {
   const options = fixture();
   readOpenClawAgentDatabaseRegistryToken({ env: options.env });
@@ -574,6 +751,7 @@ it("retains canonical borrowers and rejects the changed alias before caller cont
     fs.symlinkSync(successorDirectory, alias, linkType);
     expect(() => creator.assertCurrent()).toThrow(/identity|observed target/);
     expect(() => creator.fileIdentity).toThrow(/identity|observed target/);
+    expect(() => creator.capturePreparedGenerationClaim()).toThrow(/identity|observed target/);
     await expect(creator.runExisting(source(), operation)).rejects.toThrow(
       /identity|observed target/,
     );

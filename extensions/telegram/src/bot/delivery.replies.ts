@@ -83,10 +83,6 @@ type TelegramReplyChannelData = {
 
 type ChunkTextFn = (text: string) => TelegramTextDeliveryPage[];
 
-function markDelivered(progress: DeliveryProgress): void {
-  progress.deliveredCount += 1;
-}
-
 function resolveReplyToForSend(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -113,7 +109,7 @@ function filterEmptyTelegramTextChunks(chunks: readonly TelegramTextDeliveryPage
   );
 }
 
-async function deliverTextReply(params: {
+type TextReplyParams = {
   sender: TelegramPreparedSender;
   chatId: string;
   runtime: RuntimeEnv;
@@ -133,7 +129,9 @@ async function deliverTextReply(params: {
   progress: DeliveryProgress;
   recordMessageId: (messageId: number) => Promise<void>;
   quoteOnlyOnFirstChunk?: boolean;
-}): Promise<number | undefined> {
+};
+
+async function deliverTextReply(params: TextReplyParams): Promise<number | undefined> {
   const chunks = filterEmptyTelegramTextChunks(params.chunkText(params.text));
   const suppressReply = chunks.length > 1 && isSingleUseReplyToMode(params.replyToMode);
   const delivered = await params.sender.sendText({
@@ -187,7 +185,7 @@ async function deliverTextReply(params: {
             params.progress,
             suppressReply && first ? params.replyToId : replyToMessageId,
           );
-          markDelivered(params.progress);
+          params.progress.deliveredCount += 1;
         },
       };
     },
@@ -218,34 +216,19 @@ function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
   return undefined;
 }
 
-async function deliverMediaReply(params: {
-  sender: TelegramPreparedSender;
-  reply: ReplyPayload;
-  mediaList: string[];
-  bot: Bot;
-  chatId: string;
-  runtime: RuntimeEnv;
-  thread?: TelegramThreadSpec | null;
-  tableMode?: MarkdownTableMode;
-  richMessages?: boolean;
-  mediaLocalRoots?: readonly string[];
-  mediaMaxBytes?: number;
-  chunkText: ChunkTextFn;
-  mediaLoader: typeof loadWebMedia;
-  onVoiceRecording?: () => Promise<void> | void;
-  linkPreview?: boolean;
-  silent?: boolean;
-  replyQuoteMessageId?: number;
-  replyQuoteText?: string;
-  replyQuotePosition?: number;
-  replyQuoteEntities?: unknown[];
-  replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
-  replyToId?: number;
-  replyToMode: ReplyToMode;
-  progress: DeliveryProgress;
-  recordMessageId: (messageId: number) => Promise<void>;
-  textMode?: "html";
-}): Promise<{
+async function deliverMediaReply(
+  params: Omit<TextReplyParams, "text" | "quoteOnlyOnFirstChunk"> & {
+    reply: ReplyPayload;
+    mediaList: string[];
+    bot: Bot;
+    tableMode?: MarkdownTableMode;
+    mediaLocalRoots?: readonly string[];
+    mediaMaxBytes?: number;
+    mediaLoader: typeof loadWebMedia;
+    onVoiceRecording?: () => Promise<void> | void;
+    textMode?: "html";
+  },
+): Promise<{
   firstDeliveredMessageId?: number;
   visibleFallbackText?: string;
   mediaUrls: string[];
@@ -278,7 +261,7 @@ async function deliverMediaReply(params: {
       message,
       ...(plainText ? { text: plainText } : {}),
     });
-    markDelivered(params.progress);
+    params.progress.deliveredCount += 1;
   };
   const deliverAcceptedMedia = async (options: {
     sender: TelegramOutboundMediaSender;
@@ -328,11 +311,7 @@ async function deliverMediaReply(params: {
     const { index, mediaUrl, media, mediaPlan, mediaSender, documentSender } = batch[0];
     const isFirstMedia = index === 0;
     const { htmlCaption, plainCaption, followUpText } = mediaPlan;
-    const replyToMessageId = resolveReplyToForSend({
-      replyToId: params.replyToId,
-      replyToMode: params.replyToMode,
-      progress: params.progress,
-    });
+    const replyToMessageId = resolveReplyToForSend(params);
     const shouldAttachButtonsToMedia = isFirstMedia && params.replyMarkup && !followUpText;
     const videoDimensions =
       mediaPlan.kind === "video" ? await probeVideoDimensions(media.buffer) : undefined;
@@ -410,28 +389,15 @@ async function deliverMediaReply(params: {
         options: { replyToId?: number; includeQuote?: boolean; replyToMode?: ReplyToMode } = {},
       ) =>
         await deliverTextReply({
-          sender: params.sender,
-          chatId: params.chatId,
-          runtime: params.runtime,
+          ...params,
           text,
-          chunkText: params.chunkText,
           replyToId: options.replyToId,
-          ...(options.includeQuote
-            ? {
-                replyQuoteMessageId: params.replyQuoteMessageId,
-                replyQuotePosition: params.replyQuotePosition,
-                replyQuoteEntities: params.replyQuoteEntities,
-                replyQuoteText: params.replyQuoteText,
-              }
-            : {}),
-          thread: params.thread,
-          richMessages: params.richMessages,
-          linkPreview: params.linkPreview,
-          silent: params.silent,
-          replyMarkup: params.replyMarkup,
+          replyQuoteMessageId: options.includeQuote ? params.replyQuoteMessageId : undefined,
+          replyQuotePosition: options.includeQuote ? params.replyQuotePosition : undefined,
+          replyQuoteEntities: options.includeQuote ? params.replyQuoteEntities : undefined,
+          replyQuoteText: options.includeQuote ? params.replyQuoteText : undefined,
           replyToMode: options.replyToMode ?? params.replyToMode,
           progress: createVoiceFallbackProgress(),
-          recordMessageId: params.recordMessageId,
           quoteOnlyOnFirstChunk: true,
         });
 
@@ -444,17 +410,13 @@ async function deliverMediaReply(params: {
         }
         if (isTelegramVoiceMessagesForbiddenError(voiceErr)) {
           const fallbackText = resolveVoiceFallbackText(params.reply);
-          if (!fallbackText || !fallbackText.trim()) {
+          if (!fallbackText) {
             throw voiceErr;
           }
           logVerbose(
             "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
           );
-          const voiceFallbackReplyTo = resolveReplyToForSend({
-            replyToId: params.replyToId,
-            replyToMode: params.replyToMode,
-            progress: params.progress,
-          });
+          const voiceFallbackReplyTo = resolveReplyToForSend(params);
           const fallbackMessageId = await sendVoiceFallbackText(fallbackText, {
             replyToId: voiceFallbackReplyTo,
             includeQuote: true,
@@ -465,7 +427,7 @@ async function deliverMediaReply(params: {
           firstDeliveredMessageId ??= fallbackMessageId;
           visibleFallbackText = fallbackText;
           markReplyApplied(params.progress, voiceFallbackReplyTo);
-          markDelivered(params.progress);
+          params.progress.deliveredCount += 1;
           return;
         }
         if (isTelegramCaptionTooLongError(voiceErr)) {
@@ -477,7 +439,7 @@ async function deliverMediaReply(params: {
           delete noCaptionParams.parse_mode;
           await sendVoiceMedia(noCaptionParams);
           const fallbackText = resolveVoiceFallbackText(params.reply);
-          if (fallbackText?.trim()) {
+          if (fallbackText) {
             try {
               const fallbackMessageId = await sendVoiceFallbackText(fallbackText, {
                 replyToMode: "first",
@@ -513,20 +475,12 @@ async function deliverMediaReply(params: {
     if (followUpText) {
       try {
         const followUpMessageId = await deliverTextReply({
-          sender: params.sender,
-          chatId: params.chatId,
-          runtime: params.runtime,
-          thread: params.thread,
-          chunkText: params.chunkText,
+          ...params,
           text: followUpText,
-          replyMarkup: params.replyMarkup,
-          richMessages: params.richMessages,
-          linkPreview: params.linkPreview,
-          silent: params.silent,
-          replyToId: params.replyToId,
-          replyToMode: params.replyToMode,
-          progress: params.progress,
-          recordMessageId: params.recordMessageId,
+          replyQuoteMessageId: undefined,
+          replyQuotePosition: undefined,
+          replyQuoteEntities: undefined,
+          replyQuoteText: undefined,
         });
         if (followUpMessageId === undefined) {
           visibleFallbackText = firstDeliveredCaption ?? "";
@@ -561,7 +515,6 @@ async function maybePinFirstDeliveredMessage(params: {
   pin: ReplyPayloadDelivery["pin"];
   bot: Bot;
   chatId: string;
-  runtime: RuntimeEnv;
   firstDeliveredMessageId?: number;
 }): Promise<void> {
   const shouldPin = params.pin === true || (typeof params.pin === "object" && params.pin.enabled);
@@ -662,16 +615,11 @@ async function deliverReplyPlan(
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
-  const recordMessageId = async (messageId: number) => {
-    if (params.accountId || params.ownerAgentId) {
-      await recordSentMessage(params.chatId, messageId, params.cfg, {
-        accountId: params.accountId,
-        agentId: params.ownerAgentId,
-      });
-      return;
-    }
-    await recordSentMessage(params.chatId, messageId, params.cfg);
-  };
+  const recordMessageId = (messageId: number) =>
+    recordSentMessage(params.chatId, messageId, params.cfg, {
+      accountId: params.accountId,
+      agentId: params.ownerAgentId,
+    });
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
@@ -822,6 +770,13 @@ async function deliverReplyPlan(
 
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
+    const sentHookContext = {
+      sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+      chatId: params.chatId,
+      accountId: params.accountId,
+      isGroup: params.mirrorIsGroup,
+      groupId: params.mirrorGroupId,
+    };
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -845,60 +800,45 @@ async function deliverReplyPlan(
           verbose: false,
         });
         if (reactionResult.ok) {
-          markDelivered(progress);
+          progress.deliveredCount += 1;
         } else {
           params.runtime.error?.(danger(reactionResult.warning));
           continue;
         }
       }
+      const textReply: TextReplyParams = {
+        sender,
+        chatId: params.chatId,
+        runtime: params.runtime,
+        thread: params.thread,
+        chunkText,
+        text: reply.text || "",
+        replyMarkup,
+        replyQuoteMessageId: replyQuote.messageId,
+        replyQuoteText: replyQuote.text,
+        replyQuotePosition: replyQuote.position,
+        replyQuoteEntities: replyQuote.entities,
+        richMessages: params.richMessages,
+        linkPreview: params.linkPreview,
+        silent: params.silent,
+        replyToId,
+        replyToMode,
+        progress,
+        recordMessageId,
+      };
       if (mediaList.length === 0 && resolvedReplyText) {
-        firstDeliveredMessageId = await deliverTextReply({
-          sender,
-          chatId: params.chatId,
-          runtime: params.runtime,
-          thread: params.thread,
-          chunkText,
-          text: reply.text || "",
-          replyMarkup,
-          replyQuoteMessageId: replyQuote.messageId,
-          replyQuoteText: replyQuote.text,
-          replyQuotePosition: replyQuote.position,
-          replyQuoteEntities: replyQuote.entities,
-          richMessages: params.richMessages,
-          linkPreview: params.linkPreview,
-          silent: params.silent,
-          replyToId,
-          replyToMode,
-          progress,
-          recordMessageId,
-        });
+        firstDeliveredMessageId = await deliverTextReply(textReply);
       } else if (mediaList.length > 0) {
         const mediaDelivery = await deliverMediaReply({
-          sender,
+          ...textReply,
           reply,
           mediaList,
           bot: params.bot,
-          chatId: params.chatId,
-          runtime: params.runtime,
-          thread: params.thread,
           tableMode: params.tableMode,
-          richMessages: params.richMessages,
           mediaLocalRoots: params.mediaLocalRoots,
           mediaMaxBytes: params.mediaMaxBytes,
-          chunkText,
           mediaLoader,
           onVoiceRecording: params.onVoiceRecording,
-          linkPreview: params.linkPreview,
-          silent: params.silent,
-          replyQuoteMessageId: replyQuote.messageId,
-          replyQuoteText: replyQuote.text,
-          replyQuotePosition: replyQuote.position,
-          replyQuoteEntities: replyQuote.entities,
-          replyMarkup,
-          replyToId,
-          replyToMode,
-          progress,
-          recordMessageId,
           ...(params.textMode ? { textMode: params.textMode } : {}),
         });
         firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
@@ -911,7 +851,6 @@ async function deliverReplyPlan(
         pin: reply.delivery?.pin,
         bot: params.bot,
         chatId: params.chatId,
-        runtime: params.runtime,
         firstDeliveredMessageId,
       });
 
@@ -920,25 +859,17 @@ async function deliverReplyPlan(
       }
 
       emitTelegramMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        chatId: params.chatId,
-        accountId: params.accountId,
+        ...sentHookContext,
         content: contentForSentHook,
         success: progress.deliveredCount > deliveredCountBeforeReply,
         messageId: firstDeliveredMessageId,
-        isGroup: params.mirrorIsGroup,
-        groupId: params.mirrorGroupId,
       });
     } catch (error) {
       emitTelegramMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        chatId: params.chatId,
-        accountId: params.accountId,
+        ...sentHookContext,
         content: contentForSentHook,
         success: false,
         error: formatErrorMessage(error),
-        isGroup: params.mirrorIsGroup,
-        groupId: params.mirrorGroupId,
       });
       sender.fail(
         error,

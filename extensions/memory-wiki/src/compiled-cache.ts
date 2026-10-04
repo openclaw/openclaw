@@ -1,5 +1,4 @@
-// Memory Wiki compiled cache ownership and persistence.
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
 import type {
@@ -218,7 +217,7 @@ type MemoryWikiCompiledCacheStore = {
     snapshot: MemoryWikiCompiledCacheSnapshot,
     generation: string,
     publicationId: string,
-  ): Promise<ActiveVault>;
+  ): Promise<{ activeVault: ActiveVault; serializedSnapshot: string }>;
   reconcile(
     config: ResolvedMemoryWikiConfig,
     loadDurableIdentity: () => Promise<DurableVaultIdentity>,
@@ -381,10 +380,6 @@ export function resolveMemoryWikiCompiledCacheGeneration(
   return createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
 }
 
-export function createMemoryWikiCompiledCachePublicationId(): string {
-  return randomUUID();
-}
-
 export function createMemoryWikiCompiledCacheStore(
   openBlobStore: <TMetadata>(options: OpenBlobStoreOptions) => PluginBlobStore<TMetadata>,
   options: { onReadError?: (error: unknown) => void } = {},
@@ -462,7 +457,7 @@ export function createMemoryWikiCompiledCacheStore(
         encoding: "gzip-json",
       };
       await store.register(publicationKey(ownerId, publicationId), gzipSync(serialized), metadata);
-      return activeVault;
+      return { activeVault, serializedSnapshot: serialized };
     },
 
     async reconcile(config, loadDurableIdentity) {
@@ -612,7 +607,12 @@ export async function writeMemoryWikiCompiledCache(
   loadDurableIdentity: () => Promise<DurableVaultIdentity>,
 ): Promise<void> {
   const store = requireConfiguredStore();
-  const activeVault = await store.write(config, snapshot, generation, publicationId);
+  const { activeVault, serializedSnapshot } = await store.write(
+    config,
+    snapshot,
+    generation,
+    publicationId,
+  );
   try {
     await validatePublication();
   } catch (error) {
@@ -660,7 +660,11 @@ export async function writeMemoryWikiCompiledCache(
     ...activeVault,
     compiledCachePublicationId: publicationId,
     reconciled: true,
-    snapshot,
+    // Own the persisted payload, not compiler strings whose slices can retain entire
+    // source pages. Reuse the serialized snapshot to detach every nested string
+    // without changing its JSON representation (including lone surrogates).
+    // SAFETY: The store serialized this typed snapshot and verified its generation before writing.
+    snapshot: JSON.parse(serializedSnapshot) as MemoryWikiCompiledCacheSnapshot,
   });
   dashboardStates.delete(dashboardStateKey(config));
 }

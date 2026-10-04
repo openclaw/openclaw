@@ -1,9 +1,10 @@
-import { existsSync } from "node:fs";
+import { existsSync, unlinkSync } from "node:fs";
 import { expect, it, vi } from "vitest";
 import { findSourceImportBackedges } from "../../test/helpers/source-import-closure.js";
 import { SQLITE_WORKER_PREPARE_COMMAND } from "../infra/sqlite-worker-contract.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 import { openExistingSqliteWorkerBackend } from "./openclaw-state.worker.js";
 
@@ -25,11 +26,16 @@ it("keeps the shared-state command worker independent of host runtime discovery"
 
 it("prepares cold plugin-state reads without unrelated commands or creating a database", async () => {
   await withOpenClawTestState({ label: "plugin-state-lazy-preparation" }, async () => {
+    const databasePath = openOpenClawStateDatabase().path;
+    await closeOpenClawStateDatabaseAsync();
     const context = captureOpenClawStateWorkerContext();
-    const databasePath = context.admission.databasePath;
     const backend = runWithSqliteWorkerStateContext(context, () =>
-      openExistingSqliteWorkerBackend(undefined, { databasePath }),
+      openExistingSqliteWorkerBackend(undefined, {
+        databasePath,
+        existingIdentity: context.admission.identity.key,
+      }),
     );
+    unlinkSync(databasePath);
     try {
       expect(existsSync(databasePath)).toBe(false);
       await backend[SQLITE_WORKER_PREPARE_COMMAND]?.("pluginState.lookup");

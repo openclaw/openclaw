@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
+import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 import {
   defaultTitle,
   formatDetailKey,
@@ -28,8 +29,8 @@ type ToolDisplay = {
   detail?: string;
 };
 
-const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
-const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
+const FALLBACK = TOOL_DISPLAY_CONFIG.fallback;
+const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools;
 const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   agentId: "agent",
   sessionKey: "session",
@@ -57,15 +58,16 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
+  const { verb, detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
-    args: params.args,
+    args: call.args,
     meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
@@ -74,20 +76,13 @@ export function resolveToolDisplay(params: {
     detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
-  const { verb } = toolDisplayParts;
-  let { detail } = toolDisplayParts;
-
-  if (detail) {
-    detail = shortenHomeInString(detail);
-  }
-
   return {
     name,
     emoji,
     title,
     label,
     verb,
-    detail,
+    detail: detail ? shortenHomeInString(detail) : detail,
   };
 }
 
@@ -123,8 +118,7 @@ export function isCommandBearingToolCall(name: string | undefined, args?: unknow
   if (isShellToolDisplayName(name)) {
     return true;
   }
-  const command = asOptionalObjectRecord(args)?.command;
-  return typeof command === "string" && normalizeOptionalString(command) !== undefined;
+  return normalizeOptionalString(asOptionalObjectRecord(args)?.command) !== undefined;
 }
 
 /** Builds the compact one-line summary shown in transcripts and logs. */

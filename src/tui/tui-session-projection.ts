@@ -50,17 +50,6 @@ export function isIdentityOnlyTuiSessionInvalidation(event: SessionChangedEvent)
   );
 }
 
-/** Provider-local imports require a complete source or persisted—not envelope—sequence. */
-function isReplayableTuiSessionMessage(event: SessionMessageEvent): boolean {
-  const identity = readSessionMessageIdentity(event.message, event);
-  return Boolean(
-    identity &&
-    (!identity.isImported ||
-      identity.externalSource ||
-      readSessionMessageSequence(event.message) !== null),
-  );
-}
-
 /** Scope the shared transcript projection to the TUI's actual selected session. */
 export function readTuiSessionProjectionScope(
   state: Pick<TuiStateAccess, "currentSessionKey" | "currentAgentId" | "currentSessionId">,
@@ -116,16 +105,22 @@ export function projectTuiSessionMessage(
   event: SessionMessageEvent,
   unboundDisplayedRunIds: readonly string[],
 ): string | undefined {
-  if (!isReplayableTuiSessionMessage(event)) {
+  const identity = readSessionMessageIdentity(event.message, event);
+  // Provider-local imports require a complete source or persisted—not envelope—sequence.
+  if (
+    !identity ||
+    (identity.isImported &&
+      !identity.externalSource &&
+      readSessionMessageSequence(event.message) === null)
+  ) {
     return undefined;
   }
-  const identity = readSessionMessageIdentity(event.message, event);
   const assistantMessageId =
-    identity?.role === "assistant" && !identity.isImported ? (identity.id ?? undefined) : undefined;
+    identity.role === "assistant" && !identity.isImported ? (identity.id ?? undefined) : undefined;
   // Some transcript envelopes omit run identity. A single unbound displayed
   // final is the only non-ambiguous live owner that can adopt its durable ID.
   const authoritativeRunId = assistantMessageId
-    ? (identity?.runId ??
+    ? (identity.runId ??
       event.clientRunId ??
       state.activeChatRunId ??
       (unboundDisplayedRunIds.length === 1 ? unboundDisplayedRunIds[0] : undefined))

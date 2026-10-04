@@ -1,7 +1,7 @@
 import type { Project as AsyncProject } from "typescript/unstable/async";
 import { DiagnosticCategory, type Diagnostic, type Project } from "typescript/unstable/sync";
 
-type DiagnosticOptions = { includeSemantic?: boolean; includeDeclaration?: boolean };
+type DiagnosticOptions = { includeSemantic?: boolean };
 
 function diagnosticQueries(options: DiagnosticOptions) {
   return [
@@ -11,7 +11,6 @@ function diagnosticQueries(options: DiagnosticOptions) {
     "getSyntacticDiagnostics",
     "getBindDiagnostics",
     ...(options.includeSemantic === false ? [] : ["getSemanticDiagnostics" as const]),
-    ...(options.includeDeclaration ? ["getDeclarationDiagnostics" as const] : []),
   ] as const;
 }
 

@@ -1,6 +1,4 @@
 /**
- * Attach-only Browser tool runtime for a caller-owned loopback Chrome process.
- *
  * The bridge owns only authenticated Browser HTTP ingress. Chrome remains owned
  * by the caller and survives bridge disposal.
  */
@@ -49,22 +47,15 @@ async function persistAttachedScreenshot(params: {
 }
 
 function normalizeAttachedCdpUrl(raw: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    throw new Error("Attached Browser CDP URL must be a loopback HTTP URL with an explicit port.");
-  }
-  const port = Number(parsed.port);
+  const parsed = URL.parse(raw);
   if (
+    !parsed ||
     parsed.protocol !== "http:" ||
     parsed.hostname !== "127.0.0.1" ||
     parsed.username !== "" ||
     parsed.password !== "" ||
     parsed.port === "" ||
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65_535 ||
+    Number(parsed.port) < 1 ||
     parsed.pathname !== "/" ||
     parsed.search !== "" ||
     parsed.hash !== ""

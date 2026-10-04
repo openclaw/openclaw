@@ -1,15 +1,17 @@
-// Nextcloud Talk plugin module implements accounts behavior.
 import {
   DEFAULT_ACCOUNT_ID,
-  hasConfiguredAccountValue,
   normalizeAccountId,
   resolveAccountWithDefaultFallback,
 } from "openclaw/plugin-sdk/account-core";
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
 import { isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import { resolveSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  listNextcloudTalkAccountIds as listNextcloudTalkAccountIdsFromConfig,
+  mergeNextcloudTalkAccountConfig,
+  resolveDefaultNextcloudTalkAccountId,
+} from "../configured-state.js";
 import {
   resolveNextcloudTalkApiCredentialsResult,
   type NextcloudTalkCredentialUnavailableDiagnostic,
@@ -35,27 +37,10 @@ export type ResolvedNextcloudTalkAccount = {
   config: NextcloudTalkAccountConfig;
 };
 
-const {
-  listAccountIds: listNextcloudTalkAccountIdsInternal,
-  resolveDefaultAccountId: resolveDefaultNextcloudTalkAccountId,
-  resolveAccountConfig: mergeNextcloudTalkAccountConfig,
-} = createAccountListHelpers<NextcloudTalkAccountConfig>("nextcloud-talk", {
-  normalizeAccountId,
-  omitKeys: ["defaultAccount"],
-  hasImplicitDefaultAccount: (cfg) => {
-    const channel = cfg.channels?.["nextcloud-talk"];
-    return Boolean(
-      channel?.baseUrl?.trim() &&
-      (hasConfiguredAccountValue(channel.botSecret) ||
-        channel.botSecretFile?.trim() ||
-        process.env.NEXTCLOUD_TALK_BOT_SECRET?.trim()),
-    );
-  },
-});
 export { resolveDefaultNextcloudTalkAccountId };
 
 export function listNextcloudTalkAccountIds(cfg: CoreConfig): string[] {
-  const ids = listNextcloudTalkAccountIdsInternal(cfg);
+  const ids = listNextcloudTalkAccountIdsFromConfig(cfg);
   debugAccounts("listNextcloudTalkAccountIds", ids);
   return ids;
 }

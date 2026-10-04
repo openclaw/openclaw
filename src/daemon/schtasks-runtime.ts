@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
+import { isDeepStrictEqual } from "node:util";
 import { hasErrnoCode } from "../infra/errno.js";
 import { findVerifiedGatewayListenerPidsOnPortSync } from "../infra/gateway-processes.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
@@ -9,6 +10,7 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { readWindowsPortUsageSync } from "../infra/windows-port-pids.js";
+import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { spawnWithFallback } from "../process/spawn-utils.js";
 import { sleep } from "../utils.js";
@@ -16,8 +18,10 @@ import { ABSOLUTE_DEADLINE_EXPIRED, awaitWithinDeadline } from "../utils/absolut
 import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine } from "./output.js";
 import { execSchtasks } from "./schtasks-exec.js";
+import { assertTaskInspectionDeadline } from "./schtasks-inspection-deadline.js";
 import {
   readScheduledTaskCommand,
+  readStartupEntryCommand,
   resolveStartupEntryPaths,
   resolveTaskName,
   resolveTaskScriptPath,
@@ -35,7 +39,11 @@ import {
   shouldManageGatewayListenerPort,
   terminateGatewayProcessTree,
 } from "./schtasks-process.js";
-import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
+import {
+  probeScheduledTaskExists,
+  probeScheduledTaskState,
+  ScheduledTaskInspectionError,
+} from "./schtasks-state-probe.js";
 import { mergeGatewayServiceEnv } from "./service-env-merge.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
@@ -48,6 +56,8 @@ import type {
   GatewayServiceEnvArgs,
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
+  GatewayServiceState,
+  ReadGatewayServiceStateArgs,
 } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -149,31 +159,33 @@ export async function waitForScheduledTaskRunningEvidence(
 ): Promise<boolean> {
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (true) {
-    const probe = probeScheduledTaskState(resolveTaskName(env));
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      return false;
+    }
+    const probe = probeScheduledTaskState(resolveTaskName(env), remaining);
+    if (Date.now() >= deadline) {
+      return false;
+    }
     // Only Scheduler supervision, not an old Startup process, proves takeover.
     if (probe.status === "found" && probe.state === 4) {
       return true;
-    }
-    if (Date.now() >= deadline) {
-      return false;
     }
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
   }
 }
 
-export async function isRegisteredScheduledTask(
-  env: GatewayServiceEnv,
-  timeoutMs?: number,
-): Promise<boolean> {
-  const res = await execSchtasks(["/Query", "/TN", resolveTaskName(env)], timeoutMs).catch(
-    (error: unknown) => {
-      if (hasCommandProcessCleanupError(error)) {
-        throw error;
-      }
-      return { code: 1, stdout: "", stderr: "" };
-    },
-  );
-  return res.code === 0;
+// Ordinary install/control routing retains its best-effort Startup fallback.
+export async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
+  try {
+    const res = await execSchtasks(["/Query", "/TN", resolveTaskName(env)]);
+    return res.code === 0;
+  } catch (error) {
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    return false;
+  }
 }
 
 export async function launchFallbackTaskScript(
@@ -252,12 +264,75 @@ export async function launchFallbackTaskScript(
   child.unref();
 }
 
+/** Inspect an exact login item without borrowing a same-name Scheduled Task's state. */
+export async function readStartupEntryState(
+  startupEntryPath: string,
+  args: ReadGatewayServiceStateArgs,
+): Promise<GatewayServiceState> {
+  const deadline = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
+  const capture = async () => {
+    const contents: string[] = [];
+    const command = await readStartupEntryCommand(startupEntryPath, {
+      deadline,
+      onLauncherContent: (content) => contents.push(content),
+    });
+    return { command, contents };
+  };
+  let command: GatewayServiceCommandConfig | null = null;
+  let env = args.env ?? process.env;
+  try {
+    const captured = await capture();
+    command = captured.command;
+    env = mergeGatewayServiceEnv(env, command);
+    args.validateEnvBeforeStatusRead?.(env);
+    let runtime = await resolveFallbackRuntime(env, command, "control", deadline).catch(
+      (error: unknown) => createServiceRuntimeInspectionFailure(error, args.timeoutMs),
+    );
+    if (!isDeepStrictEqual(await capture(), captured)) {
+      throw new Error("Startup launcher changed during runtime inspection.");
+    }
+    if (deadline !== undefined && performance.now() >= deadline) {
+      runtime = createServiceRuntimeInspectionFailure(
+        "Startup runtime inspection timed out.",
+        args.timeoutMs,
+      );
+    }
+    return {
+      installed: true,
+      loadState: { status: "loaded" },
+      running: runtime.status === "running",
+      env,
+      command,
+      runtime,
+      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
+    };
+  } catch (error) {
+    if (!(error instanceof ScheduledTaskInspectionError) || error.timeoutMs === undefined) {
+      throw error;
+    }
+    const runtime = createServiceRuntimeInspectionFailure(error, args.timeoutMs);
+    return {
+      installed: command !== null,
+      loadState: { status: "unknown", detail: runtime.inspectionFailure.detail },
+      running: false,
+      env,
+      command,
+      runtime,
+      ...(runtime.inspectionReason ? { inspectionReason: runtime.inspectionReason } : {}),
+    };
+  }
+}
+
 export async function resolveFallbackRuntime(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
   mode: "observe" | "control" = "observe",
   deadlineMs?: number,
 ): Promise<GatewayServiceRuntime> {
+  const unknownRuntime = (detail: string): GatewayServiceRuntime => ({
+    status: "unknown",
+    detail: `Startup-folder login item installed; ${detail}`,
+  });
   if (deadlineMs !== undefined) {
     const observed = await readBoundedScheduledTaskProcess(env, deadlineMs, installedCommand);
     if (observed && performance.now() < deadlineMs) {
@@ -283,11 +358,9 @@ export async function resolveFallbackRuntime(
         };
       }
     }
-    return {
-      status: "unknown",
-      detail:
-        "Startup-folder login item installed; process ownership or port availability could not be verified within the inspection budget.",
-    };
+    return unknownRuntime(
+      "process ownership or port availability could not be verified within the inspection budget.",
+    );
   }
   const command =
     installedCommand === undefined
@@ -300,35 +373,24 @@ export async function resolveFallbackRuntime(
       : installedCommand;
   const port = resolveScheduledTaskCommandPort(env, command);
   if (!port) {
-    return {
-      status: "unknown",
-      detail: shouldManageGatewayListenerPort(env)
-        ? "Startup-folder login item installed; gateway port unknown."
-        : "Startup-folder login item installed; node gateway port unknown.",
-    };
+    return unknownRuntime(
+      shouldManageGatewayListenerPort(env) ? "gateway port unknown." : "node gateway port unknown.",
+    );
   }
   const installedArguments = command?.programArguments;
   if (!shouldManageGatewayListenerPort(env)) {
     const snapshot = readWindowsProcessSnapshot();
     if (!snapshot) {
-      return {
-        status: "unknown",
-        detail: `Startup-folder login item installed; could not inspect node host process for gateway port ${port}.`,
-      };
+      return unknownRuntime(`could not inspect node host process for gateway port ${port}.`);
     }
     const pid = installedArguments?.length
       ? findInstalledProcessPid(snapshot, port, installedArguments, isNodeHostArgv)
       : null;
-    return pid
-      ? {
-          status: "running",
-          pid,
-          detail: `Startup-folder login item installed; node host process detected for gateway port ${port}.`,
-        }
-      : {
-          status: "stopped",
-          detail: `Startup-folder login item installed; no node host process detected for gateway port ${port}.`,
-        };
+    return {
+      status: pid ? "running" : "stopped",
+      ...(pid ? { pid } : {}),
+      detail: `Startup-folder login item installed; ${pid ? "" : "no "}node host process detected for gateway port ${port}.`,
+    };
   }
 
   const shouldInspectProcess = process.platform === "win32" && Boolean(installedArguments?.length);
@@ -348,16 +410,10 @@ export async function resolveFallbackRuntime(
   const requireCommandOwnership = mode === "control" && process.platform === "win32";
   if (requireCommandOwnership) {
     if (!installedArguments?.length) {
-      return {
-        status: "unknown",
-        detail: `Startup-folder login item installed; persisted command unavailable for gateway port ${port}.`,
-      };
+      return unknownRuntime(`persisted command unavailable for gateway port ${port}.`);
     }
     if (!snapshot) {
-      return {
-        status: "unknown",
-        detail: `Startup-folder login item installed; could not verify the installed process for gateway port ${port}.`,
-      };
+      return unknownRuntime(`could not verify the installed process for gateway port ${port}.`);
     }
   }
   const probeHosts = await resolveGatewayServiceProbeHosts({ env, command });
@@ -368,10 +424,7 @@ export async function resolveFallbackRuntime(
     return null;
   });
   if (!diagnostics) {
-    return {
-      status: "unknown",
-      detail: `Startup-folder login item installed; could not inspect port ${port}.`,
-    };
+    return unknownRuntime(`could not inspect port ${port}.`);
   }
   if (diagnostics.status !== "busy") {
     const status =
@@ -392,24 +445,20 @@ export async function resolveFallbackRuntime(
   const ownedGatewayPids = matchedGatewayPids.length > 0 ? matchedGatewayPids : verifiedGatewayPids;
   if (ownedGatewayPids.length > 0) {
     return requireCommandOwnership
-      ? {
-          status: "unknown",
-          detail: `Startup-folder login item installed; gateway listener on port ${port} does not match the persisted command.`,
-        }
+      ? unknownRuntime(`gateway listener on port ${port} does not match the persisted command.`)
       : {
           status: "running",
           pid: ownedGatewayPids[0],
           detail: `Startup-folder login item installed; verified gateway listener detected on port ${port}.`,
         };
   }
-  return {
-    status: "unknown",
-    detail: `Startup-folder login item installed; port ${port} is busy, but the listener is not a verified gateway process.`,
-  };
+  return unknownRuntime(
+    `port ${port} is busy, but the listener is not a verified gateway process.`,
+  );
 }
 
 export function isScheduledTaskDefinitelyNotRunning(taskName: string): boolean {
-  const probe = probeScheduledTaskState(taskName);
+  const probe = probeScheduledTaskState(taskName, 5_000);
   if (probe.status !== "found") {
     return false;
   }
@@ -534,9 +583,15 @@ export async function startStartupEntry(
 
 export async function isScheduledTaskInstalled(args: GatewayServiceEnvArgs): Promise<boolean> {
   const effectiveEnv = args.env ?? (process.env as GatewayServiceEnv);
-  const deadlineMs = args.timeoutMs === undefined ? undefined : performance.now() + args.timeoutMs;
+  const timeoutMs = args.timeoutMs ?? WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS;
+  const deadlineMs = performance.now() + timeoutMs;
+  const probe = probeScheduledTaskState(resolveTaskName(effectiveEnv), timeoutMs);
+  if (probe.status === "unknown") {
+    throw new ScheduledTaskInspectionError(probe);
+  }
+  assertTaskInspectionDeadline(deadlineMs);
   return (
-    (await isRegisteredScheduledTask(effectiveEnv, args.timeoutMs)) ||
+    probe.status === "found" ||
     (await isStartupEntryInstalled(effectiveEnv, deadlineMs, args.requireEffective))
   );
 }
@@ -563,10 +618,17 @@ export async function readScheduledTaskRuntime(
     probe.state === 4 ? "running" : probe.state === 1 || probe.state === 3 ? "stopped" : "unknown";
   // A detached/lingering process may outlive its task. Retain exact persisted-argv ownership
   // evidence (including PID) without treating it as proof of Scheduler supervision.
-  const observedRuntime =
-    deadlineMs === undefined
-      ? await resolveListenerBackedScheduledTaskRuntime(env)
-      : await resolveListenerBackedScheduledTaskRuntime(env, deadlineMs);
+  const installedCommand = opts?.requireLoaded
+    ? await readScheduledTaskCommand(env, {
+        ...opts,
+        timeoutMs: deadlineMs === undefined ? undefined : deadlineMs - performance.now(),
+      })
+    : undefined;
+  const observedRuntime = await resolveListenerBackedScheduledTaskRuntime(
+    env,
+    deadlineMs,
+    installedCommand,
+  );
   return {
     ...observedRuntime,
     status: status === "unknown" ? status : (observedRuntime?.status ?? status),

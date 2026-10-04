@@ -444,15 +444,29 @@ async function ensureFinalTag(ctx: ReleaseContext): Promise<void> {
   }
   const tagged = await ctx.run(
     "git",
-    ["tag", "-a", state.tag, sha, "-m", `OpenClaw ${state.release}`],
+    ["tag", "-s", state.tag, sha, "-m", `OpenClaw ${state.release}`],
     { allowFailure: true },
   );
   if (tagged.exitCode !== 0) {
-    const local = await ctx.run("git", ["rev-parse", `${state.tag}^{}`]);
-    if (local.stdout.trim() !== sha) {
-      throw new ReleaseRefusal(`Local final tag ${state.tag} does not point to ${sha}.`, [
-        ctx.resume("publish"),
-      ]);
+    const local = await ctx.run("git", ["rev-parse", `${state.tag}^{}`], { allowFailure: true });
+    if (local.exitCode !== 0 || local.stdout.trim() !== sha) {
+      throw new ReleaseRefusal(
+        `Could not create signed final tag ${state.tag} at ${sha}. Configure Git tag signing and resume publication.`,
+        [ctx.resume("publish")],
+      );
+    }
+    const resigned = await ctx.run(
+      "git",
+      ["tag", "-s", "-f", state.tag, sha, "-m", `OpenClaw ${state.release}`],
+      {
+        allowFailure: true,
+      },
+    );
+    if (resigned.exitCode !== 0) {
+      throw new ReleaseRefusal(
+        `Could not create signed final tag ${state.tag} at ${sha}. Configure Git tag signing and resume publication.`,
+        [ctx.resume("publish")],
+      );
     }
   }
   await ctx.run("git", ["push", "origin", `refs/tags/${state.tag}`]);
@@ -602,6 +616,8 @@ export async function publish(ctx: ReleaseContext): Promise<void> {
       }
     }
     inputs.set("wait_for_clawhub", "false");
+    // flip-github activates the release itself; keep Docker off the activation gate.
+    inputs.delete("finalize_release_before_docker");
     const dispatched = await dispatchReleaseWorkflow(ctx, {
       phase: "publish",
       workflow: "openclaw-release-publish.yml",

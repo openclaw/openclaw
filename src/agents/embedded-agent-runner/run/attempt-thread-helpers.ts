@@ -1,7 +1,4 @@
 import { normalizeStructuredPromptSection } from "@openclaw/ai/internal/shared";
-/**
- * Handles per-attempt thread prompt composition and cache TTL markers.
- */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import type { isCacheTtlEligibleProvider } from "../cache-ttl.js";
@@ -62,9 +59,9 @@ export function resolveAttemptSpawnWorkspaceDir(params: {
  * eligibility both allow it. The boolean result tells callers whether the
  * session transcript changed.
  */
-export function appendAttemptCacheTtlIfNeeded(params: {
+export async function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
-    appendCustomEntry?: (customType: string, data: unknown) => void;
+    appendCustomEntryAsync: (customType: string, data: unknown) => Promise<unknown>;
   };
   timedOutDuringCompaction: boolean;
   compactionOccurredThisAttempt: boolean;
@@ -76,7 +73,7 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   isCacheTtlEligibleProvider: typeof isCacheTtlEligibleProvider;
   now?: number;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
-}): boolean {
+}): Promise<boolean> {
   // Compaction and timeout attempts already rewrite the transcript boundary.
   if (
     params.timedOutDuringCompaction ||
@@ -91,36 +88,14 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   ) {
     return false;
   }
-  if (params.sessionManager.appendCustomEntry) {
-    const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
-    const hash = hashToolResultProjectionSnapshot(snapshot);
-    params.sessionManager.appendCustomEntry(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
-      timestamp: params.now ?? Date.now(),
-      provider: params.provider,
-      modelId: params.modelId,
-      ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
-    });
-    params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
-  }
-  return true;
-}
-
-/**
- * Records completed bootstrap turns only after a clean, non-compaction attempt.
- * Failed, aborted, or compaction-mutated turns are not stable bootstrap history.
- */
-export function shouldPersistCompletedBootstrapTurn(params: {
-  shouldRecordCompletedBootstrapTurn: boolean;
-  promptError: unknown;
-  aborted: boolean;
-  timedOutDuringCompaction: boolean;
-  compactionOccurredThisAttempt: boolean;
-}): boolean {
-  if (!params.shouldRecordCompletedBootstrapTurn || params.promptError || params.aborted) {
-    return false;
-  }
-  if (params.timedOutDuringCompaction || params.compactionOccurredThisAttempt) {
-    return false;
-  }
+  const snapshot = serializeCacheTtlToolResultProjections(params.toolResultPromptProjectionState);
+  const hash = hashToolResultProjectionSnapshot(snapshot);
+  await params.sessionManager.appendCustomEntryAsync(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+    timestamp: params.now ?? Date.now(),
+    provider: params.provider,
+    modelId: params.modelId,
+    ...(hash !== params.toolResultPromptProjectionState.lastWrittenSnapshotHash ? snapshot : {}),
+  });
+  params.toolResultPromptProjectionState.lastWrittenSnapshotHash = hash;
   return true;
 }

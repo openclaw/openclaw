@@ -149,6 +149,7 @@ describe("configureProgramHelp", () => {
     expect(version).toBe(testProgramContext.programVersion);
     expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
+    expect(help).toContain("openclaw setup --baseline");
     expect(help).toContain("https://docs.openclaw.ai/cli");
   });
 

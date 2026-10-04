@@ -19,6 +19,18 @@ export type BridgeMemoryWikiResult = {
   pagePaths: string[];
 };
 
+export function emptySourceImportResult(): BridgeMemoryWikiResult {
+  return {
+    importedCount: 0,
+    updatedCount: 0,
+    skippedCount: 0,
+    removedCount: 0,
+    artifactCount: 0,
+    workspaces: 0,
+    pagePaths: [],
+  };
+}
+
 type ImportedSourceBatch = {
   results: Awaited<ReturnType<typeof writeImportedSourcePage>>[];
   activeKeys: Set<string>;

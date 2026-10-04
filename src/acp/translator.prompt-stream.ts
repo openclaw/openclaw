@@ -1,4 +1,3 @@
-/** ACP prompt submission, Gateway chat streaming, and prompt settlement. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
@@ -11,6 +10,9 @@ import type {
 import { readBool, readMetadataString, readNonNegativeInteger } from "@openclaw/acp-core/meta";
 import type { AcpSessionStore } from "@openclaw/acp-core/session";
 import type { AcpServerOptions } from "@openclaw/acp-core/types";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { mergeChatStreamMessage } from "../../packages/gateway-client/src/chat-stream-message.js";
+import { recoverTerminalReply } from "../../packages/gateway-client/src/run-recovery-text.js";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
 import { normalizeTerminalChatSendAckStatus } from "../shared/chat-send-ack-status.js";
@@ -49,16 +51,11 @@ type AcpPendingPromptAdmission = {
 };
 
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode =
-    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
-      ? (err as { gatewayCode?: string }).gatewayCode
-      : undefined;
   return (
+    err instanceof Error &&
     err.name === "GatewayClientRequestError" &&
-    gatewayCode === "INVALID_REQUEST" &&
+    "gatewayCode" in err &&
+    err.gatewayCode === "INVALID_REQUEST" &&
     err.message.includes("system provenance fields require admin scope")
   );
 }
@@ -238,8 +235,6 @@ export class AcpTranslatorPromptStream {
     session: AcpPendingPromptAdmission["session"],
   ): Promise<PromptResponse> {
     const meta = parseSessionMeta(params["_meta"]);
-    // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
-    // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
     const attachments = extractAttachmentsFromPrompt(params.prompt);
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
@@ -257,7 +252,7 @@ export class AcpTranslatorPromptStream {
           })
         : undefined;
 
-    // Defense-in-depth: also check the final assembled message (includes cwd prefix)
+    // The cwd prefix also counts against the prompt budget.
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
       throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
     }
@@ -457,9 +452,7 @@ export class AcpTranslatorPromptStream {
     if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
       return false;
     }
-    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
-      denyActive: true,
-    });
+    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey);
     this.pendingPrompts.delete(pending.sessionId);
     this.sessionStore.clearActiveRun(pending.sessionId, pending.idempotencyKey);
     this.disconnects.clearWhenIdle();
@@ -475,7 +468,6 @@ export class AcpTranslatorPromptStream {
     const sessionKey = payload.sessionKey as string | undefined;
     const state = payload.state as string | undefined;
     const runId = payload.runId as string | undefined;
-    const messageData = payload.message as Record<string, unknown> | undefined;
     if (!sessionKey || !state) {
       return;
     }
@@ -485,11 +477,11 @@ export class AcpTranslatorPromptStream {
       return;
     }
 
-    const shouldHandleMessageSnapshot = messageData && (state === "delta" || state === "final");
-    if (shouldHandleMessageSnapshot) {
-      // Gateway chat events can carry the latest full assistant snapshot on both
-      // incremental updates and the terminal final event. Process the snapshot
-      // first so ACP clients never drop the last visible assistant text.
+    const messageData =
+      state === "delta" ? mergeChatStreamMessage(pending.streamMessage, payload) : payload.message;
+    if (isRecord(messageData) && (state === "delta" || state === "final")) {
+      pending.streamMessage = messageData;
+      // Consume the terminal snapshot before settling the append-only ACP stream.
       const ownsSnapshot = await this.handleDeltaEvent(pending, messageData);
       if (
         !ownsSnapshot ||
@@ -529,35 +521,26 @@ export class AcpTranslatorPromptStream {
       return false;
     }
 
-    const fullThought = content
-      ?.filter((block) => block?.type === "thinking")
-      .map((block) => block.thinking ?? "")
-      .join("\n")
-      .trimEnd();
-    const sentThoughtSoFar = pending.sentThought?.length ?? 0;
-    if (fullThought && fullThought.length > sentThoughtSoFar) {
-      const newThought = fullThought.slice(sentThoughtSoFar);
-      pending.sentThought = fullThought;
-      await this.emitPromptChunk(pending, "agent_thought_chunk", newThought);
+    for (const [blockType, field, sentField, kind] of [
+      ["thinking", "thinking", "sentThought", "agent_thought_chunk"],
+      ["text", "text", "sentText", "agent_message_chunk"],
+    ] as const) {
+      const fullText = content
+        ?.filter((block) => block?.type === blockType)
+        .map((block) => block[field] ?? "")
+        .join("\n")
+        .trimEnd();
+      const sentSoFar = pending[sentField]?.length ?? 0;
+      if (!fullText || fullText.length <= sentSoFar) {
+        continue;
+      }
+      pending[sentField] = fullText;
+      await this.emitPromptChunk(pending, kind, fullText.slice(sentSoFar));
       if (this.getPendingPrompt(sessionId, pending.idempotencyKey) !== pending) {
         return false;
       }
     }
-
-    const fullText = content
-      ?.filter((block) => block?.type === "text")
-      .map((block) => block.text ?? "")
-      .join("\n")
-      .trimEnd();
-    const sentSoFar = pending.sentText?.length ?? 0;
-    if (!fullText || fullText.length <= sentSoFar) {
-      return true;
-    }
-
-    const newText = fullText.slice(sentSoFar);
-    pending.sentText = fullText;
-    await this.emitPromptChunk(pending, "agent_message_chunk", newText);
-    return this.getPendingPrompt(sessionId, pending.idempotencyKey) === pending;
+    return true;
   }
 
   private async finishPrompt(
@@ -630,20 +613,40 @@ export class AcpTranslatorPromptStream {
     pending: AcpPendingPrompt,
     result: AcpAgentWaitResult,
   ): Promise<void> {
-    // Claim before the first await so late chat events cannot deliver or settle
-    // the same prompt a second time.
+    const signal =
+      this.sessionStore.getSession(sessionId)?.abortController?.signal ??
+      new AbortController().signal;
+    const reply = await recoverTerminalReply({
+      runId: pending.idempotencyKey,
+      scope: { sessionKey: pending.sessionKey },
+      result,
+      request: (method, params, requestSignal) =>
+        this.gateway.request(method, params, { signal: requestSignal }),
+      signal,
+    }).catch(() => ({ outputText: undefined, unavailable: "recovery-cancelled" }));
+    // A live final or cancellation can win while history is being read.
     if (!this.claimPendingPrompt(pending)) {
       return;
     }
-    const terminalReply = result.terminalReply;
-    if (terminalReply?.disposition === "visible") {
-      const sentText = (pending.sentText ?? "").trimStart();
-      const recoveredText = terminalReply.text.startsWith(sentText)
-        ? terminalReply.text.slice(sentText.length)
-        : "";
-      if (recoveredText) {
-        await this.emitPromptChunk(pending, "agent_message_chunk", recoveredText, false);
-      }
+    const sentText = pending.sentText ?? "";
+    const outputText = reply.outputText;
+    const unavailable =
+      reply.unavailable ??
+      (outputText?.startsWith(sentText) === false ? "reply-rewritten" : undefined);
+    if (unavailable) {
+      const message = `Full reply recovery unavailable (${unavailable}). Check the session history.`;
+      await this.emitPromptChunk(
+        pending,
+        "agent_message_chunk",
+        `[OpenClaw interruption] ${message}`,
+        false,
+      );
+      await this.rejectPendingPrompt(pending, new Error(message), { claimed: true });
+      return;
+    }
+    const recoveredText = outputText?.slice(sentText.length);
+    if (recoveredText) {
+      await this.emitPromptChunk(pending, "agent_message_chunk", recoveredText, false);
     }
     if (result.status !== "error") {
       await this.finishPrompt(sessionId, pending, "end_turn", { claimed: true });

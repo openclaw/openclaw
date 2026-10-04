@@ -30,7 +30,7 @@ let createSlackStartupAuthClient: typeof import("./client.js").createSlackStartu
 let createSlackWriteClient: typeof import("./client.js").createSlackWriteClient;
 let createSlackTokenCacheKey: typeof import("./client.js").createSlackTokenCacheKey;
 let getSlackWriteClient: typeof import("./client.js").getSlackWriteClient;
-let resolveSlackProxyDispatcher: typeof import("./client-options.js").resolveSlackProxyDispatcher;
+let resolveSlackMonitorDispatchers: typeof import("./client-options.js").resolveSlackMonitorDispatchers;
 let resolveSlackWebClientOptions: typeof import("./client.js").resolveSlackWebClientOptions;
 let resolveSlackWriteClientOptions: typeof import("./client.js").resolveSlackWriteClientOptions;
 let SLACK_DEFAULT_RETRY_OPTIONS: typeof import("./client.js").SLACK_DEFAULT_RETRY_OPTIONS;
@@ -93,7 +93,7 @@ function requireFetch(options: WebClientOptions): NonNullable<WebClientOptions["
 
 beforeAll(async () => {
   const slackWebApi = await import("@slack/web-api");
-  ({ resolveSlackProxyDispatcher } = await import("./client-options.js"));
+  ({ resolveSlackMonitorDispatchers } = await import("./client-options.js"));
   ({
     createSlackWebClient,
     createSlackLookupClient,
@@ -303,12 +303,12 @@ describe("slack web client config", () => {
 describe("slack proxy dispatcher", () => {
   it("attaches one dispatcher-backed fetch for HTTPS_PROXY", async () => {
     process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
-    const dispatcher = resolveSlackProxyDispatcher();
-    const options = resolveSlackWebClientOptions({}, dispatcher);
+    const dispatchers = resolveSlackMonitorDispatchers("http");
+    const options = resolveSlackWebClientOptions({}, dispatchers.webApi);
 
-    expect(dispatcher?.constructor.name).toBe("EnvHttpProxyAgent");
+    expect(dispatchers.webApi?.constructor.name).toBe("EnvHttpProxyAgent");
     expect(requireFetch(options)).toBeTypeOf("function");
-    await dispatcher?.close();
+    await dispatchers.close();
   });
 
   it("keeps the capture-patched global fetch with ambient proxy env", async () => {
@@ -317,44 +317,50 @@ describe("slack proxy dispatcher", () => {
     const globalFetch = vi
       .spyOn(globalThis, "fetch")
       .mockResolvedValue(new Response(null, { status: 200 }));
-    const dispatcher = resolveSlackProxyDispatcher();
+    const dispatchers = resolveSlackMonitorDispatchers("http");
     try {
-      const options = resolveSlackWebClientOptions({}, dispatcher);
+      const options = resolveSlackWebClientOptions({}, dispatchers.webApi);
       await requireFetch(options)("https://slack.com/api/auth.test");
       expect(globalFetch).toHaveBeenCalledOnce();
     } finally {
       globalFetch.mockRestore();
-      await dispatcher?.close();
+      await dispatchers.close();
     }
   });
 
-  it("attaches the shared fetch when no proxy env var is configured", () => {
-    expect(resolveSlackProxyDispatcher()).toBeUndefined();
+  it("attaches the shared fetch when no proxy env var is configured", async () => {
+    const dispatchers = resolveSlackMonitorDispatchers("http");
+    expect(dispatchers.webApi).toBeUndefined();
     expect(requireFetch(resolveSlackWebClientOptions())).toBeTypeOf("function");
+    await dispatchers.close();
   });
 
   it("preserves an explicitly provided fetch", async () => {
     process.env.HTTPS_PROXY = "http://proxy.example.com:3128";
     const customFetch = vi.fn(async () => new Response(null, { status: 200 }));
-    const dispatcher = resolveSlackProxyDispatcher();
-    const options = resolveSlackWebClientOptions({ fetch: customFetch }, dispatcher);
+    const dispatchers = resolveSlackMonitorDispatchers("http");
+    const options = resolveSlackWebClientOptions({ fetch: customFetch }, dispatchers.webApi);
 
     await requireFetch(options)("https://slack.invalid/api/auth.test");
     expect(customFetch).toHaveBeenCalledWith("https://slack.invalid/api/auth.test", undefined);
-    await dispatcher?.close();
+    await dispatchers.close();
   });
 
-  it("treats empty lowercase https_proxy as authoritative over uppercase", () => {
+  it("treats empty lowercase https_proxy as authoritative over uppercase", async () => {
     process.env.https_proxy = "";
     process.env.HTTPS_PROXY = "http://upper.example.com:3128";
 
-    expect(resolveSlackProxyDispatcher()).toBeUndefined();
+    const dispatchers = resolveSlackMonitorDispatchers("http");
+    expect(dispatchers.webApi).toBeUndefined();
+    await dispatchers.close();
   });
 
-  it("degrades gracefully on malformed proxy URL", () => {
+  it("degrades gracefully on malformed proxy URL", async () => {
     process.env.HTTPS_PROXY = "not-a-valid-url://:::bad";
 
-    expect(resolveSlackProxyDispatcher()).toBeUndefined();
+    const dispatchers = resolveSlackMonitorDispatchers("http");
+    expect(dispatchers.webApi).toBeUndefined();
     expect(requireFetch(resolveSlackWebClientOptions())).toBeTypeOf("function");
+    await dispatchers.close();
   });
 });

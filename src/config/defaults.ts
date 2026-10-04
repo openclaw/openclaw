@@ -4,7 +4,10 @@ import {
   collectManifestModelIdNormalizationPolicies,
   normalizeConfiguredProviderCatalogModelId,
 } from "@openclaw/model-catalog-core/provider-model-id-normalization";
-import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asPositiveFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
@@ -40,9 +43,8 @@ const defaultWarnState: WarnState = { warned: false };
 export const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (shared model runtime catalog uses "latest" ids without date suffix)
   opus: "anthropic/claude-opus-5-5",
-  sonnet: "anthropic/claude-sonnet-5",
+  sonnet: "anthropic/claude-sonnet-5-5",
 
-  // OpenAI
   gpt: "openai/gpt-5.4",
   "gpt-mini": "openai/gpt-5.4-mini",
   "gpt-nano": "openai/gpt-5.4-nano",
@@ -260,8 +262,7 @@ export function applyModelDefaults(
       }
       const providerApi = normalizedProvider.api;
       const providerMaxTokens = asPositiveFiniteNumber(normalizedProvider.maxTokens);
-      const nextProvider = normalizedProvider;
-      if (nextProvider !== provider) {
+      if (normalizedProvider !== provider) {
         mutated = true;
       }
       let providerMutated = false;
@@ -355,14 +356,12 @@ export function applyModelDefaults(
         ) as ModelDefinitionConfig;
       });
 
-      if (!providerMutated) {
-        if (nextProvider !== provider) {
-          nextProviders[providerId] = nextProvider;
-        }
-        continue;
+      if (providerMutated) {
+        nextProviders[providerId] = { ...normalizedProvider, models: nextModels };
+        mutated = true;
+      } else if (normalizedProvider !== provider) {
+        nextProviders[providerId] = normalizedProvider;
       }
-      nextProviders[providerId] = { ...nextProvider, models: nextModels };
-      mutated = true;
     }
 
     if (mutated) {
@@ -377,41 +376,40 @@ export function applyModelDefaults(
   }
 
   let nextAgents = nextCfg.agents;
-  const rawAgentList = nextAgents?.list;
-  if (Array.isArray(rawAgentList)) {
-    let listMutated = false;
-    const agentList = rawAgentList.map((agent) => {
-      if (!isRecord(agent)) {
-        return agent;
-      }
-      let nextAgent = agent;
-      if (Object.hasOwn(agent, "model")) {
-        const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
-        if (normalizedModel !== agent.model) {
-          nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
-          listMutated = true;
+  const agentEntries = nextAgents?.entries;
+  if (agentEntries) {
+    let entriesMutated = false;
+    const entries = Object.fromEntries(
+      Object.entries(agentEntries).map(([id, agent]) => {
+        if (!isRecord(agent)) {
+          return [id, agent];
         }
-      }
-      if (isRecord(agent.models)) {
-        const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
-        if (normalizedModels !== agent.models) {
-          nextAgent = { ...nextAgent, models: normalizedModels };
-          listMutated = true;
+        let nextAgent = agent;
+        if (Object.hasOwn(agent, "model")) {
+          const normalizedModel = normalizeAgentModelSelectionForConfig(agent.model);
+          if (normalizedModel !== agent.model) {
+            nextAgent = { ...nextAgent, model: normalizedModel as typeof agent.model };
+            entriesMutated = true;
+          }
         }
-      }
-      return nextAgent;
-    });
-    if (listMutated) {
-      nextAgents = { ...nextAgents, list: agentList };
+        if (isRecord(agent.models)) {
+          const normalizedModels = normalizeAgentModelMapForConfig(agent.models);
+          if (normalizedModels !== agent.models) {
+            nextAgent = { ...nextAgent, models: normalizedModels };
+            entriesMutated = true;
+          }
+        }
+        return [id, nextAgent];
+      }),
+    );
+    if (entriesMutated) {
+      nextAgents = { ...nextAgents, entries };
       mutated = true;
     }
   }
 
   const existingAgent = nextAgents?.defaults;
   if (!existingAgent) {
-    if (!mutated) {
-      return cfg;
-    }
     return nextAgents === nextCfg.agents ? nextCfg : { ...nextCfg, agents: nextAgents };
   }
 
@@ -480,14 +478,9 @@ export function applyModelDefaults(
 export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
-  const hasMax =
-    typeof defaults?.maxConcurrent === "number" && Number.isFinite(defaults.maxConcurrent);
-  const hasSubMax =
-    typeof defaults?.subagents?.maxConcurrent === "number" &&
-    Number.isFinite(defaults.subagents.maxConcurrent);
-  const hasSubArchive =
-    typeof defaults?.subagents?.archiveAfterMinutes === "number" &&
-    Number.isFinite(defaults.subagents.archiveAfterMinutes);
+  const hasMax = asFiniteNumber(defaults?.maxConcurrent) !== undefined;
+  const hasSubMax = asFiniteNumber(defaults?.subagents?.maxConcurrent) !== undefined;
+  const hasSubArchive = asFiniteNumber(defaults?.subagents?.archiveAfterMinutes) !== undefined;
   if (hasMax && hasSubMax && hasSubArchive) {
     return cfg;
   }
@@ -521,26 +514,21 @@ export function hasAnthropicDefaultSignal(cfg: OpenClawConfig, env: NodeJS.Proce
   if (env.ANTHROPIC_API_KEY?.trim() || env.ANTHROPIC_OAUTH_TOKEN?.trim()) {
     return true;
   }
+  const isAnthropicProvider = (provider: string) => {
+    const normalized = normalizeProviderId(provider);
+    return normalized === "anthropic" || normalized === "claude-cli";
+  };
   const profiles = cfg.auth?.profiles;
-  if (profiles) {
-    for (const profile of Object.values(profiles)) {
-      const provider = normalizeProviderId(profile?.provider);
-      if (provider === "anthropic" || provider === "claude-cli") {
-        return true;
-      }
-    }
+  if (
+    profiles &&
+    Object.values(profiles).some((profile) => isAnthropicProvider(profile?.provider))
+  ) {
+    return true;
   }
   const order = cfg.auth?.order;
-  if (!order) {
-    return false;
-  }
-  return Object.keys(order).some((provider) => {
-    const normalizedProvider = normalizeProviderId(provider);
-    if (normalizedProvider !== "anthropic" && normalizedProvider !== "claude-cli") {
-      return false;
-    }
-    return (order as Record<string, unknown>)[provider] !== undefined;
-  });
+  return Object.keys(order ?? {}).some(
+    (provider) => isAnthropicProvider(provider) && order?.[provider] !== undefined,
+  );
 }
 
 export function applyContextPruningDefaults(

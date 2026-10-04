@@ -5,9 +5,9 @@
 import type {
   ChannelReactionConfig,
   ChannelReadReceiptConfig,
+  CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
 } from "./types.channel-messaging-common.js";
-import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 /** Private-API and helper actions the iMessage runtime may expose to agents. */
 export type IMessageActionConfig = {
@@ -60,18 +60,9 @@ export type IMessageAccountConfig = Omit<
     probeTimeoutMs?: number;
     groups?: Record<
       string,
-      {
-        requireMention?: boolean;
-        tools?: GroupToolPolicyConfig;
-        toolsBySender?: GroupToolPolicyBySenderConfig;
-        /**
-         * Per-group system prompt. Injected into the agent's system prompt on
-         * every turn that handles a message in that group. Matches the shape
-         * already supported by Discord, Telegram, IRC, Slack, GoogleChat, and
-         * other group-capable channels. The wildcard `groups["*"]` entry is
-         * also honored.
-         */
-        systemPrompt?: string;
+      Omit<CommonChannelGroupConfig, "skills" | "enabled" | "allowFrom"> & {
+        /** Override mention gating in native reply threads whose root this account sent. */
+        requireMentionInBotThreads?: boolean;
       }
     >;
     /**

@@ -90,7 +90,6 @@ function request(): OpenClawStateReadRequest {
   return {
     context: {
       environment: { OPENCLAW_STATE_DIR: root },
-      coordinatorRuntime: { directory: path.join(root, "coordinator"), keepAlive: false },
     },
     databasePath,
     location: databasePath,
@@ -109,33 +108,50 @@ function knownQuarantine(kind: "state" | "agent") {
   return reason;
 }
 
-it.each([false, true])(
-  "refuses a validated quarantine before source admission (reader close fails=%s)",
-  (closeFails) => {
-    const input = request();
-    const reason = knownQuarantine("state");
-    const closeFailure = new Error("quarantine reader close failed after a valid decision");
-    if (closeFails) {
-      mock.close.mockImplementationOnce(() => {
-        throw closeFailure;
-      });
-    }
-
-    const reply = mock.handler(input);
-    expect(reply).toMatchObject({ ok: false, message: expect.stringContaining(reason) });
+it.each([
+  { known: true, readFails: false, closeFails: false },
+  { known: true, readFails: false, closeFails: true },
+  { known: false, readFails: false, closeFails: true },
+  { known: false, readFails: true, closeFails: true },
+  { known: false, readFails: true, closeFails: false },
+])("preserves quarantine decisions and cleanup facts (%j)", ({ known, readFails, closeFails }) => {
+  const input = request();
+  const reason = known ? knownQuarantine("state") : undefined;
+  const readFailure = new Error("quarantine metadata read failed");
+  const closeFailure = new Error("quarantine native reader close failed");
+  if (readFails) {
+    mock.read.mockImplementationOnce(() => {
+      throw readFailure;
+    });
+  }
+  if (closeFails) {
+    mock.close.mockImplementationOnce(() => {
+      throw closeFailure;
+    });
+  }
+  const reply = mock.handler(input);
+  if (known) {
+    expect(reply).toMatchObject({ ok: false, message: expect.stringContaining(reason!) });
     expect(reply).not.toHaveProperty("sourceAdmitted", true);
-    expect(mock.query).not.toHaveBeenCalled();
-    expect(mock.close).toHaveBeenCalledOnce();
-    expect(mock.databases[0]?.isOpen).toBe(closeFails);
-    if (closeFails) {
-      expect(reply.nativeCleanupFailure?.error?.nodes).toEqual(
-        expect.arrayContaining([expect.objectContaining({ message: closeFailure.message })]),
-      );
-    } else {
-      expect(reply.nativeCleanupFailure).toBeUndefined();
-    }
-  },
-);
+  } else if (closeFails) {
+    expect(reply).toMatchObject({ ok: true, type: "fleet.list", cells: [] });
+  } else {
+    expect(reply).toEqual({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] });
+  }
+  if (closeFails) {
+    expect(reply.nativeCleanupFailure?.error?.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: closeFailure.message }),
+        ...(readFails ? [expect.objectContaining({ message: readFailure.message })] : []),
+      ]),
+    );
+  } else {
+    expect(reply.nativeCleanupFailure).toBeUndefined();
+  }
+  expect(mock.query).toHaveBeenCalledTimes(known ? 0 : 1);
+  expect(mock.close).toHaveBeenCalledOnce();
+  expect(mock.databases[0]?.isOpen).toBe(closeFails);
+});
 
 it("latches a known agent quarantine when metadata cleanup fails before source activation", () => {
   const input = request();
@@ -202,51 +218,3 @@ it.each([false, true])(
     expect(mock.claimAgentLease).not.toHaveBeenCalled();
   },
 );
-
-it.each([false, true])(
-  "reports unsettled quarantine cleanup without changing the best-effort read result (read also fails=%s)",
-  (readFails) => {
-    const readFailure = new Error("quarantine metadata read failed");
-    const closeFailure = new Error("quarantine native reader close failed");
-    if (readFails) {
-      mock.read.mockImplementationOnce(() => {
-        throw readFailure;
-      });
-    }
-    mock.close.mockImplementationOnce(() => {
-      throw closeFailure;
-    });
-    const reply = mock.handler(request());
-    expect(reply).toMatchObject({
-      ok: true,
-      type: "fleet.list",
-      cells: [],
-      nativeCleanupFailure: {
-        error: {
-          nodes: expect.arrayContaining([
-            expect.objectContaining({ message: closeFailure.message }),
-            ...(readFails ? [expect.objectContaining({ message: readFailure.message })] : []),
-          ]),
-        },
-      },
-    });
-    expect(mock.query).toHaveBeenCalledOnce();
-    expect(mock.close).toHaveBeenCalledOnce();
-    expect(mock.databases[0]?.isOpen).toBe(true);
-  },
-);
-
-it("keeps ordinary quarantine metadata failures best effort after a successful native close", () => {
-  mock.read.mockImplementationOnce(() => {
-    throw new Error("quarantine metadata unavailable");
-  });
-  expect(mock.handler(request())).toEqual({
-    ok: true,
-    type: "fleet.list",
-    sourceAdmitted: true,
-    cells: [],
-  });
-  expect(mock.query).toHaveBeenCalledOnce();
-  expect(mock.close).toHaveBeenCalledOnce();
-  expect(mock.databases[0]?.isOpen).toBe(false);
-});

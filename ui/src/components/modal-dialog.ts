@@ -8,6 +8,12 @@ import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 
 const modalLayers = (document.openClawModalLayers ??= new Set<HTMLElement>());
 
+function restoreFocus(target: HTMLElement): void {
+  target.focus({ preventScroll: true });
+  // Cross-origin frame adapters finish the return inside their own document.
+  target.dispatchEvent(new Event("openclaw:restore-focus"));
+}
+
 function setModalLayer(modal: HTMLElement, open: boolean) {
   const wasOpen = modalLayers.size > 0;
   modalLayers.delete(modal);
@@ -37,6 +43,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
   #syncGeneration = 0;
   #suppressNextCancel = false;
   #initialFocusPending = false;
+  #openingInteraction = false;
   #releaseNativeOcclusion?: () => void;
 
   static override styles = css`
@@ -239,7 +246,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#returnFocus = null;
     this.#returnFocusOverride = undefined;
     if (returnFocus?.isConnected) {
-      returnFocus.focus({ preventScroll: true });
+      restoreFocus(returnFocus);
     }
     super.disconnectedCallback();
   }
@@ -250,6 +257,8 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         without-header
         light-dismiss
         .label=${this.label}
+        @pointerdown=${{ handleEvent: this.#handleOpeningInteraction, capture: true }}
+        @keydown=${{ handleEvent: this.#handleOpeningInteraction, capture: true }}
         @focusin=${this.#handleInitialFocus}
         @wa-after-show=${this.#handleInitialFocus}
         @wa-after-hide=${this.#handleAfterHide}
@@ -287,21 +296,22 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     }
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    if (this.label) {
-      dialog.setAttribute("aria-label", this.label);
-    } else {
-      dialog.removeAttribute("aria-label");
-    }
-    if (this.description) {
-      dialog.setAttribute("aria-description", this.description);
-    } else {
-      dialog.removeAttribute("aria-description");
+    for (const [attribute, value] of Object.entries({
+      "aria-label": this.label,
+      "aria-description": this.description,
+    })) {
+      if (value) {
+        dialog.setAttribute(attribute, value);
+      } else {
+        dialog.removeAttribute(attribute);
+      }
     }
     if (this.open) {
       if (!dialog?.open) {
         this.#returnFocus =
           document.activeElement instanceof HTMLElement ? document.activeElement : null;
         this.#initialFocusPending = true;
+        this.#openingInteraction = false;
         webAwesomeDialog.open = true;
         // Web Awesome defers initial focus to a frame. Finish that custody
         // gap as soon as its opening update makes the content focusable.
@@ -315,7 +325,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
         this.#initialFocusPending
       ) {
         this.#initialFocusPending = false;
-        this.#focusInitialContent(null, dialog);
+        this.#focusInitialContent(null, dialog, !this.#openingInteraction);
       }
       return;
     }
@@ -333,13 +343,23 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     this.#releaseNativeOcclusion = undefined;
   }
 
+  #handleOpeningInteraction = () => {
+    if (this.#initialFocusPending) {
+      this.#openingInteraction = true;
+    }
+  };
+
   #handleInitialFocus = (event: Event) => {
     if (event.target === event.currentTarget) {
       this.#focusInitialContent(event instanceof FocusEvent ? event.relatedTarget : null);
     }
   };
 
-  #focusInitialContent(previous: EventTarget | null = null, fallback?: HTMLElement | null) {
+  #focusInitialContent(
+    previous: EventTarget | null = null,
+    fallback?: HTMLElement | null,
+    initial = false,
+  ) {
     if (!this.isConnected) {
       return;
     }
@@ -347,7 +367,15 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     const root = this.getRootNode();
     const active =
       root instanceof ShadowRoot ? root.activeElement : this.ownerDocument.activeElement;
-    if (active instanceof HTMLElement && active !== this && this.contains(active)) {
+    const autofocus = this.querySelector<HTMLElement>("[autofocus]");
+    // showModal can focus native media through nested slots before the declared
+    // autofocus target. Correct only initial browser focus, never a user choice.
+    if (
+      active instanceof HTMLElement &&
+      active !== this &&
+      this.contains(active) &&
+      (!initial || !autofocus || active === autofocus)
+    ) {
       return;
     }
     // The later Web Awesome frame can still focus the native dialog; restore
@@ -355,7 +383,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
     const target =
       previous instanceof HTMLElement && this.contains(previous)
         ? previous
-        : (this.querySelector<HTMLElement>("[autofocus]") ?? fallback);
+        : (autofocus ?? fallback);
     target?.focus({ preventScroll: true });
   }
 
@@ -380,7 +408,7 @@ export class OpenClawModalDialog extends OpenClawLitElement {
           originalReturnFocus.blur();
         }
       } else if (returnFocus.isConnected) {
-        returnFocus.focus({ preventScroll: true });
+        restoreFocus(returnFocus);
       }
     }, 0);
   };

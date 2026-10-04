@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentChatQuestion } from "../../packages/gateway-protocol/src/index.js";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import {
   CONFIG_AUDIT_MAX_ENTRIES,
   CONFIG_AUDIT_SCOPE,
@@ -344,10 +345,10 @@ function requiresDeterministicGreeting(overview: SystemAgentOverview): boolean {
   );
 }
 
-function formatSystemAgentGreetingFallback(
+function resolveSystemAgentGreetingFallback(
   overview: SystemAgentOverview,
   facts: SystemAgentGreetingFacts,
-): string {
+): SystemAgentGreetingResolution {
   const alerts: string[] = [];
   if (facts.updateAvailable) {
     alerts.push(`Update ${facts.updateAvailable} is available.`);
@@ -359,28 +360,12 @@ function formatSystemAgentGreetingFallback(
   }
   // recentExternalEdit is deliberately absent: withHostOwnedAlerts appends the
   // single canonical edit alert to every delivered greeting, template included.
-  return [formatSystemAgentStartupMessage(overview), alerts.join(" ") || undefined]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
-}
-
-async function withGreetingTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error("system-agent greeting timed out")), timeoutMs);
-        if (typeof timer === "object" && "unref" in timer) {
-          timer.unref();
-        }
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return {
+    text: [formatSystemAgentStartupMessage(overview), alerts.join(" ") || undefined]
+      .filter((line): line is string => line !== undefined)
+      .join("\n"),
+    source: "template",
+  };
 }
 
 async function resolveUncachedSystemAgentGreeting(params: {
@@ -397,9 +382,11 @@ async function resolveUncachedSystemAgentGreeting(params: {
   try {
     // This is the only metered greeting turn. The single-slot hash keeps unchanged
     // caretaker opens at zero tokens while preserving a model-free rescue path.
-    plan = await withGreetingTimeout(
+    plan = await raceWithTimeout(
       params.planner({ overview: params.overview, facts: params.facts, timeoutMs }),
       timeoutMs,
+      () => null,
+      { ref: false },
     );
   } catch {
     plan = null;
@@ -412,10 +399,7 @@ async function resolveUncachedSystemAgentGreeting(params: {
       factsHash: params.factsHash,
       retryAfter: params.at + SYSTEM_AGENT_GREETING_FAILURE_RETRY_MS,
     });
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   greetingFailures.delete(params.cacheStore);
   try {
@@ -474,29 +458,20 @@ async function resolveSystemAgentGreetingText(
   if (requiresDeterministicGreeting(params.overview)) {
     // When the system is broken, precision beats personality: the rescue path
     // must neither depend on nor spend inference, and model text is never cached.
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   let cacheStore: SystemAgentGreetingCacheStore;
   try {
     cacheStore = params.cacheStore ?? params.openCache?.() ?? getDefaultGreetingCache();
   } catch {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   const factsHash = systemAgentGreetingFactsHash(params.overview, params.facts);
   let cached: SystemAgentGreetingCacheRecord | null;
   try {
     cached = readGreetingCache(cacheStore);
   } catch {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   if (
     typeof cached?.text === "string" &&
@@ -508,10 +483,7 @@ async function resolveSystemAgentGreetingText(
     return { text: cached.text, source: "cache" };
   }
   if (params.allowInference === false) {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
 
   const at = (params.now ?? Date.now)();
@@ -519,10 +491,7 @@ async function resolveSystemAgentGreetingText(
   // the monotonic sequence captured with the facts instead of wall-clock time.
   const failure = greetingFailures.get(cacheStore);
   if (failure?.factsHash === factsHash && failure.retryAfter > at) {
-    return {
-      text: formatSystemAgentGreetingFallback(params.overview, params.facts),
-      source: "template",
-    };
+    return resolveSystemAgentGreetingFallback(params.overview, params.facts);
   }
   if (failure && failure.retryAfter <= at) {
     greetingFailures.delete(cacheStore);
@@ -586,16 +555,6 @@ export function acknowledgeSystemAgentGreetingDelivery(params: {
   }
 }
 
-function addQuickAction(
-  options: SystemAgentChatQuestion["options"],
-  option: SystemAgentChatQuestion["options"][number],
-): void {
-  if (options.length >= 4 || options.some((candidate) => candidate.reply === option.reply)) {
-    return;
-  }
-  options.push(option);
-}
-
 /** Quick actions are host-derived so model wording can never invent executable replies. */
 export function buildSystemAgentGreetingQuestion(
   overview: SystemAgentOverview,
@@ -603,28 +562,27 @@ export function buildSystemAgentGreetingQuestion(
 ): SystemAgentChatQuestion {
   const exceptional: SystemAgentChatQuestion["options"] = [];
   if (!overview.config.exists) {
-    addQuickAction(exceptional, { label: "Set up OpenClaw", reply: "setup" });
+    exceptional.push({ label: "Set up OpenClaw", reply: "setup" });
   } else if (!overview.config.valid) {
-    addQuickAction(exceptional, { label: "Inspect config", reply: "doctor" });
+    exceptional.push({ label: "Inspect config", reply: "doctor" });
   } else if (!overview.defaultModel) {
     // A valid config without verified inference cannot hand off to an agent;
     // setup is the canonical path to establish a model.
-    addQuickAction(
-      exceptional,
+    exceptional.push(
       overview.setupModel
         ? { label: "Choose agent model", reply: "model setup" }
         : { label: "Set up inference", reply: "setup" },
     );
   }
   if (!overview.gateway.reachable) {
-    addQuickAction(exceptional, { label: "Run gateway status", reply: "gateway status" });
-    addQuickAction(exceptional, { label: "Restart gateway", reply: "restart gateway" });
+    exceptional.push({ label: "Run gateway status", reply: "gateway status" });
+    exceptional.push({ label: "Restart gateway", reply: "restart gateway" });
   }
   if (!facts.channelHealth.available || facts.channelHealth.degraded.length > 0) {
-    addQuickAction(exceptional, { label: "Check channel health", reply: "health" });
+    exceptional.push({ label: "Check channel health", reply: "health" });
   }
   if (facts.updateAvailable) {
-    addQuickAction(exceptional, { label: "Show update", reply: "status" });
+    exceptional.push({ label: "Show update", reply: "status" });
   }
   // Keep History and agent handoff reachable even when several exceptional facts compete
   // for the schema's four slots. The greeting itself still names every exceptional fact.
@@ -632,7 +590,7 @@ export function buildSystemAgentGreetingQuestion(
   // Without a model the handoff chip would advertise a dead action; the
   // no-model branch above already routes users to setup instead.
   if (overview.defaultModel) {
-    addQuickAction(options, {
+    options.push({
       label: "Talk to my agent",
       reply: "talk to agent",
       recommended:
@@ -644,7 +602,7 @@ export function buildSystemAgentGreetingQuestion(
         overview.gateway.reachable,
     });
   }
-  addQuickAction(options, {
+  options.push({
     label: facts.recentExternalEdit ? "Review recent changes" : "Show recent changes",
     reply: "audit",
   });

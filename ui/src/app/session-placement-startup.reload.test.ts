@@ -19,7 +19,10 @@ import {
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import * as chunkRecovery from "./stale-chunk-reload.ts";
 
-beforeEach(() => sessionStorage.clear());
+beforeEach(() => {
+  vi.spyOn(Math, "random").mockReturnValue(0);
+  sessionStorage.clear();
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();

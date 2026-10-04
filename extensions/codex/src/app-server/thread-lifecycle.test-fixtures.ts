@@ -18,7 +18,10 @@ import {
   type RpcResponse,
   type CodexServerNotification,
 } from "./protocol.js";
-import { testCodexAppServerBindingStore } from "./session-binding.test-helpers.js";
+import {
+  registerCodexTestSessionIdentity,
+  testCodexAppServerBindingStore,
+} from "./session-binding.test-helpers.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -41,6 +44,7 @@ export function createCodexLifecycleHarness(options: {
   unsubscribe?: (threadId: string) => unknown;
 }) {
   const threads = new Map<string, NativeFixtureThread>();
+  const writtenRequests = createCodexRequestRecorder();
   const serverResponses = new Map<
     string | number,
     ReturnType<typeof createDeferred<RpcResponse>>
@@ -157,6 +161,7 @@ export function createCodexLifecycleHarness(options: {
       if (request.id === undefined || typeof request.method !== "string") {
         return;
       }
+      writtenRequests.record(request.method, request.params);
       void dispatch(request).then(
         (result) => send({ id: request.id, result }),
         (error: unknown) =>
@@ -173,6 +178,7 @@ export function createCodexLifecycleHarness(options: {
   });
   return Object.assign(harness, {
     request: vi.spyOn(harness.client, "request"),
+    waitForMethod: writtenRequests.waitForMethod,
     handleServerRequest: async (incoming: {
       id: string | number;
       method: string;
@@ -220,7 +226,7 @@ export function createCodexLifecycleTurnHarness(
 ) {
   const wire = createCodexLifecycleHarness(params);
   const { client, request } = wire;
-  const { requests, record, waitForMethod } = createCodexRequestRecorder();
+  const { requests, record } = createCodexRequestRecorder();
   const nativeRequest = CodexAppServerClient.prototype.request.bind(client);
   request.mockImplementation((method, requestParams, options) => {
     if (method !== "initialize") {
@@ -271,7 +277,8 @@ export function createCodexLifecycleTurnHarness(
     client,
     request,
     requests,
-    waitForMethod,
+    writes: wire.writes,
+    waitForMethod: wire.waitForMethod,
     notify,
     handleServerRequest: wire.handleServerRequest,
     completeTurn: async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
@@ -367,6 +374,36 @@ function createTrackedThreadLifecycleHostCapability(): ThreadLifecycleTestHostCa
       active = false;
     },
   };
+}
+
+export function twoStartsThenResumeMethods(preflightMethods: readonly string[]): string[] {
+  return [
+    ...preflightMethods,
+    "thread/start",
+    "thread/unsubscribe",
+    ...preflightMethods,
+    "thread/start",
+    "thread/unsubscribe",
+    ...preflightMethods,
+    "thread/read",
+    "thread/resume",
+    "thread/inject_items",
+  ];
+}
+
+export type CodexAttemptThreadInput = Omit<
+  Parameters<typeof startOrResumeThreadImpl>[0],
+  "bindingStore" | "params"
+> & { params: EmbeddedRunAttemptParams };
+
+/** Full-attempt fixtures register their transcript identity; cold session preparation has no transcript. */
+export function startOrResumeAttemptThread(params: CodexAttemptThreadInput) {
+  registerCodexTestSessionIdentity(
+    params.params.sessionFile,
+    params.params.sessionId,
+    params.params.sessionKey,
+  );
+  return startOrResumeThreadImpl({ ...params, bindingStore: testCodexAppServerBindingStore });
 }
 
 export function startOrResumeThread(

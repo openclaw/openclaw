@@ -12,7 +12,6 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
-import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -40,70 +39,15 @@ const SEARCH_SNIPPET_MAX_CHARS = 500;
 const SEARCH_LIMIT_MAX = 25;
 const SEARCH_QUERY_MAX_CHARS = 4096;
 
-function toFtsQuery(query: string): string {
+function toFtsQuery(query: string, match: SessionTranscriptSearchParams["match"]): string {
   return query
     .trim()
     .split(/\s+/u)
-    .map((token) => `"${token.replaceAll('"', '""')}"`)
+    .map(
+      (token, index, tokens) =>
+        `"${token.replaceAll('"', '""')}"${match === "prefix" && index === tokens.length - 1 ? "*" : ""}`,
+    )
     .join(" AND ");
-}
-
-/** Tracks both transcript changes and search availability for derived-result caches. */
-export function readSessionTranscriptSearchVersion(params: {
-  agentId: string;
-  env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  sessionKey?: string;
-  storePath?: string;
-}): string | null {
-  const scope = resolveSqliteReadScope(params);
-  const result = withOpenClawAgentDatabaseReadOnly((database) => {
-    const db = getNodeSqliteKysely<DB>(database.db);
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("session_windows as window")
-        .leftJoin(
-          "transcript_rewrite_watermarks as rewrite",
-          "rewrite.session_id",
-          "window.session_id",
-        )
-        .leftJoin(
-          "session_transcript_index_state as projection",
-          "projection.session_id",
-          "window.session_id",
-        )
-        .leftJoin(
-          "session_transcript_cold_archives as cold",
-          "cold.session_id",
-          "window.session_id",
-        )
-        .select((eb) => [
-          "rewrite.generation",
-          "projection.indexed_seq",
-          "projection.leaf_event_id",
-          "projection.needs_rebuild",
-          "projection.updated_at",
-          "cold.archive_sha256",
-          eb
-            .selectFrom("transcript_events as event")
-            .select("event.seq")
-            .whereRef("event.session_id", "=", "window.session_id")
-            .orderBy("event.seq", "desc")
-            .limit(1)
-            .as("max_seq"),
-        ])
-        .where("window.session_id", "=", params.sessionId),
-    );
-    if (!row) {
-      return null;
-    }
-    const { identity, incarnation } = readOpenClawAgentDatabaseIdentity(database);
-    const databaseIdentity =
-      typeof identity === "string" ? ["file", identity] : ["incognito", incarnation];
-    return JSON.stringify([databaseIdentity, row]);
-  }, toDatabaseOptions(scope));
-  return result.found ? result.value : null;
 }
 
 /** Query a captured disk owner off-thread; reconciliation remains host-owned. */
@@ -234,7 +178,7 @@ export function searchSessionTranscriptsReadOnlySync(
               ])
               .where(
                 /* kysely-allow-raw: FTS5 table MATCH with a bound search query. */
-                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query)}`,
+                sql<boolean>`session_transcript_fts MATCH ${toFtsQuery(query, params.match)}`,
               )
               .$if(params.sessionKeys === undefined, (builder) =>
                 builder.where((eb) =>

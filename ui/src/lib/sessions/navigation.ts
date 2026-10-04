@@ -24,7 +24,7 @@ import {
   uiConversationMatches,
   uiSessionRowMatchesSelectedChat,
 } from "./session-key.ts";
-export type SessionArchivedFilter = "active" | "archived" | "all";
+export type SessionArchivedFilter = "active" | "snoozed" | "archived" | "all";
 
 type SessionNavigationInput = {
   result: SessionsListResult | null;
@@ -208,13 +208,6 @@ export function filterVisibleSessionRows(
   });
 }
 
-export function getVisibleSessionRows(
-  result: SessionsListResult | null,
-  options: VisibleSessionRowOptions,
-): GatewaySessionRow[] {
-  return filterVisibleSessionRows(result?.sessions ?? [], options);
-}
-
 export function compareSessionRowsByUpdatedAt(a: GatewaySessionRow, b: GatewaySessionRow): number {
   const pinnedStateDiff = Number(b.pinned === true) - Number(a.pinned === true);
   if (pinnedStateDiff !== 0) {
@@ -258,7 +251,7 @@ export function resolveSessionNavigation(input: SessionNavigationInput): Session
     !parseCatalogSessionKey(currentSessionKey)
       ? { ...(selectedSession ?? { kind: "direct", updatedAt: null }), key: currentSessionKey }
       : undefined;
-  const sortedSessions = getVisibleSessionRows(input.result, {
+  const sortedSessions = filterVisibleSessionRows(input.result?.sessions ?? [], {
     currentSessionKey: currentSessionKey || undefined,
     agentId: selectedAgentId,
     defaultAgentId,

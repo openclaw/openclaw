@@ -39,6 +39,7 @@ import type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
+import type { MediaUnderstandingCapability, MediaUnderstandingOutput } from "./types.js";
 export type {
   DescribePreparedImageWithModelParams,
   DescribeImageFileParams,
@@ -51,9 +52,6 @@ export type {
   RunMediaUnderstandingFileResult,
   TranscribeAudioFileParams,
 } from "./runtime-types.js";
-
-type MediaUnderstandingCapability = "image" | "audio" | "video";
-type MediaUnderstandingOutput = Awaited<ReturnType<typeof runCapability>>["outputs"][number];
 
 const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandingOutput["kind"]> = {
   audio: "audio.transcription",
@@ -92,14 +90,12 @@ function buildFileContext(params: {
       ? `${params.capability}/*`
       : extensionMime) ??
     (remoteRef && params.capability ? `${params.capability}/*` : undefined);
-  if (remoteRef) {
-    return {
-      media: [{ url: remoteRef, contentType: mediaType }],
-      ...scopeFields,
-    };
-  }
   return {
-    media: [{ path: params.filePath, contentType: mediaType }],
+    media: [
+      remoteRef
+        ? { url: remoteRef, contentType: mediaType }
+        : { path: params.filePath, contentType: mediaType },
+    ],
     ...scopeFields,
   };
 }
@@ -248,10 +244,7 @@ export async function describeImageFile(
 export async function prepareImageDescriptionInput(params: PrepareImageDescriptionInputParams) {
   const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const image = await readImageDescriptionInput({
-    filePath: params.filePath,
-    mediaUrl: params.mediaUrl,
-    mime: params.mime,
-    cfg: params.cfg,
+    ...params,
     timeoutMs,
   });
   const normalizedImage = await normalizeImageDescriptionInput({

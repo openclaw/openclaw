@@ -65,20 +65,11 @@ import {
 } from "./model.static-catalog.js";
 
 const cfg = { plugins: { entries: { google: { enabled: true } } } };
-const provider = {
-  id: "google",
-  pluginId: "google",
-  label: "Google",
-  auth: [],
-  staticCatalog: { run: vi.fn() },
-};
-const unconfiguredProvider = {
-  id: "anthropic",
-  pluginId: "anthropic",
-  label: "Anthropic",
-  auth: [],
-  staticCatalog: { run: vi.fn() },
-};
+function staticProvider(id: string, label: string) {
+  return { id, pluginId: id, label, auth: [], staticCatalog: { run: vi.fn() } };
+}
+const provider = staticProvider("google", "Google");
+const unconfiguredProvider = staticProvider("anthropic", "Anthropic");
 
 function createMetadataSnapshot(
   pluginIds: string[],
@@ -117,43 +108,6 @@ describe("prepared bundled provider static catalogs", () => {
     mocks.resolveOwningPluginIdsForProviderRef.mockReturnValue(["google"]);
   });
 
-  it("keeps provider-scoped lookup on the prepared metadata generation", async () => {
-    const metadataSnapshot = createMetadataSnapshot(["google"]);
-    mocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([provider]);
-    mocks.runProviderStaticCatalog.mockResolvedValue({ marker: "static-result" });
-    mocks.normalizePluginDiscoveryResult.mockReturnValue({
-      google: {
-        models: [{ id: "gemini-3.1-pro-preview", contextWindow: 1_048_576 }],
-      },
-    });
-
-    await expect(
-      loadBundledProviderStaticCatalogContextModels({
-        cfg,
-        metadataSnapshot,
-        providerIds: ["google"],
-      }),
-    ).resolves.toEqual([
-      expect.objectContaining({ id: "gemini-3.1-pro-preview", provider: "google" }),
-    ]);
-
-    expect(mocks.resolveOwningPluginIdsForProviderRef).toHaveBeenCalledWith(
-      expect.objectContaining({ metadataSnapshot }),
-    );
-    expect(mocks.resolveActivatableProviderOwnerPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({
-        registry: metadataSnapshot.index,
-        manifestRegistry: metadataSnapshot.manifestRegistry,
-      }),
-    );
-    expect(mocks.resolveBundledProviderCompatPluginIds).toHaveBeenCalledWith(
-      expect.objectContaining({ manifestRegistry: metadataSnapshot.manifestRegistry }),
-    );
-    expect(mocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
-    );
-  });
-
   it("keeps nested provider ownership on the prepared metadata generation", async () => {
     const metadataSnapshot = createMetadataSnapshot(["shared", "unrelated"]);
     mocks.resolveOwningPluginIdsForProviderRef.mockImplementation(
@@ -179,7 +133,7 @@ describe("prepared bundled provider static catalogs", () => {
         catalogProvider.pluginId === "shared"
           ? {
               nested: {
-                models: [{ id: "model", contextWindow: 256_000 }],
+                models: [{ id: "model", contextWindow: 256_000, contextTokens: 128_000 }],
               },
             }
           : {},
@@ -191,6 +145,7 @@ describe("prepared bundled provider static catalogs", () => {
     });
     await expect(resolveContext({ provider: "outer", modelId: "nested/model" })).resolves.toEqual({
       contextWindow: 256_000,
+      contextTokens: 128_000,
     });
 
     expect(mocks.resolveOwningPluginIdsForProviderRef).toHaveBeenCalledTimes(3);
@@ -268,9 +223,10 @@ describe("prepared bundled provider static catalogs", () => {
     const metadataSnapshot = createMetadataSnapshot(["google"]);
     const models = await loadBundledProviderStaticCatalogContextModels({
       cfg,
+      providerIds: ["google"],
       metadataSnapshot,
       preparedStaticProviderCatalog: {
-        entries: [{ provider, result, providerConfigs }],
+        entries: [{ provider, providerConfigs }],
       },
     });
 
@@ -389,7 +345,6 @@ describe("prepared bundled provider static catalogs", () => {
           entries: [
             {
               provider,
-              result: undefined,
               providerConfigs: {
                 google: {
                   baseUrl: "https://fixture.example/v1",

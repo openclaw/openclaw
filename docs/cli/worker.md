@@ -41,6 +41,8 @@ capacity reservations until recovery succeeds. The same environment cannot admit
 another turn while Stop is waiting for tracked worker cleanup to settle.
 If initialization fails, independent cleanup can still finish, but the node does
 not advertise free capacity until initialization succeeds.
+When failed-turn cleanup records a terminal placement, session descriptions
+refresh to `failed` with the recovery reason instead of retaining `draining`.
 
 On current Linux and macOS node hosts, the launch journal identifies the worker's
 process owner; the application `worker.mjs` runs as its child. The owner survives
@@ -95,7 +97,9 @@ The process runs the normal embedded agent loop with a restricted backend:
 
 Worker mode does not start channels, Gateway HTTP surfaces, or plugin auto-start
 beyond the assigned session toolset. It uses a throwaway state directory and has
-no model provider credentials. When the Gateway's effective shared GitHub identity
+no model provider credentials. Worker `exec` does not read or project the Gateway
+secret store; its local approval and process state does not supply store-backed
+environment values. When the Gateway's effective shared GitHub identity
 is available, the worker receives a turn-bound access token in its private launch
 envelope. The token is materialized in a private per-turn profile inside the
 throwaway state directory, with earlier profiles removed before the next binding,
@@ -104,7 +108,15 @@ to each `exec` child. GitHub CLI must be installed on the worker host; the bundl
 includes the launcher, not `gh`.
 
 Materialized skill files are temporary turn inputs in a private directory separate
-from worker state and its GitHub credentials. A failed per-turn deletion logs
+from worker state and its GitHub credentials. Their directory is scoped to the
+session and workspace, and each skill path uses a short readable name with a digest
+of its name, source, and verified content.
+Unchanged deliveries recreate the same paths in deterministic prompt order, so
+later turns can reuse the provider's prompt prefix and read references from earlier
+turns without rewriting transcript history. Changed skill content receives a new
+path. The worker holds a filesystem lock through cleanup; another live turn cannot
+replace its inputs, and crash recovery only reclaims a definitely dead owner.
+A failed per-turn deletion logs
 `Materialized skill cleanup failed`. Node Claude skill sessions separately report
 `Node Claude skill session cleanup failed` for temporary Workshop configuration. These
 bounded, redacted warnings identify files that may remain. Wait until the worker or

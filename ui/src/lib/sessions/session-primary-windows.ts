@@ -11,7 +11,7 @@ import {
   type ManagedSessionList,
 } from "./session-list-query.ts";
 import { publishManagedList } from "./session-managed-list-refresh.ts";
-import { normalizeManagedSessionListQuery } from "./session-requests.ts";
+import { sessionListQueryKey } from "./session-requests.ts";
 
 /** Manage presentation leases on the roster owner's existing managed-list entries. */
 export function createSessionPrimaryWindows(
@@ -136,7 +136,7 @@ export function createSessionPrimaryWindows(
       activeQuery: SessionListScope,
       excludedKey?: string,
     ) {
-      const key = JSON.stringify(normalizeManagedSessionListQuery(activeQuery));
+      const key = sessionListQueryKey(activeQuery);
       const active = managedLists.get(key);
       if (key !== excludedKey && (!active || matches(active))) {
         invalidationRevision += 1;
@@ -145,7 +145,7 @@ export function createSessionPrimaryWindows(
     },
     /** Capture one accepted primary window without changing an observed query's membership. */
     capture(scope: SessionListScope, result: SessionsListResult, epoch: number) {
-      const key = JSON.stringify(normalizeManagedSessionListQuery(scope));
+      const key = sessionListQueryKey(scope);
       retireWarmLists((entry) => entry.scope.agentId === scope.agentId && entry.key !== key);
       const entry = open(scope);
       if (entry.listeners.size > 0 || entry.pending) {

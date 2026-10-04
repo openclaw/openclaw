@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readMemoryResultFromSessionRecord,
@@ -11,7 +12,7 @@ import {
   type TerminalMemorySearchWatch,
 } from "./types.js";
 
-async function readMergedActiveMemoryTranscriptState(params: {
+export async function readMergedActiveMemoryTranscriptState(params: {
   sources: readonly ActiveMemoryTranscriptSource[];
   toolsAllow: readonly string[];
 }): Promise<{
@@ -94,14 +95,14 @@ async function readTerminalMemorySearchResultFromSources(
   return undefined;
 }
 
-function watchTerminalMemorySearchResult(params: {
+export function watchTerminalMemorySearchResult(params: {
   getTranscriptSources: () => readonly ActiveMemoryTranscriptSource[];
   abortSignal: AbortSignal;
   toolsAllow: readonly string[];
 }): TerminalMemorySearchWatch {
   let stopped = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  let resolveWatch: (result: TerminalMemorySearchResult) => void = () => {};
+  const { promise, resolve: resolveWatch } = createDeferred<TerminalMemorySearchResult>();
   const stop = () => {
     if (stopped) {
       return;
@@ -145,15 +146,10 @@ function watchTerminalMemorySearchResult(params: {
       timeoutId.unref?.();
     }
   };
-  const promise = new Promise<TerminalMemorySearchResult>((resolve) => {
-    resolveWatch = resolve;
-    params.abortSignal.addEventListener("abort", stop, { once: true });
-    void tick();
-  });
+  params.abortSignal.addEventListener("abort", stop, { once: true });
+  void tick();
   return {
     promise,
     stop,
   };
 }
-
-export { readMergedActiveMemoryTranscriptState, watchTerminalMemorySearchResult };

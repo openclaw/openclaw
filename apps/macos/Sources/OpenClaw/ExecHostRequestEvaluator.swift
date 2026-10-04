@@ -51,24 +51,7 @@ enum ExecHostRequestEvaluator {
         } else {
             delayedPolicySnapshot = nil
         }
-        switch self.validateCommand(command: request.command, rawCommand: request.rawCommand) {
-        case let .success(validated):
-            return .success(ExecHostValidatedRequest(
-                command: validated.command,
-                displayCommand: validated.displayCommand,
-                evaluationRawCommand: validated.evaluationRawCommand,
-                approvalSource: approvalSource,
-                delayedPolicySnapshot: delayedPolicySnapshot))
-        case let .failure(error):
-            return .failure(error)
-        }
-    }
-
-    static func validateCommand(
-        command: [String],
-        rawCommand: String?) -> Result<ExecHostValidatedRequest, ExecHostError>
-    {
-        let executable = command.first ?? ""
+        let executable = request.command.first ?? ""
         let trimmedExecutable = executable.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedExecutable.isEmpty else {
             return .failure(
@@ -86,16 +69,16 @@ enum ExecHostRequestEvaluator {
         }
 
         let validatedCommand = ExecSystemRunCommandValidator.resolve(
-            command: command,
-            rawCommand: rawCommand)
+            command: request.command,
+            rawCommand: request.rawCommand)
         switch validatedCommand {
         case let .ok(resolved):
             return .success(ExecHostValidatedRequest(
-                command: command,
+                command: request.command,
                 displayCommand: resolved.displayCommand,
                 evaluationRawCommand: resolved.evaluationRawCommand,
-                approvalSource: nil,
-                delayedPolicySnapshot: nil))
+                approvalSource: approvalSource,
+                delayedPolicySnapshot: delayedPolicySnapshot))
         case let .invalid(message):
             return .failure(
                 ExecHostError(

@@ -13,7 +13,7 @@ read_when:
 - `pnpm test:perf:profile:main` writes a CPU profile for the Vitest main thread; `pnpm test:perf:profile:runner` writes CPU + heap profiles for each unit worker. Both print their output directory (a temporary directory by default). Use `-- --output-dir <dir>` or `OPENCLAW_VITEST_PROFILE_DIR` to retain profiles at a chosen location.
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
-- `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from the last five successful main CI runs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci/capacity#measured-shard-weights) for the daily refresh and sampling rules.
+- `pnpm ci:timings:refit`: regenerate committed `config/ci-test-timings.json` from up to five completed scheduled main CI runs using their successful jobs; add `--dry-run` to preview the changed-entry table. This file owns per-file UI E2E and per-profile compact-group weights, unlike the gitignored `.artifacts/vitest-shard-timings.json` whole-config timing cache. Independent CI shards use only the committed weights, never that cache. See [CI timing refits](/ci/capacity#measured-shard-weights) for the daily refresh and sampling rules.
 
 Runner profiling preserves the selected `forks` or `threads` pool, isolation, environment, and custom runners extending Vitest's `TestRunner`. Capture starts in a Node preload before Vitest worker imports, spans all files assigned to that worker, and finishes both profile files in awaited worker cleanup before teardown is acknowledged. It does not depend on exit-time profile flushing. Root global setup configures every selected project without replacing its reporters or setup. Main capture spans Vitest/Vite startup through run completion and close. Process termination before cleanup, bootstrap failures before runner construction, and teardown timeouts can still prevent output. Browser/VM pools, custom runners without `onCleanupWorkerContext`, and additional native `--cpu-prof`/`--heap-prof` flags are rejected for runner profiling.
 
@@ -245,7 +245,7 @@ pnpm tsx scripts/bench-cli-startup.ts --runtime-rss --case status --runs 3
 Presets:
 
 - `startup`: `--version`, `--help`, `health`, `health --json`, `status --json`, `status`
-- `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `tasks --json`, `tasks list --json`, `tasks audit --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
+- `real`: `health`, `status`, `status --json`, `sessions`, `sessions --json`, `agents list --json`, `gateway status`, `gateway status --json`, `gateway health --json`, `config get gateway.port`
 - `all`: both presets combined
 
 Output includes `sampleCount`, avg, p50, p95, min/max, exit-code/signal distribution, and RSS per command. The `maxRssMb` fields use MiB. By default, RSS uses the last preload marker received on stderr, preserving the historical fixture's attribution. A respawning launcher can supply that last marker. Default reports omit `memoryMetric` and sample `memory`; no runtime identity or temporary observation files are required. For a silent command, the exit marker can count as first output.
@@ -423,7 +423,7 @@ Use `--probe-rounds N` for allocation comparisons with equal probe work. It
 attempts exactly N sampler rounds and N history bursts per configured history
 client, regardless of which finishes first. Each sampler round requests
 `/readyz`, the Control UI, and `sessions.list`; `--control-plane` adds one each
-of `tasks.list`, `cron.list`, and `cron.status`. Enabling `--subscribers` adds
+of `cron.list` and `cron.status`. Enabling `--subscribers` adds
 one subscribe attempt per round and an unsubscribe after each successful
 subscription. History attempts total `N × historyClients × historyBurst`, capped
 at 2048 per run. Slow clients receive the same history budget as fast clients.

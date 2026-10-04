@@ -52,6 +52,16 @@ the same `event_id` is rejected durably for the tombstone retention window.
 See [Channel outbound API](/plugins/sdk-channel-outbound#durable-ingress-monitors)
 for the monitor API and shutdown contract.
 
+The dispatch lifecycle optionally exposes
+`readLaneBacklog(): Promise<readonly ChannelIngressQueueRecord<unknown, unknown>[]>`.
+It reads same-lane durable rows that have not yet been handed off, excluding the
+current event, retry-delayed pending rows, and locally released or ended claims.
+Channel buffers can match their own payloads to wait for already-admitted input;
+the core drain remains the owner of lane state. The SDK inbound debouncer's
+optional `shouldHoldFlush(items)` hook can defer a quiet-timer flush until its
+existing deadline. Appends supersede an in-flight check, and explicit flushes
+bypass it.
+
 That tombstone is the layering rule for replay guards
 (`openclaw/plugin-sdk/persistent-dedupe`): a drained channel keeps a separate
 replay guard only when the guard's identity or retention exceeds the queue's
@@ -212,10 +222,12 @@ detected again on startup. Same-identity restarts and token rotations retain the
 queue, as do legacy offsets without a known previous identity. `purge` is optional
 on the structural queue type for compatibility with plugin-supplied queues; a
 caller requiring an identity reset must fail rather than skip an unavailable purge.
-Runtime-provided purge handles recheck plugin lifecycle authority immediately
-before deletion and reject after their plugin runtime is retired.
-Account monitors must also check cancellation before purge and before resetting
-the cursor, retaining the old identity if cancellation interrupts the reset.
+Runtime-provided purge handles recheck plugin lifecycle authority at worker
+admission and before commit, and reject after their plugin runtime is retired.
+Account monitors pass their signal to `purge({ signal })` so cancellation before
+the commit is authorized preserves the rows. An authorized commit still settles.
+They must also check cancellation before resetting the cursor, retaining the old
+identity if cancellation interrupts the reset.
 
 Treat this flag as a capability claim, not a performance preference. Contract
 tests should prove that adding and editing one named account leaves a sibling's

@@ -3,8 +3,14 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { readAgentDatabaseDeletionSnapshot } from "../state/agent-deletion-journal.read.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
-import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { countBlockingSessionSqliteIssues } from "./doctor-session-sqlite-types.js";
 import { seedDeferredPluginSessionSource } from "./doctor-session-sqlite.deferred-plugin.test-support.js";
@@ -14,7 +20,7 @@ it.each(["missing", "reconstructed-held", "reconstructed-then-missing"] as const
   "preserves conflicting retained sources while deletion history is %s",
   async (history) => {
     await withOpenClawTestState({ label: `r16-recover-${history}` }, async (state) => {
-      const { cfg, storePath } = seedDeferredPluginSessionSource(state, "default");
+      const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
       const imported = await runDoctorSessionSqlite({
         cfg,
         env: state.env,
@@ -88,3 +94,73 @@ it.each(["missing", "reconstructed-held", "reconstructed-then-missing"] as const
     });
   },
 );
+
+it("holds an existing unconfigured database before importing legacy sessions with unknown history", async () => {
+  await withOpenClawTestState({ label: "existing-database-unknown-history" }, async (state) => {
+    openOpenClawStateDatabase({ env: state.env });
+    const sessionsDir = state.sessionsDir("retained");
+    const agentDir = state.agentDir("retained");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    fs.mkdirSync(agentDir, { recursive: true });
+    const sqlitePath = path.join(agentDir, "openclaw-agent.sqlite");
+    const database = openOpenClawAgentDatabase({
+      agentId: "retained",
+      path: sqlitePath,
+      env: state.env,
+    });
+    database.db.exec(
+      "CREATE TABLE retained_content (value TEXT); INSERT INTO retained_content VALUES ('keep');",
+    );
+    await closeOpenClawAgentDatabasesAsync();
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const transcriptPath = path.join(sessionsDir, "legacy-kept.jsonl");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:retained:kept": {
+          sessionId: "legacy-kept",
+          sessionFile: "legacy-kept.jsonl",
+          updatedAt: 20,
+        },
+      }),
+    );
+    fs.writeFileSync(
+      transcriptPath,
+      [
+        { type: "session", version: 3, id: "legacy-kept" },
+        {
+          type: "message",
+          id: "kept-message",
+          parentId: null,
+          message: { role: "user", content: "keep" },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+    );
+    const before = new Map(
+      [sqlitePath, storePath, transcriptPath].map((file) => [file, fs.readFileSync(file)]),
+    );
+    runOpenClawStateWriteTransaction(
+      (stateDatabase) => {
+        stateDatabase.db.exec("DROP TABLE agent_deletion_journal");
+      },
+      { env: state.env },
+    );
+    const report = await runDoctorSessionSqlite({
+      cfg: { agents: { entries: { main: {} } } },
+      env: state.env,
+      agent: "retained",
+      mode: "import",
+    });
+    expect(report.targets.flatMap((target) => target.issues)).toContainEqual({
+      code: "plugin_migration_source_retained",
+      message: expect.stringContaining("store held for agent retained database " + sqlitePath),
+    });
+    expect(report.totals.importedEntries).toBe(0);
+    expect(report.targets.flatMap((target) => target.archivedTranscriptFiles)).toEqual([]);
+    for (const [file, bytes] of before) {
+      expect(fs.readFileSync(file)).toEqual(bytes);
+    }
+  });
+});

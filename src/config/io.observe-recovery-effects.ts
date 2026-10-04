@@ -11,16 +11,23 @@ export type ConfigRecoveryEffect<T> = {
 export function createConfigRecoveryStatEffect(
   deps: Pick<NormalizedConfigIoDeps, "fs">,
   configPath: string,
+  requireIdentity = false,
 ): ConfigRecoveryEffect<fs.Stats | null> {
+  const unavailable = (error: unknown): null => {
+    if (requireIdentity && !hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    return null;
+  };
   return {
     sync: () => {
       try {
         return deps.fs.statSync(configPath, { throwIfNoEntry: false }) ?? null;
-      } catch {
-        return null;
+      } catch (error) {
+        return unavailable(error);
       }
     },
-    async: () => deps.fs.promises.stat(configPath).catch(() => null),
+    async: () => deps.fs.promises.stat(configPath).catch(unavailable),
   };
 }
 
@@ -49,14 +56,20 @@ export function createConfigBackupReadEffect(
   deps: Pick<NormalizedConfigIoDeps, "fs">,
   backupPath: string,
 ): ConfigRecoveryEffect<string | null> {
+  const unavailable = (error: unknown): null => {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
+    return null;
+  };
   return {
     sync: () => {
       try {
         return deps.fs.readFileSync(backupPath, "utf-8");
-      } catch {
-        return null;
+      } catch (error) {
+        return unavailable(error);
       }
     },
-    async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(() => null),
+    async: () => deps.fs.promises.readFile(backupPath, "utf-8").catch(unavailable),
   };
 }

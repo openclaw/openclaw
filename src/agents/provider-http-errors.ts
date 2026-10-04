@@ -18,7 +18,7 @@ import {
 } from "../infra/http-body.js";
 import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import { redactSensitiveText, redactToolPayloadText } from "../logging/redact.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
 export { asBoolean } from "../utils/boolean.js";
@@ -394,22 +394,18 @@ export async function createProviderHttpError(
   label: string,
   options?: ProviderHttpErrorOptions,
 ): Promise<ProviderHttpError> {
-  const info = await extractProviderErrorInfo(response, options);
+  const { detail, ...info } = await extractProviderErrorInfo(response, options);
   return new ProviderHttpError(
     formatProviderHttpErrorMessage({
       label,
       status: response.status,
-      detail: info.detail,
+      detail,
       requestId: info.requestId,
       statusPrefix: options?.statusPrefix,
     }),
     {
       status: response.status,
-      code: info.code,
-      type: info.type,
-      body: info.body,
-      requestId: info.requestId,
-      retryAfterMs: info.retryAfterMs,
+      ...info,
     },
   );
 }

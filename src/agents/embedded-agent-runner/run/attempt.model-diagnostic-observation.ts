@@ -1,6 +1,10 @@
+import type { ProviderAcceptance } from "@openclaw/ai/transports";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { DiagnosticModelCallContent } from "../../../infra/diagnostic-events.js";
+import type {
+  DiagnosticEventInput,
+  DiagnosticModelCallContent,
+} from "../../../infra/diagnostic-events.js";
 import {
   cloneDiagnosticContentValue,
   type DiagnosticModelContentCapturePolicy,
@@ -8,27 +12,67 @@ import {
 import { emitCoreSemanticRunProgressDiagnosticEvent } from "../../../infra/diagnostic-semantic-run-progress.js";
 import { createModelCallStreamProgressReporter } from "../../../logging/diagnostic-model-stream-progress.js";
 import { derivePromptTokens, normalizeUsage, type UsageLike } from "../../usage.js";
-import type {
-  ModelCallEventBase,
-  ModelCallObservationState,
-  ModelCallObserver,
-  ModelCallPromptStats,
-  ModelCallUsage,
-} from "./attempt.model-diagnostic-lifecycle.js";
+
+export type ModelCallEventBase = Omit<
+  Extract<DiagnosticEventInput, { type: "model.call.started" }>,
+  "type"
+>;
+type ModelCallPromptStats = NonNullable<
+  Extract<DiagnosticEventInput, { type: "model.call.started" }>["promptStats"]
+>;
+type ModelCallUsage = NonNullable<
+  Extract<DiagnosticEventInput, { type: "model.call.completed" }>["usage"]
+>;
+export type ModelCallObservationState = {
+  requestPayloadBytes?: number;
+  providerAcceptanceKind?: ProviderAcceptance["kind"];
+  responseStatus?: number;
+  responseStreamBytes: number;
+  /** Observed provider callbacks/chunks, not recovery or visible-content progress. */
+  lastProviderActivityAtMs?: number;
+  terminalReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  timeToFirstByteMs?: number;
+  modelContent?: DiagnosticModelCallContent;
+  outputMessages?: unknown[];
+  usage?: ModelCallUsage;
+  contentCapture?: DiagnosticModelContentCapturePolicy;
+  semanticProgressEmitted?: boolean;
+  terminalEventEmitted?: boolean;
+  terminalError?: Error;
+  terminalSucceeded?: boolean;
+  suppressPluginHooks?: boolean;
+};
 
 const MODEL_CALL_SEMANTIC_PROGRESS_REASON = "model_call:semantic_result";
 
-function jsonLength(value: unknown, utf8: boolean): number | undefined {
+type PromptStringLengths = WeakMap<object, Map<string, { text: string; chars: number }>>;
+type PromptStringLengthPass = { previous: PromptStringLengths; current: PromptStringLengths };
+
+function jsonLength(
+  value: unknown,
+  utf8: boolean,
+  promptStringLengths?: PromptStringLengthPass,
+): number | undefined {
   try {
     let stringLengths = 0;
-    const serialized = JSON.stringify(value, (_key, part: unknown) => {
+    const serialized = JSON.stringify(value, function (this: object, key, part: unknown) {
       if (typeof part !== "string" || part.length < 4096) {
         return part;
       }
+      const cached = !utf8 ? promptStringLengths?.previous.get(this)?.get(key) : undefined;
       // Keep large strings out of the combined JSON allocation. Native encoding
       // still owns escaping, surrogate handling, toJSON, and container semantics.
-      const encoded = JSON.stringify(part);
-      stringLengths += (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
+      let chars = cached?.text === part ? cached.chars : undefined;
+      if (chars === undefined) {
+        const encoded = JSON.stringify(part);
+        chars = (utf8 ? Buffer.byteLength(encoded, "utf8") : encoded.length) - 2;
+      }
+      if (!utf8 && promptStringLengths) {
+        const fields = promptStringLengths.current.get(this) ?? new Map();
+        fields.set(key, { text: part, chars });
+        promptStringLengths.current.set(this, fields);
+      }
+      stringLengths += chars;
       return "";
     });
     return serialized === undefined
@@ -39,45 +83,25 @@ function jsonLength(value: unknown, utf8: boolean): number | undefined {
   }
 }
 
-function utf8JsonByteLength(value: unknown): number | undefined {
-  return jsonLength(value, true);
-}
-
-function jsonCharLength(value: unknown): number | undefined {
-  return jsonLength(value, false);
-}
-
-function streamDeltaByteLength(chunk: Record<string, unknown>): number | undefined {
-  const type = chunk.type;
-  if (
-    (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
-    typeof chunk.delta === "string"
-  ) {
-    return Buffer.byteLength(chunk.delta, "utf8");
-  }
-  return undefined;
-}
-
-function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefined {
-  if (!isRecord(chunk)) {
-    return utf8JsonByteLength(chunk);
-  }
-  const deltaBytes = streamDeltaByteLength(chunk);
-  if (deltaBytes !== undefined) {
-    return deltaBytes;
-  }
-  if (!("partial" in chunk)) {
-    return utf8JsonByteLength(chunk);
-  }
-  // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
-  // count the new stream payload, not the answer-so-far replay.
-  const { partial: _partial, ...snapshotlessChunk } = chunk;
-  return utf8JsonByteLength(snapshotlessChunk);
-}
-
 function responseStreamChunkByteLength(chunk: unknown): number | undefined {
   try {
-    return responseStreamChunkByteLengthUnchecked(chunk);
+    if (!isRecord(chunk)) {
+      return jsonLength(chunk, true);
+    }
+    const type = chunk.type;
+    if (
+      (type === "text_delta" || type === "thinking_delta" || type === "toolcall_delta") &&
+      typeof chunk.delta === "string"
+    ) {
+      return Buffer.byteLength(chunk.delta, "utf8");
+    }
+    if (!("partial" in chunk)) {
+      return jsonLength(chunk, true);
+    }
+    // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
+    // count the new stream payload, not the answer-so-far replay.
+    const { partial: _partial, ...snapshotlessChunk } = chunk;
+    return jsonLength(snapshotlessChunk, true);
   } catch {
     return undefined;
   }
@@ -104,7 +128,23 @@ function streamContextModelContentFields(
   return Object.keys(content).length > 0 ? content : undefined;
 }
 
-function streamContextModelPromptStats(streamContext: unknown): ModelCallPromptStats | undefined {
+export function createModelPromptStats() {
+  // The attempt owns this cache; each field's exact text is its revision. Keep
+  // walking containers so compaction and in-place hook edits retain JSON semantics.
+  let previous: PromptStringLengths = new WeakMap();
+  return (streamContext: unknown) => {
+    const current: PromptStringLengths = new WeakMap();
+    const stats = streamContextModelPromptStats(streamContext, { previous, current });
+    // Drop deleted fields and compacted history even if their holders remain alive.
+    previous = current;
+    return stats;
+  };
+}
+
+function streamContextModelPromptStats(
+  streamContext: unknown,
+  promptStringLengths?: PromptStringLengthPass,
+): ModelCallPromptStats | undefined {
   if (!isRecord(streamContext)) {
     return undefined;
   }
@@ -112,16 +152,12 @@ function streamContextModelPromptStats(streamContext: unknown): ModelCallPromptS
   const tools = Array.isArray(streamContext.tools) ? streamContext.tools : undefined;
   const systemPrompt =
     typeof streamContext.systemPrompt === "string" ? streamContext.systemPrompt : undefined;
-  const inputMessagesChars = messages ? jsonCharLength(messages) : undefined;
-  const toolDefinitionsChars = tools ? jsonCharLength(tools) : undefined;
+  const inputMessagesChars = messages
+    ? jsonLength(messages, false, promptStringLengths)
+    : undefined;
+  const toolDefinitionsChars = tools ? jsonLength(tools, false, promptStringLengths) : undefined;
   const systemPromptChars = systemPrompt?.length;
-  if (
-    messages === undefined &&
-    tools === undefined &&
-    systemPromptChars === undefined &&
-    inputMessagesChars === undefined &&
-    toolDefinitionsChars === undefined
-  ) {
+  if (messages === undefined && tools === undefined && systemPrompt === undefined) {
     return undefined;
   }
   const totalChars =
@@ -226,7 +262,7 @@ function observeResultMessageContent(
     state.outputMessages = [cloneDiagnosticContentValue(result)];
   }
   if (state.responseStreamBytes === 0) {
-    const bytes = utf8JsonByteLength(result);
+    const bytes = jsonLength(result, true);
     if (bytes !== undefined) {
       state.responseStreamBytes = bytes;
     }
@@ -313,10 +349,11 @@ export function createModelObserver(params: {
   contentCapture?: DiagnosticModelContentCapturePolicy;
   suppressPluginHooks?: boolean;
   capturePromptStats: boolean;
-}): ModelCallObserver {
+  measurePromptStats?: ReturnType<typeof createModelPromptStats>;
+}) {
   const modelContent = streamContextModelContentFields(params.contentCapture, params.streamContext);
   const promptStats = params.capturePromptStats
-    ? streamContextModelPromptStats(params.streamContext)
+    ? (params.measurePromptStats ?? streamContextModelPromptStats)(params.streamContext)
     : undefined;
   const state: ModelCallObservationState = {
     responseStreamBytes: 0,
@@ -329,22 +366,22 @@ export function createModelObserver(params: {
     state,
     promptStats,
     modelContent,
-    assignRequestPayloadBytes(payload) {
-      const bytes = utf8JsonByteLength(payload);
+    assignRequestPayloadBytes(payload: unknown) {
+      const bytes = jsonLength(payload, true);
       if (bytes !== undefined) {
         state.requestPayloadBytes = bytes;
       }
     },
-    observeResponseChunk(startedAt, chunk) {
+    observeResponseChunk(startedAt: number, chunk: unknown) {
       observeResponseChunk(state, startedAt, chunk);
     },
-    observeFinalResult(eventBase, startedAt, result) {
+    observeFinalResult(eventBase: ModelCallEventBase, startedAt: number, result: unknown) {
       observeResultMessageContent(state, startedAt, result);
       // Queue semantic progress beside model lifecycle events so request starts,
       // progress, and the next request retain their authoritative FIFO ordering.
       maybeEmitModelCallSemanticProgress(eventBase, state, result);
     },
-    maybeEmitStreamProgress(eventBase) {
+    maybeEmitStreamProgress(eventBase: ModelCallEventBase) {
       reportStreamProgress({
         ...eventBase,
         callId: state.terminalEventEmitted ? undefined : eventBase.callId,

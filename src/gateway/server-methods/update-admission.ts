@@ -1,24 +1,142 @@
+import {
+  ErrorCodes,
+  errorShape,
+  validateUpdateRunParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { PreparedCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import { UpdatePreMutationError } from "../../cli/update-cli/shared.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatInstallOwnerMessage, readInstallOwner } from "../../infra/install-owner.js";
+import { resolveOcmUpdateManager } from "../../infra/ocm-update-client.js";
+import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { tryProcessCwd } from "../../infra/safe-cwd.js";
+import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import { currentUpdateCheckLifecycle } from "../../infra/update-check-lifecycle.js";
 import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import {
   createFreeBsdPkgOwnershipInspection,
   FreeBsdPkgOwnershipError,
 } from "../../infra/update-freebsd-pkg-ownership.js";
+import { inspectImmutableInstall } from "../../infra/update-immutable-install.js";
 import { resolveStartupInstallStatus } from "../../infra/update-install-status.js";
 import type { UpdateRequester } from "../../infra/update-requester-authority.js";
 import {
   recordUpdateRunDiagnostics,
   recordUpdateRunPhase,
   recordUpdateRunStep,
+  finishUpdateRun,
 } from "../../infra/update-run-ledger.js";
 import { summarizeUpdateStepFailure, type UpdateRunRecord } from "../../infra/update-run-record.js";
 import { resolveUpdateInstallSurface } from "../../infra/update-runner-install-surface.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner-types.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import type { GatewayRequestHandlerOptions } from "./types.js";
+import { assertValidParams } from "./validation.js";
+
+/** Native params are returned only when this request still belongs to the native updater. */
+export async function admitGatewayUpdateRequest(request: GatewayRequestHandlerOptions) {
+  const { params, respond, context } = request;
+  if (!assertValidParams(params, validateUpdateRunParams, "update.run", respond)) {
+    return null;
+  }
+  const authority = readGatewayRequestMutationAuthority(request);
+  const root = await resolveOpenClawPackageRoot({
+    moduleUrl: import.meta.url,
+    argv1: process.argv[1],
+    cwd: tryProcessCwd(),
+  });
+  const installOwner = await readInstallOwner(root);
+  if (installOwner) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, formatInstallOwnerMessage(installOwner), {
+        details: { reason: "host-owned-install", installOwner },
+        retryable: false,
+      }),
+    );
+    return null;
+  }
+  if (root && (await inspectImmutableInstall(root))) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, IMMUTABLE_UPDATE_GUIDANCE, {
+        details: { reason: "immutable-native-updater-required" },
+        retryable: false,
+      }),
+    );
+    return null;
+  }
+  const channel = params.requester?.channel;
+  const manager =
+    !channel || isInternalMessageChannel(channel) ? await resolveOcmUpdateManager() : null;
+  if (!manager?.canStart) {
+    return params;
+  }
+  if (params.target) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "This OCM version does not support an explicit Git update target.",
+      ),
+    );
+    return null;
+  }
+  const run = await manager.start(
+    authority.assertCurrent,
+    normalizeUpdateChannel(context.getRuntimeConfig().update?.channel),
+  );
+  respond(true, {
+    runId: run.runId,
+    ok: run.status === "running" || run.status === "succeeded" || run.status === "skipped",
+    result: {
+      status:
+        run.status === "running" || run.status === "skipped"
+          ? "skipped"
+          : run.status === "succeeded"
+            ? "ok"
+            : "error",
+      reason: run.reason,
+    },
+    ...(run.status === "running" ? { handoff: { status: "started" } } : {}),
+    message: "OCM owns this update. Use the Update status view to follow its progress and result.",
+  });
+  return null;
+}
+
+const IMMUTABLE_UPDATE_GUIDANCE =
+  "Run openclaw update as the root installation owner outside the Gateway service cgroup. Native immutable activation requires an explicitly enabled adoption record; use openclaw update recover --root <installation-root> for retained recovery. Gateway update.run cannot acquire that external updater authority.";
+
+export function reportImmutableGatewayUpdateRefusal(
+  runId: string,
+  installSurface: Extract<UpdateInstallSurface, { kind: "immutable" }>,
+  respond: GatewayRequestHandlerOptions["respond"],
+): void {
+  const reason = "immutable-native-updater-required";
+  recordUpdateRunPhase(runId, "requested", {
+    origin: { nextAction: IMMUTABLE_UPDATE_GUIDANCE },
+  });
+  finishUpdateRun(runId, { status: "skipped", reason });
+  respond(true, {
+    runId,
+    ok: false,
+    message: IMMUTABLE_UPDATE_GUIDANCE,
+    result: {
+      status: "skipped",
+      mode: installSurface.mode,
+      root: installSurface.root,
+      reason,
+      steps: [],
+      durationMs: 0,
+    },
+    restart: null,
+  });
+}
 
 export function retainUpdateRequesterAuthority(
   requester: UpdateRequester | undefined,
@@ -48,9 +166,14 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   const { root, status } = await currentUpdateCheckLifecycle().run((signal) =>
     resolveStartupInstallStatus(false, signal),
   );
+  if (status.error?.timeoutMs) {
+    throw new Error(status.error.message);
+  }
   recordUpdateRunPhase(runId, "requested", {
     target: {
-      ...(status.installKind === "unknown" ? {} : { kind: status.installKind }),
+      ...(status.installKind === "git" || status.installKind === "package"
+        ? { kind: status.installKind }
+        : {}),
       ...(status.installKind === "git" ? { installationMethod: "git-checkout" } : {}),
     },
   });

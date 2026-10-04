@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import * as talk from "../config/talk.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -228,18 +229,12 @@ function addObjectKeys(target: Set<string>, value: unknown): void {
     return;
   }
   for (const key of Object.keys(value)) {
-    const normalized = key.trim().toLowerCase();
-    if (normalized) {
-      target.add(normalized);
-    }
+    addStringValue(target, key);
   }
 }
 
 function addStringValue(target: Set<string>, value: unknown): void {
-  if (typeof value !== "string") {
-    return;
-  }
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeOptionalLowercaseString(value);
   if (normalized) {
     target.add(normalized);
   }
@@ -256,12 +251,8 @@ function collectRequestedSpeechProviderIds(
   options: { includeVoiceModel: boolean },
 ): Set<string> {
   const requested = new Set<string>();
-  const tts =
-    typeof cfg?.tts === "object" && cfg.tts !== null
-      ? (cfg.tts as Record<string, unknown>)
-      : undefined;
-  addStringValue(requested, tts?.provider);
-  addObjectKeys(requested, tts?.providers);
+  addStringValue(requested, cfg?.tts?.provider);
+  addObjectKeys(requested, cfg?.tts?.providers);
   addStringValue(requested, cfg && talk.resolveConfiguredTalkSpeechProviderId(cfg));
   if (options.includeVoiceModel) {
     addModelConfigProviderIds(requested, cfg?.agents?.defaults?.voiceModel);
@@ -312,39 +303,28 @@ function shouldScopeCapabilityLoadToRequestedProviders(
   );
 }
 
-function removeActiveProviderIds(requested: Set<string>, entries: readonly unknown[]): void {
-  for (const entry of entries as Array<{ provider: { id?: unknown; aliases?: unknown } }>) {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string") {
-      requested.delete(provider.id.toLowerCase());
-    }
-    if (Array.isArray(provider.aliases)) {
-      for (const alias of provider.aliases) {
-        if (typeof alias === "string") {
-          requested.delete(alias.toLowerCase());
-        }
+function* capabilityProviderIds(provider: { id?: unknown; aliases?: unknown }) {
+  if (typeof provider.id === "string") {
+    yield provider.id.toLowerCase();
+  }
+  if (Array.isArray(provider.aliases)) {
+    for (const alias of provider.aliases) {
+      if (typeof alias === "string") {
+        yield alias.toLowerCase();
       }
     }
   }
 }
 
-function filterLoadedProvidersForRequestedConfig<K extends CapabilityProviderRegistryKey>(params: {
-  key: K;
-  requested: Set<string>;
-  entries: PluginRegistry[K];
-}): PluginRegistry[K] {
-  return params.entries.filter((entry) => {
-    const provider = entry.provider as { id?: unknown; aliases?: unknown };
-    if (typeof provider.id === "string" && params.requested.has(provider.id.toLowerCase())) {
-      return true;
+function removeActiveProviderIds(
+  requested: Set<string>,
+  entries: PluginRegistry[CapabilityProviderRegistryKey],
+): void {
+  for (const { provider } of entries) {
+    for (const id of capabilityProviderIds(provider)) {
+      requested.delete(id);
     }
-    if (Array.isArray(provider.aliases)) {
-      return provider.aliases.some(
-        (alias) => typeof alias === "string" && params.requested.has(alias.toLowerCase()),
-      );
-    }
-    return false;
-  }) as PluginRegistry[K];
+  }
 }
 
 function filterPolicyAllowedCapabilityProviders<K extends CapabilityProviderRegistryKey>(params: {
@@ -664,11 +644,14 @@ export function preparePluginCapabilityProviderResolution<K extends CapabilityPr
       const loadedProviderFilter =
         activeProviders.length > 0 ? requestedProviders : requestedProviderFilter;
       const requestedLoadedProviders = loadedProviderFilter
-        ? filterLoadedProvidersForRequestedConfig({
-            key: params.key,
-            requested: loadedProviderFilter,
-            entries: loadedProviders,
-          })
+        ? (loadedProviders.filter(({ provider }) => {
+            for (const id of capabilityProviderIds(provider)) {
+              if (loadedProviderFilter.has(id)) {
+                return true;
+              }
+            }
+            return false;
+          }) as PluginRegistry[K])
         : loadedProviders;
       return mergeCapabilityProviderEntries(activeProviders, requestedLoadedProviders).map(
         (entry) => entry.provider as CapabilityProviderFor<K>,

@@ -1,34 +1,59 @@
-import type { DatabaseSync } from "node:sqlite";
 import {
   assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
+  runSqliteDeferredTransactionSync,
+  runSqliteWorkerTransactionSync,
 } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerBackend } from "../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerDatabaseContext } from "../infra/sqlite-worker-database-context.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { normalizeBoardWidgetPutParams } from "./board-store.js";
-import type { BoardWriteOperations } from "./sqlite-board-operations.js";
+import type { BoardReadOperations, BoardWriteOperations } from "./sqlite-board-operations.js";
 import {
   applyBoardOpsToDatabase,
   ensureBoardSchema,
   grantBoardWidgetInDatabase,
   putBoardWidgetInDatabase,
+  readBoardSnapshotWithHtmlViewMetadata,
+  readBoardWidgetDocument,
 } from "./sqlite-board-store.kernel.js";
 
 export function bindSqliteWorkerBackend(
-  _input: unknown,
-  context: {
-    database: DatabaseSync;
-    databasePath: string;
-    admit(stage: "transaction" | "commit"): void;
-  },
-): SqliteWorkerBackend<BoardWriteOperations> {
+  input: unknown,
+  context: SqliteWorkerDatabaseContext,
+): SqliteWorkerBackend<BoardWriteOperations & BoardReadOperations> {
   const database = { db: context.database, path: context.databasePath };
-  ensureBoardSchema(database);
+  if (input !== "read") {
+    ensureBoardSchema(database);
+  }
   let closed = false;
   return {
     execute(command) {
       if (closed) {
         throw new Error("Board publication scope is closed");
+      }
+      if (command.type === "boards.readSnapshot" || command.type === "boards.readWidgetDocument") {
+        return runSqliteDeferredTransactionSync(
+          database.db,
+          () => {
+            context.admit("transaction");
+            return command.type === "boards.readSnapshot"
+              ? readBoardSnapshotWithHtmlViewMetadata(database, command.input.sessionKey)
+              : readBoardWidgetDocument(
+                  database,
+                  command.input.sessionKey,
+                  command.input.name,
+                  command.input.contentKind,
+                );
+          },
+          {
+            databaseLabel: database.path,
+            operationLabel: command.type,
+            withCommit(commit) {
+              context.admit("commit");
+              return commit();
+            },
+          },
+        );
       }
       const changes: SessionRowChange[] = [];
       const unsubscribe = sessionChanges.subscribeFacts((change) => {
@@ -41,10 +66,9 @@ export function bindSqliteWorkerBackend(
         }
       });
       try {
-        const value = runSqliteImmediateTransactionSync(
-          database.db,
+        const value = runSqliteWorkerTransactionSync(
+          context,
           () => {
-            context.admit("transaction");
             if (command.type === "boards.applyOps") {
               return applyBoardOpsToDatabase(database, command.input.sessionKey, command.input.ops);
             }
@@ -68,10 +92,6 @@ export function bindSqliteWorkerBackend(
           {
             databaseLabel: database.path,
             operationLabel: command.type,
-            withCommit(commit) {
-              context.admit("commit");
-              commit();
-            },
           },
         );
         return { value, changes };

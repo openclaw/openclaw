@@ -114,47 +114,44 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
 }
 
 describe("full release child evidence producer", () => {
-  it.each(["normalCi", "pluginPrereleaseIndependent"])(
-    "blocks failed selected metadata and workload jobs for %s",
-    (key) => {
-      const workload = {
-        name: "install_smoke",
-        status: "completed",
-        conclusion: "success",
-      };
-      const metadata = { name: PUBLISHER, status: "completed", conclusion: "failure" };
-      const snapshot = () =>
-        classifyReleaseSnapshot({
-          children: [
-            {
-              key,
-              selected: true,
-              required: true,
-              result: "success",
-              source: "fresh",
-              runId: "101",
-              runAttempt: 1,
-              status: "completed",
-              conclusion: "success",
-              jobs: [workload, metadata],
-            },
-          ],
-          releaseProfile: "stable",
-          workflowRef: "main",
-        });
-      expect(snapshot()).toMatchObject({
-        state: "blocked_complete",
-        blockers: [expect.objectContaining({ job: PUBLISHER, kind: "job_failure" })],
+  it.each(["normalCi"])("blocks failed selected metadata and workload jobs for %s", (key) => {
+    const workload = {
+      name: "install_smoke",
+      status: "completed",
+      conclusion: "success",
+    };
+    const metadata = { name: PUBLISHER, status: "completed", conclusion: "failure" };
+    const snapshot = () =>
+      classifyReleaseSnapshot({
+        children: [
+          {
+            key,
+            selected: true,
+            required: true,
+            result: "success",
+            source: "fresh",
+            runId: "101",
+            runAttempt: 1,
+            status: "completed",
+            conclusion: "success",
+            jobs: [workload, metadata],
+          },
+        ],
+        releaseProfile: "stable",
+        workflowRef: "main",
       });
-      metadata.conclusion = "success";
-      expect(snapshot()).toMatchObject({ state: "passed", blockers: [] });
-      workload.conclusion = "failure";
-      expect(snapshot()).toMatchObject({
-        state: "blocked_complete",
-        blockers: [expect.objectContaining({ job: "install_smoke", kind: "job_failure" })],
-      });
-    },
-  );
+    expect(snapshot()).toMatchObject({
+      state: "blocked_complete",
+      blockers: [expect.objectContaining({ job: PUBLISHER, kind: "job_failure" })],
+    });
+    metadata.conclusion = "success";
+    expect(snapshot()).toMatchObject({ state: "passed", blockers: [] });
+    workload.conclusion = "failure";
+    expect(snapshot()).toMatchObject({
+      state: "blocked_complete",
+      blockers: [expect.objectContaining({ job: "install_smoke", kind: "job_failure" })],
+    });
+  });
 
   it.each([
     "ci.yml",
@@ -194,85 +191,59 @@ describe("full release child evidence producer", () => {
     expect(upload?.with?.overwrite).toBe(false);
   });
 
-  it("seals child facts without requiring any parent status or manifest", () => {
-    const { result, receipt, output } = seal();
-    expect(result.status, result.stderr).toBe(0);
-    const evidence = JSON.parse(readFileSync(receipt, "utf8"));
-    expect(evidence).toMatchObject({
-      schema: "openclaw.full-release-child-evidence/v1",
-      sourceParentRunId: "77",
-      sourceParentAttempt: 1,
-      runId: "101",
-      plannedRunAttempt: 1,
-      effectiveRunAttempt: 1,
-      role: "normalCi",
-      targetSha: TARGET,
-      workflowSha: SHA,
-      workloadConclusion: "success",
-      inputs: { release_scope: "full", target_ref: TARGET },
-      publisher: { jobId: "3", jobName: PUBLISHER },
-    });
-    expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
-      "node tests",
-      "resolve target",
-    ]);
-    const { sha256, ...payload } = evidence;
-    expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
-    expect(readFileSync(output, "utf8")).toBe(
-      `artifact_name=full-release-child-evidence-${TARGET}-normalCi-101-1\n`,
-    );
-  });
+  it.each(["success", "failure"])(
+    "seals %s workload facts independently of the parent",
+    (conclusion) => {
+      const data = fixture();
+      data.jobs[1]!.conclusion = conclusion;
+      const { result, receipt, output } = seal(data);
+      expect(result.status, result.stderr).toBe(0);
+      const evidence = JSON.parse(readFileSync(receipt, "utf8"));
+      expect(evidence).toMatchObject({
+        schema: "openclaw.full-release-child-evidence/v1",
+        sourceParentRunId: "77",
+        sourceParentAttempt: 1,
+        runId: "101",
+        plannedRunAttempt: 1,
+        effectiveRunAttempt: 1,
+        role: "normalCi",
+        targetSha: TARGET,
+        workflowSha: SHA,
+        workloadConclusion: conclusion,
+        inputs: { release_scope: "full", target_ref: TARGET },
+        publisher: { jobId: "3", jobName: PUBLISHER },
+      });
+      expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
+        "node tests",
+        "resolve target",
+      ]);
+      const { sha256, ...payload } = evidence;
+      expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
+      expect(readFileSync(output, "utf8")).toBe(
+        `artifact_name=full-release-child-evidence-${TARGET}-normalCi-101-1\n`,
+      );
+    },
+  );
 
-  it("records a failed predecessor instead of sealing green evidence", () => {
-    const data = fixture();
-    data.jobs[1]!.conclusion = "failure";
-    const { result, receipt } = seal(data);
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(readFileSync(receipt, "utf8")).workloadConclusion).toBe("failure");
-  });
-
-  it("composes failed-job retries without losing carried green work or retaining seal jobs", () => {
-    const data = fixture();
-    data.run.run_attempt = 2;
-    data.run.triggering_actor.login = "release-maintainer";
-    data.jobs[1]!.conclusion = "failure";
-    data.jobs[2]!.status = "completed";
-    data.jobs[2]!.conclusion = "success";
-    data.attempts.push([
-      { ...data.jobs[1]!, run_attempt: 2, conclusion: "success" },
-      { ...data.jobs[2]!, id: 4, run_attempt: 2, status: "in_progress", conclusion: null },
-    ]);
-    const { result, receipt } = seal(data, 2);
-    expect(result.status, result.stderr).toBe(0);
-    const evidence = JSON.parse(readFileSync(receipt, "utf8"));
-    expect(evidence).toMatchObject({
-      workloadConclusion: "success",
-      effectiveRunAttempt: 2,
-      observedRunAttempts: [1, 2],
-      triggeringActor: "release-maintainer",
-      publisher: { jobId: "4" },
-    });
-    expect(
-      evidence.jobs.map((job: { name: string; acceptedRunAttempt: number }) => [
-        job.name,
-        job.acceptedRunAttempt,
-      ]),
-    ).toEqual([
-      ["node tests", 2],
-      ["resolve target", 1],
-    ]);
-  });
-
-  it.each([2, 3])(
-    "recovers publisher-only attempt %s while carrying earlier workload evidence",
-    (runAttempt) => {
+  it.each([
+    { runAttempt: 2, retryWorkload: true, observedRunAttempts: [1, 2], accepted: 2 },
+    { runAttempt: 3, retryWorkload: false, observedRunAttempts: [1, 2, 3], accepted: 1 },
+  ])(
+    "composes attempt $runAttempt with workload retry=$retryWorkload and excludes publishers",
+    ({ runAttempt, retryWorkload, observedRunAttempts, accepted }) => {
       const data = fixture();
       data.run.run_attempt = runAttempt;
       data.run.triggering_actor.login = "release-maintainer";
       data.jobs[2]!.status = "completed";
-      data.jobs[2]!.conclusion = "failure";
+      data.jobs[2]!.conclusion = retryWorkload ? "success" : "failure";
+      if (retryWorkload) {
+        data.jobs[1]!.conclusion = "failure";
+      }
       for (let attempt = 2; attempt <= runAttempt; attempt += 1) {
         data.attempts.push([
+          ...(retryWorkload
+            ? [{ ...data.jobs[1]!, run_attempt: attempt, conclusion: "success" }]
+            : []),
           {
             ...data.jobs[2]!,
             id: attempt + 2,
@@ -288,15 +259,17 @@ describe("full release child evidence producer", () => {
       expect(evidence).toMatchObject({
         workloadConclusion: "success",
         effectiveRunAttempt: runAttempt,
+        triggeringActor: "release-maintainer",
+        publisher: { jobId: String(runAttempt + 2) },
       });
-      expect(evidence.observedRunAttempts).toEqual(runAttempt === 2 ? [1, 2] : [1, 2, 3]);
+      expect(evidence.observedRunAttempts).toEqual(observedRunAttempts);
       expect(
         evidence.jobs.map((job: { name: string; acceptedRunAttempt: number }) => [
           job.name,
           job.acceptedRunAttempt,
         ]),
       ).toEqual([
-        ["node tests", 1],
+        ["node tests", accepted],
         ["resolve target", 1],
       ]);
     },

@@ -14,6 +14,21 @@ import { createSessionCompanion } from "./session-companion.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { notifyGatewaySessionReset } from "./session-reset-notifications.js";
 
+function askRequest(
+  question: string,
+  overrides: Partial<
+    Omit<Parameters<ReturnType<typeof createSessionCompanion>["ask"]>[0], "question">
+  > = {},
+) {
+  return {
+    agentId: "main",
+    sessionKey: "agent:main:main",
+    question,
+    connId: "conn-1",
+    ...overrides,
+  };
+}
+
 function createHarness(overrides?: {
   scheduler?: GatewayScheduler;
   now?: () => number;
@@ -75,14 +90,10 @@ describe("session companion asks", () => {
     vi.useFakeTimers();
     const harness = createHarness();
 
-    await expect(
-      harness.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "Why is it reading that file?",
-        connId: "conn-1",
-      }),
-    ).resolves.toEqual({ answer: "Evidence says the build is green.", ts: 100 });
+    await expect(harness.service.ask(askRequest("Why is it reading that file?"))).resolves.toEqual({
+      answer: "Evidence says the build is green.",
+      ts: 100,
+    });
 
     expect(harness.run).toHaveBeenCalledOnce();
     const call = harness.run.mock.calls[0]?.[0];
@@ -130,12 +141,7 @@ describe("session companion asks", () => {
       }),
     });
 
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "What happened?",
-      connId: "conn-1",
-    });
+    await harness.service.ask(askRequest("What happened?"));
 
     const call = harness.run.mock.calls[0]?.[0];
     expect(call?.systemPrompt).not.toContain(hostile);
@@ -166,25 +172,15 @@ describe("session companion asks", () => {
     });
 
     const unavailable = await harness.service
-      .ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "What recovered?",
-        connId: "conn-1",
-      })
+      .ask(askRequest("What recovered?"))
       .catch((error: unknown) => error);
     expect(unavailable).toBeInstanceOf(SessionCompanionAskError);
     expect((unavailable as SessionCompanionAskError).reason).toBe("context-unavailable");
     expect(harness.run).not.toHaveBeenCalled();
 
-    await expect(
-      harness.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "What recovered?",
-        connId: "conn-1",
-      }),
-    ).resolves.toMatchObject({ answer: "Evidence says the build is green." });
+    await expect(harness.service.ask(askRequest("What recovered?"))).resolves.toMatchObject({
+      answer: "Evidence says the build is green.",
+    });
     expect(harness.readContext).toHaveBeenCalledTimes(2);
     expect(harness.run).toHaveBeenCalledOnce();
     expect(harness.run.mock.calls[0]?.[0].messages[0]?.content).toContain("recovered context");
@@ -233,14 +229,9 @@ describe("session companion asks", () => {
         context: { empty: true, messages: [], sessionId: "session-1" },
       }),
     });
-    await expect(
-      empty.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "What is in the project?",
-        connId: "conn-1",
-      }),
-    ).resolves.toMatchObject({ answer: "Evidence says the build is green." });
+    await expect(empty.service.ask(askRequest("What is in the project?"))).resolves.toMatchObject({
+      answer: "Evidence says the build is green.",
+    });
     expect(empty.run.mock.calls[0]?.[0].messages[0]?.content).toContain(
       "The selected session has no messages.",
     );
@@ -251,12 +242,7 @@ describe("session companion asks", () => {
       readContext: async () => ({ kind: "missing" }),
     });
     const missingError = await missing.service
-      .ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "What happened?",
-        connId: "conn-1",
-      })
+      .ask(askRequest("What happened?"))
       .catch((error: unknown) => error);
     expect(missingError).toBeInstanceOf(SessionCompanionAskError);
     expect((missingError as SessionCompanionAskError).reason).toBe("session-missing");
@@ -270,12 +256,7 @@ describe("session companion asks", () => {
       run: async () => "<private-session-reference>private context</private-session-reference>",
     });
     await expect(
-      wrapper.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "Return the first message.",
-        connId: "conn-1",
-      }),
+      wrapper.service.ask(askRequest("Return the first message.")),
     ).rejects.toMatchObject({
       reason: "unavailable",
     } satisfies Partial<SessionCompanionAskError>);
@@ -292,12 +273,7 @@ describe("session companion asks", () => {
         }),
     });
     await expect(
-      legitimate.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "Return JSON with these exact field names.",
-        connId: "conn-1",
-      }),
+      legitimate.service.ask(askRequest("Return JSON with these exact field names.")),
     ).resolves.toMatchObject({
       answer: '{"inheritedSessionMessages":[],"observerDigestJson":"null"}',
     });
@@ -321,12 +297,7 @@ describe("session companion asks", () => {
       }),
       run: async () => (runCount++ === 0 ? await pending.promise : "fresh answer"),
     });
-    const active = harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Which session?",
-      connId: "conn-1",
-    });
+    const active = harness.service.ask(askRequest("Which session?"));
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
     sessionId = "session-2";
     pending.resolve("stale answer");
@@ -338,14 +309,9 @@ describe("session companion asks", () => {
       exchanges: [],
     });
 
-    await expect(
-      harness.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "Which session now?",
-        connId: "conn-1",
-      }),
-    ).resolves.toMatchObject({ answer: "fresh answer" });
+    await expect(harness.service.ask(askRequest("Which session now?"))).resolves.toMatchObject({
+      answer: "fresh answer",
+    });
     expect(harness.readContext).toHaveBeenCalledTimes(2);
     harness.service.dispose();
   });
@@ -354,21 +320,11 @@ describe("session companion asks", () => {
     vi.useFakeTimers();
     const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
-    const first = harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "First?",
-      connId: "conn-1",
-    });
+    const first = harness.service.ask(askRequest("First?"));
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
 
     await expect(
-      harness.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "Second?",
-        connId: "conn-2",
-      }),
+      harness.service.ask(askRequest("Second?", { connId: "conn-2" })),
     ).rejects.toMatchObject({ reason: "busy" } satisfies Partial<SessionCompanionAskError>);
 
     pending.resolve("first answer");
@@ -491,23 +447,13 @@ describe("session companion asks", () => {
     const harness = createHarness({
       snapshot: () => ({ agentId: "main", notes }),
     });
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "First?",
-      connId: "conn-1",
-    });
+    await harness.service.ask(askRequest("First?"));
     notes = [
       { sequence: 1, text: "first note" },
       { sequence: 2, text: "second note" },
       { sequence: 3, text: "third note" },
     ];
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Second?",
-      connId: "conn-2",
-    });
+    await harness.service.ask(askRequest("Second?", { connId: "conn-2" }));
 
     expect(harness.readContext).toHaveBeenCalledOnce();
     const secondMessages = harness.run.mock.calls[1]?.[0].messages ?? [];
@@ -545,12 +491,7 @@ describe("session companion asks", () => {
   it("truncates answers without splitting a UTF-16 surrogate pair", async () => {
     vi.useFakeTimers();
     const harness = createHarness({ run: async () => "🦞".repeat(601) });
-    const result = await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Long answer?",
-      connId: "conn-1",
-    });
+    const result = await harness.service.ask(askRequest("Long answer?"));
     expect(result.answer).toBe("🦞".repeat(600));
     harness.service.dispose();
   });
@@ -559,12 +500,7 @@ describe("session companion asks", () => {
     const clock = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(clock.clock);
     const harness = createHarness({ now: clock.clock.now, scheduler });
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Before idle?",
-      connId: "conn-1",
-    });
+    await harness.service.ask(askRequest("Before idle?"));
     await clock.advanceBy(2 * 60 * 60_000);
     expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
       exchanges: [],
@@ -584,12 +520,7 @@ describe("session companion asks", () => {
     const harness = createHarness({
       readContext: () => (reads++ === 0 ? pendingContext.promise : Promise.resolve(context)),
     });
-    const request = {
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Old?",
-      connId: "conn-1",
-    };
+    const request = askRequest("Old?");
     let failure: unknown;
     const active = harness.service.ask(request).catch((error: unknown) => {
       failure = error;
@@ -620,12 +551,7 @@ describe("session companion asks", () => {
     vi.useFakeTimers();
     const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
-    const active = harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Still there?",
-      connId: "conn-1",
-    });
+    const active = harness.service.ask(askRequest("Still there?"));
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
     harness.service.reset({ agentId: "main", sessionKey: "agent:main:main" });
     await expect(active).rejects.toMatchObject({
@@ -641,12 +567,7 @@ describe("session companion asks", () => {
     vi.useFakeTimers();
     const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
-    const active = harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Still the same backing session?",
-      connId: "conn-1",
-    });
+    const active = harness.service.ask(askRequest("Still the same backing session?"));
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
 
     notifyGatewaySessionReset("agent:main:main", "main");
@@ -669,19 +590,10 @@ describe("session companion asks", () => {
     const harness = createHarness({
       run: async () => (runCount++ === 0 ? "existing answer" : await pending.promise),
     });
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "What is already known?",
-      connId: "conn-1",
-    });
-    const active = harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Will a disconnected request commit?",
-      connId: "conn-1",
-      signal: controller.signal,
-    });
+    await harness.service.ask(askRequest("What is already known?"));
+    const active = harness.service.ask(
+      askRequest("Will a disconnected request commit?", { signal: controller.signal }),
+    );
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledTimes(2));
 
     controller.abort();
@@ -706,12 +618,7 @@ describe("session companion asks", () => {
     vi.useFakeTimers();
     const pending = createDeferredCore<string>();
     const harness = createHarness({ run: async () => await pending.promise });
-    const active = harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Will this survive shutdown?",
-      connId: "conn-1",
-    });
+    const active = harness.service.ask(askRequest("Will this survive shutdown?"));
     await vi.waitFor(() => expect(harness.run).toHaveBeenCalledOnce());
 
     harness.service.dispose();
@@ -733,16 +640,11 @@ describe("session companion asks", () => {
       },
     });
 
-    await expect(
-      harness.service.ask({
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        question: "Can the provider answer?",
-        connId: "conn-1",
-      }),
-    ).rejects.toMatchObject({
-      reason: "unavailable",
-    } satisfies Partial<SessionCompanionAskError>);
+    await expect(harness.service.ask(askRequest("Can the provider answer?"))).rejects.toMatchObject(
+      {
+        reason: "unavailable",
+      } satisfies Partial<SessionCompanionAskError>,
+    );
     expect(harness.run).toHaveBeenCalledOnce();
     expect(harness.service.state({ agentId: "main", sessionKey: "agent:main:main" })).toEqual({
       exchanges: [],
@@ -753,12 +655,7 @@ describe("session companion asks", () => {
   it("clears a thread when the committed gateway reset path notifies", async () => {
     vi.useFakeTimers();
     const harness = createHarness();
-    await harness.service.ask({
-      agentId: "main",
-      sessionKey: "agent:main:main",
-      question: "Before reset?",
-      connId: "conn-1",
-    });
+    await harness.service.ask(askRequest("Before reset?"));
     expect(
       harness.service.state({ agentId: "main", sessionKey: "agent:main:main" }).exchanges,
     ).toHaveLength(1);

@@ -3,47 +3,28 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
-import type { EmbeddedAgentMeta } from "../../agents/embedded-agent-runner/types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
-import {
-  applySessionEntryLifecycleMutation,
-  loadSessionEntry,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { applySessionEntryLifecycleMutation } from "../../config/sessions/session-accessor.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   disposeOpenClawAgentDatabaseByPath,
   isOpenClawAgentDatabaseOpen,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { isReplyPayloadTerminalContent } from "../reply-payload.js";
-import type { ReplyPayload } from "../types.js";
-import type {
-  AgentTurnCompaction,
-  AgentTurnExecutionResult,
-} from "./agent-runner-execution.types.js";
-import { accountAgentTurn, accountFollowupTurn } from "./agent-runner-result-accounting.js";
+import { getReplyPayloadMetadata, isReplyPayloadTerminalContent } from "../reply-payload.js";
+import { accountAgentTurn } from "./agent-runner-result-accounting.js";
+import {
+  agentAccountingPersistenceDiagnostic as diagnostic,
+  createAgentAccountingPersistenceFixture,
+} from "./agent-runner-result-accounting.persistence.test-support.js";
 import { completeReplyAgentRun } from "./agent-runner-result-complete.js";
 import { finalizeReplyAgentRun } from "./agent-runner-result.js";
-import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
-import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
-import {
-  createReplyOperation,
-  retainReplyOperationUntilComplete,
-  type ReplyOperation,
-} from "./reply-run-registry.js";
-import { createReplySessionEntryHandle } from "./session-entry-handle.js";
+import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
-import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
-import { createTypingSignaler } from "./typing-mode.js";
 
 vi.mock("../../agents/live-model-switch.js", () => ({
   consolidateLiveModelSwitchAfterRun: vi.fn(async () => {}),
@@ -55,13 +36,17 @@ let suiteRoot: string;
 let storePath: string;
 let fixtureSequence = 0;
 beforeAll(() => {
-  suiteRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-accounting-suite-"));
+  // openclaw-temp-dir: allow suite database root drains before removal
+  suiteRoot = fs.mkdtempSync(
+    path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-accounting-suite-"),
+  );
   storePath = path.join(suiteRoot, "openclaw-agent.sqlite");
   openOpenClawAgentDatabase({ agentId: "main", path: storePath });
 });
 afterAll(async () => {
   await drainSessionStoreWriterQueuesForTest();
   disposeOpenClawAgentDatabaseByPath(storePath);
+  await closeOpenClawAgentDatabasesAsync(suiteRoot);
   expect(isOpenClawAgentDatabaseOpen(storePath)).toBe(false);
   fs.rmSync(suiteRoot, { recursive: true, force: true });
 });
@@ -70,278 +55,54 @@ afterEach(() => {
     operation.complete();
   }
 });
-const diagnostic = {
-  schemaVersion: 1,
-  source: "pre-prompt-estimate",
-  updatedAt: 20,
-  provider: "openai",
-  model: "gpt-5.6-luna",
-  route: "compact_only",
-  shouldCompact: true,
-  estimatedPromptTokens: 950,
-  contextTokenBudget: 1_000,
-  promptBudgetBeforeReserve: 900,
-  reserveTokens: 100,
-  effectiveReserveTokens: 100,
-  remainingPromptBudgetTokens: 0,
-  overflowTokens: 50,
-  toolResultReducibleChars: 0,
-  messageCount: 4,
-  unwindowedMessageCount: 4,
-} satisfies NonNullable<SessionEntry["contextBudgetStatus"]>;
-
-async function createFixture() {
-  const root = tempDirs.make("openclaw-context-pressure-");
-  const fixtureId = ++fixtureSequence;
-  const sessionKey = `agent:main:accounting-${fixtureId}`;
-  const sessionId = `accounting-session-${fixtureId}`;
-  const runId = `context-pressure-run-${fixtureId}`;
-  const entry: InternalSessionEntry = {
-    sessionId,
-    lifecycleRevision: "generation-1",
-    activeWriterRunId: runId,
-    updatedAt: 1,
-    modelProvider: diagnostic.provider,
-    model: diagnostic.model,
-    contextBudgetStatus: { ...diagnostic, updatedAt: 1 },
-    estimatedCostUsd: 2,
-  };
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
-  const cfg: OpenClawConfig = {
-    session: { store: storePath },
-    models: {
-      providers: {
-        openai: {
-          baseUrl: "https://unused.invalid",
-          models: [
-            {
-              id: diagnostic.model,
-              name: "test model",
-              reasoning: false,
-              input: ["text"],
-              contextWindow: 1_000,
-              maxTokens: 100,
-              cost: { input: 1, output: 2, cacheRead: 0.5, cacheWrite: 1 },
-            },
-          ],
-        },
-      },
-    },
-  };
-  const followupRun = createMockFollowupRun({
-    run: {
-      sessionKey,
-      sessionId: entry.sessionId,
-      agentDir: root,
-      workspaceDir: root,
-      config: cfg,
-      provider: diagnostic.provider,
-      model: diagnostic.model,
-    },
-  });
-  const sessionStore = { [sessionKey]: entry };
-  const replyOperation = createReplyOperation({
-    sessionId: entry.sessionId,
-    sessionKey,
-    resetTriggered: false,
-  });
-  replyOperation.setPhase("running");
-  retainReplyOperationUntilComplete(replyOperation);
-  operations.push(replyOperation);
-  const context: FinalizeReplyAgentRunInput = {
-    activeIsNewSession: false,
-    activeSessionEntry: entry,
-    activeSessionStore: sessionStore,
-    blockReplyPipeline: null,
-    blockStreamingEnabled: false,
-    cfg,
-    commandBody: followupRun.prompt,
-    defaultModel: diagnostic.model,
-    followupRun,
-    isHeartbeat: false,
-    pendingToolTasks: new Set(),
-    preflightCompactionApplied: false,
-    queueKey: sessionKey,
-    replyMediaContext: { normalizePayload: async (payload) => payload },
-    replyOperation,
-    replyRouteThreadId: undefined,
-    replyToChannel: undefined,
-    replyToMode: "off",
-    resolvedBlockStreamingBreak: "message_end",
-    resolvedQueue: { mode: "followup" },
-    resolvedVerboseLevel: "off",
-    returnWithQueuedFollowupDrain: (value) => value,
-    runFollowupTurn: async () => {},
-    execution: {
-      kind: "settled",
-      status: "ok",
-      result: {
-        payloads: [{ text: "done" }],
-        meta: {
-          durationMs: 1,
-          requestShaping: { authMode: "api-key", fallbackEligible: false },
-        },
-      },
-      resolved: { provider: diagnostic.provider, model: diagnostic.model },
-      fallback: { exhausted: false, attempts: [] },
-      autoCompactionCount: 0,
-      didLogHeartbeatStrip: false,
-    },
-    runId,
-    runStartedAt: Date.now(),
-    sessionCtx: {},
-    sessionKey,
-    shouldInjectGroupIntro: false,
+function createFixture() {
+  return createAgentAccountingPersistenceFixture({
     storePath,
-    typingSignals: createTypingSignaler({
-      typing: createMockTypingController(),
-      mode: "never",
-      isHeartbeat: false,
-    }),
-  };
-  const handle = createReplySessionEntryHandle({
-    sessionEntry: entry,
-    sessionStore,
-    sessionKey,
-    generationFence: { sessionId: entry.sessionId, expectedStoreEntry: entry },
-  });
-  const turn: AdmittedFollowupTurn = {
-    runId: context.runId,
-    queued: followupRun,
-    operation: context.replyOperation,
-    config: cfg,
-    session: {
-      kind: "session",
-      key: sessionKey,
-      storePath,
-      current: () => handle.getCurrent(),
-      publish: (next) => next && handle.replaceCurrent(next),
-      adopt: (next) => handle.adoptCurrent(next),
+    root: tempDirs.make("openclaw-context-pressure-"),
+    fixtureId: ++fixtureSequence,
+    registerOperation: (operation) => {
+      operations.push(operation);
     },
-    sessionStore: handle.toCompatSessionStore(),
-    sendPolicy: "allow",
-    preflightCompactionApplied: false,
-  };
-  const accountQueued = (outcome: AgentTurnExecutionResult["outcome"]) =>
-    accountFollowupTurn({
-      turn,
-      defaults: {
-        defaultModel: diagnostic.model,
-        typing: createMockTypingController(),
-        typingMode: "never",
-        opts: { isHeartbeat: context.isHeartbeat },
-      },
-      execution: {
-        commentaryPayloadsEnabled: false,
-        execution: { runId: context.runId, outcome },
-        runStartedAt: context.runStartedAt,
-        sessionCtx: {},
-        pendingToolTasks: context.pendingToolTasks,
-        progress: { drain: async () => {} },
+  });
+}
+
+it("publishes a prepared final only after its worker patch commits without host transactions", async () => {
+  const fixture = await createFixture();
+  const accounting = await accountAgentTurn(fixture.context);
+  const payload = { text: "durable final" };
+  const sql = observeHostDataSql();
+  try {
+    await completeReplyAgentRun({
+      context: fixture.context,
+      accounting,
+      prepared: {
+        kind: "continue",
+        activeSessionEntry: accounting.activeSessionEntry,
+        completedSourceReplyDelivery: false,
+        guardedReplyPayloads: [payload],
+        responseUsageLine: undefined,
       },
     });
-  const recordCompaction = (params: { sessionId?: string; currentContextTokens?: number } = {}) => {
-    const fact: CompactionAccountingFact = {
-      kind: "durable",
-      count: 1,
-      currentContextSnapshot: { tokens: params.currentContextTokens },
-      target: {
-        agentId: "main",
-        sessionKey,
-        storePath,
-        sessionId: params.sessionId ?? entry.sessionId,
-        lifecycleRevision: entry.lifecycleRevision,
-        activeWriterRunId: entry.activeWriterRunId,
-      },
-    };
-    const compaction: AgentTurnCompaction = { count: fact.count, durable: [fact] };
-    context.execution.autoCompactionCount = compaction.count;
-    context.execution.compaction = compaction;
-    return compaction;
-  };
-  return {
-    sessionId,
-    context,
-    turn,
-    deliverQueued: async () => {
-      const registry = createEmptyPluginRegistry();
-      registry.providers.push({
-        pluginId: "synthetic",
-        source: "test",
-        provider: { id: diagnostic.provider, label: "Synthetic provider", auth: [] },
-      });
-      return withPluginRuntimeRegistryScope(registry, async () => {
-        const delivered: ReplyPayload[] = [];
-        const accounting = await accountQueued(context.execution);
-        const decision = await resolveFollowupDeliveryDecision({
-          turn,
-          execution: { runId: context.runId, outcome: context.execution },
-          accounting,
-          opts: { onBlockReply: async () => {} },
-        });
-        await deliverFollowupDecision({
-          decision,
-          turn,
-          defaults: {
-            defaultModel: diagnostic.model,
-            typing: createMockTypingController(),
-            typingMode: "never",
-            opts: {
-              onBlockReply: async (payload) => {
-                delivered.push(payload);
-              },
-            },
-          },
-          runId: context.runId,
-          runFollowup: async () => {},
-        });
-        return delivered;
-      });
-    },
-    recordCompaction,
-    accountAborted: (reason: "user" | "restart") => {
-      const compaction =
-        context.execution.compaction ?? recordCompaction({ currentContextTokens: 40 });
-      if (reason === "restart") {
-        replyOperation.abortForRestart();
-      } else {
-        replyOperation.abortByUser();
-      }
-      return accountQueued({ kind: "aborted", reason, compaction });
-    },
-    read: () => loadSessionEntry({ storePath, sessionKey, readConsistency: "latest" }),
-    replace: (next: SessionEntry) => replaceSessionEntry({ storePath, sessionKey }, next),
-    account: async (lane: "ordinary" | "followup", meta: Partial<EmbeddedAgentMeta>) => {
-      context.execution.result.meta.agentMeta = {
-        sessionId: entry.sessionId,
-        provider: diagnostic.provider,
-        model: diagnostic.model,
-        contextTokens: 1_000,
-        contextBudgetStatus: diagnostic,
-        ...meta,
-      };
-      if (lane === "ordinary") {
-        const accounting = await accountAgentTurn(context);
-        await completeReplyAgentRun({
-          context,
-          accounting,
-          prepared: {
-            kind: "continue",
-            activeSessionEntry: accounting.activeSessionEntry,
-            // The reply was already delivered; exercise completion bookkeeping
-            // without creating another pending delivery intent.
-            completedSourceReplyDelivery: true,
-            guardedReplyPayloads: [],
-            responseUsageLine: undefined,
-          },
-        });
-      } else {
-        turn.preflightCompactionApplied = context.preflightCompactionApplied === true;
-        await accountQueued(context.execution);
-      }
-    },
-  };
-}
+    expect(
+      sql.queries.filter((query) =>
+        /\b(?:BEGIN|COMMIT|ROLLBACK|INSERT|UPDATE|DELETE)\b/i.test(query),
+      ),
+    ).toEqual([]);
+  } finally {
+    sql.restore();
+  }
+  const completion = getReplyPayloadMetadata(payload)?.pendingFinalDeliveryCompletion;
+  expect(completion).toMatchObject({
+    sessionId: fixture.sessionId,
+    sessionKey: fixture.context.sessionKey,
+    storePath,
+  });
+  expect(fixture.read()?.pendingFinalDelivery).toMatchObject({
+    intentId: completion?.intentId,
+    deliveries: [{ id: completion?.deliveryId, state: "prepared" }],
+    text: "durable final",
+  });
+});
 
 it.each([
   { stored: "off", selected: "raw", authorized: true, trace: true },

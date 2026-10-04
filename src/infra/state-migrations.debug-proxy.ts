@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
-import { safeStatSync } from "@openclaw/fs-safe/path";
+import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "./sqlite-number.js";
+import {
+  existsDir as dirExists,
+  migrationFileExists as fileExists,
+} from "./state-migrations.fs.js";
 
 const DEBUG_PROXY_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 
@@ -18,39 +22,46 @@ type LegacyDebugProxyCaptureDetection = {
   hasLegacy: boolean;
 };
 
-type LegacyCaptureSessionRow = {
-  id: string;
+type LegacyCaptureSessionRow = Pick<
+  DB["capture_sessions"],
+  "id" | "mode" | "source_scope" | "source_process" | "proxy_url"
+> & {
   started_at: number | bigint;
   ended_at: number | bigint | null;
-  mode: string;
-  source_scope: string;
-  source_process: string;
-  proxy_url: string | null;
   blob_dir: string;
 };
 
-type LegacyCaptureEventRow = {
-  session_id: string;
+type LegacyCaptureEventRow = Omit<
+  Pick<DB["capture_events"], (typeof CAPTURE_EVENT_COLUMNS)[number]>,
+  "ts" | "status" | "close_code"
+> & {
   ts: number | bigint;
-  source_scope: string;
-  source_process: string;
-  protocol: string;
-  direction: string;
-  kind: string;
-  flow_id: string;
-  method: string | null;
-  host: string | null;
-  path: string | null;
   status: number | bigint | null;
   close_code: number | bigint | null;
-  content_type: string | null;
-  headers_json: string | null;
-  data_text: string | null;
-  data_blob_id: string | null;
-  data_sha256: string | null;
-  error_text: string | null;
-  meta_json: string | null;
 };
+
+const CAPTURE_EVENT_COLUMNS = [
+  "session_id",
+  "ts",
+  "source_scope",
+  "source_process",
+  "protocol",
+  "direction",
+  "kind",
+  "flow_id",
+  "method",
+  "host",
+  "path",
+  "status",
+  "close_code",
+  "content_type",
+  "headers_json",
+  "data_text",
+  "data_blob_id",
+  "data_sha256",
+  "error_text",
+  "meta_json",
+] as const satisfies readonly (keyof DB["capture_events"])[];
 
 type LegacyCaptureBlobRow = {
   blobId: string;
@@ -72,14 +83,6 @@ class LegacyDebugProxySessionConflictError extends Error {
   constructor(readonly sessionId: string) {
     super(`legacy debug proxy session conflicts with shared state: ${sessionId}`);
   }
-}
-
-function fileExists(filePath: string): boolean {
-  return safeStatSync(filePath)?.isFile() ?? false;
-}
-
-function dirExists(dirPath: string): boolean {
-  return safeStatSync(dirPath)?.isDirectory() ?? false;
 }
 
 function resolveLegacyDebugProxyCapturePaths(stateDir: string): {
@@ -162,28 +165,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       "db_path",
       "blob_dir",
     ]);
-    assertTableColumns(db, "capture_events", [
-      "session_id",
-      "ts",
-      "source_scope",
-      "source_process",
-      "protocol",
-      "direction",
-      "kind",
-      "flow_id",
-      "method",
-      "host",
-      "path",
-      "status",
-      "close_code",
-      "content_type",
-      "headers_json",
-      "data_text",
-      "data_blob_id",
-      "data_sha256",
-      "error_text",
-      "meta_json",
-    ]);
+    assertTableColumns(db, "capture_events", CAPTURE_EVENT_COLUMNS);
     const sessions = db
       .prepare(
         `SELECT id, started_at, ended_at, mode, source_scope, source_process, proxy_url, blob_dir
@@ -193,10 +175,7 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
       .all() as LegacyCaptureSessionRow[];
     const events = db
       .prepare(
-        `SELECT
-           session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-           method, host, path, status, close_code, content_type, headers_json, data_text,
-           data_blob_id, data_sha256, error_text, meta_json
+        `SELECT ${CAPTURE_EVENT_COLUMNS.join(", ")}
          FROM capture_events
          ORDER BY ts ASC, id ASC`,
       )
@@ -273,32 +252,11 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
 }
 
 function eventValues(event: LegacyCaptureEventRow): SQLInputValue[] {
-  return [
-    event.session_id,
-    normalizeSqliteInteger(event.ts),
-    event.source_scope,
-    event.source_process,
-    event.protocol,
-    event.direction,
-    event.kind,
-    event.flow_id,
-    event.method,
-    event.host,
-    event.path,
-    normalizeSqliteInteger(event.status),
-    normalizeSqliteInteger(event.close_code),
-    event.content_type,
-    event.headers_json,
-    event.data_text,
-    event.data_blob_id,
-    event.data_sha256,
-    event.error_text,
-    event.meta_json,
-  ];
-}
-
-function eventKey(values: SQLInputValue[]): string {
-  return JSON.stringify(values);
+  return CAPTURE_EVENT_COLUMNS.map((column) =>
+    column === "ts" || column === "status" || column === "close_code"
+      ? normalizeSqliteInteger(event[column])
+      : event[column],
+  );
 }
 
 function archiveLegacyDebugProxySqlite(params: {
@@ -314,7 +272,7 @@ function archiveLegacyDebugProxySqlite(params: {
   }
   const resolutions: Array<{ sourcePath: string; targetPath: string; removed: boolean }> = [];
   for (const sourcePath of existingSources) {
-    const archivedPath = `${sourcePath}.migrated`;
+    let archivedPath = `${sourcePath}.migrated`;
     try {
       if (fileExists(archivedPath)) {
         if (fs.readFileSync(sourcePath).equals(fs.readFileSync(archivedPath))) {
@@ -326,10 +284,7 @@ function archiveLegacyDebugProxySqlite(params: {
         while (fs.existsSync(`${sourcePath}.migrated.${index}`)) {
           index++;
         }
-        const nextArchivePath = `${sourcePath}.migrated.${index}`;
-        fs.renameSync(sourcePath, nextArchivePath);
-        resolutions.push({ sourcePath, targetPath: nextArchivePath, removed: false });
-        continue;
+        archivedPath = `${sourcePath}.migrated.${index}`;
       }
       fs.renameSync(sourcePath, archivedPath);
       resolutions.push({ sourcePath, targetPath: archivedPath, removed: false });
@@ -504,25 +459,18 @@ export function migrateLegacyDebugProxyCaptureSidecar(params: {
         const existingEventCount = db.prepare(
           `SELECT COUNT(*) AS count
            FROM capture_events
-           WHERE session_id IS ? AND ts IS ? AND source_scope IS ? AND source_process IS ?
-             AND protocol IS ? AND direction IS ? AND kind IS ? AND flow_id IS ?
-             AND method IS ? AND host IS ? AND path IS ? AND status IS ? AND close_code IS ?
-             AND content_type IS ? AND headers_json IS ? AND data_text IS ? AND data_blob_id IS ?
-             AND data_sha256 IS ? AND error_text IS ? AND meta_json IS ?
+           WHERE ${CAPTURE_EVENT_COLUMNS.map((column) => `${column} IS ?`).join(" AND ")}
           `,
         );
         const insertEvent = db.prepare(
-          `INSERT INTO capture_events (
-            session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
-            method, host, path, status, close_code, content_type, headers_json, data_text,
-            data_blob_id, data_sha256, error_text, meta_json
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO capture_events (${CAPTURE_EVENT_COLUMNS.join(", ")})
+           VALUES (${CAPTURE_EVENT_COLUMNS.map(() => "?").join(", ")})`,
         );
         const existingCounts = new Map<string, number>();
         const seenCounts = new Map<string, number>();
         for (const event of legacy.events) {
           const values = eventValues(event);
-          const key = eventKey(values);
+          const key = JSON.stringify(values);
           const seenCount = (seenCounts.get(key) ?? 0) + 1;
           seenCounts.set(key, seenCount);
           let existingCount = existingCounts.get(key);

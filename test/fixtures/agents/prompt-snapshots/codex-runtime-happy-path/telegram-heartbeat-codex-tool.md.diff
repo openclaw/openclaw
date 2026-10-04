@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=948d6dcba394847262b6465d2d78795bbdfaf75f34cbe95d34959adae2620995
-+++ telegram-heartbeat-codex-tool.md	sha256=9d6a8b0f7ad49ead2bc88ea6d986c22c133b139a3b8b71fcec5483d5501fec9a
+--- telegram-direct-codex-message-tool.md	sha256=188c4ba27ffacec2641f9ae11f2041080fb573b882e1db1083d73889a4e1c68d
++++ telegram-heartbeat-codex-tool.md	sha256=a2868623ed583dfff1e1736a9cbc6ba19ad9789af67ac0e2d7be31a9fe6f20ef
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Telegram Direct Codex Heartbeat Tool Turn
@@ -13,50 +13,50 @@
 -  "trigger": "user"
 +  "toolSnapshot": "codex-dynamic-tools.heartbeat-turn.json",
 +  "trigger": "heartbeat"
-@@ -98,0 +99,1 @@
+@@ -96,0 +97,1 @@
 +    "heartbeat_respond",
-@@ -138,1 +139,1 @@
+@@ -136,1 +137,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool"
 +  "threadId": "thread-telegram-heartbeat-codex-tool"
-@@ -151,4 +151,0 @@
+@@ -149,4 +149,0 @@
 -    "openclaw_current_sender": {
 -      "kind": "untrusted",
 -      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
 -    },
-@@ -188,2 +185,2 @@
+@@ -186,2 +183,2 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool",
 -  "turnTrigger": "user"
 +  "threadId": "thread-telegram-heartbeat-codex-tool",
 +  "turnTrigger": "heartbeat"
-@@ -228,1 +225,1 @@
+@@ -226,1 +223,1 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.heartbeat-turn.json",
-@@ -241,2 +238,2 @@
--    "chars": 1025,
--    "roughTokens": 257
-+    "chars": 895,
-+    "roughTokens": 224
-@@ -261,2 +258,2 @@
--    "chars": 68132,
--    "roughTokens": 17033
-+    "chars": 69625,
-+    "roughTokens": 17407
-@@ -273,2 +270,2 @@
--    "chars": 27055,
--    "roughTokens": 6764
-+    "chars": 27392,
-+    "roughTokens": 6848
-@@ -277,2 +274,2 @@
--    "chars": 95189,
--    "roughTokens": 23798
-+    "chars": 97019,
-+    "roughTokens": 24255
-@@ -281,2 +278,2 @@
+@@ -239,2 +236,2 @@
+-    "chars": 1348,
+-    "roughTokens": 337
++    "chars": 1218,
++    "roughTokens": 305
+@@ -259,2 +256,2 @@
+-    "chars": 72395,
+-    "roughTokens": 18099
++    "chars": 73888,
++    "roughTokens": 18472
+@@ -271,2 +268,2 @@
+-    "chars": 27378,
+-    "roughTokens": 6845
++    "chars": 27715,
++    "roughTokens": 6929
+@@ -275,2 +272,2 @@
+-    "chars": 99775,
+-    "roughTokens": 24944
++    "chars": 101605,
++    "roughTokens": 25402
+@@ -279,2 +276,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
 +    "chars": 1346,
 +    "roughTokens": 337
-@@ -530,6 +526,0 @@
+@@ -528,6 +524,0 @@
 -### User: OpenClaw Additional Context (openclaw_current_sender)
 -
 -```text

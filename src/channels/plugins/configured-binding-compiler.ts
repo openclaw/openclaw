@@ -1,64 +1,36 @@
-/**
- * Configured binding compiler.
- *
- * Compiles config rules into channel/provider-specific binding registry entries.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
+  resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildConfiguredAcpSessionKey,
+  normalizeBindingConfig,
+  normalizeMode,
+  normalizeText,
+  toConfiguredAcpBindingRecord,
+  type ConfiguredAcpBindingSpec,
+} from "../../acp/persistent-bindings.types.js";
+import { resolveAgentConfig, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { parseModelRef } from "../../agents/model-selection-normalize.js";
+import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import { listConfiguredBindings } from "../../config/bindings.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getPluginRegistryForContext } from "../../plugins/runtime/gateway-request-scope.js";
 import { pickFirstExistingAgentId } from "../../routing/resolve-route.js";
-import { resolveChannelConfiguredBindingProvider } from "./binding-provider.js";
-import type { CompiledConfiguredBinding, ConfiguredBindingChannel } from "./binding-types.js";
-import { resolveConfiguredBindingConsumer } from "./configured-binding-consumers.js";
+import type { CompiledConfiguredBinding } from "./binding-types.js";
 import { getLoadedChannelPluginEntryById } from "./registry-loaded.js";
-import type { ChannelConfiguredBindingProvider } from "./types.adapters.js";
-
-export type CompiledConfiguredBindingRegistry = {
-  rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;
-};
-
-function resolveConfiguredBindingAdapter(channel: string): {
-  channel: ConfiguredBindingChannel;
-  provider: ChannelConfiguredBindingProvider;
-} | null {
-  const normalized = normalizeOptionalLowercaseString(channel);
-  if (!normalized) {
-    return null;
-  }
-  // Candidate validation and admitted routing compile against their exact owner.
-  const plugin = getLoadedChannelPluginEntryById(
-    normalized,
-    getPluginRegistryForContext() ?? undefined,
-  )?.plugin;
-  const provider = resolveChannelConfiguredBindingProvider(plugin);
-  if (
-    !plugin ||
-    !provider ||
-    !provider.compileConfiguredBinding ||
-    !provider.matchInboundConversation
-  ) {
-    return null;
-  }
-  return {
-    channel: plugin.id,
-    provider,
-  };
-}
+import type { ChannelId } from "./types.public.js";
 
 export function resolveCompiledBindingRegistry(
   cfg: OpenClawConfig,
-): CompiledConfiguredBindingRegistry {
-  const rulesByChannel = new Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>();
+): Map<ChannelId, CompiledConfiguredBinding[]> {
+  const rulesByChannel = new Map<ChannelId, CompiledConfiguredBinding[]>();
 
   for (const binding of listConfiguredBindings(cfg)) {
-    // Ordinary routing bindings share the config array but have no stateful target consumer.
+    // Ordinary routing bindings share the config array but have no stateful target.
     // Reject them before consulting the loaded channel registry on request-time route lookups.
-    const consumer = resolveConfiguredBindingConsumer(binding);
-    if (!consumer) {
+    if (binding.type !== "acp") {
       continue;
     }
     const bindingConversationId = normalizeOptionalString(binding.match?.peer?.id);
@@ -66,12 +38,21 @@ export function resolveCompiledBindingRegistry(
       continue;
     }
 
-    const resolvedChannel = resolveConfiguredBindingAdapter(binding.match.channel);
-    if (!resolvedChannel) {
+    const channel = normalizeOptionalLowercaseString(binding.match.channel);
+    if (!channel) {
       continue;
     }
-
-    const target = resolvedChannel.provider.compileConfiguredBinding({
+    // Candidate validation and admitted routing compile against their exact owner.
+    const plugin = getLoadedChannelPluginEntryById(
+      channel,
+      getPluginRegistryForContext() ?? undefined,
+    )?.plugin;
+    const provider = plugin?.bindings;
+    if (!plugin || !provider?.compileConfiguredBinding || !provider.matchInboundConversation) {
+      continue;
+    }
+    const channelId = plugin.id;
+    const target = provider.compileConfiguredBinding({
       binding,
       conversationId: bindingConversationId,
     });
@@ -80,26 +61,67 @@ export function resolveCompiledBindingRegistry(
     }
 
     const agentId = pickFirstExistingAgentId(cfg, binding.agentId ?? "main");
-    const targetFactory = consumer.buildTargetFactory({
-      cfg,
-      binding,
-      channel: resolvedChannel.channel,
-      agentId,
-      target,
-      bindingConversationId,
-    });
-    if (!targetFactory) {
-      continue;
-    }
+    // Binding config overrides ACP runtime defaults; unset fields remain harness-owned.
+    const agent = resolveAgentConfig(cfg, agentId);
+    const runtimeDefaults = agent?.runtime?.type === "acp" ? agent.runtime.acp : undefined;
+    const acpAgentId = normalizeText(runtimeDefaults?.agent);
+    const bindingOverrides = normalizeBindingConfig(binding.acp);
+    const mode = normalizeMode(bindingOverrides.mode ?? normalizeText(runtimeDefaults?.mode));
+    // Every ACP binding uses its owner's explicit model, regardless of the owner's runtime type.
+    const model = resolvePrimaryStringValue(agent?.model);
+    const modelRef = model ? parseModelRef(model, "") : null;
+    const thinking =
+      agent?.thinkingDefault ??
+      (modelRef
+        ? resolveConfiguredThinkingDefault({ cfg, ...modelRef })
+        : cfg.agents?.defaults?.thinkingDefault);
+    // Unconfigured workspaces stay unset so ACP can choose its normal default.
+    const cwd =
+      bindingOverrides.cwd ??
+      normalizeText(runtimeDefaults?.cwd) ??
+      (normalizeText(agent?.workspace) || normalizeText(cfg.agents?.defaults?.workspace)
+        ? resolveAgentWorkspaceDir(cfg, agentId)
+        : undefined);
+    const backend = bindingOverrides.backend ?? normalizeText(runtimeDefaults?.backend);
+    const label = bindingOverrides.label;
     const rule: CompiledConfiguredBinding = {
-      channel: resolvedChannel.channel,
+      channel: channelId,
       accountPattern: normalizeOptionalString(binding.match.accountId),
       binding,
       bindingConversationId,
       target,
       agentId,
-      provider: resolvedChannel.provider,
-      targetFactory,
+      provider,
+      targetFactory: {
+        driverId: "acp",
+        materialize: ({ accountId, conversation }) => {
+          // Wildcard bindings get a stable session key only after the conversation is known.
+          const spec: ConfiguredAcpBindingSpec = {
+            channel: channelId,
+            accountId,
+            conversationId: conversation.conversationId,
+            parentConversationId: conversation.parentConversationId,
+            agentId,
+            acpAgentId,
+            mode,
+            model,
+            thinking,
+            cwd,
+            backend,
+            label,
+          };
+          return {
+            record: toConfiguredAcpBindingRecord(spec),
+            statefulTarget: {
+              kind: "stateful",
+              driverId: "acp",
+              sessionKey: buildConfiguredAcpSessionKey(spec),
+              agentId,
+              ...(label ? { label } : {}),
+            },
+          };
+        },
+      },
     };
     const existing = rulesByChannel.get(rule.channel);
     if (existing) {
@@ -109,5 +131,5 @@ export function resolveCompiledBindingRegistry(
     }
   }
 
-  return { rulesByChannel };
+  return rulesByChannel;
 }

@@ -12,6 +12,11 @@ import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { BundledProviderPolicySurface } from "./provider-policy-surface.types.js";
 
+export type PluginMcpAuthDeclarations = ReadonlyMap<
+  string,
+  readonly { serverName: string; url: string }[]
+>;
+
 export type ProviderPolicyOwnerIndex = {
   bundled: Map<string, PluginManifestRecord>;
   trusted: Map<string, PluginManifestRecord[]>;
@@ -51,7 +56,6 @@ export type PluginCacheMetadata = {
         read: () => BundledProviderPolicySurface | null;
       }
     >;
-    bundledDiscoveryMode?: { value: "compat" | "allowlist" | undefined };
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;
     discovery: Map<string, PluginDiscoveryResult>;
@@ -77,6 +81,10 @@ export type PluginCacheMetadata = {
         unconfigured?: ManifestModelSuppressionResolver;
         byConfig: WeakMap<OpenClawConfig, ManifestModelSuppressionResolver>;
       }
+    >;
+    mcpAuthDeclarations: WeakMap<
+      PluginMetadataSnapshot,
+      WeakMap<OpenClawConfig, PluginMcpAuthDeclarations>
     >;
   };
 };

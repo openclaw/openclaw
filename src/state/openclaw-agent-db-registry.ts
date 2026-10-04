@@ -3,16 +3,18 @@ import path from "node:path";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   assertAgentDeletionPathFence,
   prepareAgentDeletionPathFence,
 } from "./agent-deletion-journal.js";
 import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
-  type OpenClawAgentDatabaseRegistrationCommit,
+  type OpenClawAgentDatabaseRegistrationObserver,
 } from "./openclaw-agent-db-contract.js";
-import { invalidateRegisteredAgentDatabasesMemo } from "./openclaw-agent-db-registry-listing.js";
+import {
+  emitOpenClawAgentDatabaseRegistryChange,
+  recordOpenClawAgentDatabaseRegistryMutation,
+} from "./openclaw-agent-db-registry-listing.js";
 import {
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
@@ -69,7 +71,7 @@ export function registerOpenClawAgentDatabase(
     env?: NodeJS.ProcessEnv;
     schemaVersion?: number;
   },
-  onCommitted?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void,
+  observer?: OpenClawAgentDatabaseRegistrationObserver,
 ): void {
   if (!isPersistentOpenClawAgentDatabasePath(params.path, params.env)) {
     return;
@@ -85,6 +87,7 @@ export function registerOpenClawAgentDatabase(
     sizeBytes = null;
   }
   const lastSeenAt = Date.now();
+  observer?.starting?.();
   runOpenClawStateWriteTransaction(
     (database) => {
       assertAgentDeletionPathFence(database, deletionFence);
@@ -109,7 +112,8 @@ export function registerOpenClawAgentDatabase(
             }),
           ),
       );
-      invalidateRegisteredAgentDatabasesMemo({ env: params.env });
+      recordOpenClawAgentDatabaseRegistryMutation(database, "upsert", [params]);
+      const onCommitted = observer?.committed;
       if (onCommitted) {
         const receipt = Object.freeze({
           agentId: params.agentId,
@@ -130,7 +134,7 @@ export function registerOpenClawAgentDatabase(
           );
         }
       }
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+      emitOpenClawAgentDatabaseRegistryChange(params.agentId, database.db);
     },
     { env: params.env },
   );
@@ -154,8 +158,8 @@ export function unregisterOpenClawAgentDatabase(params: {
           .where("agent_id", "=", params.agentId)
           .where("path", "in", matchingPaths),
       );
-      invalidateRegisteredAgentDatabasesMemo({ env: params.env });
-      sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+      recordOpenClawAgentDatabaseRegistryMutation(database, "remove", [params]);
+      emitOpenClawAgentDatabaseRegistryChange(params.agentId, database.db);
     },
     { env: params.env, initializationAgentPaths: [params.path] },
   );
@@ -178,8 +182,15 @@ export function unregisterOpenClawAgentDatabases(params: {
       database.db,
       db.deleteFrom("agent_databases").where("agent_id", "=", params.agentId).returning("path"),
     );
-    invalidateRegisteredAgentDatabasesMemo(options);
-    sessionChanges.emit({ all: true, scope: "stores" }, database.db);
+    recordOpenClawAgentDatabaseRegistryMutation(
+      database,
+      "remove",
+      removed.rows.map((row) => ({
+        agentId: params.agentId,
+        path: resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
+      })),
+    );
+    emitOpenClawAgentDatabaseRegistryChange(params.agentId, database.db);
     return removed.rows.map((row) =>
       resolveOpenClawRegisteredAgentDatabasePath(database.path, row.path),
     );

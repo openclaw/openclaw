@@ -30,7 +30,7 @@ import { BrowserCdpEndpointBlockedError } from "./errors.js";
 
 export async function ensureChromeMcpAvailable(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<void> {
   await withChromeMcpLease(profileName, profileOptions, options, async (lease, normalized) => {
@@ -54,10 +54,10 @@ export async function ensureChromeMcpAvailable(
 
 async function readChromeMcpTabs(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<BrowserTab[]> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; ; attempt += 1) {
     try {
       return await withChromeMcpLease(
         profileName,
@@ -85,13 +85,12 @@ async function readChromeMcpTabs(
       throw err;
     }
   }
-  return [];
 }
 
 /** List Chrome MCP pages converted to persistent BrowserTab handles. */
 export async function listChromeMcpTabs(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpOperationOptions = {},
 ): Promise<BrowserTab[]> {
   return await readChromeMcpTabs(profileName, profileOptions, {
@@ -103,7 +102,7 @@ export async function listChromeMcpTabs(
 /** Count Chrome MCP pages without returning handles from an ephemeral session. */
 export async function countChromeMcpTabs(
   profileName: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpCallOptions = {},
 ): Promise<number> {
   return (await readChromeMcpTabs(profileName, profileOptions, options)).length;
@@ -185,7 +184,7 @@ async function captureChromeMcpTabOwnership(params: {
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
-  profileOptions?: string | ChromeMcpProfileOptions,
+  profileOptions?: ChromeMcpProfileOptions,
   options: ChromeMcpOpenOptions = {},
 ): Promise<BrowserOpenResult> {
   const targetUrl = url.trim() || "about:blank";
@@ -292,45 +291,42 @@ export async function openChromeMcpTab(
             "Chrome MCP cannot safely track the first page without durable CDP ownership.",
           );
         }
-        if (targetUrl === initialUrl) {
-          return {
-            targetId: created.targetId,
-            title: "",
-            url: created.page.url ?? targetUrl,
-            type: "page",
-            ownership: captured.ownership,
-          };
-        }
-        const navigateCallTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(
-          CHROME_MCP_NAVIGATE_TIMEOUT_MS,
-        );
-        await callTool(
-          profileName,
-          normalizedProfileOptions,
-          "navigate_page",
-          {
-            pageId: created.page.id,
-            type: "url",
-            url: targetUrl,
-            timeout: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
-          },
-          { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
-          lease,
-        );
-        const verified = await listChromeMcpTargetsWithLease({
-          profileName,
-          profileOptions: normalizedProfileOptions,
-          lease,
-          options: { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
-        });
-        const finalPage = verified.find((entry) => entry.targetId === created.targetId);
-        if (!finalPage) {
-          throw new Error("Chrome MCP created page identity changed before navigation completed.");
+        let page = created.page;
+        if (targetUrl !== initialUrl) {
+          const navigateCallTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(
+            CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+          );
+          await callTool(
+            profileName,
+            normalizedProfileOptions,
+            "navigate_page",
+            {
+              pageId: created.page.id,
+              type: "url",
+              url: targetUrl,
+              timeout: CHROME_MCP_NAVIGATE_TIMEOUT_MS,
+            },
+            { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
+            lease,
+          );
+          const verified = await listChromeMcpTargetsWithLease({
+            profileName,
+            profileOptions: normalizedProfileOptions,
+            lease,
+            options: { timeoutMs: navigateCallTimeoutMs, signal: options.signal },
+          });
+          const finalPage = verified.find((entry) => entry.targetId === created.targetId);
+          if (!finalPage) {
+            throw new Error(
+              "Chrome MCP created page identity changed before navigation completed.",
+            );
+          }
+          page = finalPage.page;
         }
         return {
           targetId: created.targetId,
           title: "",
-          url: finalPage.page.url ?? targetUrl,
+          url: page.url ?? targetUrl,
           type: "page",
           ownership: captured.ownership,
         };

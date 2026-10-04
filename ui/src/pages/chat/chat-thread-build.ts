@@ -33,6 +33,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { hasSessionsYieldCall, projectSessionsYieldItems } from "./chat-sessions-yield.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
@@ -99,6 +100,10 @@ export type BuildChatItemsProps = ChatInputPlacementProps & {
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
+  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
+  replyPeople?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  replyLocalPerson?: string;
 };
 
 function canvasAssistantItemKey(
@@ -269,7 +274,7 @@ export function buildChatItems(
       });
     }
 
-    if (!props.showToolCalls && isToolResult) {
+    if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
       continue;
     }
 
@@ -295,9 +300,7 @@ export function buildChatItems(
     (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
       ? resolveProgress().runId
       : null);
-  const historyTurnBounds = findCurrentTurnBounds(
-    items.filter((item) => !hiddenHistoryKeys.has(item.key)),
-  );
+  const historyTurnBounds = findCurrentTurnBounds(items);
   const { pendingKeys, historicalKeys, hiddenKeys, activeInputKey } = placeChatInputs(
     items,
     history,
@@ -305,7 +308,6 @@ export function buildChatItems(
     inputOrder,
     currentRunId,
   );
-  items = items.filter((item) => !hiddenHistoryKeys.has(item.key) && !hiddenKeys.has(item.key));
   const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
   const canvasRunBounds = createRunTurnLookup(executionItems());
   const currentTurnBounds =
@@ -510,7 +512,7 @@ export function buildChatItems(
       }
     }
     const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
+    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
       const before = toolBeforeBoundaries.get(tool.runId, tool.callId);
       const after = toolAfterBoundaries.get(tool.runId, tool.callId);
       tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
@@ -628,5 +630,24 @@ export function buildChatItems(
       ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
     });
   }
-  return groupMessages(coalesceToolActivityMessages(items));
+  // Place output against the complete transcript before search hides any rows.
+  // Pending/local inputs contribute people and turn boundaries just like history;
+  // queued future inputs must remain after the live output they do not own.
+  const hidden =
+    hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
+      ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
+      : undefined;
+  const projectYields = (source: ChatItem[]) =>
+    projectSessionsYieldItems(
+      source,
+      props.runActive || props.runWorking
+        ? { runId: currentRunId, startedAt: props.streamStartedAt }
+        : undefined,
+      props.showToolCalls,
+    );
+  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden)), {
+    items: hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined,
+    people: props.replyPeople,
+    localPerson: props.replyLocalPerson,
+  });
 }

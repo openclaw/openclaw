@@ -1,5 +1,5 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig, WizardPrompter } from "openclaw/plugin-sdk/core";
 import { patchTopLevelChannelConfigSection } from "openclaw/plugin-sdk/setup";
 import { fingerprint } from "../protocol/index.js";
 import {
@@ -24,22 +24,7 @@ import {
   ReefTransportClient,
 } from "./transport.js";
 
-type Prompt = {
-  note(message: string, title?: string): Promise<void>;
-  text(params: {
-    message: string;
-    initialValue?: string;
-    placeholder?: string;
-    sensitive?: boolean;
-    validate?: (value: string) => string | undefined;
-  }): Promise<string>;
-  select<T>(params: {
-    message: string;
-    options: Array<{ value: T; label: string; hint?: string }>;
-    initialValue?: T;
-  }): Promise<T>;
-  confirm(params: { message: string; initialValue?: boolean }): Promise<boolean>;
-};
+type Prompt = Pick<WizardPrompter, "note" | "text" | "select" | "confirm">;
 
 const reefSetupAdapter = {
   applyAccountConfig: ({

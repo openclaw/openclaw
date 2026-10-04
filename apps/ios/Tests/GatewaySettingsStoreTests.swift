@@ -21,13 +21,6 @@ private let bootstrapDefaultsKeys = [
     "gateway.lastDiscoveredStableID",
 ]
 private let bootstrapKeychainEntries = [instanceIdEntry, preferredGatewayEntry, lastGatewayEntry]
-private let lastGatewayDefaultsKeys = [
-    "gateway.last.kind",
-    "gateway.last.host",
-    "gateway.last.port",
-    "gateway.last.tls",
-    "gateway.last.stableID",
-]
 private let lastGatewayKeychainEntry = KeychainEntry(service: gatewayService, account: "lastConnection")
 private let gatewayRegistryKeychainEntry = KeychainEntry(service: gatewayService, account: "gateway-registry")
 
@@ -79,7 +72,7 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
 
 private func withBootstrapSnapshots(_ body: () -> Void) {
     gatewayPersistenceTestSemaphore.wait()
-    let defaultsSnapshot = snapshotDefaults(bootstrapDefaultsKeys + lastGatewayDefaultsKeys)
+    let defaultsSnapshot = snapshotDefaults(bootstrapDefaultsKeys)
     let keychainSnapshot = snapshotKeychain(
         bootstrapKeychainEntries + [lastGatewayKeychainEntry, gatewayRegistryKeychainEntry])
     defer {
@@ -92,10 +85,8 @@ private func withBootstrapSnapshots(_ body: () -> Void) {
 
 private func withLastGatewaySnapshot(_ body: () -> Void) {
     gatewayPersistenceTestSemaphore.wait()
-    let defaultsSnapshot = snapshotDefaults(lastGatewayDefaultsKeys)
     let keychainSnapshot = snapshotKeychain([lastGatewayKeychainEntry, gatewayRegistryKeychainEntry])
     defer {
-        restoreDefaults(defaultsSnapshot)
         restoreKeychain(keychainSnapshot)
         gatewayPersistenceTestSemaphore.signal()
     }
@@ -205,7 +196,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             service: service)["X-Owner"] == "exact")
     }
 
-    @Test func `legacy gateway defaults cannot alias encoded owner keys`() {
+    @Test func `legacy selected agent defaults cannot alias encoded owner keys`() {
         let exactOwner = "gateway-\(UUID().uuidString)"
         let component = Data(exactOwner.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -213,20 +204,14 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             .replacingOccurrences(of: "=", with: "")
         let collidingLegacyOwner = "v2.\(component)"
         defer {
-            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: nil)
-            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
         }
 
-        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: "exact-client")
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: "exact-agent")
 
-        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: collidingLegacyOwner) == nil)
         #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: collidingLegacyOwner) == nil)
-        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
-        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: exactOwner) == "exact-client")
         #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: exactOwner) == "exact-agent")
     }
 
@@ -902,13 +887,6 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 lastGatewayKeychainEntry:
                     #"{"kind":"discovered","stableID":"bonjour|gateway-a","useTLS":true}"#,
             ])
-            applyDefaults([
-                "gateway.last.kind": "manual",
-                "gateway.last.host": "stale.example.org",
-                "gateway.last.port": 18789,
-                "gateway.last.tls": false,
-                "gateway.last.stableID": "manual|stale.example.org|18789",
-            ])
 
             GatewaySettingsStore.bootstrapPersistence()
 
@@ -916,36 +894,6 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(active?.stableID == "bonjour|gateway-a")
             #expect(active?.kind == .discovered)
             #expect(active?.name == "bonjour|gateway-a")
-            let defaults = UserDefaults.standard
-            #expect(defaults.object(forKey: "gateway.last.stableID") == nil)
-            #expect(defaults.object(forKey: "gateway.last.host") == nil)
-        }
-    }
-
-    @Test func `legacy defaults migrate directly into active registry`() {
-        withLastGatewaySnapshot {
-            applyKeychain([
-                gatewayRegistryKeychainEntry: nil,
-                lastGatewayKeychainEntry: nil,
-            ])
-            applyDefaults([
-                "gateway.last.kind": "manual",
-                "gateway.last.host": "defaults.example.org",
-                "gateway.last.port": 443,
-                "gateway.last.tls": true,
-                "gateway.last.stableID": "manual|defaults.example.org|443",
-            ])
-
-            GatewaySettingsStore.bootstrapPersistence()
-
-            let active = GatewaySettingsStore.activeGatewayEntry()
-            #expect(active?.stableID == "manual|defaults.example.org|443")
-            #expect(active?.host == "defaults.example.org")
-            #expect(active?.port == 443)
-            #expect(active?.useTLS == true)
-            for key in lastGatewayDefaultsKeys {
-                #expect(UserDefaults.standard.object(forKey: key) == nil)
-            }
         }
     }
 

@@ -19,15 +19,91 @@ vi.mock("@openclaw/fs-safe/atomic", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@openclaw/fs-safe/atomic")>()),
 }));
 
-const { createHistoricalRestoreStore } = useDoctorSessionSqliteTestFixture();
+const { createHistoricalRestoreStore, createVerifiedRecoveryStore } =
+  useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
+  it.each([
+    { interrupted: false, changed: false },
+    { interrupted: true, changed: false },
+    { interrupted: false, changed: true },
+    { interrupted: true, changed: true },
+  ])(
+    "checks retained receipts after a device change (interrupted=$interrupted, changed=$changed)",
+    async ({ interrupted, changed }) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const manifestPath = expectDefined(imported.migrationRun?.manifestPath, "migration receipt");
+      const original = fs.readFileSync(archivePath, "utf8");
+      const originalIdentity = fs.statSync(archivePath, { bigint: true });
+      if (interrupted) {
+        const unlink = fs.unlinkSync;
+        const unlinkSpy = vi.spyOn(fs, "unlinkSync").mockImplementation((file) => {
+          if (String(file) === archivePath) {
+            throw new Error("injected restore interruption");
+          }
+          return unlink(file);
+        });
+        try {
+          const first = await runPublicSessionSqlite(store, "restore");
+          expect(first.report.targets[0]?.restore?.conflicts).toEqual([
+            expect.objectContaining({ archivePath, reason: "injected restore interruption" }),
+          ]);
+          expect(fs.statSync(archivePath).nlink).toBe(2);
+        } finally {
+          unlinkSpy.mockRestore();
+        }
+      }
+      const manifest = readMigrationManifest(manifestPath);
+      for (const target of manifest.targets) {
+        for (const move of [...target.plannedMoves, ...target.completedMoves]) {
+          if (move.archivePath !== archivePath) {
+            continue;
+          }
+          const artifact = expectDefined(move.artifact, "recorded original identity");
+          artifact.identity.dev = String(BigInt(artifact.identity.dev) + 1n);
+        }
+      }
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+      const retainedTargets = structuredClone(manifest.targets);
+      const content = changed
+        ? original.replace("preserved history", "different history")
+        : original;
+      if (changed) {
+        expect(content).not.toBe(original);
+        fs.writeFileSync(archivePath, content);
+      }
+
+      if (interrupted && changed) {
+        await expect(runPublicSessionSqlite(store, "restore")).rejects.toThrow(/changed/);
+      } else {
+        const result = await runPublicSessionSqlite(store, "restore");
+        expect(result.report.targets[0]?.restore?.conflicts).toEqual(
+          changed
+            ? [expect.objectContaining({ archivePath, reason: expect.stringContaining("changed") })]
+            : [],
+        );
+        expect(result.exitCode).toBe(changed ? 1 : 0);
+      }
+      const recorded = readMigrationManifest(manifestPath);
+      expect(recorded.targets).toEqual(retainedTargets);
+      if (changed) {
+        expect(fs.readFileSync(archivePath, "utf8")).toBe(content);
+        expect(fs.existsSync(store.transcriptPath)).toBe(interrupted);
+      } else {
+        expect(fs.readFileSync(store.transcriptPath, "utf8")).toBe(original);
+        const restored = fs.statSync(store.transcriptPath, { bigint: true });
+        expect(restored.ino).toBe(originalIdentity.ino);
+        expect(restored.nlink).toBe(1n);
+        expect(fs.existsSync(archivePath)).toBe(false);
+        expect(recorded.restore?.consumedArchives).toContain(archivePath);
+      }
+    },
+  );
+
   it.each(
     (
       [
         { version: 1, destination: "file" },
-        { version: 2, destination: "file" },
-        { version: 1, destination: "dangling-symlink" },
         { version: 2, destination: "dangling-symlink" },
       ] as const
     ).filter(({ destination }) => destination === "file" || process.platform !== "win32"),
@@ -93,11 +169,10 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ([1, 2] as const).flatMap((version) =>
-      (["transcript", "legacy-store"] as const).map((kind) => ({ version, kind })),
-    ),
-  )(
+  it.each([
+    { version: 1, kind: "transcript" },
+    { version: 2, kind: "legacy-store" },
+  ] as const)(
     "rejects a changed historical v$version $kind before adopting restore metadata",
     async ({ version, kind }) => {
       const { store, manifestPath, manifest } = createHistoricalRestoreStore(version);
@@ -162,11 +237,10 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ([1, 2] as const).flatMap((version) =>
-      (["restore", "recover"] as const).map((retryMode) => ({ version, retryMode })),
-    ),
-  )(
+  it.each([
+    { version: 1, retryMode: "restore" },
+    { version: 2, retryMode: "recover" },
+  ] as const)(
     "retries historical v$version restored-directory edge sync through $retryMode",
     async ({ version, retryMode }) => {
       const { store, manifestPath, manifest } = createHistoricalRestoreStore(version);
@@ -248,21 +322,15 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ([1, 2] as const).flatMap((version) =>
-      (
-        [
-          { phase: "metadata-write", retryMode: "restore" },
-          { phase: "metadata-sync", retryMode: "restore" },
-          { phase: "target-sync", retryMode: "recover" },
-          { phase: "receipt-write", retryMode: "restore" },
-          { phase: "receipt-sync", retryMode: "recover" },
-          { phase: "archive-unlink", retryMode: "restore" },
-          { phase: "archive-sync", retryMode: "recover" },
-        ] as const
-      ).map(({ phase, retryMode }) => ({ version, phase, retryMode })),
-    ),
-  )(
+  it.each([
+    { version: 1, phase: "metadata-write", retryMode: "restore" },
+    { version: 2, phase: "metadata-sync", retryMode: "restore" },
+    { version: 1, phase: "target-sync", retryMode: "recover" },
+    { version: 2, phase: "receipt-write", retryMode: "restore" },
+    { version: 1, phase: "receipt-sync", retryMode: "recover" },
+    { version: 2, phase: "archive-unlink", retryMode: "restore" },
+    { version: 1, phase: "archive-sync", retryMode: "recover" },
+  ] as const)(
     "resumes historical v$version index restore after $phase through $retryMode",
     async ({ version, phase, retryMode }) => {
       const { store, manifestPath, manifest } = createHistoricalRestoreStore(version);

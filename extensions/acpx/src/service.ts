@@ -10,6 +10,7 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import type {
   OpenClawPluginService,
   OpenClawPluginServiceContext,
@@ -32,7 +33,6 @@ import {
   cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
   reapStaleOpenClawOwnedAcpxOrphans,
-  type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 import type { CompleteAcpRuntime } from "./runtime-proxy.js";
 import { AcpxRuntime } from "./runtime.js";
@@ -75,7 +75,6 @@ type CreateAcpxRuntimeServiceParams = {
   getAllowedAgents?: () => readonly string[] | undefined;
   openKeyedStore?: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
   runtimeFactory?: (params: AcpxRuntimeFactoryParams) => AcpxRuntimeLike | Promise<AcpxRuntimeLike>;
-  processCleanupDeps?: AcpxProcessCleanupDeps;
 };
 
 function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
@@ -160,33 +159,6 @@ function shouldProbeRuntimeAtStartup(env: NodeJS.ProcessEnv = process.env): bool
   return env[ENABLE_STARTUP_PROBE_ENV] !== "0" && env[SKIP_RUNTIME_PROBE_ENV] !== "1";
 }
 
-async function withStartupProbeTimeout<T>(params: {
-  promise: Promise<T>;
-  timeoutSeconds: number;
-}): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = resolveAcpxTimerTimeoutMs(params.timeoutSeconds) ?? 1;
-  try {
-    return await Promise.race([
-      params.promise,
-      new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => {
-          reject(
-            new Error(
-              `embedded acpx runtime backend startup probe timed out after ${params.timeoutSeconds}s`,
-            ),
-          );
-        }, timeoutMs);
-        (timeout as { unref?: () => void }).unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
-}
-
 async function resolveGatewayInstanceId(
   openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
 ): Promise<string> {
@@ -211,14 +183,9 @@ async function resolveGatewayInstanceId(
 async function reapOpenAcpxProcessLeases(params: {
   gatewayInstanceId: string;
   leaseStore: AcpxProcessLeaseStore;
-  deps?: AcpxProcessCleanupDeps;
   assertCurrent?: () => void;
 }): Promise<{ inspectedPids: number[]; terminatedPids: number[] }> {
-  const assertCurrent = () => {
-    params.assertCurrent?.();
-    params.deps?.assertCurrent?.();
-  };
-  const deps = { ...params.deps, assertCurrent };
+  const { assertCurrent } = params;
   const leases = await params.leaseStore.listOpen(params.gatewayInstanceId);
   const inspectedPids: number[] = [];
   const terminatedPids: number[] = [];
@@ -228,23 +195,23 @@ async function reapOpenAcpxProcessLeases(params: {
     if (pending) {
       legacyWrapperRoots.add(lease.wrapperRoot);
     }
-    assertCurrent();
+    assertCurrent?.();
     await params.leaseStore.markState(lease.leaseId, "closing");
-    assertCurrent();
+    assertCurrent?.();
     const result = pending
       ? await cleanupOpenClawOwnedAcpxPendingLease({
           leaseId: lease.leaseId,
           gatewayInstanceId: lease.gatewayInstanceId,
           wrapperRoot: lease.wrapperRoot,
           wrapperPath: lease.wrapperPath,
-          deps,
+          assertCurrent,
         })
       : await cleanupOpenClawOwnedAcpxProcessTree({
           rootPid: lease.rootPid,
           expectedLeaseId: lease.leaseId,
           expectedGatewayInstanceId: lease.gatewayInstanceId,
           wrapperRoot: lease.wrapperRoot,
-          deps,
+          assertCurrent,
         });
     inspectedPids.push(...result.inspectedPids);
     terminatedPids.push(...result.terminatedPids);
@@ -258,7 +225,7 @@ async function reapOpenAcpxProcessLeases(params: {
           result.skippedReason === "unverified-root" ||
           (lease.sessionKey === ACPX_PROBE_LEASE_SESSION_KEY &&
             result.skippedReason === "missing-root")));
-    assertCurrent();
+    assertCurrent?.();
     await params.leaseStore.markState(
       lease.leaseId,
       retryableEvidenceFailure ? "open" : result.terminatedPids.length > 0 ? "closed" : "lost",
@@ -268,10 +235,10 @@ async function reapOpenAcpxProcessLeases(params: {
   // proves this Gateway had an uncertain spawn. Keep aggregate results wholly
   // separate from the state transition of any specific lease.
   for (const wrapperRoot of legacyWrapperRoots) {
-    assertCurrent();
+    assertCurrent?.();
     const legacyResult = await reapStaleOpenClawOwnedAcpxOrphans({
       wrapperRoot,
-      deps,
+      assertCurrent,
     });
     inspectedPids.push(...legacyResult.inspectedPids);
     terminatedPids.push(...legacyResult.terminatedPids);
@@ -359,7 +326,6 @@ export function createAcpxRuntimeService(
         prepareAcpxCodexAuthConfig({
           pluginConfig: basePluginConfig,
           stateDir: ctx.stateDir,
-          logger: ctx.logger,
         }),
       );
       const wrapperRoot = path.join(ctx.stateDir, "acpx");
@@ -377,7 +343,6 @@ export function createAcpxRuntimeService(
         reapOpenAcpxProcessLeases({
           gatewayInstanceId,
           leaseStore: processLeaseStore,
-          deps: params.processCleanupDeps,
           assertCurrent,
         });
       if (params.startupPurpose !== "inspection") {
@@ -420,11 +385,18 @@ export function createAcpxRuntimeService(
       lifecycleRevision += 1;
       const currentRevision = lifecycleRevision;
       try {
+        const timeoutSeconds = pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS;
         const doctorReport = await measureAcpxStartup(ctx, "probe.availability", () =>
-          withStartupProbeTimeout({
-            promise: startedRuntime.doctor(),
-            timeoutSeconds: pluginConfig.timeoutSeconds ?? DEFAULT_ACPX_TIMEOUT_SECONDS,
-          }),
+          raceWithTimeout(
+            startedRuntime.doctor(),
+            resolveAcpxTimerTimeoutMs(timeoutSeconds) ?? 1,
+            () => {
+              throw new Error(
+                `embedded acpx runtime backend startup probe timed out after ${timeoutSeconds}s`,
+              );
+            },
+            { ref: false },
+          ),
         );
         if (currentRevision !== lifecycleRevision) {
           return;

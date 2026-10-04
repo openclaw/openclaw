@@ -1,35 +1,24 @@
-import type { SessionProviderReviewComparison } from "../config/sessions/provider-review.types.js";
-import type {
-  TranscriptArchivePublishPlan,
-  TranscriptArchivePublishResult,
-} from "../config/sessions/session-accessor.sqlite-archive-types.js";
-import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import type {
-  SessionEntryReplacementCommit,
-  SessionEntryReplacementCommitted,
-} from "../config/sessions/session-accessor.sqlite-replacement-types.js";
-import type {
-  PublishedSessionTranscriptArchive,
-  SessionLegacyArchiveRemovalResult,
-} from "../config/sessions/session-history-archive-pruning.types.js";
-import type { SessionEntry } from "../config/sessions/types.js";
-import type { SqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
+import type { IncognitoSessionOperations } from "../config/sessions/session-incognito-contract.js";
 import type {
   SqliteWalPeriodicRequest,
   SqliteWalPeriodicResult,
 } from "../infra/sqlite-wal-write-admission.js";
+import type {
+  SqliteWorkerEphemeralTarget,
+  SqliteWorkerStore,
+} from "../infra/sqlite-worker-contract.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type {
   SqliteWorkerAdmissionFactory,
   SqliteWorkerAdmissionRequest,
 } from "../infra/sqlite-worker-operation-admission.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
-import type { SqliteTrajectoryRuntimeAppend } from "../trajectory/runtime-store.sqlite.js";
 import type { AgentDatabaseRegistryChange } from "./openclaw-agent-db-registry-listing.js";
 import type { AgentDatabaseDomainOperations } from "./openclaw-agent-execution-domain.js";
+import type { RegisteredAgentWorkerOperations } from "./openclaw-agent-execution-operations.js";
 
 /** Recorded by the native owner; a descriptor never grants access to that owner. */
-export type AgentDatabaseExecutionIdentity = {
+export type AgentDatabaseFileExecutionIdentity = {
   kind: "file";
   physicalIdentity: string;
   birthtime?: string;
@@ -38,11 +27,48 @@ export type AgentDatabaseExecutionIdentity = {
 };
 
 export type AgentDatabaseExecutionFileIdentity = Pick<
-  AgentDatabaseExecutionIdentity,
+  AgentDatabaseFileExecutionIdentity,
   "kind" | "physicalIdentity" | "birthtime" | "nativeLocation"
 >;
 
-export type AgentDatabaseExecutionOpen = {
+/** A borrowed native generation, never a file locator that can adopt a later open. */
+export type AgentDatabaseGenerationClaim = {
+  readonly identity: string;
+  readonly incarnation: string;
+  assertCurrent(): void;
+};
+
+export type AgentDatabaseExecutionScope = Pick<
+  SqliteWorkerStore<AgentDatabaseOperations>,
+  "execute"
+>;
+
+export type OpenClawAgentDatabaseExecution = {
+  readonly agentId: string;
+  readonly path: string;
+  /** The accepted native receipt; reading this never adopts the current pathname. */
+  readonly fileIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  assertCurrent(): void;
+  captureGenerationClaim(): AgentDatabaseGenerationClaim;
+  /** Reuse only a native generation whose preparation and registration publication settled. */
+  capturePreparedGenerationClaim(): AgentDatabaseGenerationClaim | undefined;
+  /** Initialize first-use storage through the same admitted native owner. */
+  prepare(source: AgentDatabaseRequestExecutionSource, signal?: AbortSignal): Promise<void>;
+  /** Admit a write against existing storage; a missing store remains missing. */
+  runExisting<T>(
+    source: AgentDatabaseRequestExecutionSource,
+    operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
+    options?: { retireNativeOnFailure: true },
+  ): Promise<T | undefined>;
+  /**
+   * Join this reference's work; native cleanup failures remain with its resource owner.
+   * The owner may retain one bounded idle generation.
+   */
+  release(): Promise<void>;
+};
+
+export type AgentDatabaseFileExecutionOpen = {
+  kind?: "file";
   leaseId: string;
   agentId: string;
   databasePath: string;
@@ -53,49 +79,41 @@ export type AgentDatabaseExecutionOpen = {
   creatingIdentity?: DatabasePathIdentity;
 };
 
-export type AgentDatabaseOperations = AgentDatabaseDomainOperations & {
-  "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
-  "trajectory.events.append": { input: SqliteTrajectoryRuntimeAppend; output: void };
-  "session.archives.preparePublication": {
-    input: {
-      archiveDirectory: string;
-      requested: readonly Pick<TranscriptArchivePublishPlan, "sessionId" | "generation">[];
-    };
-    output: TranscriptArchivePublishPlan[];
-  };
-  "session.archives.recordPublication": {
-    input: { results: readonly TranscriptArchivePublishResult[]; nowMs: number };
-    output: void;
-  };
-  "session.transcript.initialize": {
-    input: { sessionKey: string; sessionId: string; cwd?: string };
-    output: SessionTranscriptInitializationPublication;
-  };
-  "database.prepareWrite": { input: undefined; output: void };
-  "session.entry.read": { input: { sessionKey: string }; output: SessionEntry | undefined };
-  "session.entries.replace": {
-    input: SessionEntryReplacementCommit & {
-      initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
-    };
-    output: SessionEntryReplacementCommitted;
-  };
-  "session.providerReview.compare": {
-    input: SessionProviderReviewComparison;
-    output: SessionEntry;
-  };
-  "session.archivePruning.deletePublished": {
-    input: PublishedSessionTranscriptArchive;
-    output: void;
-  };
-  "session.archivePruning.removeLegacy": {
-    input: { filePath: string };
-    output: SessionLegacyArchiveRemovalResult;
-  };
-  "session.archivePruning.reclaimPages": {
-    input: { maxPages?: number };
-    output: SqliteWalReclamationResult;
-  };
+/** Process-private locators; neither a handle nor its incarnation grants authority. */
+export type AgentDatabaseIncognitoIdentity = Readonly<SqliteWorkerEphemeralTarget>;
+
+export type AgentDatabaseIncognitoOpen = {
+  kind: "ephemeral";
+  identity: AgentDatabaseIncognitoIdentity;
+  agentId: string;
+  databasePath: string;
+  environment: SqliteWorkerStateContext["environment"];
 };
+
+export type AgentDatabaseExecutionOpen =
+  | AgentDatabaseFileExecutionOpen
+  | AgentDatabaseIncognitoOpen;
+
+type AgentDatabaseIncognitoMemory = {
+  agentId: string;
+  /** SQLite page allocation only, excluding allocator, decoded results, and transport memory. */
+  databaseBytes: number;
+  pageCount: number;
+  pageSize: number;
+};
+
+/** Inactive actor operations; production routing changes only at the complete cutover. */
+export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
+  "database.incognito.memory": { input: undefined; output: AgentDatabaseIncognitoMemory };
+};
+
+export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
+
+export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
+  RegisteredAgentWorkerOperations & {
+    "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
+    "database.prepareWrite": { input: undefined; output: void };
+  };
 
 /** A request owner composes its retained admission with the native owner's validation. */
 export type AgentDatabaseRequestExecutionSource = {

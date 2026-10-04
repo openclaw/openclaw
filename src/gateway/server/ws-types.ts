@@ -2,6 +2,7 @@
 import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import type { GatewayAuthPolicy } from "../auth-policy.types.js";
 import type { AuthenticatedGitHubIdentitySync } from "../github-user-identity.types.js";
 import type { GatewayOperatorAccessAuthority } from "../operator-access-policy.types.js";
 import type { GatewayOperatorRoleActor } from "../operator-role-actor.js";
@@ -42,10 +43,12 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
   pairedClientId?: string;
   usesSharedGatewayAuth: boolean;
   sharedGatewaySessionGeneration?: string;
-  authPolicyGeneration?: string;
+  authPolicy?: GatewayAuthPolicy;
   presenceKey?: string;
   /** Connection-owned timing facts, reconciled across live peers independently of the TTL cache. */
   personPresence?: { onlineSince: number; lastActivityAt?: number };
+  /** Accepted interaction on this exact connection, never copied from another client. */
+  connectionLastActivityAt?: number;
   authenticatedUserId?: string;
   /** Verified Tailscale provider identity; generic proxy identities must not infer this. */
   authenticatedUserIsTailscaleProvider?: boolean;
@@ -77,9 +80,6 @@ export type GatewayWsClient = PluginNodeCapabilityClient & {
     /** Additional access captured at authenticated admission; independent of socket lifetime. */
     operatorAccessAuthority?: GatewayOperatorAccessAuthority | null;
   };
-  canvasHostUrl?: string;
-  canvasCapability?: string;
-  canvasCapabilityExpiresAtMs?: number;
   invalidatedReason?: string;
 };
 

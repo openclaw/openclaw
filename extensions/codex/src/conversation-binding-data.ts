@@ -94,11 +94,8 @@ export function createCodexCliNodeConversationBindingData(params: {
 export function readCodexConversationBindingData(
   binding: PluginConversationBinding | null | undefined,
 ): CodexConversationBindingData | undefined {
-  const data = binding?.data;
-  if (!data || typeof data !== "object" || Array.isArray(data)) {
-    return undefined;
-  }
-  return readCodexConversationBindingDataRecord(data);
+  const data = readRecord(binding?.data);
+  return data ? readCodexConversationBindingDataRecord(data) : undefined;
 }
 
 export function readCodexConversationBindingDataRecord(

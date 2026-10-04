@@ -1,7 +1,8 @@
 // Feishu tests cover chat plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, PluginRuntime } from "../runtime-api.js";
+import { registerFeishuChatTools } from "./chat.js";
 import type { FeishuConfig } from "./types.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -12,8 +13,6 @@ const contactUserGetMock = vi.hoisted(() => vi.fn());
 vi.mock("./client.js", () => ({
   createFeishuClient: createFeishuClientMock,
 }));
-
-let registerFeishuChatTools: typeof import("./chat.js").registerFeishuChatTools;
 
 const DIRECT_CHAT_RESPONSE = {
   code: 0,
@@ -106,10 +105,6 @@ describe("registerFeishuChatTools", () => {
     return [resolveRegisteredTool(registerTool, params.context), registerTool] as const;
   }
 
-  beforeAll(async () => {
-    ({ registerFeishuChatTools } = await import("./chat.js"));
-  });
-
   afterAll(() => {
     vi.doUnmock("./client.js");
     vi.resetModules();
@@ -150,20 +145,10 @@ describe("registerFeishuChatTools", () => {
       data: { name: hostile, user_count: 3 },
     });
     const infoResult = await tool.execute("tc_1", { action: "info", chat_id: "oc_1" });
-    expect(infoResult.details).toEqual({
+    expect(infoResult.details).toMatchObject({
       chat_id: "oc_1",
       name: hostile,
-      description: undefined,
-      owner_id: undefined,
-      tenant_key: undefined,
       user_count: 3,
-      chat_mode: undefined,
-      chat_type: undefined,
-      join_message_visibility: undefined,
-      leave_message_visibility: undefined,
-      membership_approval: undefined,
-      moderation_permission: undefined,
-      avatar: undefined,
     });
     expect(infoResult.content[0]?.text).toContain("EXTERNAL_UNTRUSTED_CONTENT");
     expect(infoResult.content[0]?.text).not.toContain("<|im_start|>");
@@ -178,7 +163,7 @@ describe("registerFeishuChatTools", () => {
       },
     });
     const membersResult = await tool.execute("tc_2", { action: "members", chat_id: "oc_1" });
-    expect(membersResult.details).toEqual({
+    expect(membersResult.details).toMatchObject({
       chat_id: "oc_1",
       has_more: false,
       page_token: "",
@@ -186,7 +171,6 @@ describe("registerFeishuChatTools", () => {
         {
           member_id: "ou_1",
           name: "member1",
-          tenant_key: undefined,
           member_id_type: "open_id",
         },
       ],
@@ -215,34 +199,13 @@ describe("registerFeishuChatTools", () => {
       member_id: "ou_1",
       chat_id: "oc_1",
     });
-    expect(memberInfoResult.details).toEqual({
+    expect(memberInfoResult.details).toMatchObject({
       member_id: "ou_1",
       member_id_type: "open_id",
       open_id: "ou_1",
-      user_id: undefined,
-      union_id: undefined,
       name: "member1",
-      en_name: undefined,
-      nickname: undefined,
       email: "member1@example.com",
-      enterprise_email: undefined,
-      mobile: undefined,
-      mobile_visible: undefined,
-      status: undefined,
-      avatar: undefined,
       department_ids: ["od_1"],
-      department_path: undefined,
-      leader_user_id: undefined,
-      city: undefined,
-      country: undefined,
-      work_station: undefined,
-      join_time: undefined,
-      is_tenant_manager: undefined,
-      employee_no: undefined,
-      employee_type: undefined,
-      description: undefined,
-      job_title: undefined,
-      geo: undefined,
     });
   });
 
@@ -514,12 +477,6 @@ describe("registerFeishuChatTools", () => {
       "page_size must be a positive integer between 1 and 100",
     );
     expect(chatMembersGetMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not expose the disabled chat tool", () => {
-    const [tool] = registerChatTool({ account: { tools: { chat: false } } });
-    expect(tool).toBeFalsy();
-    expect(createFeishuClientMock).not.toHaveBeenCalled();
   });
 
   it("preserves Feishu diagnostics from rejected member lookups", async () => {

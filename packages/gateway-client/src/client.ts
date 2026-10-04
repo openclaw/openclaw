@@ -20,6 +20,7 @@ import {
 } from "@openclaw/gateway-protocol/version";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { raceWithTimeout } from "@openclaw/retry";
 import {
   formatGatewayClientErrorForLog,
   isGatewayClientStoppedError,
@@ -43,7 +44,12 @@ import {
 } from "./connect-auth.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { resolveModelCatalogConnect } from "./model-catalog-connect.js";
-import type { GatewayProtocolConnectAuthority } from "./protocol-client-contract.js";
+import type { GatewayProtocolRequestTiming } from "./pending-request.js";
+import type {
+  GatewayClientCloseInfo,
+  GatewayClientConnectionMetadata,
+  GatewayProtocolConnectAuthority,
+} from "./protocol-client-contract.js";
 import {
   GatewayProtocolClient,
   type GatewayProtocolCloseContext,
@@ -69,7 +75,7 @@ import {
   isGatewayLoopbackHost,
   resolveGatewayWebSocketTransport,
 } from "./websocket-transport.js";
-import { WebSocket } from "./websocket.js";
+import { WebSocket, type GatewayWebSocketTargetOptions } from "./websocket.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -142,15 +148,6 @@ export type GatewayReconnectPausedInfo = {
   detailCode: string | null;
 };
 
-export type GatewayClientCloseInfo = {
-  phase: "pre-hello" | "post-hello";
-  socketOpened: boolean;
-  transportValidated: boolean;
-  connectRequestSent?: boolean;
-  transientPreHelloCleanClose: boolean;
-  connectError?: Error;
-};
-
 export { GatewayClientRequestError, isGatewayConnectAssemblyError } from "./request-error.js";
 export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
@@ -163,69 +160,61 @@ export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTime
 
 class GatewayClientTransportPolicyError extends GatewayWebSocketTransportConfigurationError {}
 
-export type GatewayClientOptions = {
-  url?: string; // ws://127.0.0.1:18789
-  origin?: string;
-  /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
-  edgeAuthHeaders?: Readonly<Record<string, string>>;
-  connectChallengeTimeoutMs?: number;
-  /**
-   * Server-side pre-auth handshake budget. Config-derived local clients use
-   * this to keep the connect-challenge watchdog aligned with the gateway.
-   */
-  preauthHandshakeTimeoutMs?: number;
-  tickWatchMinIntervalMs?: number;
-  tickWatchTimeoutMs?: number;
-  requestTimeoutMs?: number;
-  token?: string;
-  bootstrapToken?: string;
-  /** Prefer one setup credential for the first successful device-auth exchange. */
-  preferBootstrapToken?: boolean;
-  deviceToken?: string;
-  password?: string;
-  approvalRuntimeToken?: string;
-  agentRuntimeIdentityToken?: string;
-  instanceId?: string;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  clientVersion?: string;
-  clientBuildId?: string;
-  platform?: string;
-  deviceFamily?: string;
-  modelIdentifier?: string;
-  mode?: GatewayClientMode;
-  role?: string;
-  scopes?: string[];
-  modelCatalog?: ConnectParams["modelCatalog"];
-  caps?: string[];
-  commands?: string[];
-  computerUse?: ConnectParams["computerUse"];
-  /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
-  workerRuns?: ConnectParams["workerRuns"];
-  permissions?: Record<string, boolean>;
-  pathEnv?: string;
-  env?: NodeJS.ProcessEnv;
-  deviceIdentity?: DeviceIdentity | null;
-  hostDeps?: GatewayClientHostDeps;
-  minProtocol?: number;
-  maxProtocol?: number;
-  tlsFingerprint?: string;
-  onEvent?: (evt: EventFrame) => void;
-  onHelloOk?: (hello: HelloOk) => void;
-  onConnectError?: (err: Error) => void;
-  onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
-  /** Report retryable startup closes for clients that present connection progress. */
-  notifyOnStartupRetry?: boolean;
-  onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
-};
+export type GatewayClientOptions = GatewayWebSocketTargetOptions &
+  NonNullable<ConnectParams["auth"]> & {
+    origin?: string;
+    /** Already-resolved edge-proxy auth headers (identity-aware proxy in front of the Gateway). */
+    edgeAuthHeaders?: Readonly<Record<string, string>>;
+    connectChallengeTimeoutMs?: number;
+    /**
+     * Server-side pre-auth handshake budget. Config-derived local clients use
+     * this to keep the connect-challenge watchdog aligned with the gateway.
+     */
+    preauthHandshakeTimeoutMs?: number;
+    tickWatchMinIntervalMs?: number;
+    tickWatchTimeoutMs?: number;
+    requestTimeoutMs?: number;
+    /** Prefer one setup credential for the first successful device-auth exchange. */
+    preferBootstrapToken?: boolean;
+    instanceId?: string;
+    clientName?: GatewayClientName;
+    clientDisplayName?: string;
+    clientVersion?: string;
+    clientBuildId?: string;
+    platform?: string;
+    deviceFamily?: string;
+    modelIdentifier?: string;
+    mode?: GatewayClientMode;
+    role?: string;
+    scopes?: string[];
+    modelCatalog?: ConnectParams["modelCatalog"];
+    caps?: string[];
+    commands?: string[];
+    computerUse?: ConnectParams["computerUse"];
+    /** @deprecated Compatibility for the shipped v1 node-host connect envelope. */
+    workerRuns?: ConnectParams["workerRuns"];
+    permissions?: Record<string, boolean>;
+    pathEnv?: string;
+    env?: NodeJS.ProcessEnv;
+    deviceIdentity?: DeviceIdentity | null;
+    hostDeps?: GatewayClientHostDeps;
+    minProtocol?: number;
+    maxProtocol?: number;
+    onEvent?: (evt: EventFrame) => void;
+    onHelloOk?: (hello: HelloOk) => void;
+    onConnectError?: (err: Error) => void;
+    onReconnectPaused?: (info: GatewayReconnectPausedInfo) => void;
+    /** Report retryable startup closes for clients that present connection progress. */
+    notifyOnStartupRetry?: boolean;
+    onClose?: (code: number, reason: string, info?: GatewayClientCloseInfo) => void;
+    onGap?: (info: { expected: number; received: number }) => void;
+    onRequestTiming?: (timing: GatewayProtocolRequestTiming) => void;
+  };
 
-export type GatewayClientConnectionMetadata = {
-  clientName?: GatewayClientName;
-  hasDeviceIdentity: boolean;
-  mode?: GatewayClientMode;
-  preauthHandshakeTimeoutMs?: number;
-};
+export type {
+  GatewayClientCloseInfo,
+  GatewayClientConnectionMetadata,
+} from "./protocol-client-contract.js";
 
 const FORCE_STOP_TERMINATE_GRACE_MS = 250;
 const STOP_AND_WAIT_TIMEOUT_MS = 1_000;
@@ -366,6 +355,7 @@ export class GatewayClient {
         this.logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(error)}`),
       onEvent: (event) => this.opts.onEvent?.(event),
       onGap: (info) => this.opts.onGap?.(info),
+      onRequestTiming: (timing) => this.opts.onRequestTiming?.(timing),
       onActivity: () => {
         this.lastTick = Date.now();
       },
@@ -455,6 +445,7 @@ export class GatewayClient {
     const transport = resolveGatewayWebSocketTransport({
       url,
       tlsFingerprint: this.opts.tlsFingerprint,
+      tlsServerName: this.opts.tlsServerName,
       env: this.opts.env,
       normalizeTlsFingerprint: this.deps.normalizeTlsFingerprint,
       options: {
@@ -578,21 +569,16 @@ export class GatewayClient {
       opts?.timeoutMs === undefined
         ? STOP_AND_WAIT_TIMEOUT_MS
         : resolveSafeTimeoutDelayMs(opts.timeoutMs);
-    let timeout: NodeJS.Timeout | null = null;
     try {
-      await Promise.race([
-        stopPromise,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(new Error(`gateway client stop timed out after ${timeoutMs}ms`));
-          }, timeoutMs);
-          timeout.unref?.();
-        }),
-      ]);
+      await raceWithTimeout(
+        Promise.resolve(stopPromise),
+        timeoutMs,
+        () => {
+          throw new Error(`gateway client stop timed out after ${timeoutMs}ms`);
+        },
+        { ref: false },
+      );
     } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
       // The transport deadline must never abandon accepted durable operations.
       await this.deviceAuth.drain();
     }
@@ -635,9 +621,6 @@ export class GatewayClient {
   }
 
   private createPendingStop(ws: WebSocket): PendingStop {
-    if (this.pendingStop?.ws === ws) {
-      return this.pendingStop;
-    }
     let resolve = () => {};
     const promise = new Promise<void>((done) => {
       resolve = done;

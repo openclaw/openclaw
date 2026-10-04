@@ -3,13 +3,12 @@ import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js"
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
-  migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync,
-  readLegacyMatrixRecoveryKeyFile,
   readMatrixRecoveryKeyStateForPathAsync,
   writeMatrixRecoveryKeyStateForPathAsync,
   type MatrixSnapshotStateRuntime,
 } from "../crypto-state-store.js";
 import { formatMatrixErrorReason } from "../errors.js";
+import { assertMatrixSupportedStateFile } from "../retired-state.js";
 import { LogService } from "./logger.js";
 import type {
   MatrixCryptoBootstrapApi,
@@ -37,16 +36,12 @@ export function isRepairableSecretStorageAccessError(err: unknown): boolean {
 }
 
 export class MatrixRecoveryKeyStore {
-  private readonly secretStorageKeyCache = new Map<
-    string,
-    { key: Uint8Array; keyInfo?: MatrixStoredRecoveryKey["keyInfo"] }
-  >();
+  private readonly secretStorageKeyCache = new Map<string, Uint8Array>();
   private stagedRecoveryKey: MatrixStoredRecoveryKey | null = null;
   private stagedRecoveryKeyUsed = false;
   private readonly stagedCacheKeyIds = new Set<string>();
   private readonly storageRootDir?: string;
   private readonly recoveryKeyPath?: string;
-  private legacyRecoveryKeyPathOnMigrationFailure?: string;
 
   private pendingPersistence: Promise<void> = Promise.resolve();
   private closed = false;
@@ -57,15 +52,6 @@ export class MatrixRecoveryKeyStore {
     this.storageRootDir = recoveryKeyPath ? path.dirname(recoveryKeyPath) : undefined;
     if (recoveryKeyPath) {
       this.stateRuntime = stateRuntime ?? getMatrixRuntime().state;
-      const runtime = this.stateRuntime;
-      void this.enqueuePersistence(async () => {
-        try {
-          await migrateLegacyMatrixRecoveryKeyFilePathToStoreAsync(recoveryKeyPath, runtime);
-        } catch (err) {
-          this.legacyRecoveryKeyPathOnMigrationFailure = recoveryKeyPath;
-          LogService.warn("MatrixClientLite", "Failed to migrate Matrix recovery key state:", err);
-        }
-      });
     }
   }
 
@@ -123,7 +109,7 @@ export class MatrixRecoveryKeyStore {
         for (const keyId of requestedKeyIds) {
           const cached = this.secretStorageKeyCache.get(keyId);
           if (cached) {
-            return [keyId, new Uint8Array(cached.key)];
+            return [keyId, new Uint8Array(cached)];
           }
         }
 
@@ -144,7 +130,7 @@ export class MatrixRecoveryKeyStore {
         }
 
         if (stored.keyId && requestedKeyIds.includes(stored.keyId)) {
-          this.rememberSecretStorageKey(stored.keyId, privateKey, stored.keyInfo);
+          this.rememberSecretStorageKey(stored.keyId, privateKey);
           return [stored.keyId, privateKey];
         }
 
@@ -152,7 +138,7 @@ export class MatrixRecoveryKeyStore {
         if (!firstRequestedKeyId) {
           return null;
         }
-        this.rememberSecretStorageKey(firstRequestedKeyId, privateKey, stored.keyInfo);
+        this.rememberSecretStorageKey(firstRequestedKeyId, privateKey);
         return [firstRequestedKeyId, privateKey];
       });
     return {
@@ -166,7 +152,7 @@ export class MatrixRecoveryKeyStore {
           passphrase: keyInfo?.passphrase,
           name: typeof keyInfo?.name === "string" ? keyInfo.name : undefined,
         };
-        this.rememberSecretStorageKey(keyId, privateKey, normalizedKeyInfo);
+        this.rememberSecretStorageKey(keyId, privateKey);
 
         // The SDK's void callback admits a write; getters and dispatch join it.
         void this.saveRecoveryKeyToDisk({ keyId, keyInfo: normalizedKeyInfo, privateKey }, true);
@@ -218,7 +204,7 @@ export class MatrixRecoveryKeyStore {
       if (privateKey.length === 0) {
         return null;
       }
-      this.rememberSecretStorageKey(normalizedKeyId, privateKey, stored.keyInfo);
+      this.rememberSecretStorageKey(normalizedKeyId, privateKey);
       return privateKey;
     });
   }
@@ -359,7 +345,7 @@ export class MatrixRecoveryKeyStore {
     if (recoveryKey && status?.defaultKeyId) {
       const defaultKeyId = status.defaultKeyId;
       if (!stagedRecovery) {
-        this.rememberSecretStorageKey(defaultKeyId, recoveryKey.privateKey, recoveryKey.keyInfo);
+        this.rememberSecretStorageKey(defaultKeyId, recoveryKey.privateKey);
         if (storedRecovery && storedRecovery.keyId !== defaultKeyId) {
           await this.saveRecoveryKeyToDisk({
             keyId: defaultKeyId,
@@ -473,45 +459,28 @@ export class MatrixRecoveryKeyStore {
       return null;
     }
     this.stagedRecoveryKeyUsed = true;
-    this.rememberSecretStorageKey(keyId, privateKey, staged.keyInfo);
+    this.rememberSecretStorageKey(keyId, privateKey);
     this.stagedCacheKeyIds.add(keyId);
     return [keyId, privateKey];
   }
 
-  private rememberSecretStorageKey(
-    keyId: string,
-    key: Uint8Array,
-    keyInfo?: MatrixStoredRecoveryKey["keyInfo"],
-  ): void {
+  private rememberSecretStorageKey(keyId: string, key: Uint8Array): void {
     if (!keyId.trim()) {
       return;
     }
-    this.secretStorageKeyCache.set(keyId, {
-      key: new Uint8Array(key),
-      keyInfo,
-    });
+    this.secretStorageKeyCache.set(keyId, new Uint8Array(key));
   }
 
   private async loadStoredRecoveryKey(): Promise<MatrixStoredRecoveryKey | null> {
     if (!this.recoveryKeyPath || !this.stateRuntime) {
       return null;
     }
+    await assertMatrixSupportedStateFile(this.recoveryKeyPath);
     try {
-      const stored = await readMatrixRecoveryKeyStateForPathAsync(
-        this.recoveryKeyPath,
-        this.stateRuntime,
-      );
-      if (stored) {
-        return stored;
-      }
+      return await readMatrixRecoveryKeyStateForPathAsync(this.recoveryKeyPath, this.stateRuntime);
     } catch {
-      // If the SQLite migration failed during construction, keep the readable
-      // legacy file usable for this run and leave it unarchived for retry.
+      return null;
     }
-    if (this.legacyRecoveryKeyPathOnMigrationFailure) {
-      return readLegacyMatrixRecoveryKeyFile(this.legacyRecoveryKeyPathOnMigrationFailure);
-    }
-    return null;
   }
 
   private saveRecoveryKeyToDisk(
@@ -531,6 +500,7 @@ export class MatrixRecoveryKeyStore {
       return;
     }
     try {
+      await assertMatrixSupportedStateFile(this.recoveryKeyPath);
       const payload: MatrixStoredRecoveryKey = {
         version: 1,
         createdAt: new Date().toISOString(),

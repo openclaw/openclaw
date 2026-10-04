@@ -8,6 +8,7 @@ vi.mock("nostr-tools", async (importOriginal) => {
 
 import { useBuzzBusLifecycleFixture } from "./buzz-bus.lifecycle.test-harness.js";
 import { relayMocks } from "./buzz-bus.test-helpers.js";
+import { BUZZ_MEMBER_ADDED_NOTIFICATION_KIND } from "./room-membership-notification.js";
 
 const {
   CHANNEL_ID,
@@ -88,42 +89,6 @@ describe("Buzz mention delivery", () => {
     expect(relayMocks.close).toHaveBeenCalledOnce();
   });
 
-  it("resolves active-bus mentions for proactive sends and agent replies", async () => {
-    relayMocks.profileEvents = [
-      signSenderEvent({
-        kind: 0,
-        created_at: 1_700_000_000,
-        content: JSON.stringify({ display_name: "Alice" }),
-        tags: [],
-      }),
-    ];
-    const bus = await startTestBus();
-
-    await bus.sendText({
-      channelId: CHANNEL_ID,
-      text: "Hello @Alice",
-      threadId: "root-id",
-      replyToId: "parent-id",
-    });
-
-    const event = relayMocks.publish.mock.calls
-      .map(([published]) => published)
-      .find((published) => published.kind === 9);
-    expect(event).toMatchObject({
-      kind: 9,
-      content: "Hello @Alice",
-      tags: [
-        ["h", CHANNEL_ID],
-        ["e", "root-id", "", "root"],
-        ["e", "parent-id", "", "reply"],
-        ["p", SENDER_PUBLIC_KEY],
-      ],
-    });
-    expect(relayMocks.connect).toHaveBeenCalledOnce();
-
-    await bus.close();
-  });
-
   it("stops mentioning a removed member before the signed roster refresh completes", async () => {
     const explicitSender = `nostr:${nip19.npubEncode(SENDER_PUBLIC_KEY)}`;
     const bus = await startTestBus();
@@ -152,22 +117,60 @@ describe("Buzz mention delivery", () => {
 
     await bus.close();
   });
+});
 
-  it("keeps mention-free active sends off the room roster path", async () => {
-    const bus = await startTestBus();
-    const mentionMembers = vi.spyOn(bus.directory, "mentionMembers");
+describe("Buzz archived room lifecycle", () => {
+  beforeEach(() => {
+    relayMocks.auth.mockResolvedValue("ok");
+    relayMocks.membershipEvents[0]!.tags = relayMocks.membershipEvents[0]!.tags.filter(
+      (tag) => tag[0] !== "p" || tag[1] === BOT_PUBLIC_KEY,
+    );
+  });
 
-    await bus.sendText({
-      channelId: CHANNEL_ID,
-      text: "Plain message without a mention",
+  it("rebuilds room subscriptions when an archived room becomes active", async () => {
+    relayMocks.roomMetadataEvents = [
+      {
+        id: "room-metadata-archived",
+        kind: 39_000,
+        pubkey: RELAY_PUBLIC_KEY,
+        created_at: 1_700_000_000,
+        content: "",
+        sig: "e".repeat(128),
+        tags: [
+          ["d", CHANNEL_ID],
+          ["archived", "true"],
+        ],
+      },
+    ];
+    const onFatalError = vi.fn();
+    const bus = await startTestBus({
+      onFatalError,
     });
+    expect(relayMocks.subscriptions.some((entry) => subscriptionIncludesKind(entry, 9))).toBe(
+      false,
+    );
+    expect(bus.directory.activeRoomIds()).toEqual([]);
+    expect(bus.directory.listGroups({})).toEqual([]);
+    relayMocks.subscriptions
+      .find((entry) => subscriptionIncludesKind(entry, BUZZ_MEMBER_ADDED_NOTIFICATION_KIND))
+      ?.handlers.onevent({
+        id: "restore-room",
+        kind: BUZZ_MEMBER_ADDED_NOTIFICATION_KIND,
+        pubkey: RELAY_PUBLIC_KEY,
+        created_at: 1_700_000_001,
+        content: JSON.stringify({ type: "member_added", channel_id: CHANNEL_ID }),
+        sig: "e".repeat(128),
+        tags: [
+          ["p", BOT_PUBLIC_KEY],
+          ["h", CHANNEL_ID],
+        ],
+      });
 
-    expect(mentionMembers).not.toHaveBeenCalled();
-    expect(relayMocks.publish.mock.calls.at(-1)?.[0]).toMatchObject({
-      kind: 9,
-      tags: [["h", CHANNEL_ID]],
-    });
-
+    expect(onFatalError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: `Buzz room ${CHANNEL_ID} membership changed; rebuilding subscriptions`,
+      }),
+    );
     await bus.close();
   });
 });

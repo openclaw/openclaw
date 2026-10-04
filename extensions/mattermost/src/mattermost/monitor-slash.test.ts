@@ -1,5 +1,6 @@
 // Mattermost tests cover monitor slash plugin behavior.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerMattermostMonitorSlashCommands } from "./monitor-slash.js";
 
 const listSkillCommandsForAgents = vi.hoisted(() => vi.fn());
 const fetchMattermostUserTeams = vi.hoisted(() => vi.fn());
@@ -50,12 +51,6 @@ function requireFirstMockCall<TArgs extends unknown[]>(
 }
 
 describe("mattermost monitor slash", () => {
-  let registerMattermostMonitorSlashCommands: typeof import("./monitor-slash.js").registerMattermostMonitorSlashCommands;
-
-  beforeAll(async () => {
-    ({ registerMattermostMonitorSlashCommands } = await import("./monitor-slash.js"));
-  });
-
   beforeEach(() => {
     listSkillCommandsForAgents.mockReset();
     fetchMattermostUserTeams.mockReset();

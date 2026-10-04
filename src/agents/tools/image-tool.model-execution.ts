@@ -43,20 +43,6 @@ type ImageModelExecutionDeps = {
   }) => MediaUnderstandingProvider | undefined;
 };
 
-export function resolveImageToolMaxTokens(
-  modelMaxTokens: number | undefined,
-  requestedMaxTokens = 4096,
-) {
-  if (
-    typeof modelMaxTokens !== "number" ||
-    !Number.isFinite(modelMaxTokens) ||
-    modelMaxTokens <= 0
-  ) {
-    return requestedMaxTokens;
-  }
-  return Math.min(requestedMaxTokens, modelMaxTokens);
-}
-
 export function resolveImageModelConfigForOverride(params: {
   cfg?: OpenClawConfig;
   modelOverride?: string;
@@ -276,7 +262,7 @@ export async function runImagePrompt(
           provider,
           model: modelId,
           prompt: params.prompt,
-          maxTokens: resolveImageToolMaxTokens(undefined),
+          maxTokens: 4096,
           timeoutMs,
           ...(signal ? { signal } : {}),
           cfg: providerCfg,
@@ -336,9 +322,7 @@ export async function runImagePrompt(
   });
 
   return {
-    text: result.result.text,
-    provider: result.result.provider,
-    model: result.result.model,
+    ...result.result,
     attempts: result.attempts.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,

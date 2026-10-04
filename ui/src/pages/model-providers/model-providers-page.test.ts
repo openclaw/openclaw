@@ -15,6 +15,7 @@ import {
   createAuthStatus,
   createEmptyModelProvidersRouteData,
   createHarness,
+  drainPageUpdates,
   waitForProviders,
   requestCount,
   saveKey,
@@ -482,8 +483,13 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderId = "anthropic";
     page.addProviderKey = "new-provider-key";
 
-    await page.addProvider();
     await page.updateComplete;
+    const save = page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!;
+    expect(save.disabled).toBe(false);
+    save.click();
+    expect(runtimeConfig.runExternalMutation).toHaveBeenCalledOnce();
+    await runtimeConfig.runExternalMutation.mock.results[0]!.value;
+    await drainPageUpdates(page);
 
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);
@@ -563,7 +569,12 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderId = "anthropic";
     page.addProviderKey = "shared-provider-key";
 
-    const adding = page.addProvider();
+    await page.updateComplete;
+    const save = page.querySelector<HTMLButtonElement>("[data-models-key-dialog] button.primary")!;
+    expect(save.disabled).toBe(false);
+    save.click();
+    expect(runtimeConfig.runExternalMutation).toHaveBeenCalledOnce();
+    const adding = runtimeConfig.runExternalMutation.mock.results[0]!.value;
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("models.authSetApiKey", {
         provider: "anthropic",
@@ -580,6 +591,7 @@ describe("ModelProvidersPage agent scope", () => {
     page.addProviderKey = "shared-provider-key";
     gate.resolve({ profileId: "anthropic:manual-api-key" });
     await adding;
+    await drainPageUpdates(page);
 
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
     expect(page.addProviderOpen).toBe(true);

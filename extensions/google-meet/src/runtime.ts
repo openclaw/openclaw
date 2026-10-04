@@ -1,4 +1,3 @@
-// Google Meet composes platform strategies with the shared meeting session runtime.
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
@@ -14,7 +13,6 @@ import {
   type MeetingSessionLeaveResult,
   type MeetingParticipationAttempt,
   type MeetingParticipationRequest,
-  type MeetingParticipationSource,
   type MeetingSessionRuntimeHandles,
   type MeetingSessionRuntimeJoinContext,
 } from "openclaw/plugin-sdk/meeting-runtime";
@@ -43,7 +41,6 @@ import {
   withSessionAgentConfig,
 } from "./runtime-session.js";
 import { getGoogleMeetRuntimeSetupStatus } from "./runtime-setup.js";
-import { participateInChromeMeet } from "./transports/chrome-participation.js";
 import {
   launchChromeMeet,
   launchChromeMeetOnNode,
@@ -61,10 +58,6 @@ import type {
 } from "./transports/types.js";
 import { createVoiceCallGateway, joinMeetViaVoiceCallGateway } from "./voice-call-gateway.js";
 
-type ChromeAudioBridgeResult = NonNullable<
-  | Awaited<ReturnType<typeof launchChromeMeet>>["audioBridge"]
-  | Awaited<ReturnType<typeof launchChromeMeetOnNode>>["audioBridge"]
->;
 type ChromeLaunchResult =
   | Awaited<ReturnType<typeof launchChromeMeet>>
   | Awaited<ReturnType<typeof launchChromeMeetOnNode>>;
@@ -128,23 +121,12 @@ export class GoogleMeetRuntime {
             await getParticipationStore().registerIfAbsent(key, attempt),
           register: async (key, attempt) => await getParticipationStore().register(key, attempt),
         },
-        capabilities: (session) =>
-          isBrowserTransport(session.transport) &&
-          session.chrome?.launched &&
-          session.chrome.browserTab &&
-          session.chrome.health?.inCall === true &&
-          !session.chrome.health.manualAction
-            ? (adapter.browser.participation?.capabilities ?? [])
-            : [],
-        validateAction: (action) => adapter.browser.participation?.validateAction(action),
-        execute: async (session, request, assertCurrent) =>
-          await participateInChromeMeet({
-            runtime: params.runtime,
-            config: params.config,
-            session,
-            request,
-            assertCurrent,
-          }),
+        capabilities: () => [],
+        validateAction: () => undefined,
+        execute: async () => ({
+          status: "unsupported",
+          message: "Participation requires a supported tracked browser meeting.",
+        }),
       },
       logger: params.logger,
       logScope: "[google-meet]",
@@ -252,14 +234,6 @@ export class GoogleMeetRuntime {
 
   participate(sessionId: string, request: MeetingParticipationRequest) {
     return this.#sessions.participate(sessionId, request);
-  }
-
-  observeParticipationSource(sessionId: string, source: MeetingParticipationSource) {
-    return this.#sessions.observeParticipationSource(sessionId, source);
-  }
-
-  inspectParticipationSource(sessionId: string, sourceId: string) {
-    return this.#sessions.inspectParticipationSource(sessionId, sourceId);
   }
 
   async transcript(sessionId: string, options: { sinceIndex?: number } = {}) {
@@ -491,7 +465,7 @@ export class GoogleMeetRuntime {
 
   #attachChromeAudioBridge(
     session: GoogleMeetSession,
-    audioBridge: ChromeAudioBridgeResult | undefined,
+    audioBridge: ChromeLaunchResult["audioBridge"],
   ): MeetingSessionRuntimeHandles<GoogleMeetChromeHealth> | undefined {
     if (!session.chrome || !audioBridge) {
       return undefined;

@@ -39,14 +39,6 @@ function respondHtml(res: ServerResponse, status: number, body: string): void {
   res.end(body);
 }
 
-function readPendingState(lastAuthorizationUrl: string): string | undefined {
-  try {
-    return new URL(lastAuthorizationUrl).searchParams.get("state")?.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function isPerRequesterServer(server: Record<string, unknown>): boolean {
   const oauth = isRecord(server.oauth) ? server.oauth : undefined;
   return server.enabled !== false && server.auth === "oauth" && oauth?.identity === "per-requester";
@@ -91,7 +83,13 @@ export async function handleMcpOAuthCallback(
   const context = captureOpenClawStateWorkerContext();
   const storeKey = state ? await readMcpOAuthPendingAuthorization(state, context) : undefined;
   const pending = storeKey ? await readMcpOAuthStore(storeKey, context) : undefined;
-  if (!storeKey || !state || readPendingState(pending?.lastAuthorizationUrl ?? "") !== state) {
+  if (
+    !storeKey ||
+    !state ||
+    (URL.parse(pending?.lastAuthorizationUrl ?? "")
+      ?.searchParams.get("state")
+      ?.trim() || undefined) !== state
+  ) {
     respondHtml(res, 404, EXPIRED_HTML);
     return true;
   }

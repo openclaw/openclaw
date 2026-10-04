@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -13,10 +14,47 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
 }));
 
 import {
+  collectWorkspaceBackupTip,
   maybeRepairWorkspaceMemoryHealth,
   noteWorkspaceMemoryHealth,
   shouldSuggestMemorySystem,
 } from "./doctor-workspace.js";
+
+const WORKSPACE_BACKUP_TIP =
+  "- Tip: back up the agent workspace in a private git repo; keep ~/.openclaw out of git (credentials, sessions). Details: /concepts/agent-workspace#git-backup-recommended-private";
+
+describe("workspace backup tip", () => {
+  it("recognizes direct, deeply nested, and symlinked Git workspaces without duplicate tips", async () => {
+    await withTestDir({ prefix: "openclaw-doctor-workspace-git-" }, async (tempDir) => {
+      const repoRoot = path.join(tempDir, "repo");
+      const nestedWorkspace = path.join(repoRoot, "agents", "direct");
+      const deeplyNestedWorkspace = path.join(
+        repoRoot,
+        ...Array.from({ length: 12 }, (_, index) => `workspace-level-${index}`),
+      );
+      const linkedWorkspace = path.join(tempDir, "linked-workspace");
+      const outsideWorkspace = path.parse(tempDir).root;
+      const missingWorkspace = path.join(tempDir, "missing");
+      await fs.mkdir(path.join(repoRoot, ".git"), { recursive: true });
+      await fs.mkdir(nestedWorkspace, { recursive: true });
+      await fs.mkdir(deeplyNestedWorkspace, { recursive: true });
+      await fs.symlink(
+        nestedWorkspace,
+        linkedWorkspace,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+
+      expect(collectWorkspaceBackupTip(repoRoot)).toBeNull();
+      expect(
+        [nestedWorkspace, deeplyNestedWorkspace, linkedWorkspace]
+          .map((workspaceDir) => collectWorkspaceBackupTip(workspaceDir))
+          .filter((tip) => tip !== null),
+      ).toEqual([]);
+      expect(collectWorkspaceBackupTip(outsideWorkspace)).toBe(WORKSPACE_BACKUP_TIP);
+      expect(collectWorkspaceBackupTip(missingWorkspace)).toBeNull();
+    });
+  });
+});
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
@@ -41,7 +79,7 @@ describe("root memory repair", () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-root-memory-"));
     cfg = {
-      agents: { defaults: { workspace: tmpDir }, entries: { main: { default: true } } },
+      agents: { defaults: { workspace: tmpDir }, entries: { main: {} } },
     };
     prompter = createDoctorPrompter({
       runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
@@ -211,6 +249,7 @@ describe("root memory repair", () => {
       initialValue: true,
     });
     const canonical = await fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8");
+    expect(canonical).toContain("# Canonical");
     expect(canonical).toContain("# Legacy");
     await expectPathMissing(path.join(tmpDir, "memory.md"));
     expect(note).toHaveBeenCalledTimes(1);
@@ -224,12 +263,11 @@ describe("root memory repair", () => {
     );
     expect(repairLines).toContain(`- removed legacy file: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
-  });
-
-  it("treats an oversized AGENTS.md as missing memory guidance", async () => {
-    await fs.writeFile(path.join(tmpDir, "AGENTS.md"), "x".repeat(2 * 1024 * 1024), "utf8");
-
-    await expect(shouldSuggestMemorySystem(tmpDir)).resolves.toBe(true);
+    const archiveLine = repairLines.find((line) => line.startsWith("- backup: "));
+    expect(archiveLine).toBeDefined();
+    await expect(fs.readFile(archiveLine!.slice("- backup: ".length), "utf8")).resolves.toBe(
+      "# Legacy\n",
+    );
   });
 
   it("follows a symlinked AGENTS.md while keeping its target bounded", async () => {
@@ -330,6 +368,8 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(targetFile, "utf8")).resolves.toBe("# Canonical\n");
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe("# Legacy\n");
   });
 
   it("reports a skipped repair when a root memory file is oversized", async () => {
@@ -351,6 +391,12 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n",
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe(
+      "# Legacy\n".repeat(1_000_000),
+    );
   });
 
   it("skips without mutation when legacy memory cannot be archived atomically", async () => {
@@ -405,6 +451,10 @@ describe("root memory repair", () => {
     expect(repairLines).toContain(`- canonical: ${path.join(tmpDir, "MEMORY.md")}`);
     expect(repairLines).toContain(`- legacy: ${path.join(tmpDir, "memory.md")}`);
     expect(repairNote?.[1]).toBe("Doctor changes");
+    await expect(fs.readFile(path.join(tmpDir, "MEMORY.md"), "utf8")).resolves.toBe(
+      "# Canonical\n",
+    );
+    await expect(fs.readFile(path.join(tmpDir, "memory.md"), "utf8")).resolves.toBe("# Legacy\n");
   });
 
   it("reports a preserved archive when a failed repair cannot restore legacy", async () => {

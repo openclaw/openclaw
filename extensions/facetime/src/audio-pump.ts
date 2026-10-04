@@ -8,6 +8,7 @@ import type {
   RealtimeVoiceAudioChunkMetadata,
   RealtimeVoicePlaybackItem,
 } from "openclaw/plugin-sdk/realtime-voice";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 
 type PumpProcess = {
   pid?: number;
@@ -52,7 +53,7 @@ const MAX_PLAYBACK_BUFFERED_BYTES = 2 * 1024 * 1024;
 type FaceTimeAudioPump = {
   suppressionReady(): Promise<void>;
   routeReady(): Promise<void>;
-  processOutputSuppressed(): boolean;
+  processOutputSuppressed(this: void): boolean;
   writeOutputAudio(audio: Buffer, metadata?: RealtimeVoiceAudioChunkMetadata): void;
   getPlaybackState(): RealtimeVoicePlaybackItem[];
   finishOutputAudio(): void;
@@ -176,31 +177,17 @@ async function terminateProcess(proc: PumpProcess, signal: NodeJS.Signals = "SIG
       resolve();
     });
   });
-  try {
-    proc.kill(signal);
-  } catch {
-    return;
-  }
-  await Promise.race([
-    exitedPromise,
-    new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, 500);
-      timer.unref?.();
-    }),
-  ]);
-  if (!exited && signal !== "SIGKILL") {
+  const signals: NodeJS.Signals[] = signal === "SIGKILL" ? [signal] : [signal, "SIGKILL"];
+  for (const nextSignal of signals) {
     try {
-      proc.kill("SIGKILL");
+      proc.kill(nextSignal);
     } catch {
       return;
     }
-    await Promise.race([
-      exitedPromise,
-      new Promise<void>((resolve) => {
-        const timer = setTimeout(resolve, 500);
-        timer.unref?.();
-      }),
-    ]);
+    await Promise.race([exitedPromise, sleepWithAbort(500, undefined, { ref: false })]);
+    if (exited) {
+      return;
+    }
   }
 }
 
@@ -296,16 +283,13 @@ export function startFaceTimeAudioPump(params: {
       env: childEnv,
       stdio: ["pipe", "ignore", "pipe"],
     });
-    proc.on("error", (error) => {
+    const onError = (error: Error) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(error, false);
       }
-    });
-    proc.stdin?.on("error", (error) => {
-      if (!stopped && !mediaSuspended && proc === outputProcess) {
-        reportFailure(error, false);
-      }
-    });
+    };
+    proc.on("error", onError);
+    proc.stdin?.on("error", onError);
     proc.on("exit", (code, signal) => {
       if (!stopped && !mediaSuspended && proc === outputProcess) {
         reportFailure(new Error(`SoX playback exited (${code ?? signal ?? "done"})`), false);

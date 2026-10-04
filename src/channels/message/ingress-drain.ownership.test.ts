@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createChannelIngressDrain, isIngressAdoptionLostError } from "./ingress-drain.js";
@@ -17,6 +18,70 @@ describe("channel ingress drain ownership", () => {
     vi.useRealTimers();
     closeOpenClawStateDatabaseForTest();
   });
+
+  it.each([
+    { method: "complete", envelope: "direct" },
+    { method: "complete", envelope: "aggregate" },
+    { method: "release", envelope: "cause" },
+    { method: "fail", envelope: "cause" },
+  ] as const)(
+    "holds custody without replaying $method after a $envelope unknown outcome",
+    async ({ method, envelope }) => {
+      await withTempState(async (stateDir) => {
+        const queue = createTestIngressQueue(stateDir);
+        await queue.enqueue("unknown-settlement", { text: "delivered" }, { laneKey: "lane" });
+        const unknown = new SqliteWorkerError("Synthetic lost native outcome", "outcome-unknown");
+        const failure =
+          envelope === "direct"
+            ? unknown
+            : new Error("Synthetic cleanup failure", {
+                cause: envelope === "aggregate" ? new AggregateError([unknown]) : unknown,
+              });
+        const write = vi.spyOn(queue, method).mockRejectedValue(failure);
+        const shutdown = new AbortController();
+        const drain = createChannelIngressDrain<Payload>(
+          {
+            queue,
+            abortSignal: shutdown.signal,
+            ...(method === "fail"
+              ? {
+                  resolveNonRetryableFailure: () => ({
+                    reason: "invalid-event",
+                    message: "invalid",
+                  }),
+                }
+              : {}),
+            dispatchClaimedEvent: async (_event, lifecycle) => {
+              if (method === "complete") {
+                return await lifecycle.onAdopted();
+              }
+              return { kind: "failed-retryable", error: new Error("Synthetic delivery failure") };
+            },
+          },
+          method !== "complete",
+        );
+        try {
+          await drain.drainOnce();
+          await drain.waitForIdle();
+          if (method === "complete") {
+            await vi.advanceTimersByTimeAsync(1_000);
+          }
+          expect(write).toHaveBeenCalledOnce();
+          expect((await queue.listClaims()).map((row) => row.id)).toEqual(["unknown-settlement"]);
+          expect(drain.activeLaneKeys().has("lane")).toBe(true);
+          if (method !== "complete") {
+            shutdown.abort();
+            await expect(drain.dispose({ waitForSettlements: true })).rejects.toBe(failure);
+          }
+        } finally {
+          shutdown.abort();
+          await drain.waitForIdle();
+          drain.dispose();
+          write.mockRestore();
+        }
+      });
+    },
+  );
 
   it("requires owner cancellation before finalizing retained claim custody", async () => {
     await withTempState(async (stateDir) => {

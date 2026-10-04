@@ -62,13 +62,10 @@ export function isMentionForwardRequest(event: FeishuMessageEvent, botOpenId?: s
   const userMentions = mentions.filter((m) => !isFeishuBroadcastMention(m));
   const hasOtherMention = userMentions.some((m) => m.id.open_id !== normalizedBotOpenId);
 
-  if (isDirectMessage) {
-    // DM: trigger if any non-bot user is mentioned
-    return hasOtherMention;
-  }
-  // Group: need to mention both bot and other users
-  const hasBotMention = userMentions.some((m) => m.id.open_id === normalizedBotOpenId);
-  return hasBotMention && hasOtherMention;
+  return (
+    hasOtherMention &&
+    (isDirectMessage || userMentions.some((m) => m.id.open_id === normalizedBotOpenId))
+  );
 }
 
 export function buildMentionedCardContent(targets: MentionTarget[], message: string): string {

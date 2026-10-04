@@ -17,7 +17,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_requiresLocationPermissionWhenNeitherFineNorCoarse() =
     runTest {
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -36,7 +36,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_requiresForegroundBeforeLocationPermission() =
     runTest {
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -62,7 +62,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
           backgroundGranted = true,
         )
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource = source,
           isForeground = { false },
@@ -79,7 +79,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_deniesBackgroundWhenFlavorDisablesAlwaysMode() =
     runTest {
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -99,25 +99,6 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
     }
 
   @Test
-  fun hasFineLocationPermission_reflectsDataSource() {
-    val denied =
-      LocationHandler.forTesting(
-        appContext = appContext(),
-        dataSource = FakeLocationDataSource(fineGranted = false, coarseGranted = true),
-      )
-    assertFalse(denied.hasFineLocationPermission())
-    assertTrue(denied.hasCoarseLocationPermission())
-
-    val granted =
-      LocationHandler.forTesting(
-        appContext = appContext(),
-        dataSource = FakeLocationDataSource(fineGranted = true, coarseGranted = false),
-      )
-    assertTrue(granted.hasFineLocationPermission())
-    assertFalse(granted.hasCoarseLocationPermission())
-  }
-
-  @Test
   fun handleLocationGet_usesPreciseGpsFirstWhenFinePermissionAndPreciseEnabled() =
     runTest {
       val source =
@@ -126,7 +107,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
           coarseGranted = true,
         )
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource = source,
           locationPreciseEnabled = { true },
@@ -149,7 +130,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
           coarseGranted = true,
         )
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource = source,
           locationPreciseEnabled = { true },
@@ -165,7 +146,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_mapsTimeoutToLocationTimeout() =
     runTest {
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -186,7 +167,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_mapsOtherFailuresToLocationUnavailable() =
     runTest {
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(
@@ -207,7 +188,7 @@ class LocationHandlerTest : NodeHandlerRobolectricTest() {
   fun handleLocationGet_propagatesParentCancellation() =
     runTest {
       val handler =
-        LocationHandler.forTesting(
+        LocationHandler(
           appContext = appContext(),
           dataSource =
             FakeLocationDataSource(

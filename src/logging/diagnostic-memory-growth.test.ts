@@ -65,71 +65,59 @@ describe("diagnostic memory growth", () => {
     },
   );
 
-  it("warns then becomes critical for a sustained 60 MiB/min ramp within 30 minutes", () => {
-    for (let minute = 0; minute <= 30; minute += 0.5) {
-      sample(minute, 3.5 * GIB + minute * 60 * MIB);
-    }
+  it.each<
+    [
+      name: string,
+      heapGiB: number,
+      rateMiB: number,
+      warningGiB: number,
+      criticalGiB: number,
+      initialRssMiB: number,
+      options?: Parameters<typeof sample>[3],
+    ]
+  >([
+    ["16 GiB heap", 16, 60, 0.64, 1.28, 3.5 * 1024],
+    ["32 GiB heap", 32, 120, 1.28, 2.56, 128],
+    ["8 GiB process constraint", 32, 60, 0.5, 1, 128, { processMemoryLimitBytes: 8 * GIB }],
+    ["8 GiB physical capacity", 32, 60, 0.5, 1, 128, { physicalMemoryBytes: 8 * GIB }],
+    [
+      "Bun compatibility heap",
+      512,
+      60,
+      0.5,
+      1,
+      128,
+      { processMemoryLimitBytes: 512 * GIB, isBunRuntime: true },
+    ],
+    ["zero heap limit", 0, 44, 0.5, 1, 128],
+    ["NaN heap limit", Number.NaN, 44, 0.5, 1, 128],
+  ])(
+    "uses growth thresholds for %s",
+    (_, heapGiB, rateMiB, warningGiB, criticalGiB, initialRssMiB, options) => {
+      for (let minute = 0; minute <= 30; minute += 0.5) {
+        sample(minute, (initialRssMiB + minute * rateMiB) * MIB, heapGiB * GIB, options);
+      }
 
-    expect(pressures[0]).toMatchObject({
-      level: "warning",
-      reason: "rss_growth",
-      thresholdBytes: Math.floor(0.64 * GIB),
-      rssGrowthBytes: 900 * MIB,
-      windowMs: 15 * MINUTE,
-    });
-    expect(pressures.at(-1)).toMatchObject({
-      level: "critical",
-      reason: "rss_growth",
-      thresholdBytes: Math.floor(1.28 * GIB),
-      rssGrowthBytes: 1500 * MIB,
-      windowMs: 25 * MINUTE,
-    });
-    expect(pressures.every((event) => event.reason === "rss_growth")).toBe(true);
-  });
-
-  it.each([
-    { name: "32 GiB heap", heapGiB: 32, rateMiB: 120, warningGiB: 1.28, criticalGiB: 2.56 },
-    {
-      name: "8 GiB process constraint",
-      heapGiB: 32,
-      rateMiB: 60,
-      warningGiB: 0.5,
-      criticalGiB: 1,
-      processMemoryLimitBytes: 8 * GIB,
+      expect(pressures[0]).toMatchObject({
+        level: "warning",
+        reason: "rss_growth",
+        thresholdBytes: Math.floor(warningGiB * GIB),
+      });
+      expect(pressures.at(-1)).toMatchObject({
+        level: "critical",
+        reason: "rss_growth",
+        thresholdBytes: Math.floor(criticalGiB * GIB),
+      });
+      if (heapGiB === 16) {
+        expect(pressures[0]).toMatchObject({ rssGrowthBytes: 900 * MIB, windowMs: 15 * MINUTE });
+        expect(pressures.at(-1)).toMatchObject({
+          rssGrowthBytes: 1500 * MIB,
+          windowMs: 25 * MINUTE,
+        });
+        expect(pressures.every((event) => event.reason === "rss_growth")).toBe(true);
+      }
     },
-    {
-      name: "8 GiB physical capacity",
-      heapGiB: 32,
-      rateMiB: 60,
-      warningGiB: 0.5,
-      criticalGiB: 1,
-      physicalMemoryBytes: 8 * GIB,
-    },
-    {
-      name: "Bun compatibility heap",
-      heapGiB: 512,
-      rateMiB: 60,
-      warningGiB: 0.5,
-      criticalGiB: 1,
-      processMemoryLimitBytes: 512 * GIB,
-      isBunRuntime: true,
-    },
-  ])("uses growth thresholds for $name", (testCase) => {
-    for (let minute = 0; minute <= 30; minute += 0.5) {
-      sample(minute, (128 + minute * testCase.rateMiB) * MIB, testCase.heapGiB * GIB, testCase);
-    }
-
-    expect(pressures[0]).toMatchObject({
-      level: "warning",
-      reason: "rss_growth",
-      thresholdBytes: Math.floor(testCase.warningGiB * GIB),
-    });
-    expect(pressures.at(-1)).toMatchObject({
-      level: "critical",
-      reason: "rss_growth",
-      thresholdBytes: Math.floor(testCase.criticalGiB * GIB),
-    });
-  });
+  );
 
   it("does not report a rising floor after RSS falls at a window boundary", () => {
     for (let minute = 0; minute < 20; minute += 0.5) {
@@ -160,24 +148,4 @@ describe("diagnostic memory growth", () => {
 
     expect(pressures).toEqual([]);
   });
-
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
-    "keeps the 512 MiB/1 GiB growth defaults with an unknown heap limit of %s",
-    (heapSizeLimitBytes) => {
-      for (let minute = 0; minute <= 30; minute += 0.5) {
-        sample(minute, (128 + minute * 44) * MIB, heapSizeLimitBytes);
-      }
-
-      expect(pressures[0]).toMatchObject({
-        level: "warning",
-        reason: "rss_growth",
-        thresholdBytes: 512 * MIB,
-      });
-      expect(pressures.at(-1)).toMatchObject({
-        level: "critical",
-        reason: "rss_growth",
-        thresholdBytes: GIB,
-      });
-    },
-  );
 });

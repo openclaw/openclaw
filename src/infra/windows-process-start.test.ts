@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getWindowsPowerShellExePath, getWindowsWmicExePath } from "./windows-install-roots.js";
+import { getWindowsPowerShellExePath } from "./windows-install-roots.js";
 import {
   readWindowsProcessAncestorsSync,
   readWindowsProcessStartTimeSync,
@@ -39,16 +39,6 @@ describe("readWindowsProcessStartTimeSync", () => {
 
     expect(readWindowsProcessStartTimeSync(123, 1000)).toBe(Date.parse("2026-07-13T07:20:49.123Z"));
     expect(spawnSyncMock.mock.calls[0]?.[0]).toBe(getWindowsPowerShellExePath());
-  });
-
-  it("falls back to WMIC DMTF creation time output", () => {
-    spawnSyncMock.mockReturnValueOnce({ status: 1, stdout: "" } as never).mockReturnValueOnce({
-      status: 0,
-      stdout: Buffer.from("CreationDate=20260713092049.123456+120\r\n"),
-    } as never);
-
-    expect(readWindowsProcessStartTimeSync(456, 1000)).toBe(Date.parse("2026-07-13T07:20:49.123Z"));
-    expect(spawnSyncMock.mock.calls[1]?.[0]).toBe(getWindowsWmicExePath());
   });
 
   it("projects supplied native context with Windows key precedence for both queries", () => {

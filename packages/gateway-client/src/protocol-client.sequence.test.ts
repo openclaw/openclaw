@@ -81,11 +81,21 @@ describe("GatewayProtocolClient event sequences", () => {
     sendEvent(replacementConnection, 5);
 
     expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 4, received: 5 });
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(connections).toHaveLength(3);
+    const recovered = connections[2];
+    if (!recovered) {
+      throw new Error("synthetic gap recovery connection missing");
+    }
+    sendEvent(recovered, 7);
     expect(onEvent).toHaveBeenCalledTimes(3);
+    expect(onGap).toHaveBeenCalledOnce();
     client.stop();
   });
 
   test("resets on restart without admitting retired socket frames", () => {
+    vi.useFakeTimers();
     const { client, connections, onEvent, onGap } = createSequenceClient();
     client.start();
     const firstConnection = connections[0];
@@ -109,7 +119,7 @@ describe("GatewayProtocolClient event sequences", () => {
     sendEvent(replacementConnection, 5);
 
     expect(onGap).toHaveBeenCalledExactlyOnceWith({ expected: 4, received: 5 });
-    expect(onEvent).toHaveBeenCalledTimes(3);
+    expect(onEvent).toHaveBeenCalledTimes(2);
     client.stop();
   });
 });

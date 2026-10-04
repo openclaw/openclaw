@@ -34,8 +34,10 @@ const agentRoster = [
 
 const operatorConfig = {
   agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
     entries: {
-      main: { default: true, name: "Main" },
+      main: { name: "Main" },
       reviewer: { name: "Reviewer" },
     },
   },

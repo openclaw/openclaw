@@ -1,4 +1,13 @@
 // Openai tests cover realtime voice provider plugin behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  saveAuthProfileStore,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 
@@ -206,7 +215,7 @@ describe("OpenAI realtime voice provider routing", () => {
     );
     const provider = buildOpenAIRealtimeVoiceProvider();
     const cfg = {
-      agents: { list: [{ id: "main" }, { id: "voice-agent" }] },
+      agents: { entries: { main: {}, "voice-agent": {} } },
     } as never;
 
     expect(
@@ -454,6 +463,81 @@ describe("OpenAI realtime voice provider routing", () => {
     });
   });
 
+  it("excludes SIWC from voice readiness and selects a separate Codex credential", async () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-voice-capabilities-"));
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:siwc": {
+          type: "oauth",
+          provider: "openai",
+          authFlow: "chatgpt-token-sharing",
+          access: createTestJwt({
+            "https://api.openai.com/auth": { chatgpt_account_id: "siwc-account" },
+          }),
+          refresh: "siwc-refresh",
+          expires: Date.now() + 3_600_000,
+        },
+      },
+    };
+    const realAuth = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-auth")>(
+      "openclaw/plugin-sdk/provider-auth",
+    );
+    isProviderAuthProfileConfiguredMock.mockImplementation((params) =>
+      realAuth.isProviderAuthProfileConfigured({ ...params, agentDir }),
+    );
+    resolveProviderAuthProfileApiKeyMock.mockImplementation((params) =>
+      realAuth.resolveProviderAuthProfileApiKey({ ...params, agentDir }),
+    );
+    const { broker, createBrowserSession } = createQuicksilverBrowserBrokerFixture();
+    const provider = buildOpenAIRealtimeVoiceProvider({ quicksilverBrowserSessionBroker: broker });
+    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
+    const cfg = { auth: { order: { openai: ["openai:siwc", "openai:codex"] } } };
+    const request = {
+      cfg,
+      providerConfig: { model: "gpt-live-1-codex" },
+      model: "gpt-live-1-codex",
+      agentId: "main",
+      workspaceDir: "/tmp/openclaw-agent-workspace",
+      initialItems: [],
+    };
+    try {
+      saveAuthProfileStore(store, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      expect(internalApi.isBrowserSessionConfigured(request)).toBe(false);
+      await expect(provider.createBrowserSession?.(request)).rejects.toThrow();
+      expect(createBrowserSession).not.toHaveBeenCalled();
+
+      const codexToken = createTestJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "codex-account" },
+      });
+      store.profiles["openai:codex"] = {
+        type: "oauth",
+        provider: "openai",
+        access: codexToken,
+        refresh: "codex-refresh",
+        expires: Date.now() + 3_600_000,
+      };
+      saveAuthProfileStore(store, agentDir, {
+        filterExternalAuthProfiles: false,
+        syncExternalCli: false,
+      });
+      expect(internalApi.isBrowserSessionConfigured(request)).toBe(true);
+      await provider.createBrowserSession?.(request);
+      expect(createBrowserSession).toHaveBeenCalledWith(expect.any(Object), {
+        type: "oauth",
+        token: codexToken,
+        accountId: "codex-account",
+      });
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      closeOpenClawAgentDatabasesForTest();
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { name: "OAuth", hostClaim: true, broker: true, auth: "oauth", supported: false },
     { name: "Platform", hostClaim: true, broker: true, auth: "api_key", supported: true },
@@ -512,10 +596,10 @@ describe("OpenAI realtime voice provider routing", () => {
     });
     const cfg = {
       agents: {
-        list: [
-          { id: "helper", agentDir: "/tmp/openclaw-helper-agent" },
-          { id: "molty", agentDir: "/tmp/openclaw-molty-agent" },
-        ],
+        entries: {
+          helper: { agentDir: "/tmp/openclaw-helper-agent" },
+          molty: { agentDir: "/tmp/openclaw-molty-agent" },
+        },
       },
     } as never;
     const resolveCapabilities =

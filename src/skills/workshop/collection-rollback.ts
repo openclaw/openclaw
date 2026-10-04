@@ -54,12 +54,9 @@ export async function restoreSkillCollectionBackupTransaction(params: {
   }
 }
 
-async function restoreSkillCollectionBackup(params: {
-  skillsRoot: string;
-  backupDir: string;
-  skillDirs: readonly string[];
-  resultSkillDirs: readonly string[];
-}): Promise<void> {
+async function restoreSkillCollectionBackup(
+  params: Parameters<typeof restoreSkillCollectionBackupTransaction>[0],
+): Promise<void> {
   const removeDirs = new Set([
     ...params.skillDirs.map((relativeDir) => path.join(params.skillsRoot, relativeDir)),
     ...params.resultSkillDirs.map((relativeDir) => path.join(params.skillsRoot, relativeDir)),
@@ -91,16 +88,6 @@ async function discardRestoreSnapshot(backupDir: string, rollbackDir: string): P
 }
 
 async function removeSkillCollectionDirectory(skillsRoot: string, skillDir: string): Promise<void> {
-  const relativePath = relativeSkillCollectionPath(skillsRoot, skillDir);
-  await removePathWithinRoot({
-    rootDir: skillsRoot,
-    relativePath,
-    recursive: true,
-    force: false,
-  });
-}
-
-function relativeSkillCollectionPath(skillsRoot: string, skillDir: string): string {
   const relativePath = path.relative(skillsRoot, skillDir);
   if (
     !relativePath ||
@@ -110,5 +97,10 @@ function relativeSkillCollectionPath(skillsRoot: string, skillDir: string): stri
   ) {
     throw new Error(`Skill directory must be inside the Skill Workshop directory: ${skillDir}`);
   }
-  return relativePath;
+  await removePathWithinRoot({
+    rootDir: skillsRoot,
+    relativePath,
+    recursive: true,
+    force: false,
+  });
 }

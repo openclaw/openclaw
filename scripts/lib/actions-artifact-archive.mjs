@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
-import { inflateRawSync } from "node:zlib";
+import { crc32, inflateRawSync } from "node:zlib";
 
 const ACTIONS_ARTIFACT_API_VERSION = "2026-03-10";
 const DEFAULT_MAX_ACTIONS_ARTIFACT_BYTES = 256 * 1024 * 1024;
@@ -68,7 +68,7 @@ function assertTrimmedString(value, label) {
   return value;
 }
 
-function hasControlCharacters(value) {
+export function hasControlCharacters(value) {
   for (const character of value) {
     const codePoint = character.codePointAt(0);
     if (codePoint <= 0x1f || codePoint === 0x7f) {
@@ -78,7 +78,7 @@ function hasControlCharacters(value) {
   return false;
 }
 
-function boundedLimit(value, fallback, label) {
+export function boundedLimit(value, fallback, label) {
   if (value === undefined) {
     return fallback;
   }
@@ -175,7 +175,7 @@ export function sha256Digest(bytes) {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function compareCodeUnits(left, right) {
+export function compareCodeUnits(left, right) {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
@@ -258,17 +258,6 @@ function findEndOfCentralDirectory(bytes) {
   );
 }
 
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc ^= byte;
-    for (let bit = 0; bit < 8; bit += 1) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
 function normalizeArchivePolicy(policy) {
   if (!policy || typeof policy !== "object") {
     throw new Error("Actions artifact ZIP policy is required.");
@@ -324,7 +313,6 @@ function normalizeArchivePolicy(policy) {
   }
   return {
     expectedEntries,
-    expectedEntrySet: expectedEntries ? new Set(expectedEntries) : undefined,
     maxArchiveBytes,
     maxEntries,
     maxExpandedBytes,

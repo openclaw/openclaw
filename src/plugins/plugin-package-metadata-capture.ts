@@ -7,14 +7,22 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isPathInside } from "../infra/path-guards.js";
+import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { escapeRegExp } from "../shared/regexp.js";
-import { retainPluginSourceCaptureInstance } from "./plugin-source-capture-directory.js";
+import {
+  retainLoadedPluginSourceCapture,
+  retainPluginSourceCaptureInstance,
+} from "./plugin-source-capture-directory.js";
 import { PLUGIN_SOURCE_CAPTURE_PREFIX } from "./plugin-source-capture-path.js";
+import { isPluginSourceEntry } from "./plugin-source-file.js";
 import { verifyPluginSourceInputs, type PluginSourceInput } from "./plugin-source-verification.js";
 
 export type PluginDependencyResolution = { root: string; lookupDirectory: string };
 
-export function createPluginDependencyResolver() {
+export function createPluginDependencyResolver(lookupBoundary?: {
+  root: string;
+  onUnresolvable: (name: string, importer: string) => void;
+}) {
   const roots = new Map<string, PluginDependencyResolution | undefined>();
   return (name: string, importer: string): PluginDependencyResolution | undefined => {
     const key = `${path.dirname(importer)}\0${name}`;
@@ -25,6 +33,24 @@ export function createPluginDependencyResolver() {
     for (const nodeModules of createRequire(importer).resolve.paths(`${name}/`) ?? []) {
       const candidate = path.join(nodeModules, name);
       if (fs.existsSync(path.join(candidate, "package.json"))) {
+        if (
+          lookupBoundary &&
+          isPathInside(lookupBoundary.root, importer) &&
+          !isPathInside(lookupBoundary.root, nodeModules)
+        ) {
+          const manifestFile = path.join(resolvePluginModulePackageRoot(importer), "package.json");
+          const manifest = fs.existsSync(manifestFile)
+            ? asOptionalRecord(JSON.parse(fs.readFileSync(manifestFile, "utf8")))
+            : undefined;
+          // Node walks ancestor node_modules up to the filesystem root. An undeclared
+          // optional lookup must not acquire unrelated ancestor code for a rehearsal.
+          // Declared packages and links inside the copy retain containment validation.
+          if (!pluginDependencyNames(manifest).has(name)) {
+            lookupBoundary.onUnresolvable(name, importer);
+            roots.set(key, undefined);
+            return undefined;
+          }
+        }
         const resolved = {
           root: fs.realpathSync(candidate),
           lookupDirectory: path.dirname(nodeModules),
@@ -85,6 +111,9 @@ function pluginDependencyNames(manifest: Record<string, unknown> | undefined): S
 type PluginNativeDependencyScope = { prepareDependencies?: () => void };
 
 export type PluginModuleCapture = {
+  staticImports?: ReadonlySet<string>;
+  isNativeImportPattern: (specifier: string) => boolean;
+  isRequireReference: (specifier: string) => boolean;
   prepareDependency: ReturnType<typeof createPluginDependencyLookup>;
   nativeScope: PluginNativeDependencyScope;
   capture: (
@@ -127,6 +156,8 @@ export function createPluginNativeDependencyScopes(
 export function capturePluginDependencies(params: {
   root: string;
   manifestFile?: string;
+  /** Nested manifests nobody selected (benchmarks, examples) keep their declarations optional. */
+  incidental?: boolean;
   references: ReadonlyMap<string, ReadonlySet<string>>;
   resolve: ReturnType<typeof createPluginDependencyResolver>;
   capture: (name: string, dependency: PluginDependencyResolution) => void;
@@ -154,6 +185,7 @@ export function capturePluginDependencies(params: {
     if (!dependency) {
       if (
         !params.manifestFile ||
+        params.incidental ||
         name in (manifest.optionalDependencies ?? {}) ||
         name in (manifest.peerDependencies ?? {})
       ) {
@@ -250,16 +282,16 @@ export function capturePluginPackageMetadata(
 export const packageName = (specifier: string) =>
   specifier.startsWith("@") ? specifier.split("/").slice(0, 2).join("/") : specifier.split("/")[0]!;
 export const importTargetNames = (value: unknown): string[] => {
-  if (typeof value === "string") {
-    return value &&
-      !value.startsWith(".") &&
-      !value.startsWith("#") &&
-      !path.isAbsolute(value) &&
-      !isBuiltin(value)
-      ? [packageName(value)]
-      : [];
-  }
-  return value && typeof value === "object" ? Object.values(value).flatMap(importTargetNames) : [];
+  return [...pluginPackageTargets(value)]
+    .filter(
+      (target) =>
+        target &&
+        !target.startsWith(".") &&
+        !target.startsWith("#") &&
+        !path.isAbsolute(target) &&
+        !isBuiltin(target),
+    )
+    .map(packageName);
 };
 
 /** Capture declared targets; native loading owns conditions and subpath selection. */
@@ -341,7 +373,7 @@ function visitPluginPackageTargetFiles(params: {
         throw new Error(`Plugin source contains a directory cycle: ${source}`);
       }
       ancestors.add(real);
-      for (const name of fs.readdirSync(input).toSorted()) {
+      for (const name of fs.readdirSync(input).filter(isPluginSourceEntry).toSorted()) {
         visit(path.join(source, name));
       }
       ancestors.delete(real);
@@ -615,10 +647,26 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     directory = fs.realpathSync(created);
     fs.chmodSync(directory, 0o700);
   } catch (error) {
-    if (created) {
-      fs.rmSync(created, { recursive: true, force: true });
+    const cleanupErrors: unknown[] = [];
+    try {
+      if (created) {
+        fs.rmSync(created, { recursive: true, force: true });
+      }
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
     }
-    instance?.release();
+    try {
+      instance?.release();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    if (cleanupErrors.length > 0) {
+      throw createSqliteLifecycleAggregateError(
+        [error, ...cleanupErrors],
+        "Plugin source capture setup and cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
   const inputs = new Map<string, PluginSourceInput>();
@@ -683,12 +731,16 @@ export function createPluginSourceCapture(execute?: <T>(run: () => T) => T) {
     },
     dispose() {
       beginDisposal();
-      fs.rmSync(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        fs.rmSync(directory, { recursive: true, force: true });
+      }
       instance?.release();
     },
     async disposeAsync() {
       beginDisposal();
-      await fsPromises.rm(directory, { recursive: true, force: true });
+      if (!retainLoadedPluginSourceCapture(directory)) {
+        await fsPromises.rm(directory, { recursive: true, force: true });
+      }
       await instance?.releaseAsync();
     },
   };

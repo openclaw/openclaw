@@ -23,12 +23,16 @@ export const {
   resolveCodexAppServerAuthProfileStore,
 } = createCodexAuthProfileSelection({ ensureAuthProfileStore, resolveAuthProfileOrder });
 
-/** Inputs needed to resolve whether a binding's auth profile is native Codex/OpenAI auth. */
 export type CodexAppServerAuthProfileLookup = {
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
   agentDir?: string;
   config?: ProviderAuthAliasConfig;
+};
+
+export type CodexAppServerAuthRuntimeContext = CodexAppServerAuthProfileLookup & {
+  authMode?: "prepared-api-key" | "profile";
+  onAuthRefreshFailure?: () => void;
 };
 
 /** Returns true when an auth profile uses native Codex/OpenAI app-server auth. */
@@ -77,13 +81,9 @@ export function isCodexAppServerNativeAuthProfile(
 }
 
 /** Hides redundant OpenAI provider attribution for native Codex auth bindings. */
-export function normalizeCodexAppServerBindingModelProvider(params: {
-  authProfileId?: string;
-  modelProvider?: string;
-  authProfileStore?: AuthProfileStore;
-  agentDir?: string;
-  config?: ProviderAuthAliasConfig;
-}): string | undefined {
+export function normalizeCodexAppServerBindingModelProvider(
+  params: CodexAppServerAuthProfileLookup & { modelProvider?: string },
+): string | undefined {
   const modelProvider = params.modelProvider?.trim();
   if (!modelProvider) {
     return undefined;

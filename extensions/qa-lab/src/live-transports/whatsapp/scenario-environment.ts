@@ -33,7 +33,6 @@ export type WhatsAppQaScenarioEnvironment = {
   runtimeEnv: WhatsAppQaRuntimeEnv;
   scenario: { id: string; timeoutMs: number; title: string };
   sutAccountId: string;
-  sutAuthDir: string;
 };
 
 function resolveWhatsAppQaReplacePaths(accountId: string): string[] {
@@ -97,19 +96,11 @@ export function createWhatsAppQaScenarioEnvironment(params: {
             : run.configMode === "pairing"
               ? ["+15550000000"]
               : [params.runtimeEnv.driverPhoneE164];
-      const dmPolicy =
-        run.kind === "approval"
-          ? "allowlist"
-          : run.configMode === "open" || run.configMode === "disabled"
-            ? run.configMode
-            : run.configMode === "allowlist"
-              ? "allowlist"
-              : "pairing";
       const snapshot = await readLiveQaGatewayConfig(input.gateway);
       const cfg = buildWhatsAppQaConfig(snapshot.config as OpenClawConfig, {
         allowFrom,
         authDir: params.sutAuthDir,
-        dmPolicy,
+        dmPolicy: run.kind === "approval" ? "allowlist" : run.configMode,
         groupJid,
         ownerAllowFrom: [params.runtimeEnv.driverPhoneE164],
         overrides: implementation.configOverrides,
@@ -140,7 +131,6 @@ export function createWhatsAppQaScenarioEnvironment(params: {
           title: input.scenarioTitle,
         },
         sutAccountId: params.accountId,
-        sutAuthDir: params.sutAuthDir,
       } satisfies WhatsAppQaScenarioEnvironment,
     };
   };

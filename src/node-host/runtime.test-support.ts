@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => {
   return {
     closeMcp,
     closeWorkerSupervisor: vi.fn(async () => undefined),
+    retireIdleWorkers: vi.fn<() => Promise<void>>(async () => undefined),
     workerHasActiveWork: vi.fn(async () => false),
     pluginHasActiveWork: vi.fn(() => false),
     initializeWorkerSupervisor: vi.fn(async () => undefined),
@@ -48,6 +49,7 @@ vi.mock("./node-worker-supervisor.js", () => ({
   createNodeWorkerSupervisor: vi.fn(() => ({
     initialize: mocks.initializeWorkerSupervisor,
     hasActiveWork: mocks.workerHasActiveWork,
+    retireIdle: mocks.retireIdleWorkers,
     close: mocks.closeWorkerSupervisor,
   })),
 }));
@@ -55,6 +57,7 @@ vi.mock("./node-worker-supervisor.js", () => ({
 vi.mock("./node-worker-workspace.js", () => ({
   NodeWorkerWorkspaceRuntime: class {
     readonly exec = vi.fn();
+    readonly checkAdmission = vi.fn(async () => undefined);
   },
 }));
 
@@ -76,8 +79,7 @@ vi.mock("./skills.js", () => ({
 
 // Retain local bindings after mock registration for Vitest's export transform.
 const { prepareNodeHostRuntime } = await import("./runtime.js");
-const { listRegisteredNodeHostCapsAndCommands } = await import("./plugin-node-host.js");
-export { mocks, prepareNodeHostRuntime, listRegisteredNodeHostCapsAndCommands };
+export { mocks, prepareNodeHostRuntime };
 
 export const frame = {
   id: "invoke-1",
@@ -94,6 +96,7 @@ beforeEach(() => {
   mocks.closeWorkerSupervisor.mockResolvedValue(undefined);
   mocks.initializeWorkerSupervisor.mockResolvedValue(undefined);
   mocks.workerHasActiveWork.mockResolvedValue(false);
+  mocks.retireIdleWorkers.mockResolvedValue(undefined);
   mocks.pluginHasActiveWork.mockReturnValue(false);
   mocks.disconnectPlugins.mockResolvedValue(undefined);
 });
@@ -115,7 +118,6 @@ export async function startRuntime(
     config: { nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true } } },
     env: { PATH: "/usr/bin" },
     enableAgentRuns: true,
-    enableWorkerRuns: true,
   });
   return prepared.start({ client });
 }

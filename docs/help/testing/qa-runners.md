@@ -53,6 +53,14 @@ inside every shard.
     and config paths, so its CLI bootstrap cannot select the operator's installed
     Gateway service. Parent profiles and runtime environment patches do not
     override that worker identity.
+    Child temporary files and default compiler caches stay in the worker's
+    temporary root and are removed after its processes stop. Parent temporary
+    paths and runtime environment patches do not redirect this scratch storage.
+    `OPENCLAW_QA_KEEP_TEMP=1` retains that root for debugging.
+    If the controller dies, the current Gateway's parent watchdog exits without
+    deleting runtime files that descendants may still use. A surviving owner or
+    host maintenance must confirm that those writers stopped before removing the
+    retained roots.
   - Exits non-zero when any scenario fails. Use `--allow-failures` for
     artifacts without a failing exit code.
   - Supports provider modes `live-frontier`, `mock-openai`, and `aimock`.
@@ -138,7 +146,11 @@ inside every shard.
     fail immediately, while unknown or inapplicable ids fail canonical scenario
     validation. The package runner promotes the selected RTT scenario once to
     the first position before the remaining taxonomy-backed fail-fast release
-    scenarios.
+    scenarios. Probes continue in its most recently observed conversation and
+    thread, using the leased primary participant. The first sample starts a
+    new message; later samples chain their own replies rather than a reply
+    observed by another scenario participant. Delivery-only scenarios use their
+    observed outbound route and need no additional catalog metadata.
   - Uses the same Convex-leased Test Server userbot credentials as
     `pnpm openclaw qa telegram`. Set `OPENCLAW_QA_CONVEX_SITE_URL` and the
     secret for the selected role. The Docker wrapper selects Convex by default.
@@ -165,17 +177,19 @@ inside every shard.
   or `custom` lane profiles. Set `telegram_mode=mock-openai` or
   `live-frontier` to run the Telegram QA workflow against the same
   `package-under-test` artifact.
-  - For existing Telegram topic bindings across a published-driver update, select
+  - For legacy Telegram topic bindings across a published-driver update, select
     `suite_profile=telegram`, `telegram_mode=mock-openai`, and the single scenario
     `telegram-published-upgrade-bindings`. Supply `package_spec` as an exact
     published baseline, such as `openclaw@2026.9.6`, and resolve the candidate
     through `source=ref` or a verified tarball artifact. This scenario installs
-    the baseline before leasing Test Server credentials, creates a real bound
-    child session, and runs that installation's normal `openclaw update` against
-    the candidate. It checks the same binding after activation and another
-    Gateway restart, including all three orderly shutdowns. Raw credential,
-    session, and transport state stays in container scratch; uploaded evidence
-    contains the package identities and redacted outcome only.
+    the baseline before leasing Test Server credentials, lets it spawn a
+    thread-bound child that takes over the forum topic, and runs that
+    installation's normal `openclaw update` against the candidate. It checks that
+    the topic routes back to the parent session after activation and another
+    Gateway restart while the child session stays intact, including all three
+    orderly shutdowns. Raw credential, session, and transport state stays in
+    container scratch; uploaded evidence contains the package identities and
+    redacted outcome only.
   - Latest beta product proof:
 
 ```bash

@@ -1,8 +1,7 @@
-// Shared media-understanding types for attachments, provider hooks, request
-// auth, decisions, and structured extraction inputs.
 import type { Result } from "@openclaw/normalization-core/result";
 import type { MediaUnderstandingCapability } from "../../packages/media-understanding-common/src/types.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
+import type { ModelProviderRequestTransportOverrides } from "../agents/provider-request-config.types.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -71,38 +70,16 @@ export type MediaUnderstandingDecision = {
   nativeVisionActive?: boolean;
 };
 
-type MediaUnderstandingProviderRequestAuthOverride =
-  | { mode: "provider-default" }
-  | { mode: "authorization-bearer"; token: string }
-  | { mode: "header"; headerName: string; value: string; prefix?: string };
-
-type MediaUnderstandingProviderRequestTlsOverride = {
-  ca?: string;
-  cert?: string;
-  key?: string;
-  passphrase?: string;
-  serverName?: string;
-  insecureSkipVerify?: boolean;
-};
-
-type MediaUnderstandingProviderRequestProxyOverride =
-  | { mode: "env-proxy"; tls?: MediaUnderstandingProviderRequestTlsOverride }
-  | { mode: "explicit-proxy"; url: string; tls?: MediaUnderstandingProviderRequestTlsOverride };
-
-type MediaUnderstandingProviderRequestTransportOverrides = {
-  headers?: Record<string, string>;
-  auth?: MediaUnderstandingProviderRequestAuthOverride;
-  proxy?: MediaUnderstandingProviderRequestProxyOverride;
-  tls?: MediaUnderstandingProviderRequestTlsOverride;
-  /** Runtime-only flag from trusted model-provider config; media config rejects it. */
-  allowPrivateNetwork?: boolean;
-};
-
 export type MediaUnderstandingProviderRequestAuth =
   | { kind: "api-key"; apiKey: string; source?: string }
   | { kind: "none"; source: string };
 
-export type AudioTranscriptionRequest = {
+export type AudioTranscriptionRequest = MediaUnderstandingProviderRequest & {
+  language?: string;
+  query?: Record<string, string | number | boolean>;
+};
+
+type MediaUnderstandingProviderRequest = {
   buffer: Buffer;
   fileName: string;
   mime?: string;
@@ -111,20 +88,20 @@ export type AudioTranscriptionRequest = {
   auth?: MediaUnderstandingProviderRequestAuth;
   baseUrl?: string;
   headers?: Record<string, string>;
-  request?: MediaUnderstandingProviderRequestTransportOverrides;
+  request?: ModelProviderRequestTransportOverrides;
   model?: string;
-  language?: string;
   prompt?: string;
-  query?: Record<string, string | number | boolean>;
   timeoutMs: number;
   signal?: AbortSignal;
   fetchFn?: typeof fetch;
 };
 
-export type AudioTranscriptionResult = {
+type MediaUnderstandingTextResult = {
   text: string;
   model?: string;
 };
+
+export type AudioTranscriptionResult = MediaUnderstandingTextResult;
 
 type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "auth"> & {
   cfg: OpenClawConfig;
@@ -134,47 +111,12 @@ type AudioTranscriptionContext = Omit<AudioTranscriptionRequest, "apiKey" | "aut
   preferredProfile?: string;
 };
 
-export type VideoDescriptionRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-  /** Compatibility field for existing providers; prefer auth.kind/apiKey. */
-  apiKey: string;
-  auth?: MediaUnderstandingProviderRequestAuth;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  request?: MediaUnderstandingProviderRequestTransportOverrides;
-  model?: string;
-  prompt?: string;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  fetchFn?: typeof fetch;
-};
+export type VideoDescriptionRequest = MediaUnderstandingProviderRequest;
 
-export type VideoDescriptionResult = {
-  text: string;
-  model?: string;
-};
+export type VideoDescriptionResult = MediaUnderstandingTextResult;
 
-export type ImageDescriptionRequest = {
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
-  prompt?: string;
-  maxTokens?: number;
-  timeoutMs: number;
-  signal?: AbortSignal;
-  profile?: string;
-  preferredProfile?: string;
-  authStore?: AuthProfileStore;
-  agentId?: string;
-  agentDir: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: MediaPreparedModelRuntime;
-  cfg: OpenClawConfig;
-  model: string;
-  provider: string;
-};
+export type ImageDescriptionRequest = ImagesDescriptionInput &
+  Omit<ImagesDescriptionRequest, "images">;
 
 export type ImagesDescriptionInput = {
   buffer: Buffer;
@@ -200,26 +142,17 @@ export type ImagesDescriptionRequest = {
   cfg: OpenClawConfig;
 };
 
-export type ImageDescriptionResult = {
-  text: string;
-  model?: string;
-};
+export type ImageDescriptionResult = MediaUnderstandingTextResult;
 
-export type ImagesDescriptionResult = {
-  text: string;
-  model?: string;
-};
+export type ImagesDescriptionResult = ImageDescriptionResult;
 
 export type StructuredExtractionTextInput = {
   type: "text";
   text: string;
 };
 
-export type StructuredExtractionImageInput = {
+export type StructuredExtractionImageInput = ImagesDescriptionInput & {
   type: "image";
-  buffer: Buffer;
-  fileName: string;
-  mime?: string;
 };
 
 export type StructuredExtractionInput =

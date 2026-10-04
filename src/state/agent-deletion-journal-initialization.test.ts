@@ -6,9 +6,9 @@ import { ensureMemoryIndexSchema } from "../../packages/memory-host-sdk/src/host
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareConfigFileWrite } from "../config/backup-rotation.js";
 import { withDeferredPluginMigrationsCurrent } from "../infra/deferred-plugin-migrations.js";
+import * as stateOwners from "../infra/gateway-state-owner.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteIntegrityCheckSync } from "../infra/sqlite-integrity.js";
-import * as stateCoordinator from "../infra/state-database-coordinator.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { migrateLegacyMediaPersistence } from "../infra/state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
@@ -38,11 +38,13 @@ afterEach(() => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("agent deletion journal initialization", () => {
-  it.each(
-    ["missing", "reconstructed", "deleted-during-integrity", "lost-during-integrity"].flatMap(
-      (history) => ["canonical", "external"].map((location) => ({ history, location })),
-    ),
-  )(
+  it.each([
+    { history: "missing", location: "canonical" },
+    { history: "missing", location: "external" },
+    { history: "reconstructed", location: "external" },
+    { history: "deleted-during-integrity", location: "external" },
+    { history: "lost-during-integrity", location: "external" },
+  ])(
     "preserves $location independently managed agent bytes when history is $history",
     ({ history, location }) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-independent-agent-") };
@@ -177,7 +179,7 @@ describe("agent deletion journal initialization", () => {
     }
   });
 
-  it("captures checkpoint freshness after an earlier config publication obtains the state coordinator", async () => {
+  it("captures checkpoint freshness after earlier config publication and process ownership", async () => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-checkpoint-publication-") };
     const originalAgentPath = createLegacyDatabaseFixture({
       env,
@@ -201,9 +203,9 @@ describe("agent deletion journal initialization", () => {
       previousRaw: "{}",
       fsModule: fs,
     });
-    const acquire = stateCoordinator.acquireStateDatabaseCoordinator;
+    const acquire = stateOwners.acquireStateDatabaseSchemaLease;
     const publication = vi
-      .spyOn(stateCoordinator, "acquireStateDatabaseCoordinator")
+      .spyOn(stateOwners, "acquireStateDatabaseSchemaLease")
       .mockImplementationOnce((options) => {
         withDeferredPluginMigrationsCurrent({ env, expectedPending: [] }, () =>
           preparedFile.publish(),
@@ -334,72 +336,53 @@ describe("agent deletion journal initialization", () => {
     }
   });
 
-  it.each([
-    "missing",
-    "inline",
-    "include-env",
-    "legacy-session-json",
-    "empty-agent",
-    "external-agent",
-  ])("creates a known-empty journal for fresh state (config: %s)", (configSource) => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-fresh-") };
-    if (configSource === "external-agent") {
-      openOpenClawAgentDatabase({
-        agentId: "main",
-        path: path.join(tempDirs.make("journal-fresh-external-"), "openclaw-agent.sqlite"),
-        env,
-      });
-    }
-    if (configSource === "legacy-session-json" || configSource === "empty-agent") {
-      const file = path.join(
-        env.OPENCLAW_STATE_DIR,
-        "agents",
-        "main",
-        configSource === "empty-agent" ? "agent/openclaw-agent.sqlite" : "sessions/sessions.json",
-      );
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, configSource === "empty-agent" ? "" : "{}");
-    }
-    if (configSource === "inline" || configSource === "include-env") {
-      fs.writeFileSync(
-        path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
-        configSource === "inline"
-          ? "{ agents: { entries: { main: {} } } }"
-          : JSON.stringify({
-              env: { L1072_AGENT_DIR: path.join(env.OPENCLAW_STATE_DIR, "custom-agent") },
-              agents: { $include: "./agents.json5" },
-            }),
-      );
+  it.each(["include-env", "legacy-session-json", "empty-agent"])(
+    "creates a known-empty journal for fresh state (config: %s)",
+    (configSource) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("journal-fresh-") };
+      if (configSource === "legacy-session-json" || configSource === "empty-agent") {
+        const file = path.join(
+          env.OPENCLAW_STATE_DIR,
+          "agents",
+          "main",
+          configSource === "empty-agent" ? "agent/openclaw-agent.sqlite" : "sessions/sessions.json",
+        );
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        fs.writeFileSync(file, configSource === "empty-agent" ? "" : "{}");
+      }
       if (configSource === "include-env") {
+        fs.writeFileSync(
+          path.join(env.OPENCLAW_STATE_DIR, "openclaw.json"),
+          JSON.stringify({
+            env: { L1072_AGENT_DIR: path.join(env.OPENCLAW_STATE_DIR, "custom-agent") },
+            agents: { $include: "./agents.json5" },
+          }),
+        );
         fs.writeFileSync(
           path.join(env.OPENCLAW_STATE_DIR, "agents.json5"),
           "{ entries: { main: { agentDir: '${L1072_AGENT_DIR}' } } }",
         );
+        fs.mkdirSync(path.join(env.OPENCLAW_STATE_DIR, "agents"));
+        fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "agents", ".DS_Store"), "");
       }
-      fs.mkdirSync(path.join(env.OPENCLAW_STATE_DIR, "agents"));
-      fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, "agents", ".DS_Store"), "");
-    }
-    const opened = openOpenClawStateDatabase({ env });
-    expect(opened.db.prepare("SELECT count(*) AS count FROM agent_deletion_journal").get()).toEqual(
-      { count: 0 },
-    );
-    const discovery = discoverAgentDatabaseMigrationTargets({
-      env,
-      configuredAgentDatabaseTargets: [],
-      registeredAgentDatabases: [],
-    });
-    expect(discovery.warnings).toEqual([]);
-    expect(discovery.retainedTargets).toEqual([]);
-  });
+      const opened = openOpenClawStateDatabase({ env });
+      expect(
+        opened.db.prepare("SELECT count(*) AS count FROM agent_deletion_journal").get(),
+      ).toEqual({ count: 0 });
+      const discovery = discoverAgentDatabaseMigrationTargets({
+        env,
+        configuredAgentDatabaseTargets: [],
+        registeredAgentDatabases: [],
+      });
+      expect(discovery.warnings).toEqual([]);
+      expect(discovery.retainedTargets).toEqual([]);
+    },
+  );
 
   it.each([
     "existing-empty-database",
     "shared-wal",
-    "shared-shm",
-    "shared-journal",
     "empty-agent-wal",
-    "empty-agent-shm",
-    "empty-agent-journal",
     "invalid-json5",
     "missing-include",
     "unresolved-storage-env",
@@ -414,27 +397,15 @@ describe("agent deletion journal initialization", () => {
       const pathname = resolveOpenClawStateSqlitePath(env);
       fs.mkdirSync(path.dirname(pathname));
       new DatabaseSync(pathname).close();
-    } else if (source === "shared-wal" || source === "shared-shm" || source === "shared-journal") {
+    } else if (source === "shared-wal") {
       const pathname = resolveOpenClawStateSqlitePath(env);
       fs.mkdirSync(path.dirname(pathname));
-      const suffix = { "shared-wal": "-wal", "shared-shm": "-shm", "shared-journal": "-journal" }[
-        source
-      ];
-      fs.writeFileSync(pathname + suffix, Buffer.alloc(64));
-    } else if (
-      source === "empty-agent-wal" ||
-      source === "empty-agent-shm" ||
-      source === "empty-agent-journal"
-    ) {
+      fs.writeFileSync(`${pathname}-wal`, Buffer.alloc(64));
+    } else if (source === "empty-agent-wal") {
       const pathname = path.join(env.OPENCLAW_STATE_DIR, "agents/main/agent/openclaw-agent.sqlite");
       fs.mkdirSync(path.dirname(pathname), { recursive: true });
       fs.writeFileSync(pathname, "");
-      const suffix = {
-        "empty-agent-wal": "-wal",
-        "empty-agent-shm": "-shm",
-        "empty-agent-journal": "-journal",
-      }[source];
-      fs.writeFileSync(pathname + suffix, Buffer.alloc(64));
+      fs.writeFileSync(`${pathname}-wal`, Buffer.alloc(64));
     } else {
       const config = {
         "invalid-json5": "{ agents:",

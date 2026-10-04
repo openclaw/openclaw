@@ -18,6 +18,7 @@ import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-suppor
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import type { TestChatPane } from "./chat-pane.test-support.ts";
 import { readChatInputRunIds } from "./chat-pending-inputs.ts";
+import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
@@ -31,6 +32,34 @@ import { RealtimeTalkSession } from "./talk/session.ts";
 
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
+
+function globalSession(
+  agentId: string,
+  overrides: Partial<GatewaySessionRow> = {},
+): GatewaySessionRow {
+  return {
+    key: "global",
+    agentId,
+    sessionId: `${agentId}-global`,
+    kind: "global",
+    updatedAt: 1,
+    ...overrides,
+  };
+}
+
+function composerControls(state: ChatPageHost, agentDefaultModel?: string) {
+  return renderChatPaneComposerControls({
+    state,
+    selectedSession: selectedChatSessionRow(state),
+    agentDefaultModel,
+    modelAccess: { allowed: true, requiredScope: "operator.write" },
+    effortAccess: { allowed: true, requiredScope: "operator.write" },
+    contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
+    permissionAccess: { allowed: true, requiredScope: "operator.write" },
+    canSelectFull: true,
+    onModelSetup: vi.fn(),
+  });
+}
 
 describe("mounted pane session event ownership", () => {
   it("retires Talk on a provider pause and prevents it from starting again", async () => {
@@ -131,13 +160,7 @@ describe("mounted pane session event ownership", () => {
   ] as const)(
     "keeps a foreign $key descriptor after history refresh without changing primary membership (archived: $archived)",
     async ({ key, kind, archived }) => {
-      const primary: GatewaySessionRow = {
-        key: "global",
-        agentId: "main",
-        sessionId: "main-global",
-        kind: "global",
-        updatedAt: 1,
-      };
+      const primary = globalSession("main");
       const selected: GatewaySessionRow = {
         key,
         agentId: "research",
@@ -251,22 +274,11 @@ describe("mounted pane session event ownership", () => {
   );
 
   it("does not admit fenced hidden history and hydrates its foreign descriptor when presented", async () => {
-    const primary: GatewaySessionRow = {
-      key: "global",
-      agentId: "main",
-      sessionId: "main-global",
-      kind: "global",
-      updatedAt: 1,
-    };
-    const original: GatewaySessionRow = {
-      key: "global",
-      agentId: "research",
-      sessionId: "research-global",
-      kind: "global",
+    const primary = globalSession("main");
+    const original = globalSession("research", {
       archived: true,
-      updatedAt: 1,
       label: "Earlier history",
-    };
+    });
     const latest = { ...original, updatedAt: 2, label: "Current research session" };
     const oldHistory = createDeferred<ChatHistoryResult>();
     const freshHistory = createDeferred<ChatHistoryResult>();
@@ -511,17 +523,7 @@ describe("mounted pane session event ownership", () => {
         adoptStartedChatRun(state, "current-run", 2);
         const container = document.createElement("div");
         const draw = () => {
-          const controls = renderChatPaneComposerControls({
-            state,
-            selectedSession: selectedChatSessionRow(state),
-            agentDefaultModel: "example/primary",
-            modelAccess: { allowed: true, requiredScope: "operator.write" },
-            effortAccess: { allowed: true, requiredScope: "operator.write" },
-            contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-            permissionAccess: { allowed: true, requiredScope: "operator.write" },
-            canSelectFull: true,
-            onModelSetup: vi.fn(),
-          });
+          const controls = composerControls(state, "example/primary");
           render(controls.composerControls, container);
           return container.querySelector<HTMLElement>("[data-chat-model-select]");
         };
@@ -556,25 +558,15 @@ describe("mounted pane session event ownership", () => {
   );
 
   it("projects an admitted equal-clock terminal descriptor while a newer local run continues", async () => {
-    const primary: GatewaySessionRow = {
-      key: "global",
-      agentId: "main",
-      sessionId: "main-global",
-      kind: "global",
-      updatedAt: 100,
-    };
-    const running: GatewaySessionRow = {
-      key: "global",
-      agentId: "research",
-      sessionId: "research-global",
-      kind: "global",
+    const primary = globalSession("main", { updatedAt: 100 });
+    const running = globalSession("research", {
       updatedAt: 100,
       startedAt: 50,
       hasActiveRun: true,
       status: "running",
       activeRunIds: ["completed-run"],
       lastRunId: "completed-run",
-    };
+    });
     const terminal = {
       key: running.key,
       agentId: running.agentId,
@@ -627,6 +619,10 @@ describe("mounted pane session event ownership", () => {
         runId: "newer-run",
         state: "delta",
         deltaText: "The newer run continues.",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "The newer run continues." }],
+        },
       });
       expect(continuing.state.chatStream).toBe("The newer run continues.");
       holdLaterReads = true;
@@ -662,22 +658,11 @@ describe("mounted pane session event ownership", () => {
   });
 
   it("recovers a foreign pane's permission picker from history after scoped readback fails", async () => {
-    const primary: GatewaySessionRow = {
-      key: "global",
-      agentId: "main",
-      sessionId: "main-global",
-      kind: "global",
-      updatedAt: 1,
-    };
-    const selected: GatewaySessionRow = {
-      key: "global",
-      agentId: "research",
-      sessionId: "research-global",
-      kind: "global",
-      updatedAt: 1,
+    const primary = globalSession("main");
+    const selected = globalSession("research", {
       permissionMode: "workspace",
       label: "Initial research session",
-    };
+    });
     const observed = { ...selected, label: "Observed research session" };
     const recovered = { ...observed, label: "Recovered through history" };
     const historyReply = createDeferred<ChatHistoryResult>();
@@ -730,26 +715,14 @@ describe("mounted pane session event ownership", () => {
       });
       expect(descriptor.row).toMatchObject(observed);
       expect(selectedChatSessionRow(state)).toMatchObject(observed);
-      const controls = () =>
-        renderChatPaneComposerControls({
-          state,
-          selectedSession: selectedChatSessionRow(state),
-          agentDefaultModel: undefined,
-          modelAccess: { allowed: true, requiredScope: "operator.write" },
-          effortAccess: { allowed: true, requiredScope: "operator.write" },
-          contextWindowAccess: { allowed: true, requiredScope: "operator.write" },
-          permissionAccess: { allowed: true, requiredScope: "operator.write" },
-          canSelectFull: true,
-          onModelSetup: vi.fn(),
-        });
       const container = document.createElement("div");
       const draw = () => {
-        render(renderChatPermissionPicker(controls().permissionPicker), container);
+        render(renderChatPermissionPicker(composerControls(state).permissionPicker), container);
         return container.querySelector<HTMLButtonElement>("[data-chat-permission-select]");
       };
       expect(draw()?.dataset.chatSelectValue).toBe("workspace");
 
-      await controls().permissionPicker.onSelect("full");
+      await composerControls(state).permissionPicker.onSelect("full");
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: "global",
         agentId: "research",

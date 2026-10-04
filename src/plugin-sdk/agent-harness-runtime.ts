@@ -40,6 +40,7 @@ import { expandToolGroups } from "../agents/tool-policy-shared.js";
 import {
   buildWatchedSessionsPromptLines,
   prepareWatchedSessionsPrompt,
+  prepareWatchedSessionsPromptAsync,
 } from "../agents/watched-sessions-prompt.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecModePolicy } from "../infra/exec-approvals-core.js";
@@ -63,6 +64,7 @@ export const execPolicy = Object.freeze({ resolveExecModePolicy, minSecurity, ma
  * Harness runtimes that assemble their own instruction layers (e.g. Codex)
  * must surface the same watched-session facts as the embedded prompt, or the
  * model keeps refusing cross-session questions on those runtimes (openclaw#114797).
+ * @deprecated Await prepareWatchedSessionsHarnessContext with current host authority.
  */
 export function buildWatchedSessionsHarnessContext(params: {
   config?: OpenClawConfig;
@@ -74,6 +76,18 @@ export function buildWatchedSessionsHarnessContext(params: {
   const lines = buildWatchedSessionsPromptLines(
     prepareWatchedSessionsPrompt({ enabled: true, ...params }),
   );
+  return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
+}
+
+/** Prepares current watched-session facts through the worker before rendering them. */
+export async function prepareWatchedSessionsHarnessContext(
+  params: Parameters<typeof buildWatchedSessionsHarnessContext>[0] & {
+    assertCurrent: () => void;
+  },
+): Promise<string | undefined> {
+  const prepared = await prepareWatchedSessionsPromptAsync({ enabled: true, ...params });
+  params.assertCurrent();
+  const lines = buildWatchedSessionsPromptLines(prepared);
   return lines.length > 0 ? lines.join("\n").trimEnd() : undefined;
 }
 
@@ -256,6 +270,7 @@ export {
   extractMessagingToolSourceReplyPayload,
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
+export { captureToolAuthoredSourceReply } from "../agents/embedded-agent-tool-authored-source-reply.js";
 export {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
@@ -412,6 +427,14 @@ export async function detectAndLoadAgentHarnessPromptImages(params: {
   });
 }
 
+/** Load static MCP metadata without connecting transports or discovering tools. */
+export async function loadAgentHarnessMcpConfig(
+  params: Parameters<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>[0],
+): Promise<ReturnType<typeof import("../agents/bundle-mcp-config.js").loadStaticBundleMcpConfig>> {
+  const { loadStaticBundleMcpConfig } = await import("../agents/bundle-mcp-config.js");
+  return loadStaticBundleMcpConfig(params);
+}
+
 /** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
 export async function loadCodexBundleMcpThreadConfig(
   params: LoadCodexBundleMcpThreadConfigParams,
@@ -420,6 +443,8 @@ export async function loadCodexBundleMcpThreadConfig(
     await import("../agents/codex-mcp-config.js");
   return load(params);
 }
+
+export { decodeHeaderEnvPlaceholder } from "../agents/bundle-mcp-adapter.js";
 
 /** Lazily load the strict MCP proxy client with core-owned framing, startup, and shutdown. */
 export const mcpStdioRuntime = Object.freeze({
@@ -453,8 +478,22 @@ export async function prepareHarnessNativeMcpAppPreview(params: {
   }
   const { buildMcpAppCanvasPayload, fetchMcpAppView } =
     await import("../agents/mcp-ui-resource.js");
+  const { prepareMcpAppFormUpload } = await import("../agents/mcp-form-resource-upload.js");
   const view = await fetchMcpAppView({
     runtime: params.runtime,
+    requesterId: params.runtime.appRequester?.profileId,
+    uploadResources:
+      params.agentId && params.runtime.sessionKey
+        ? await prepareMcpAppFormUpload({
+            runtime: params.runtime,
+            serverName: params.serverName,
+            agentId: params.agentId,
+            sessionKey: params.runtime.sessionKey,
+            assertCurrent: () => {
+              params.runtime.assertOwnerCurrent?.();
+            },
+          })
+        : undefined,
     agentId: params.agentId,
     serverName: params.serverName,
     toolName: params.toolName,
@@ -491,8 +530,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRun(
     >
   >
 > {
-  const shouldLoad = shouldLoadRequesterScopedMcpHarnessRuntime(params);
-  if (!shouldLoad) {
+  if (!shouldLoadRequesterScopedMcpHarnessRuntime(params)) {
     return undefined;
   }
   const { materializeRequesterScopedMcpToolsForHarnessRunCore: materialize } =
@@ -509,10 +547,10 @@ export {
   resolveWritableSandboxBindHostRoots,
 } from "../agents/sandbox/fs-paths.js";
 export {
-  buildBootstrapContextForFiles,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
 } from "../agents/bootstrap-files.js";
+export { buildBootstrapContextForFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 export { prepareAgentWorkspaceContext } from "../agents/harness/workspace-context.js";
 export { buildAgentWorkspaceInstructionSnapshot } from "../agents/harness/workspace-instructions.js";
 export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/context-file.js";
@@ -560,11 +598,7 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
-// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
-// agent-harness-runtime surface so plugin harnesses such as Codex bound their
-// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
-// timeout the built-in embedded-agent runner uses — one shared implementation, no
-// copy-pasted watchdog.
+// Plugin-owned compaction uses the embedded runner's host-resolved safety timeout.
 export {
   compactWithSafetyTimeout,
   compactContextEngineWithSafetyTimeout,
@@ -586,6 +620,7 @@ export {
 export {
   awaitAgentEndSideEffects,
   runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
 } from "../agents/harness/agent-end-side-effects.js";
 export { buildEmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/agent-end-context.js";
 export type { EmbeddedForegroundPromptContext } from "../agents/embedded-agent-runner/run/params.js";
@@ -632,9 +667,6 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
  * Classify terminal harness turns that completed without assistant output that
  * should advance fallback. Deliberate silent replies such as NO_REPLY count as
  * intentional output, while whitespace-only text remains fallback-eligible.
- * This is intentionally SDK-level so plugin harness adapters such as Codex
- * preserve the same OpenClaw-owned fallback signals as the built-in OpenClaw path
- * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(
   params: AgentHarnessTerminalOutcomeInput,
@@ -642,7 +674,7 @@ export function classifyAgentHarnessTerminalOutcome(
   if (
     !params.turnCompleted ||
     (params.promptError !== undefined && params.promptError !== null) ||
-    hasVisibleAssistantText(params.assistantTexts)
+    params.assistantTexts.some((text) => text.trim().length > 0)
   ) {
     return undefined;
   }
@@ -653,10 +685,6 @@ export function classifyAgentHarnessTerminalOutcome(
     return "reasoning-only";
   }
   return "empty";
-}
-
-function hasVisibleAssistantText(assistantTexts: readonly string[]): boolean {
-  return assistantTexts.some((text) => text.trim().length > 0);
 }
 
 export const toolPolicy = Object.freeze({ createToolPolicyMatcher, expandToolGroups });

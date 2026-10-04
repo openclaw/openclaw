@@ -1,36 +1,24 @@
 import { createHmac, randomBytes } from "node:crypto";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 import { splitCommandArgs } from "openclaw/plugin-sdk/process-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asOptionalRecord as readRecord,
   normalizeOptionalString as readNonEmptyString,
+  normalizeTrimmedStringList,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawExecAsk, OpenClawExecSecurity } from "./config-contracts.shared.js";
-import type { CodexServiceTier } from "./protocol.js";
+import { normalizeCodexServiceTier } from "./service-tier-normalization.js";
 
-const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
-const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
+export { normalizeCodexServiceTier } from "./service-tier-normalization.js";
+
+const START_OPTIONS_KEY_SECRET = resolveGlobalSingleton(
+  Symbol.for("openclaw.codexAppServerStartOptionsKeySecret"),
+  () => randomBytes(32),
+);
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 export { readNonEmptyString, readRecord };
-
-export function normalizeCodexServiceTier(value: unknown): CodexServiceTier | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  const normalized = trimmed.toLowerCase();
-  if (normalized === "fast" || normalized === "priority") {
-    return "priority";
-  }
-  if (normalized === "flex") {
-    return "flex";
-  }
-  return trimmed;
-}
 
 export function isCodexFastServiceTier(value: unknown): boolean {
   return normalizeCodexServiceTier(value) === "priority";
@@ -75,9 +63,7 @@ export function readNumberEnv(value: string | undefined): number | undefined {
 
 export function resolveArgs(configArgs: unknown, envArgs: string | undefined): string[] {
   if (Array.isArray(configArgs)) {
-    return configArgs
-      .map((entry) => readNonEmptyString(entry))
-      .filter((entry): entry is string => entry !== undefined);
+    return normalizeTrimmedStringList(configArgs);
   }
   // v2026.9.1 string overrides preserve backslashes and accept unfinished quotes;
   // applying shell escaping or strict quote validation would change existing argv.
@@ -95,12 +81,4 @@ export function hashSecretForKey(value: string | undefined, label: string): stri
     .update("\0")
     .update(value)
     .digest("hex");
-}
-
-function getStartOptionsKeySecret(): Buffer {
-  const globalState = globalThis as typeof globalThis & {
-    [START_OPTIONS_KEY_SECRET_SYMBOL]?: Buffer;
-  };
-  globalState[START_OPTIONS_KEY_SECRET_SYMBOL] ??= randomBytes(32);
-  return globalState[START_OPTIONS_KEY_SECRET_SYMBOL];
 }

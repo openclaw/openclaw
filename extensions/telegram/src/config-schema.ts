@@ -5,7 +5,7 @@ import {
   buildChannelAccountSchemaParts,
   buildGroupEntrySchema,
   ChannelPreviewStreamingConfigSchema,
-  ChannelStreamingPreviewSchema,
+  ChannelThreadBindingsSchema,
   DmPolicySchema,
   GroupPolicySchema,
   ProviderCommandsSchema,
@@ -80,13 +80,11 @@ const TelegramCapabilitiesSchema = z.union([
     })
     .strict(),
 ]);
-const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
-  preview: ChannelStreamingPreviewSchema.optional(),
-}).strict();
 const TelegramErrorPolicySchema = z.enum(["always", "once", "silent"]).optional();
 const TelegramTopicSchema = z
   .object({
     requireMention: z.boolean().optional(),
+    requireMentionInBotThreads: z.boolean().optional(),
     ingest: z.boolean().optional(),
     disableAudioPreflight: z.boolean().optional(),
     groupPolicy: GroupPolicySchema.optional(),
@@ -100,6 +98,7 @@ const TelegramTopicSchema = z
   .strict();
 
 const TelegramGroupSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
   ingest: z.boolean().optional(),
   disableAudioPreflight: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional(),
@@ -128,7 +127,9 @@ const TelegramDirectSchema = z
     enabled: z.boolean().optional(),
     allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     systemPrompt: z.string().optional(),
-    topics: z.record(z.string(), TelegramTopicSchema.optional()).optional(),
+    topics: z
+      .record(z.string(), TelegramTopicSchema.omit({ requireMentionInBotThreads: true }).optional())
+      .optional(),
     errorPolicy: TelegramErrorPolicySchema,
     requireTopic: z.boolean().optional(),
     autoTopicLabel: AutoTopicLabelSchema,
@@ -166,7 +167,7 @@ const validateTelegramCustomCommands = (
 const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
   capabilities: TelegramCapabilitiesSchema.optional(),
   defaultTo: z.union([z.string(), z.number()]).optional(),
-  streaming: TelegramPreviewStreamingConfigSchema.optional(),
+  streaming: ChannelPreviewStreamingConfigSchema.optional(),
 });
 
 const TelegramAccountSchemaBase = z
@@ -212,19 +213,16 @@ const TelegramAccountSchemaBase = z
       .describe(
         "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
       ),
-    webhookHost: z
-      .string()
+    legacyWebhook: z
+      .union([
+        z.literal(false),
+        z
+          .object({ port: z.number().int().nonnegative().max(65535), host: z.string().optional() })
+          .strict(),
+      ])
       .optional()
       .describe(
-        "Local bind host for the webhook listener. Defaults to 127.0.0.1; keep loopback unless you intentionally expose direct ingress.",
-      ),
-    webhookPort: z
-      .number()
-      .int()
-      .nonnegative()
-      .optional()
-      .describe(
-        "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
+        "Explicit webhook forwarding endpoint. Doctor pins existing proxy endpoints once; remove the pin after moving the proxy to the Gateway, or set false to disable inherited forwarding.",
       ),
     webhookCertPath: z
       .string()
@@ -245,16 +243,7 @@ const TelegramAccountSchemaBase = z
       })
       .strict()
       .optional(),
-    threadBindings: z
-      .object({
-        enabled: z.boolean().optional(),
-        idleHours: z.number().nonnegative().optional(),
-        maxAgeHours: z.number().nonnegative().optional(),
-        spawnSessions: z.boolean().optional(),
-        defaultSpawnContext: z.enum(["isolated", "fork"]).optional(),
-      })
-      .strict()
-      .optional(),
+    threadBindings: ChannelThreadBindingsSchema.optional(),
     ...buildChannelReactionShape({
       notificationModes: ["off", "own", "all"],
       reactionLevels: ["off", "ack", "minimal", "extensive"],

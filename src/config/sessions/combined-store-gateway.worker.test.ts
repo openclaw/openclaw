@@ -53,7 +53,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
 
 it("revokes a prepared listing when its canonical owner closes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     const scope = { agentId: "main", sessionKey: "agent:main:main" };
     replaceSessionEntrySync(scope, { sessionId: "before-close", updatedAt: 1 });
     const pending = loadCombinedSessionStoreForGatewayCoreAsync(cfg).then(
@@ -71,7 +71,7 @@ it("revokes a prepared listing when its canonical owner closes", async () => {
 
 it("retains later stores while an earlier store read settles", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true }, other: {} } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {}, other: {} } } };
     for (const agentId of ["main", "other"]) {
       replaceSessionEntrySync(
         { agentId, sessionKey: `agent:${agentId}:main` },
@@ -123,7 +123,7 @@ it("retains later stores while an earlier store read settles", async () => {
 
 it("retains physical targets selected before ambient state changes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:main" },
       {
@@ -156,7 +156,7 @@ it("retains physical targets selected before ambient state changes", async () =>
 
 it("retains selection and sentinel options while the worker read is queued", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "global" },
       {
@@ -196,7 +196,7 @@ it("keeps stored addresses and foreign lineage stable after main-alias changes",
     }
     for (const scope of ["per-sender", "global"] as const) {
       const cfg: OpenClawConfig = {
-        agents: { entries: { main: { default: true }, work: {} } },
+        agents: { entries: { main: {}, work: {} } },
         session: { mainKey: "home", scope },
       };
       for (const options of [{}, { agentId: "work" }]) {
@@ -223,7 +223,7 @@ it("keeps stored addresses and foreign lineage stable after main-alias changes",
 
 it("transfers a Windows-normalized environment through the real worker transport", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+    const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
     replaceSessionEntrySync(
       { agentId: "main", sessionKey: "agent:main:main" },
       {
@@ -256,7 +256,10 @@ it("federates worker rows under the same physical owners and keeps incognito pro
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const storePath = state.statePath("shared.sqlite");
     const cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, ops: {} } },
+      agents: {
+        entries: { main: {}, ops: {} },
+        defaults: { sessionStore: { agentId: "main" } },
+      },
       session: { store: storePath },
     };
     openOpenClawAgentDatabase({ agentId: "main", path: storePath });
@@ -299,7 +302,7 @@ it.each(["newer schema", "missing required table"])(
   "propagates a worker store with %s instead of returning an empty listing",
   async (failure) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
       const database = openOpenClawAgentDatabase({ agentId: "main" });
       replaceSessionEntrySync(
         { agentId: "main", sessionKey: "agent:main:main" },

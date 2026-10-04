@@ -5,7 +5,7 @@ import {
   validateSessionsTitlePrepareParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareDashboardSessionTitle } from "../dashboard-session-title.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { prepareSessionCreateModelSelection } from "../session-create-model-selection.js";
@@ -69,7 +69,7 @@ export const sessionTitleHandlers: GatewayRequestHandlers = {
       }
       let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
       try {
-        const personalSelection = preparePersonalModelSelection(
+        const personalSelection = await preparePersonalModelSelection(
           { client, context, signal },
           request.model,
         );

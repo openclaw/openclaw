@@ -8,51 +8,21 @@ extension OpenClawChatSQLiteTranscriptCache {
     /// attachment bodies and ordinary tool arguments are never cache data.
     static func cacheableMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         messages.suffix(maxCachedMessagesPerSession).map { message in
-            OpenClawChatMessage(
-                id: message.id,
-                role: message.role,
-                content: message.content.map { item in
-                    OpenClawChatMessageContent(
-                        type: item.type,
-                        text: item.text,
-                        textSignature: item.textSignature,
-                        thinking: item.thinking,
-                        thinkingSignature: nil,
-                        mimeType: item.mimeType,
-                        fileName: item.fileName,
-                        artifactId: item.artifactId,
-                        url: item.url,
-                        openUrl: item.openUrl,
-                        alt: item.alt,
-                        width: item.width,
-                        height: item.height,
-                        sizeBytes: item.sizeBytes,
-                        durationSeconds: item.durationSeconds,
-                        content: nil,
-                        id: item.id,
-                        name: item.name,
-                        arguments: self.cacheablePatchArguments(item),
-                        details: self.cacheableDetails(item.details),
-                        isError: item.isError)
-                },
-                timestamp: message.timestamp,
-                transcriptMessageID: message.transcriptMessageID,
-                transcriptRunID: message.transcriptRunID,
-                isTruncated: message.isTruncated,
-                idempotencyKey: message.idempotencyKey,
-                toolCallId: message.toolCallId,
-                toolName: message.toolName,
-                usage: message.usage,
-                stopReason: message.stopReason,
-                errorMessage: message.errorMessage,
-                details: self.cacheableDetails(message.details),
-                isError: message.isError,
-                provenance: message.provenance,
-                historyMarker: message.historyMarker,
-                phase: message.phase,
-                turnBoundary: message.turnBoundary,
-                steerTargetRunID: message.steerTargetRunID,
-                streamFallback: message.streamFallback)
+            var cached = message
+            cached.activity = nil
+            cached.details = self.cacheableDetails(message.details)
+            cached.content = message.content.map { item in
+                var cached = item
+                cached.thinkingSignature = nil
+                cached.playback = nil
+                cached.content = nil
+                cached.preview = nil
+                cached.runId = nil
+                cached.arguments = self.cacheablePatchArguments(item)
+                cached.details = self.cacheableDetails(item.details)
+                return cached
+            }
+            return cached
         }
     }
 

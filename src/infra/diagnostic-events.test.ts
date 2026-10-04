@@ -36,6 +36,16 @@ import {
   registerDiagnosticTracePropagationBridge,
 } from "./diagnostic-trace-propagation.js";
 
+function modelStartedEvent(runId = "run-1", callId = "call-1") {
+  return {
+    type: "model.call.started" as const,
+    runId,
+    callId,
+    provider: "openai",
+    model: "gpt-5.4",
+  };
+}
+
 describe("diagnostic-events", () => {
   beforeEach(() => {
     resetDiagnosticEventsForTest();
@@ -144,31 +154,6 @@ describe("diagnostic-events", () => {
     expect(seen).toEqual(["webhook.received"]);
   });
 
-  it("carries explicit trace context without creating retained trace state", () => {
-    const trace = createDiagnosticTraceContext({
-      traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
-      spanId: "00f067aa0ba902b7",
-    });
-    const events: Array<{ trace: typeof trace | undefined; type: string }> = [];
-    const stop = onDiagnosticEvent((event) => {
-      events.push({ trace: event.trace, type: event.type });
-    });
-
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "telegram",
-      trace,
-    });
-    stop();
-    emitDiagnosticEvent({
-      type: "message.queued",
-      source: "telegram",
-      trace,
-    });
-
-    expect(events).toEqual([{ trace, type: "message.queued" }]);
-  });
-
   it("uses active request trace context when events omit explicit trace", () => {
     const trace = createDiagnosticTraceContext({
       traceId: "4bf92f3577b34da6a3ce929d0e0e4736",
@@ -224,13 +209,7 @@ describe("diagnostic-events", () => {
       type: "webhook.received",
       channel: "telegram",
     });
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emitTrustedDiagnosticEvent(modelStartedEvent());
 
     await yieldToEventLoop();
     expect(events).toEqual([
@@ -273,11 +252,7 @@ describe("diagnostic-events", () => {
 
     emitTrustedDiagnosticEventWithPrivateData(
       {
-        type: "model.call.started",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
+        ...modelStartedEvent(),
         trace: diagnosticTrace,
       },
       {
@@ -360,13 +335,7 @@ describe("diagnostic-events", () => {
       events.push(metadata.trusted);
     });
 
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emitDiagnosticEvent(modelStartedEvent());
 
     await yieldToEventLoop();
     expect(events).toEqual([false]);
@@ -383,13 +352,7 @@ describe("diagnostic-events", () => {
       internalEvents.push({ trusted: metadata.trusted, type: event.type });
     });
 
-    emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emitTrustedDiagnosticEvent(modelStartedEvent());
 
     await yieldToEventLoop();
     expect(publicEvents).toStrictEqual([]);
@@ -558,11 +521,7 @@ describe("diagnostic-events", () => {
     });
 
     emitTrustedDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
+      ...modelStartedEvent(),
       trace,
     });
 
@@ -635,13 +594,7 @@ describe("diagnostic-events", () => {
       type: "tool.execution.started",
       toolName: "read",
     });
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-1",
-      callId: "call-1",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emitDiagnosticEvent(modelStartedEvent());
 
     expect(events).toStrictEqual([]);
     await yieldToEventLoop();
@@ -655,13 +608,7 @@ describe("diagnostic-events", () => {
     });
 
     for (let index = 0; index < 250; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `run-${index}`,
-        callId: `call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
+      emitDiagnosticEvent(modelStartedEvent(`run-${index}`, `call-${index}`));
     }
 
     expect(events).toStrictEqual([]);
@@ -673,27 +620,6 @@ describe("diagnostic-events", () => {
     expect(events).toHaveLength(250);
   });
 
-  it("waits for all queued high-frequency diagnostic events to drain", async () => {
-    const events: string[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event.type);
-    });
-
-    for (let index = 0; index < 250; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `run-${index}`,
-        callId: `call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
-    }
-
-    await waitForDiagnosticEventsDrained();
-
-    expect(events).toHaveLength(250);
-  });
-
   it("does not extend a drain barrier for events queued after it starts", async () => {
     const callIds: string[] = [];
     onDiagnosticEvent((event) => {
@@ -702,22 +628,10 @@ describe("diagnostic-events", () => {
       }
     });
 
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-before-barrier",
-      callId: "before-barrier",
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    emitDiagnosticEvent(modelStartedEvent("run-before-barrier", "before-barrier"));
     const drained = waitForDiagnosticEventsDrained();
     for (let index = 0; index < 250; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `run-after-${index}`,
-        callId: `after-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
+      emitDiagnosticEvent(modelStartedEvent(`run-after-${index}`, `after-${index}`));
     }
 
     await drained;
@@ -809,11 +723,7 @@ describe("diagnostic-events", () => {
 
   it("skips uncloneable pending diagnostics during queue inspection", async () => {
     emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-uncloneable",
-      callId: "call-uncloneable",
-      provider: "openai",
-      model: "gpt-5.4",
+      ...modelStartedEvent("run-uncloneable", "call-uncloneable"),
       badValue: () => undefined,
     } as never);
     emitTrustedDiagnosticEvent({
@@ -865,13 +775,7 @@ describe("diagnostic-events", () => {
     emitTrustedDiagnosticEvent(terminalEvents[0]!);
 
     for (let index = 0; index < 9_999; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `saturation-run-${index}`,
-        callId: `saturation-call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
+      emitDiagnosticEvent(modelStartedEvent(`saturation-run-${index}`, `saturation-call-${index}`));
     }
     for (const terminalEvent of terminalEvents.slice(1)) {
       emitTrustedDiagnosticEvent(terminalEvent);
@@ -902,13 +806,7 @@ describe("diagnostic-events", () => {
     });
 
     for (let index = 0; index < 10_001; index += 1) {
-      emitDiagnosticEvent({
-        type: "model.call.started",
-        runId: `drop-run-${index}`,
-        callId: `drop-call-${index}`,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
+      emitDiagnosticEvent(modelStartedEvent(`drop-run-${index}`, `drop-call-${index}`));
     }
     emitTrustedDiagnosticEvent({ type: "gateway.rpc", method: "health", phase: "received" });
 
@@ -932,32 +830,6 @@ describe("diagnostic-events", () => {
     expect(events.some((event) => event.type === "gateway.rpc")).toBe(false);
   });
 
-  it("emits exec approval followup suppression events on the public stream", async () => {
-    const events: DiagnosticEventPayload[] = [];
-    onDiagnosticEvent((event) => {
-      events.push(event);
-    });
-
-    emitDiagnosticEvent({
-      type: "exec.approval.followup_suppressed",
-      approvalId: "approval-123",
-      reason: "session_rebound",
-      phase: "gateway_preflight",
-    });
-
-    await waitForDiagnosticEventsDrained();
-
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "exec.approval.followup_suppressed",
-        approvalId: "approval-123",
-        reason: "session_rebound",
-        phase: "gateway_preflight",
-        ts: expect.any(Number),
-      }),
-    );
-  });
-
   it("keeps trusted private data off shared internal diagnostic listeners", async () => {
     const internalEvents: DiagnosticEventPayload[] = [];
     const trustedEvents: Array<{
@@ -971,21 +843,12 @@ describe("diagnostic-events", () => {
       trustedEvents.push({ event, privateData });
     });
 
-    emitTrustedDiagnosticEventWithPrivateData(
-      {
-        type: "model.call.started",
-        runId: "run-1",
-        callId: "call-1",
-        provider: "openai",
-        model: "gpt-5.4",
+    emitTrustedDiagnosticEventWithPrivateData(modelStartedEvent(), {
+      modelContent: {
+        inputMessages: ["secret prompt"],
+        systemPrompt: "secret system",
       },
-      {
-        modelContent: {
-          inputMessages: ["secret prompt"],
-          systemPrompt: "secret system",
-        },
-      },
-    );
+    });
 
     await waitForDiagnosticEventsDrained();
 

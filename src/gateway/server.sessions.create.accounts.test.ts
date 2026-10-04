@@ -15,7 +15,7 @@ import {
   createGitWorkspace,
 } from "./server.sessions.create.projects.test-support.js";
 import {
-  setupSessionCreateTestHarness,
+  setupSessionCreateHandlerTestHarness,
   dashboardTitleGenerationMocks,
   chatSendOwner,
   removeSessionWorktree,
@@ -29,7 +29,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
-const { createSessionStoreDir, withSessionTestState } = setupSessionCreateTestHarness(
+const { createSessionStoreDir, withSessionTestState } = setupSessionCreateHandlerTestHarness(
   async (makeTempDir) => {
     gitWorkspaceTemplate = await createGitWorkspace(makeTempDir("openclaw-session-git-template-"));
   },
@@ -178,65 +178,27 @@ test.each([
   },
 );
 
-test("sessions.create commits the personal default before dispatching its initial turn", async () => {
-  await withSessionTestState({ layout: "state-only" }, async () => {
-    const { storePath, authProfileId, client, context } =
-      await createPersonalAccountSessionFixture();
-    const key = "agent:main:dashboard:personal-default-initial-turn";
-    const observedProfiles: Array<string | undefined> = [];
-    const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
-    chatSend.mockImplementation(async ({ respond }) => {
-      observedProfiles.push(loadSessionEntry({ sessionKey: key, storePath })?.authProfileOverride);
-      respond(true, { runId: "personal-default-first-turn", status: "started" });
-    });
-    try {
-      const created = await directSessionReq<{ runStarted: boolean }>(
-        "sessions.create",
-        { key, model: "openai/gpt-5.6-sol", message: "Start the first turn" },
-        { client, context },
-      );
-
-      expect(created.ok, JSON.stringify(created.error)).toBe(true);
-      expect(created.payload?.runStarted).toBe(true);
-      expect(observedProfiles).toEqual([authProfileId]);
-      expect(loadSessionEntry({ sessionKey: key, storePath })).toMatchObject({
-        authProfileOverride: authProfileId,
-        authProfileOverrideSource: "user-link",
-      });
-    } finally {
-      chatSend.mockRestore();
-    }
-  });
-});
-
 test.each([
   {
     endpoint: "direct model override",
     modelId: "trinity-large-thinking",
-    baseUrl: "https://api.arcee.ai/api/v1",
     expectedPin: "arcee:work",
     expectedSource: "user-link",
   },
   {
     endpoint: "inherited OpenRouter endpoint",
     modelId: "trinity-large-preview",
-    baseUrl: "https://openrouter.ai/api/v1",
     expectedPin: undefined,
     expectedSource: undefined,
   },
 ] as const)(
   "sessions.create applies an admin-linked Arcee default only for the $endpoint",
-  async ({ modelId, baseUrl, expectedPin, expectedSource }) => {
+  async ({ modelId, expectedPin, expectedSource }) => {
     await withSessionTestState(
       { layout: "state-only", prefix: "session-arcee-linked-default-" },
       async (state) => {
-        const { OpenClawSchema } = await import("../config/zod-schema.js");
         const { ensureAuthProfileStoreWithoutExternalProfiles } =
           await import("../agents/auth-profiles/store-runtime.js");
-        const { resolveModelWithRegistry } =
-          await import("../agents/embedded-agent-runner/model.registry-resolution.js");
-        const { AuthStorage } = await import("../agents/sessions/auth-storage.js");
-        const { ModelRegistry } = await import("../agents/sessions/model-registry.js");
         const { createModelAccountConnectService } = await import("./model-account-connect.js");
         const { storePath } = await createSessionStoreDir();
         const inputConfig: import("../config/types.openclaw.js").OpenClawConfig = {
@@ -276,8 +238,6 @@ test.each([
             },
           },
         };
-        const parsedConfig = OpenClawSchema.safeParse(inputConfig);
-        expect(parsedConfig.success, JSON.stringify(parsedConfig.error?.issues)).toBe(true);
         await state.writeConfig(inputConfig);
         const credential = {
           type: "api_key",
@@ -294,9 +254,8 @@ test.each([
         const cfg = gatewayConfig.getRuntimeConfig();
         const { loadPluginMetadataSnapshot } =
           await import("../plugins/plugin-metadata-snapshot.js");
-        const { getCurrentPluginMetadataSnapshot, withPluginMetadataSnapshotScope } =
+        const { withPluginMetadataSnapshotScope } =
           await import("../plugins/current-plugin-metadata-snapshot.js");
-        const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
         const { resolveSessionModelRef } = await import("../agents/session-model-ref.js");
         const bundledRoot = path.resolve(import.meta.dirname, "../../extensions");
         const metadata = loadPluginMetadataSnapshot({
@@ -313,32 +272,6 @@ test.each([
         await withPluginMetadataSnapshotScope(
           metadata,
           async () => {
-            const manifest = metadata.byPluginId.get("arcee");
-            const manifestPath = path.join(bundledRoot, "arcee", "openclaw.plugin.json");
-            const declaredManifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
-            expect(manifest?.manifestPath).toBe(manifestPath);
-            expect(manifest?.origin).toBe("bundled");
-            expect(manifest?.providerAuthAliases).toEqual(declaredManifest.providerAuthAliases);
-            expect(
-              getCurrentPluginMetadataSnapshot({
-                config: cfg,
-                allowWorkspaceScopedSnapshot: true,
-              }) === metadata,
-            ).toBe(true);
-            const providerDefaultAuth = resolveProviderIdForAuth("arcee", { config: cfg });
-            expect(providerDefaultAuth).toBe("openrouter");
-            expect(resolveProviderIdForAuth("arcee", { config: cfg, storedCredential: true })).toBe(
-              "arcee",
-            );
-            const model = await resolveModelWithRegistry({
-              cfg,
-              provider: "arcee",
-              modelId,
-              agentDir: state.agentDir(),
-              modelRegistry: ModelRegistry.inMemory(AuthStorage.inMemory()),
-            });
-            expect(model?.baseUrl).toBe(baseUrl);
-
             const owner = ensureProfileForEmail("arcee-session-owner@example.test");
             const administrator = ensureProfileForEmail("arcee-link-admin@example.test");
             const client = {

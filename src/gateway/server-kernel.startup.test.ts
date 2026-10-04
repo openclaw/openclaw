@@ -76,7 +76,7 @@ describe("Gateway startup", () => {
       expect(requested.session?.placement?.state).toBe("requested");
       reportPlacementTransition(
         undefined,
-        placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" }),
+        await placements.fail({ sessionId: identity.sessionId, recoveryError: "Current failure" }),
       );
       const failed = await describePlacement();
       expect(failed.session?.sessionId).toBe(identity.sessionId);

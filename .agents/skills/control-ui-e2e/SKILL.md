@@ -107,6 +107,26 @@ await page.getByText("Done.").waitFor();
 
 Extend `installMockGateway` with typed scenario options or method responses when a new flow needs more Gateway surface.
 
+## Run Inspector evidence
+
+Use `withControlUiRunInspector` from `ui/src/test-helpers/control-ui-run-inspector.ts`
+for collection. It owns a separate page, closes it on success or failure, and leaves
+the caller's Chat page and unsent draft in place. Use `preparePage` for a mock
+Gateway or the campaign's existing per-tab authentication setup; a shared browser
+context does not copy another tab's session-storage token.
+The helper uses `RunInspectorSelector` and `activityRunInspectorSelectorHref` from
+the rendered component's model, including a selected receipt's decision cursor.
+
+The rendered panel's `data-run-id` and `data-execution-id` identify the returned
+present identity, not just the requested URL. The selected detail's
+`data-receipt-selector-id` is `DecisionReceiptDisplayV1.selectorId`. Missing or
+ambiguous identity and missing selected receipts must not be treated as matches.
+These decision selectors are separate from the optional terminal transcript key
+`agent.wait.terminalReceipt.assistantTranscriptIdempotencyKey`; never manufacture
+that key from a DOM selector or history row, or claim its absence is repaired by
+Inspector evidence. For sidebar run state, the current accessible label is
+`Active run`, not `Running`.
+
 ## Standalone Recording
 
 For narrated captions, eased target zooms, or fast-forwarded pauses, use the

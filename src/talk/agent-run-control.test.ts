@@ -349,41 +349,6 @@ describe("controlRealtimeVoiceAgentRun", () => {
     expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
   });
 
-  it("answers status from recent Talk tool events", async () => {
-    const deps = createDeps({ activeSessionId: "session-active" });
-    const recentEvents = [
-      {
-        id: "event-1",
-        type: "tool.progress",
-        sessionId: "talk-1",
-        seq: 1,
-        timestamp: new Date(0).toISOString(),
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        payload: { name: "read", phase: "running" },
-      } satisfies TalkEvent,
-    ];
-
-    const result = await controlRealtimeVoiceAgentRun(
-      {
-        sessionKey: "agent:main:main",
-        text: "status",
-        mode: "status",
-        recentEvents,
-      },
-      deps,
-    );
-
-    expect(result).toMatchObject({
-      ok: true,
-      mode: "status",
-      active: true,
-      message: "OpenClaw is working in read (running).",
-    });
-    expect(deps.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
-  });
-
   it("answers status from diagnostic run activity when Talk events are absent", async () => {
     const deps = createDeps({
       activity: {

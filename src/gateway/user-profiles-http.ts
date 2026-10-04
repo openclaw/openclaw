@@ -8,6 +8,7 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createProfileAvatarReader } from "../state/user-profiles-avatar.js";
@@ -20,21 +21,14 @@ import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js"
 
 const GRAVATAR_BASE_URL = "https://www.gravatar.com/avatar";
 const GRAVATAR_FETCH_TIMEOUT_MS = 5_000;
-// Whole-request budget shared across a profile's linked emails. Lookups run
-// sequentially (see the resolution loop) so a secondary email's hash is only
-// disclosed to Gravatar after the earlier one is a definite miss; this deadline
-// bounds the total wait so an unreachable Gravatar cannot stall the held
-// connection by GRAVATAR_FETCH_TIMEOUT_MS × linked-email-count.
+// Bound the total wait across sequential linked-email lookups, not each lookup alone.
 const GRAVATAR_TOTAL_TIMEOUT_MS = 6_000;
 const GRAVATAR_CACHE_MAX_ENTRIES = 256;
 const GRAVATAR_CACHE_MAX_BYTES = 16 * 1024 * 1024;
 const GRAVATAR_HIT_TTL_MS = 24 * 60 * 60_000;
 const GRAVATAR_MISS_TTL_MS = 15 * 60_000;
 const MAX_GRAVATAR_BYTES = 1_000_000;
-// Bound the Gravatar fan-out per avatar request. Linked emails are primary-first
-// and resolved sequentially with short-circuit, so the cap only matters when
-// every earlier email misses; it stops a profile with many linked addresses from
-// probing an unbounded number of them against Gravatar.
+// Bound upstream disclosure when every earlier linked email misses.
 const MAX_GRAVATAR_EMAIL_LOOKUPS = 8;
 const GRAVATAR_MIME_TYPES = new Set(["image/gif", "image/jpeg", "image/png", "image/webp"]);
 
@@ -87,17 +81,11 @@ type GravatarHit = {
 type GravatarResult = GravatarHit | { kind: "miss" } | { kind: "error" };
 type CachedGravatarResult = Exclude<GravatarResult, { kind: "error" }> & { expiresAtMs: number };
 
-const gravatarCache = new Map<string, CachedGravatarResult>();
+const gravatarCache = new LruCache<CachedGravatarResult>(GRAVATAR_CACHE_MAX_ENTRIES, {
+  maxBytes: GRAVATAR_CACHE_MAX_BYTES,
+  sizeOf: (result) => (result.kind === "hit" ? result.bytes.byteLength : 0),
+});
 const gravatarRequests = new Map<string, Promise<GravatarResult>>();
-let gravatarCacheBytes = 0;
-
-function deleteCachedGravatar(hash: string): void {
-  const cached = gravatarCache.get(hash);
-  if (cached?.kind === "hit") {
-    gravatarCacheBytes -= cached.bytes.byteLength;
-  }
-  gravatarCache.delete(hash);
-}
 
 function hashEmail(email: string): string {
   return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
@@ -109,14 +97,8 @@ function getCachedGravatar(hash: string, nowMs: number): GravatarResult | undefi
     return undefined;
   }
   if (cached.expiresAtMs <= nowMs) {
-    deleteCachedGravatar(hash);
+    gravatarCache.delete(hash);
     return undefined;
-  }
-  // Map insertion order is the LRU order. Promote on every hit.
-  deleteCachedGravatar(hash);
-  gravatarCache.set(hash, cached);
-  if (cached.kind === "hit") {
-    gravatarCacheBytes += cached.bytes.byteLength;
   }
   return cached.kind === "hit"
     ? { kind: "hit", bytes: cached.bytes, mime: cached.mime, etag: cached.etag }
@@ -129,22 +111,7 @@ function cacheGravatar(
   nowMs: number,
 ) {
   const ttlMs = result.kind === "hit" ? GRAVATAR_HIT_TTL_MS : GRAVATAR_MISS_TTL_MS;
-  deleteCachedGravatar(hash);
-  const cached = { ...result, expiresAtMs: nowMs + ttlMs } satisfies CachedGravatarResult;
-  gravatarCache.set(hash, cached);
-  if (cached.kind === "hit") {
-    gravatarCacheBytes += cached.bytes.byteLength;
-  }
-  while (
-    gravatarCache.size > GRAVATAR_CACHE_MAX_ENTRIES ||
-    gravatarCacheBytes > GRAVATAR_CACHE_MAX_BYTES
-  ) {
-    const oldest = gravatarCache.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    deleteCachedGravatar(oldest);
-  }
+  gravatarCache.set(hash, { ...result, expiresAtMs: nowMs + ttlMs });
 }
 
 function normalizeContentType(value: string | null): string {
@@ -177,13 +144,8 @@ async function readBoundedGravatarBody(
   if (totalBytes === 0) {
     return undefined;
   }
-  const bytes = new Uint8Array(totalBytes);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
+  const bytes = Buffer.concat(chunks, totalBytes);
+  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
 }
 
 async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
@@ -257,8 +219,8 @@ function sendAvatar(
   req: IncomingMessage,
   res: ServerResponse,
   avatar: { bytes?: Uint8Array; byteLength: number; mime: string; etag: string },
-  cacheControl: string,
 ): void {
+  const cacheControl = "private, max-age=0, must-revalidate";
   if (matchesHttpIfNoneMatch(req.headers["if-none-match"], avatar.etag)) {
     // Carry the success cache policy so a 304 does not inherit the miss-path
     // no-store and force the client to re-download an unchanged avatar.
@@ -353,12 +315,7 @@ export async function handleUserProfileAvatarHttpRequest(
         if (!prepared.isCurrent() || (needsBytes && !bytes)) {
           continue;
         }
-        sendAvatar(
-          req,
-          res,
-          { ...uploaded, bytes: bytes?.bytes, etag },
-          "private, max-age=0, must-revalidate",
-        );
+        sendAvatar(req, res, { ...uploaded, bytes: bytes?.bytes, etag });
         return true;
       }
       // A legacy owner tombstone must never borrow the host photo after a merge.
@@ -371,16 +328,11 @@ export async function handleUserProfileAvatarHttpRequest(
         continue;
       }
       if (hostAvatar) {
-        sendAvatar(
-          req,
-          res,
-          {
-            ...hostAvatar,
-            byteLength: hostAvatar.bytes.byteLength,
-            etag: formatUserProfileAvatarEtag(hostAvatar.sha256, hostAvatar.mime),
-          },
-          "private, max-age=0, must-revalidate",
-        );
+        sendAvatar(req, res, {
+          ...hostAvatar,
+          byteLength: hostAvatar.bytes.byteLength,
+          etag: formatUserProfileAvatarEtag(hostAvatar.sha256, hostAvatar.mime),
+        });
         return true;
       }
       emails = prepared.emails;
@@ -429,15 +381,13 @@ export async function handleUserProfileAvatarHttpRequest(
       waiterSignal.throwIfAborted();
       authResult.assertCurrent();
       if (result.kind === "hit") {
-        sendAvatar(
-          req,
-          res,
-          { ...result, byteLength: result.bytes.byteLength },
-          "private, max-age=0, must-revalidate",
-        );
+        sendAvatar(req, res, { ...result, byteLength: result.bytes.byteLength });
         return true;
       }
-      transientFailure ||= result.kind === "error";
+      if (result.kind === "error") {
+        transientFailure = true;
+        break;
+      }
     }
   } catch (error) {
     if (!waiterSignal.aborted) {

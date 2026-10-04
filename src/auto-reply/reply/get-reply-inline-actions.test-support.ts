@@ -6,17 +6,19 @@ import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { buildTestCtx } from "./test-ctx.js";
 import type { TypingController } from "./typing.js";
 
-export const createOpenClawToolsMock = vi.fn();
+const { createOpenClawToolsMock } = vi.hoisted(() => ({
+  createOpenClawToolsMock: vi.fn(),
+}));
+
+export { createOpenClawToolsMock };
+
+vi.mock("../../agents/openclaw-tools.js", () => ({
+  createOpenClawTools: createOpenClawToolsMock,
+}));
 
 export type HandleInlineActionsInput = Parameters<
   typeof import("./get-reply-inline-actions.js").handleInlineActions
 >[0];
-
-const skillToolDispatchDependencies: NonNullable<
-  HandleInlineActionsInput["skillToolDispatchDependencies"]
-> = {
-  createOpenClawTools: createOpenClawToolsMock,
-};
 
 export const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
@@ -83,7 +85,6 @@ export const createHandleInlineActionsInput = (params: {
     contextTokens: 0,
     abortedLastRun: false,
     sessionScope: "per-sender",
-    skillToolDispatchDependencies,
     ...params.overrides,
   };
 };

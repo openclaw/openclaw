@@ -271,7 +271,6 @@ export function createInstalledPluginOwnershipResolver(
     return resolveLifecycle(pluginId);
   }
   function isSourceInUse(sourcePath: string, loadPaths: readonly string[]): boolean {
-    const target = safeRealpathSync(sourcePath, realpathCache) ?? path.resolve(sourcePath);
     const paths = [
       ...loadPaths,
       ...Object.values(index.installRecords).flatMap((record) => [
@@ -280,16 +279,26 @@ export function createInstalledPluginOwnershipResolver(
       ]),
       ...index.plugins.flatMap((entry) => [entry.rootDir, entry.source, entry.manifestPath]),
     ];
-    return paths.some((candidate) => {
-      if (!candidate?.trim()) {
-        return false;
-      }
-      const resolved = path.resolve(resolveUserPath(candidate, env));
-      const current = safeRealpathSync(resolved, realpathCache) ?? resolved;
-      return isPathInside(target, current) || isPathInside(current, target);
-    });
+    return isPluginSourcePathInUse(sourcePath, paths, env);
   }
   return { resolvePackage, resolveLifecycle, resolveUpdate, resolveReload, isSourceInUse };
+}
+
+export function isPluginSourcePathInUse(
+  sourcePath: string,
+  paths: readonly (string | undefined)[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const realpathCache = new Map<string, string>();
+  const target = safeRealpathSync(sourcePath, realpathCache) ?? path.resolve(sourcePath);
+  return paths.some((candidate) => {
+    if (!candidate?.trim()) {
+      return false;
+    }
+    const resolved = path.resolve(resolveUserPath(candidate, env));
+    const current = safeRealpathSync(resolved, realpathCache) ?? resolved;
+    return isPathInside(target, current) || isPathInside(current, target);
+  });
 }
 
 function installRecordPathMatchesPluginRoot(

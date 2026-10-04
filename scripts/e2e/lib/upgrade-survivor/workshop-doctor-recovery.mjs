@@ -290,6 +290,15 @@ function seedPhysicalIndex(stateDir, artifactRoot, stage) {
   return seeded;
 }
 
+function hasStartedDoctor(observations) {
+  return fs
+    .readdirSync(path.join(observations, "diagnostics"))
+    .filter((name) => /^process-\d+-started\.json$/u.test(name))
+    .some((name) =>
+      ["doctor", "post-core"].includes(readJson(path.join(observations, "diagnostics", name)).role),
+    );
+}
+
 function assertPhysicalUpdateRefusal(stateDir, artifactRoot, observations, packageRoot, exitCode) {
   assert.equal(exitCode, 1, "Published updater must refuse physical index corruption");
   const baseline = readJson(path.join(artifactRoot, "workshop-baseline.json"));
@@ -321,12 +330,7 @@ function assertPhysicalUpdateRefusal(stateDir, artifactRoot, observations, packa
     malformedAtStart: false,
     physicalIndexCorruptAtStart: true,
   });
-  const doctorStarted = fs
-    .readdirSync(path.join(observations, "diagnostics"))
-    .filter((name) => /^process-\d+-started\.json$/u.test(name))
-    .some((name) =>
-      ["doctor", "post-core"].includes(readJson(path.join(observations, "diagnostics", name)).role),
-    );
+  const doctorStarted = hasStartedDoctor(observations);
   assert.equal(doctorStarted, false, "Physical refusal occurred after candidate handoff");
   writeJson(path.join(artifactRoot, "physical-baseline-refusal.json"), {
     status: "physical-index-refused-before-candidate",
@@ -624,12 +628,7 @@ export function assertWorkshopUpdateRefusal(
     exitCode: 1,
     malformedAtStart: true,
   });
-  const doctorStarted = fs
-    .readdirSync(path.join(observations, "diagnostics"))
-    .filter((name) => /^process-\d+-started\.json$/u.test(name))
-    .some((name) =>
-      ["doctor", "post-core"].includes(readJson(path.join(observations, "diagnostics", name)).role),
-    );
+  const doctorStarted = hasStartedDoctor(observations);
   assert.equal(doctorStarted, false, "Published refusal must precede the candidate handoff");
   const refusal = {
     status: "refused-before-candidate",

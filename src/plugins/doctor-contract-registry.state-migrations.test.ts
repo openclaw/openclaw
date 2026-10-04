@@ -275,6 +275,39 @@ describe("doctor-contract-registry state migrations", () => {
     expect(doctorContractWarnMock).not.toHaveBeenCalled();
   });
 
+  it.each(["stateless", "detector", "invalid-detector", "foreign-owner"] as const)(
+    "inspects the public setup entry without dropping %s migration obligations",
+    (kind) => {
+      const pluginRoot = makeTempDir();
+      const { setupSource } = writeLegacySetupEntry(
+        pluginRoot,
+        `module.exports = { plugin: {
+          id: ${JSON.stringify(kind === "foreign-owner" ? "other-channel" : "legacy-channel")},
+          ${kind === "detector" ? "lifecycle: { detectLegacyStateMigrations: () => [] }," : ""}
+          ${kind === "invalid-detector" ? "lifecycle: { detectLegacyStateMigrations: true }," : ""}
+        } };`,
+      );
+      mockDoctorPlugins({
+        id: "legacy-channel",
+        origin: "global",
+        rootDir: pluginRoot,
+        setupSource,
+        channels: ["legacy-channel"],
+        providers: [],
+      });
+      const stateless = vi.fn();
+      const entries = listPluginDoctorStateMigrationEntries({
+        config: {},
+        env: {},
+        pluginIds: ["legacy-channel"],
+        onInspectedStatelessPlugin: stateless,
+      });
+      expect(entries).toHaveLength(kind === "detector" ? 1 : 0);
+      expect(stateless).not.toHaveBeenCalled();
+      expect(doctorContractWarnMock).toHaveBeenCalledTimes(kind === "invalid-detector" ? 1 : 0);
+    },
+  );
+
   it.each([
     { name: "entry feature present", entryFeature: true, expectedCount: 1 },
     { name: "entry feature absent", entryFeature: false, expectedCount: 0 },

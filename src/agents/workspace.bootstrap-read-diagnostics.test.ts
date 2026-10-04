@@ -189,51 +189,44 @@ describe("workspace bootstrap read diagnostics", () => {
     }
   });
 
-  it("rejects remote bootstrap content when access is revoked during the read", async () => {
-    const tempDir = tempDirs.make("openclaw-remote-workspace-");
-    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "stale local document");
-    let release = () => {};
-    const bridge: AgentWorkspaceAccess["bridge"] = {
-      readFile: vi.fn(),
-      writeFile: vi.fn(),
-      stat: vi.fn(),
-      readFileWithSource: vi.fn(async () => {
+  it.each(["revoked access", "missing provenance"] as const)(
+    "rejects remote bootstrap content with %s without local fallback",
+    async (failure) => {
+      const tempDir = tempDirs.make("openclaw-remote-workspace-no-source-");
+      await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "stale local document");
+      const missingProvenance = failure === "missing provenance";
+      let release = () => {};
+      const readFile = missingProvenance
+        ? vi.fn(async () => Buffer.from("unattributed remote document"))
+        : vi.fn();
+      const stat = vi.fn<AgentWorkspaceAccess["bridge"]["stat"]>();
+      const bridge: AgentWorkspaceAccess["bridge"] = {
+        readFile,
+        writeFile: vi.fn(),
+        stat,
+      };
+      if (!missingProvenance) {
+        bridge.readFileWithSource = vi.fn(async () => {
+          release();
+          return { data: Buffer.from("remote document"), canonicalPath: "/remote/AGENTS.md" };
+        });
+      }
+      release = registerAgentWorkspaceAccess(tempDir, { bridge });
+      try {
+        await expect(loadWorkspaceBootstrapFiles(tempDir)).rejects.toThrow(
+          missingProvenance
+            ? "Workspace bootstrap source identity is unavailable"
+            : /Workspace access/,
+        );
+        if (missingProvenance) {
+          expect(readFile).not.toHaveBeenCalled();
+          expect(stat).not.toHaveBeenCalled();
+        }
+      } finally {
         release();
-        return {
-          data: Buffer.from("remote document"),
-          canonicalPath: "/remote/AGENTS.md",
-        };
-      }),
-    };
-    release = registerAgentWorkspaceAccess(tempDir, { bridge });
-    try {
-      await expect(loadWorkspaceBootstrapFiles(tempDir)).rejects.toThrow(/Workspace access/);
-    } finally {
-      release();
-    }
-  });
-
-  it("requires remote bootstrap provenance without falling back to byte-only or local reads", async () => {
-    const tempDir = tempDirs.make("openclaw-remote-workspace-no-source-");
-    await fs.writeFile(path.join(tempDir, DEFAULT_AGENTS_FILENAME), "stale local document");
-    const readFile = vi.fn(async () => Buffer.from("unattributed remote document"));
-    const stat = vi.fn<AgentWorkspaceAccess["bridge"]["stat"]>();
-    const bridge: AgentWorkspaceAccess["bridge"] = {
-      readFile,
-      writeFile: vi.fn(),
-      stat,
-    };
-    const release = registerAgentWorkspaceAccess(tempDir, { bridge });
-    try {
-      await expect(loadWorkspaceBootstrapFiles(tempDir)).rejects.toThrow(
-        "Workspace bootstrap source identity is unavailable",
-      );
-      expect(readFile).not.toHaveBeenCalled();
-      expect(stat).not.toHaveBeenCalled();
-    } finally {
-      release();
-    }
-  });
+      }
+    },
+  );
 
   it("marks oversized bootstrap files unreadable and warns with the bounded-read reason", async () => {
     const tempDir = tempDirs.make("openclaw-workspace-");

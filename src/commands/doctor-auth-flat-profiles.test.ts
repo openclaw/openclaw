@@ -39,7 +39,10 @@ import {
   migrateSharedAuthStore,
 } from "../infra/state-migrations.shared-auth-store.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -181,7 +184,6 @@ async function expectSelectedCodexAccountStatus(params: {
       defaultGroupActivation: () => "mention",
       modelAuthOverride: "oauth",
       activeModelAuthOverride: "oauth",
-      skipDefaultTaskLookup: true,
     });
     expect(usageProfileIds).toEqual(["openai:chatgpt-default"]);
     expect(status).toContain("Week 75% left");
@@ -1568,7 +1570,7 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
           auth: { profiles: { "agent-work": { key: "sk-config" } } },
           agents: {
             entries: {
-              main: { default: true },
+              main: {},
               ops: {
                 models: {
                   "openai/gpt-5.5": {
@@ -1622,7 +1624,6 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       agents: {
         entries: {
           main: {
-            default: true,
             models: {
               "openai/gpt-5.5": {
                 agentRuntime: { authProfileId: "ambiguous" },
@@ -2591,12 +2592,13 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     const state = await makeTestState();
     const cfg: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "failed" },
-          { id: "inherited" },
-          { id: "dedup" },
-        ],
+        defaults: { authInheritance: { agentId: "main" } },
+        entries: {
+          main: {},
+          failed: {},
+          inherited: {},
+          dedup: {},
+        },
       },
     };
     const sharedCredential = {
@@ -2753,6 +2755,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         model: "gpt-5.5",
       },
     );
+    await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest();
     const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
     const database = new DatabaseSync(sqlitePath);
@@ -2797,6 +2800,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       { storePath, sessionKey, env: state.env },
       { sessionId: "retained-codex-window", updatedAt: 10 },
     );
+    await closeOpenClawAgentDatabasesAsync(state.root);
     closeOpenClawAgentDatabasesForTest();
     const sqlitePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
     const database = new DatabaseSync(sqlitePath);

@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { fetchWithZaloSendContext } from "./send-context.js";
+import type { ZaloEventMessage } from "./types.js";
 
 type ZcaJsRuntime = Pick<typeof import("zca-js"), "Zalo">;
 
@@ -49,6 +50,11 @@ export type Message = {
   data: Record<string, unknown>;
 };
 
+type LoginQRActions = {
+  retry: () => unknown;
+  abort: () => unknown;
+};
+
 export type LoginQRCallbackEvent =
   | {
       type: 0;
@@ -56,19 +62,12 @@ export type LoginQRCallbackEvent =
         code: string;
         image: string;
       };
-      actions: {
-        saveToFile: (qrPath?: string) => Promise<unknown>;
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions & { saveToFile: (qrPath?: string) => Promise<unknown> };
     }
   | {
       type: 1;
       data: null;
-      actions: {
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions;
     }
   | {
       type: 2;
@@ -76,20 +75,14 @@ export type LoginQRCallbackEvent =
         avatar: string;
         display_name: string;
       };
-      actions: {
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions;
     }
   | {
       type: 3;
       data: {
         code: string;
       };
-      actions: {
-        retry: () => unknown;
-        abort: () => unknown;
-      };
+      actions: LoginQRActions;
     }
   | {
       type: 4;
@@ -114,19 +107,17 @@ type Listener = {
   stop(): void;
 };
 
-type DeliveryEventMessage = {
-  msgId: string;
-  cliMsgId: string;
-  uidFrom: string;
-  idTo: string;
-  msgType: string;
-  st: number;
-  at: number;
-  cmd: number;
-  ts: string | number;
-};
-
-type DeliveryEventMessages = DeliveryEventMessage | DeliveryEventMessage[];
+type AttachmentSource =
+  | string
+  | {
+      data: Buffer;
+      filename: `${string}.${string}`;
+      metadata: {
+        totalSize: number;
+        width?: number;
+        height?: number;
+      };
+    };
 
 export type API = {
   listener: Listener;
@@ -170,29 +161,7 @@ export type API = {
     attachment?: Array<{ msgId?: string | number }>;
   }>;
   uploadAttachment(
-    sources:
-      | string
-      | {
-          data: Buffer;
-          filename: `${string}.${string}`;
-          metadata: {
-            totalSize: number;
-            width?: number;
-            height?: number;
-          };
-        }
-      | Array<
-          | string
-          | {
-              data: Buffer;
-              filename: `${string}.${string}`;
-              metadata: {
-                totalSize: number;
-                width?: number;
-                height?: number;
-              };
-            }
-        >,
+    sources: AttachmentSource | AttachmentSource[],
     threadId: string,
     type?: number,
   ): Promise<
@@ -231,10 +200,10 @@ export type API = {
   ): Promise<unknown>;
   sendDeliveredEvent(
     isSeen: boolean,
-    messages: DeliveryEventMessages,
+    messages: ZaloEventMessage | ZaloEventMessage[],
     type?: number,
   ): Promise<unknown>;
-  sendSeenEvent(messages: DeliveryEventMessages, type?: number): Promise<unknown>;
+  sendSeenEvent(messages: ZaloEventMessage | ZaloEventMessage[], type?: number): Promise<unknown>;
 };
 
 type ZaloCtor = new (options?: {

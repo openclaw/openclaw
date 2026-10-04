@@ -1,3 +1,4 @@
+import { hostname } from "node:os";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -10,6 +11,7 @@ import {
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   type OpenClawStateDatabase,
@@ -17,18 +19,21 @@ import {
 import { runOpenClawStateWriteTransaction } from "./openclaw-state-db.js";
 import type { OpenClawStateLeaseLifecycleOperations } from "./openclaw-state-lease-context.js";
 import {
+  createOpenClawStateLeaseLostError,
   OpenClawStateLeaseError,
-  toOpenClawStateLeaseVerificationError,
 } from "./openclaw-state-lease-error.js";
 import { leaseHeartbeatState } from "./openclaw-state-lease-heartbeat-shared.js";
-import { withLeaseWriteTransaction } from "./openclaw-state-lease-storage.js";
+import {
+  verifyOpenClawStateLeaseOwnership,
+  withLeaseWriteTransaction,
+} from "./openclaw-state-lease-storage.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
-  readOpenClawStateLeaseExpiry,
+  reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
   renewOpenClawStateLeaseInTransaction,
-  type OpenClawStateLeaseIdentity,
 } from "./openclaw-state-lease-store.js";
+import type { OpenClawStateLeaseIdentity } from "./openclaw-state-lease.types.js";
 
 function takeLeaseExpiryObservation(identity: OpenClawStateLeaseIdentity): BigInt64Array {
   const attachment = takeSqliteWorkerOperationAdmissionAttachment();
@@ -75,17 +80,11 @@ function readOwnedLeaseExpiry(
   database: DatabaseSync,
   identity: OpenClawStateLeaseIdentity,
 ): number {
-  try {
-    const expiresAt = readOpenClawStateLeaseExpiry(database, identity);
-    if (expiresAt === undefined) {
-      throw new OpenClawStateLeaseError(`state lease ${identity.scope}/${identity.key} was lost`, {
-        code: "OPENCLAW_STATE_LEASE_LOST",
-      });
-    }
-    return expiresAt;
-  } catch (error) {
-    throw toOpenClawStateLeaseVerificationError(identity, error);
-  }
+  return verifyOpenClawStateLeaseOwnership({
+    ...identity,
+    leaseLabel: "state lease",
+    transaction: database,
+  });
 }
 
 function assertOpenClawStateLeaseWorkerOwned(
@@ -150,6 +149,19 @@ export function acquireOpenClawStateLeaseInWorker(
 ) {
   const { identity, leaseMs, operationLabel, schemaPolicy } = input;
   const shared = input.observeExpiry ? takeLeaseExpiryObservation(identity) : undefined;
+  // Worker threads share the process lifetime; arbitrary subprocess work does not.
+  const payloadJson = input.processBound
+    ? JSON.stringify({
+        owner: {
+          pid: process.pid,
+          host: hostname(),
+          startedAt: getFileLockProcessStartTime(
+            process.pid,
+            getSqliteWorkerStateContext().environment,
+          ),
+        },
+      })
+    : null;
   try {
     return withLeaseWriteTransaction(
       {
@@ -165,7 +177,8 @@ export function acquireOpenClawStateLeaseInWorker(
       (db) => {
         const facts = { kind: "state-lease-acquire", identity };
         requestSqliteWorkerOperationAdmission({ stage: "transaction", facts });
-        const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs);
+        reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+        const result = acquireOpenClawStateLeaseInTransaction(db, identity, leaseMs, payloadJson);
         requestSqliteWorkerOperationAdmission({ stage: "commit", facts });
         if (shared && result.kind === "acquired") {
           stageLeaseExpiryObservation(db, shared, result.expiresAt);
@@ -212,10 +225,7 @@ export function executeOpenClawStateLeaseCommand(
             command.input.leaseMs,
           );
           if (expiresAt === undefined) {
-            throw new OpenClawStateLeaseError(
-              `state lease ${command.input.identity.scope}/${command.input.identity.key} was lost`,
-              { code: "OPENCLAW_STATE_LEASE_LOST" },
-            );
+            throw createOpenClawStateLeaseLostError(command.input.identity);
           }
           assertOpenClawStateLeaseWorkerOwnedInTransaction(
             db,

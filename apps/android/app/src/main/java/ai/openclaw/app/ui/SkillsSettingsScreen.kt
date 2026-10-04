@@ -42,11 +42,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -124,7 +122,7 @@ internal fun SkillsSettingsScreen(
   SettingsDetailFrame(
     title = nativeString("Skills"),
     subtitle = nativeString("Manage installed skills and add trusted releases from ClawHub."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Skills.icon,
     onBack = onBack,
   ) {
     SettingsRefreshControls(isConnected, skillsState.refreshing, skillsState.errorText, viewModel::refreshSkills)
@@ -140,13 +138,10 @@ internal fun SkillsSettingsScreen(
       modifier = Modifier.fillMaxWidth(),
     )
     if (isConnected && !operatorAdminScopeAvailable) {
-      ClawPanel {
-        Text(
-          text = nativeString("Skill changes require operator.admin. Reconnect with an admin-capable gateway token."),
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.warning,
-        )
-      }
+      SettingsMessagePanel(
+        text = nativeString("Skill changes require operator.admin. Reconnect with an admin-capable gateway token."),
+        color = ClawTheme.colors.warning,
+      )
     }
     when (selectedTab) {
       SkillsTab.Installed -> {
@@ -216,7 +211,7 @@ private fun SkillDetailSettingsScreen(
   SettingsDetailFrame(
     title = skill?.name ?: skillKey,
     subtitle = nativeString("Inspect and manage installed skill state."),
-    icon = Icons.Default.Settings,
+    icon = SettingsRoute.Skills.icon,
     onBack = onBack,
   ) {
     skill?.let { summary ->
@@ -240,6 +235,12 @@ private fun SkillDetailSettingsScreen(
   }
 }
 
+private data class SkillReadinessSegment(
+  val label: String,
+  val count: Int,
+  val color: Color,
+)
+
 @Composable
 private fun SkillsOverviewPanel(
   installedCount: Int,
@@ -247,83 +248,44 @@ private fun SkillsOverviewPanel(
   needsSetupCount: Int,
   disabledCount: Int,
 ) {
-  ClawPanel(contentPadding = PaddingValues(14.dp)) {
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-      Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
-        Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
-      }
-      SkillDistributionBar(
-        readyCount = readyCount,
-        needsSetupCount = needsSetupCount,
-        disabledCount = disabledCount,
-      )
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        SkillCountLegend(
-          label = nativeString("Ready"),
-          count = readyCount,
-          color = ClawTheme.colors.success,
-          modifier = Modifier.weight(1f),
-        )
-        SkillCountLegend(
-          label = nativeString("Needs Setup"),
-          count = needsSetupCount,
-          color = ClawTheme.colors.warning,
-          modifier = Modifier.weight(1f),
-        )
-        SkillCountLegend(
-          label = nativeString("Off"),
-          count = disabledCount,
-          color = ClawTheme.colors.textSubtle,
-          modifier = Modifier.weight(1f),
-        )
+  val segments =
+    listOf(
+      SkillReadinessSegment(nativeString("Ready"), readyCount, ClawTheme.colors.success),
+      SkillReadinessSegment(nativeString("Needs Setup"), needsSetupCount, ClawTheme.colors.warning),
+      SkillReadinessSegment(nativeString("Off"), disabledCount, ClawTheme.colors.textSubtle),
+    )
+  ClawPanel(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
+      Text(text = installedCount.toString(), style = ClawTheme.type.display, color = ClawTheme.colors.text)
+      Text(text = nativeString("Installed"), style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted)
+    }
+    Row(
+      modifier =
+        Modifier
+          .fillMaxWidth()
+          .height(6.dp)
+          .clip(RoundedCornerShape(ClawTheme.radii.pill))
+          .background(ClawTheme.colors.surfacePressed),
+    ) {
+      if (segments.sumOf { it.count } > 0) {
+        segments.forEach { segment ->
+          if (segment.count > 0) {
+            Box(modifier = Modifier.weight(segment.count.toFloat()).fillMaxHeight().background(segment.color))
+          }
+        }
       }
     }
-  }
-}
-
-@Composable
-private fun SkillDistributionBar(
-  readyCount: Int,
-  needsSetupCount: Int,
-  disabledCount: Int,
-) {
-  val total = readyCount + needsSetupCount + disabledCount
-  Row(
-    modifier =
-      Modifier
-        .fillMaxWidth()
-        .height(6.dp)
-        .clip(RoundedCornerShape(ClawTheme.radii.pill))
-        .background(ClawTheme.colors.surfacePressed),
-  ) {
-    if (total > 0) {
-      if (readyCount > 0) {
-        Box(modifier = Modifier.weight(readyCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.success))
-      }
-      if (needsSetupCount > 0) {
-        Box(modifier = Modifier.weight(needsSetupCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.warning))
-      }
-      if (disabledCount > 0) {
-        Box(modifier = Modifier.weight(disabledCount.toFloat()).fillMaxHeight().background(ClawTheme.colors.textSubtle))
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+      segments.forEach { segment ->
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(segment.color))
+            Text(text = segment.label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
+          }
+          Text(text = segment.count.toString(), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        }
       }
     }
-  }
-}
-
-@Composable
-private fun SkillCountLegend(
-  label: String,
-  count: Int,
-  color: Color,
-  modifier: Modifier = Modifier,
-) {
-  Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(3.dp)) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-      Box(modifier = Modifier.size(6.dp).clip(CircleShape).background(color))
-      Text(text = label, style = ClawTheme.type.caption, color = ClawTheme.colors.textMuted, maxLines = 1)
-    }
-    Text(text = count.toString(), style = ClawTheme.type.section, color = ClawTheme.colors.text)
   }
 }
 
@@ -340,37 +302,31 @@ private fun InstalledSkillsPane(
   onSkillClick: (GatewaySkillSummary) -> Unit,
   onSkillEnabledChange: (String, Boolean) -> Unit,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-      ClawTextField(value = query, onValueChange = onQueryChange, placeholder = nativeString("Search installed skills"))
-      Row(
-        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
-      ) {
-        InstalledSkillFilter.entries.forEach { option ->
-          ClawPill(
-            text = installedSkillFilterLabel(option),
-            selected = option == filter,
-            onClick = { onFilterChange(option) },
-          )
-        }
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    ClawTextField(value = query, onValueChange = onQueryChange, placeholder = nativeString("Search installed skills"))
+    Row(
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+      InstalledSkillFilter.entries.forEach { option ->
+        ClawPill(
+          text = installedSkillFilterLabel(option),
+          selected = option == filter,
+          onClick = { onFilterChange(option) },
+        )
       }
     }
   }
   when {
     skills.isEmpty() -> {
-      ClawPanel {
-        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
-          Text(text = nativeString("No skills installed."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-          Text(text = nativeString("Skills installed on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-        }
-      }
+      SettingsMessagePanel(
+        title = nativeString("No skills installed."),
+        text = nativeString("Skills installed on the gateway will appear here."),
+      )
     }
 
     visibleSkills.isEmpty() -> {
-      ClawPanel {
-        Text(text = nativeString("No installed skills match this search."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+      SettingsMessagePanel(text = nativeString("No installed skills match this search."))
     }
 
     else -> {
@@ -419,11 +375,9 @@ private fun SkillSwitchPanel(
 
 @Composable
 private fun SkillSetupPanel(skill: GatewaySkillSummary) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text(text = nativeString("Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(text = skillConfigurationText(skill), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+    Text(text = nativeString("Setup"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+    Text(text = skillConfigurationText(skill), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
   }
 }
 
@@ -433,15 +387,11 @@ private fun SkillDetailPanel(
   isConnected: Boolean,
 ) {
   if (!isConnected) {
-    ClawPanel {
-      Text(text = nativeString("Connect the gateway to load skill details."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
+    SettingsMessagePanel(text = nativeString("Connect the gateway to load skill details."))
     return
   }
   if (skill == null) {
-    ClawPanel {
-      Text(text = nativeString("Skill detail is not available in the current skills status."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-    }
+    SettingsMessagePanel(text = nativeString("Skill detail is not available in the current skills status."))
     return
   }
   SettingsMetricPanel(
@@ -454,11 +404,9 @@ private fun SkillDetailPanel(
       ),
   )
   skill.description?.let { description ->
-    ClawPanel {
-      Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = nativeString("Description"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-        Text(text = description, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
-      }
+    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+      Text(text = nativeString("Description"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+      Text(text = description, style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
     }
   }
 }
@@ -475,7 +423,7 @@ private fun SkillListRow(
     title = skill.name,
     subtitle = skillSubtitle(skill),
     modifier = Modifier.clickable(onClickLabel = nativeString("Open skill detail"), onClick = onClick),
-    leading = { ClawTextBadge(text = skillBadge(skill)) },
+    leading = { ClawTextBadge(text = skill.emoji ?: badgeInitials(skill.name, fallback = "S")) },
     trailing = {
       Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         ClawStatusPill(text = skillStatusText(skill), status = skillStatus(skill))
@@ -502,39 +450,37 @@ private fun ClawHubSkillSearchPanel(
   onReviewInstall: (GatewayClawHubSkillSummary) -> Unit,
   onClearMessage: () -> Unit,
 ) {
-  ClawPanel {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-      Text(text = nativeString("Find on ClawHub"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+  ClawPanel(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Text(text = nativeString("Find on ClawHub"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
+    Text(
+      text = nativeString("Search registry metadata. The Gateway verifies trust again before any download."),
+      style = ClawTheme.type.body,
+      color = ClawTheme.colors.textMuted,
+    )
+    if (isConnected && !methodsAvailable) {
       Text(
-        text = nativeString("Search registry metadata. The Gateway verifies trust again before any download."),
+        text = nativeString(CLAWHUB_SKILL_GATEWAY_UNAVAILABLE),
         style = ClawTheme.type.body,
-        color = ClawTheme.colors.textMuted,
+        color = ClawTheme.colors.warning,
       )
-      if (isConnected && !methodsAvailable) {
-        Text(
-          text = nativeString(CLAWHUB_SKILL_GATEWAY_UNAVAILABLE),
-          style = ClawTheme.type.body,
-          color = ClawTheme.colors.warning,
-        )
-      }
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-      ) {
-        ClawTextField(
-          value = query,
-          onValueChange = onQueryChange,
-          placeholder = nativeString("Search ClawHub"),
-          modifier = Modifier.weight(1f),
-        )
-        ClawIconButton(
-          icon = Icons.Default.Search,
-          contentDescription = if (state.searching) nativeString("Searching") else nativeString("Search"),
-          onClick = onSearch,
-          enabled = isConnected && methodsAvailable && !state.searching,
-        )
-      }
+    }
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+      ClawTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        placeholder = nativeString("Search ClawHub"),
+        modifier = Modifier.weight(1f),
+      )
+      ClawIconButton(
+        icon = Icons.Default.Search,
+        contentDescription = if (state.searching) nativeString("Searching") else nativeString("Search"),
+        onClick = onSearch,
+        enabled = isConnected && methodsAvailable && !state.searching,
+      )
     }
   }
   if (state.errorText != null || state.messageText != null) {
@@ -669,9 +615,12 @@ private fun ClawHubInstallReviewDialog(
   onDismiss: () -> Unit,
   onInstall: () -> Unit,
 ) {
-  AppAlertDialog(
-    onDismissRequest = onDismiss,
-    title = { Text(text = nativeString("Review ClawHub skill")) },
+  AppConfirmationDialog(
+    title = nativeString("Review ClawHub skill"),
+    confirmLabel = nativeString("Verify and install"),
+    onConfirm = onInstall,
+    onDismiss = onDismiss,
+    confirmEnabled = canInstall,
     text = {
       Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text = review.displayName, style = ClawTheme.type.section, color = ClawTheme.colors.text)
@@ -685,16 +634,6 @@ private fun ClawHubInstallReviewDialog(
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )
-      }
-    },
-    confirmButton = {
-      TextButton(onClick = onInstall, enabled = canInstall) {
-        Text(text = nativeString("Verify and install"))
-      }
-    },
-    dismissButton = {
-      TextButton(onClick = onDismiss) {
-        Text(text = nativeString("Cancel"))
       }
     },
   )
@@ -742,7 +681,7 @@ private fun installedSkillFilterLabel(filter: InstalledSkillFilter): String =
     InstalledSkillFilter.Off -> nativeString("Off")
   }
 
-private fun skillReady(skill: GatewaySkillSummary): Boolean =
+internal fun skillReady(skill: GatewaySkillSummary): Boolean =
   !skill.disabled &&
     skill.eligible &&
     !skill.blockedByAllowlist &&
@@ -811,8 +750,3 @@ private fun skillSourceLabel(skill: GatewaySkillSummary): String =
     "openclaw-extra" -> nativeString("Extra")
     else -> nativeString("Skill")
   }
-
-private fun skillBadge(skill: GatewaySkillSummary): String {
-  skill.emoji?.let { return it }
-  return badgeInitials(skill.name, fallback = "S")
-}

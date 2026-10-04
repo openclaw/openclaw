@@ -15,11 +15,9 @@ import {
   type TranscriptRecentReadLimits,
 } from "../sessions/transcript-anchor-page.js";
 import { isVisibleTranscriptRecord } from "../sessions/transcript-visible-record.js";
+import { isPreSessionStartAssistantMessage } from "./chat-display-projection.history.js";
 import { projectTranscriptEntryMessage } from "./session-transcript-entry-message.js";
-import {
-  resolveSessionTranscriptCandidates,
-  resolveSessionTranscriptResetArchiveCandidatesAsync,
-} from "./session-transcript-files.fs.js";
+import { resolveSessionTranscriptResetArchiveCandidatesAsync } from "./session-transcript-files.fs.js";
 import {
   assertArchiveTranscriptSource,
   readIndexedTranscriptEntries,
@@ -28,16 +26,21 @@ import {
   type MaterializedTranscriptEntry,
   type SessionTranscriptIndex,
 } from "./session-transcript-index.fs.js";
+import type {
+  ReadRecentSessionMessagesOptions,
+  ReadSessionMessageByIdResult,
+  ReadSessionMessagesAsyncOptions,
+  ReadSessionMessagesResult,
+} from "./session-transcript-read.types.js";
 import {
   MAX_TRANSCRIPT_PARSE_LINE_BYTES,
   parseTranscriptRecord,
 } from "./session-transcript-record-parser.js";
 
-export type ReadRecentSessionMessagesOptions = {
-  maxMessages: number;
-  maxBytes?: number;
-  maxLines?: number;
-};
+export type {
+  ReadRecentSessionMessagesOptions,
+  ReadSessionMessagesAsyncOptions,
+} from "./session-transcript-read.types.js";
 
 type ReadSessionMessagesPageOptions = {
   offset: number;
@@ -45,15 +48,6 @@ type ReadSessionMessagesPageOptions = {
   beforeSeq?: number;
   recentAtHead?: TranscriptRecentReadLimits;
 };
-
-export type ReadSessionMessagesAsyncOptions =
-  | {
-      mode: "full";
-      reason: string;
-    }
-  | ({
-      mode: "recent";
-    } & ReadRecentSessionMessagesOptions);
 
 type ReadRecentSessionMessagesResult = {
   displaySource?: string;
@@ -65,15 +59,11 @@ type ReadRecentSessionMessagesResult = {
   transcriptSource?: "reset-archive";
 };
 
-type ReadSessionMessagesResult = {
-  messages: unknown[];
-  transcriptPath?: string;
-};
-
 const RECENT_SESSION_MESSAGES_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 
 type ArchivedTranscriptReadScope = {
   agentId?: string | undefined;
+  exactArchivePath?: string | undefined;
   sessionFile?: string | undefined;
   sessionId: string;
   storePath?: string | undefined;
@@ -155,24 +145,18 @@ function parseRecentTranscriptTailSnapshot(
   };
 }
 
-export function findExistingTranscriptPath(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string | null {
-  return (
-    resolveSessionTranscriptCandidates(sessionId, storePath, sessionFile, agentId).find((value) =>
-      fs.existsSync(value),
-    ) ?? null
-  );
-}
-
 /** Reads retained reset archives after the caller has selected its SQLite fallback. */
 export class ArchivedTranscriptReader {
   constructor(private readonly scope: ArchivedTranscriptReadScope) {}
 
   private async resolvePath(): Promise<string | null> {
+    if (this.scope.exactArchivePath) {
+      const exactPath = this.scope.exactArchivePath;
+      if ((await fs.promises.stat(exactPath).catch(() => null))?.isFile()) {
+        return materializeSessionArchiveForRead(exactPath);
+      }
+      return null;
+    }
     const archives = await resolveSessionTranscriptResetArchiveCandidatesAsync(
       this.scope.sessionId,
       this.scope.storePath,
@@ -214,7 +198,8 @@ export class ArchivedTranscriptReader {
 
   async readById(
     messageId: string,
-  ): Promise<{ message?: unknown; seq?: number; oversized: boolean; found: boolean }> {
+    historyVisibility?: { sessionStartedAt?: number },
+  ): Promise<ReadSessionMessageByIdResult> {
     const filePath = await this.resolvePath();
     if (!filePath) {
       return { oversized: false, found: false };
@@ -234,18 +219,36 @@ export class ArchivedTranscriptReader {
       return { oversized: false, found: false };
     }
     // Raw-byte limits still reject placeholders; only bounded, validated image recoveries qualify.
-    if (
+    const oversized =
       entry.byteLength > MAX_TRANSCRIPT_PARSE_LINE_BYTES &&
       (entry.recoveredImageData !== true ||
-        jsonUtf8Bytes(entry.record) > MAX_TRANSCRIPT_PARSE_LINE_BYTES)
-    ) {
+        jsonUtf8Bytes(entry.record) > MAX_TRANSCRIPT_PARSE_LINE_BYTES);
+    if (oversized && !historyVisibility) {
       return { oversized: true, found: true, seq: entry.seq };
     }
+    const message = indexedTranscriptEntryToMessage(entry);
+    const preceding =
+      historyVisibility &&
+      isPreSessionStartAssistantMessage(message, historyVisibility.sessionStartedAt)
+        ? index.entries[entry.seq - 2]
+        : undefined;
+    const previous = preceding
+      ? (await readIndexedTranscriptEntries(filePath, index, [preceding], this.scope.sessionId))[0]
+      : undefined;
     return {
-      message: indexedTranscriptEntryToMessage(entry),
+      message,
       seq: entry.seq,
-      oversized: false,
+      oversized,
       found: true,
+      ...(historyVisibility
+        ? {
+            historyContext: {
+              transcriptPath: filePath,
+              displaySource: index.displaySource,
+              ...(previous ? { precedingMessage: indexedTranscriptEntryToMessage(previous) } : {}),
+            },
+          }
+        : {}),
     };
   }
 
@@ -350,12 +353,15 @@ export class ArchivedTranscriptReader {
     }
   > {
     let displaySource: string | undefined;
-    for (const archivePath of await resolveSessionTranscriptResetArchiveCandidatesAsync(
-      this.scope.sessionId,
-      this.scope.storePath,
-      this.scope.sessionFile,
-      this.scope.agentId,
-    )) {
+    const candidates = this.scope.exactArchivePath
+      ? [this.scope.exactArchivePath]
+      : await resolveSessionTranscriptResetArchiveCandidatesAsync(
+          this.scope.sessionId,
+          this.scope.storePath,
+          this.scope.sessionFile,
+          this.scope.agentId,
+        );
+    for (const archivePath of candidates) {
       let filePath: string;
       try {
         filePath = materializeSessionArchiveForRead(archivePath);

@@ -1,3 +1,4 @@
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -6,10 +7,8 @@ import {
   registerSessionBindingAdapter,
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import {
-  peekSystemEventEntries,
-  resetSystemEventsForTest,
-} from "openclaw/plugin-sdk/system-event-runtime";
+import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
+import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { IMessageRpcClient, type createIMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
@@ -47,7 +46,8 @@ afterEach(() => {
 it("keeps a watched reaction on the runtime-bound global owner's queue", async () => {
   const sender = "+15550001111";
   const cfg = {
-    agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+    agents: { entries: { main: {}, research: {} } },
+    bindings: [{ agentId: "main", match: { channel: "imessage", accountId: "default" } }],
     channels: {
       imessage: {
         dmPolicy: "allowlist" as const,
@@ -95,21 +95,23 @@ it("keeps a watched reaction on the runtime-bound global owner's queue", async (
           },
         },
       });
-      await vi.waitFor(() =>
-        expect(runtime.log).toHaveBeenCalledWith(
-          expect.stringContaining("reaction system event queued session=global"),
-        ),
-      );
     });
     return client;
   });
 
-  await monitorIMessageProvider({ config: cfg, runtime });
+  await monitorIMessageProvider({
+    scheduler: createTestPluginServiceScheduler(),
+    config: cfg,
+    runtime,
+  });
 
+  expect(runtime.error).not.toHaveBeenCalled();
+  expect(runtime.log).toHaveBeenCalledWith(
+    expect.stringContaining("reaction system event queued session=global"),
+  );
   expect(peekSystemEventEntries("agent:research:global")).toEqual([
     expect.objectContaining({ text: `iMessage reaction added: 👍 by ${sender} on msg bot-reply` }),
   ]);
   expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
   expect(binding.targetSessionKey).toBe("global");
-  expect(runtime.error).not.toHaveBeenCalled();
 });

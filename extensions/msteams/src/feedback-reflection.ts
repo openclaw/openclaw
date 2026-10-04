@@ -13,39 +13,6 @@ import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsApp } from "./sdk.js";
 
-type FeedbackEvent = {
-  type: "custom";
-  event: "feedback";
-  ts: number;
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-};
-
-export function buildFeedbackEvent(params: {
-  messageId: string;
-  value: "positive" | "negative";
-  comment?: string;
-  sessionKey: string;
-  agentId: string;
-  conversationId: string;
-}): FeedbackEvent {
-  return {
-    type: "custom",
-    event: "feedback",
-    ts: Date.now(),
-    messageId: params.messageId,
-    value: params.value,
-    comment: params.comment,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
-    conversationId: params.conversationId,
-  };
-}
-
 type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;

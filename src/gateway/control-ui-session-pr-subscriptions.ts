@@ -5,40 +5,38 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type {
   ControlUiSessionPullRequestSnapshot,
-  ControlUiSessionPullRequests,
   ControlUiSessionPullRequestsChanged,
 } from "./control-ui-contract.js";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
 } from "./control-ui-contract.js";
+import {
+  createControlUiSessionPrPreparedRead,
+  type PreparedSessionPrState,
+} from "./control-ui-session-pr-prepared-read.js";
 import type {
   ControlUiSessionPrRead,
-  ControlUiSessionPrReadContext,
   ControlUiSessionPrTarget,
 } from "./control-ui-session-pr-read.js";
+import {
+  loadSessionPullRequests,
+  pushedSnapshot,
+  UNAVAILABLE_SNAPSHOT,
+  type LoadSessionPullRequests,
+} from "./control-ui-session-pr-snapshot-read.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
 const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
-type LoadSessionPullRequests = (
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-) => Promise<ControlUiSessionPullRequests>;
-
-type WatchedKeyState = {
-  connIds: Set<string>;
-  target: ControlUiSessionPrTarget;
+type WatchedKeyState = PreparedSessionPrState & {
   watchLifetime: object;
   sourceIdentity?: string;
-  // Retire cache pins with the shared key, without cancelling another watcher's load.
-  cacheLifetime: AbortController;
-  snapshot?: ControlUiSessionPullRequestSnapshot;
   refreshedAt?: number;
   cancelRefresh?: () => void;
   delivery?: Promise<void>;
@@ -53,41 +51,7 @@ type SubscriptionDeps = {
   isConnectionActive?: (connId: string) => boolean;
   load?: LoadSessionPullRequests;
   scheduler: GatewayScheduler;
-};
-
-type ControlUiSessionPullRequestSubscriptions = {
-  replace: (
-    connId: string,
-    sessionKeys: readonly string[],
-    refreshSessionKeys?: ReadonlySet<string>,
-    onAdmitted?: () => void,
-  ) => Promise<void>;
-  unsubscribe: (connId: string) => void;
-  pollNow: () => Promise<void>;
-  stop: () => Promise<void>;
-};
-
-async function loadSessionPullRequests(
-  params: ControlUiSessionPullRequestsParams,
-  cacheSignal: AbortSignal | undefined,
-  read: ControlUiSessionPrReadContext,
-): Promise<ControlUiSessionPullRequests> {
-  read.assertCurrent();
-  const { loadControlUiSessionPullRequests } = await import("./control-ui-session-prs.js");
-  return loadControlUiSessionPullRequests(params, { cacheSignal, read });
-}
-
-function pushedSnapshot(result: ControlUiSessionPullRequests): ControlUiSessionPullRequestSnapshot {
-  return {
-    ...result,
-    status: result.status ?? (result.rateLimited ? "rate-limited" : "ready"),
-  };
-}
-
-const UNAVAILABLE_SNAPSHOT: ControlUiSessionPullRequestSnapshot = {
-  pullRequests: [],
-  rateLimited: false,
-  status: "unavailable",
+  getSessionRowProjection?: () => SessionRowProjection | undefined;
 };
 
 function parseSessionKeys(value: unknown): string[] | null {
@@ -134,9 +98,7 @@ export function parseControlUiSessionPullRequestsSubscribeParams(
  * Owns the union of connection replace-sets. Only this union drives GitHub
  * refreshes, so hidden/disconnected clients cannot leave orphan polling work.
  */
-export function createControlUiSessionPullRequestSubscriptions(
-  deps: SubscriptionDeps,
-): ControlUiSessionPullRequestSubscriptions {
+export function createControlUiSessionPullRequestSubscriptions(deps: SubscriptionDeps) {
   // A retained key keeps its work and delivery lifetime; removing it retires that cell.
   type Watched = {
     readCurrent: ControlUiSessionPrRead;
@@ -160,7 +122,7 @@ export function createControlUiSessionPullRequestSubscriptions(
       demands: Set<() => boolean>;
     }
   >();
-  const scheduler = deps.scheduler;
+  const scheduler = deps.scheduler.scope();
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   const customLoad = deps.load;
   const load = customLoad ?? loadSessionPullRequests;
@@ -178,6 +140,7 @@ export function createControlUiSessionPullRequestSubscriptions(
   const retireKeyStateIfUnused = (sessionKey: string, state: WatchedKeyState | undefined) => {
     if (
       !state ||
+      state.prepared ||
       state.connIds.size > 0 ||
       [...(pendingAdmissions.get(sessionKey) ?? [])].some((isCurrent) => isCurrent())
     ) {
@@ -209,6 +172,8 @@ export function createControlUiSessionPullRequestSubscriptions(
     target: ControlUiSessionPrTarget,
     sourceIdentity?: string,
   ) => {
+    // Shared snapshots outlive individual viewers; authority stays only in each watched reader.
+    const { assertCurrent: _assertCurrent, ...preparedTarget } = target;
     const previous = keyStates.get(sessionKey);
     if (
       previous?.target.identity === target.identity &&
@@ -216,7 +181,7 @@ export function createControlUiSessionPullRequestSubscriptions(
         previous.sourceIdentity === undefined ||
         previous.sourceIdentity === sourceIdentity)
     ) {
-      previous.target = target;
+      previous.target = preparedTarget;
       previous.sourceIdentity ??= sourceIdentity;
       return previous;
     }
@@ -224,14 +189,25 @@ export function createControlUiSessionPullRequestSubscriptions(
     previous?.cacheLifetime.abort(null);
     const state: WatchedKeyState = {
       connIds: new Set(previous?.connIds),
-      target,
+      target: preparedTarget,
       watchLifetime: previous?.watchLifetime ?? {},
+      prepared: previous?.prepared,
       sourceIdentity,
       cacheLifetime: new AbortController(),
     };
     keyStates.set(sessionKey, state);
     return state;
   };
+
+  const prepared = createControlUiSessionPrPreparedRead({
+    scope,
+    limit,
+    withSource,
+    load,
+    keyStates,
+    stateForTarget,
+    getSessionRowProjection: deps.getSessionRowProjection,
+  });
 
   const currentWatcher = async (connId: string, sessionKey: string) => {
     const watched = subscriptions.get(connId)?.get(sessionKey);
@@ -383,7 +359,7 @@ export function createControlUiSessionPullRequestSubscriptions(
               .catch(() => ({ ...UNAVAILABLE_SNAPSHOT }));
             if ((await currentKeyState(sessionKey)) === state) {
               assertSourceCurrent();
-              state.snapshot = snapshot;
+              prepared.publishSnapshot(state, snapshot);
               // Shared equality does not acknowledge recipients that missed publication.
               await push(
                 new Set(state.connIds),
@@ -519,18 +495,19 @@ export function createControlUiSessionPullRequestSubscriptions(
     return scope.track(async () => {
       // One union pass owns each key once; the loader retains its failure and
       // rate-limit cache, so the poller never creates a second quota policy.
-      await Promise.all([
-        Promise.allSettled(replacements),
-        Promise.all(
-          Array.from(keyStates, ([sessionKey, state]) => {
-            const watchLifetime = state.watchLifetime;
-            return loadSnapshot(
+      const loads = [];
+      for (const [sessionKey, state] of keyStates) {
+        if (state.connIds.size > 0) {
+          const watchLifetime = state.watchLifetime;
+          loads.push(
+            loadSnapshot(
               sessionKey,
               () => keyStates.get(sessionKey)?.watchLifetime === watchLifetime,
-            );
-          }),
-        ),
-      ]);
+            ),
+          );
+        }
+      }
+      await Promise.all([Promise.allSettled(replacements), prepared.settle(), ...loads]);
     });
   };
 
@@ -733,8 +710,8 @@ export function createControlUiSessionPullRequestSubscriptions(
       return stopPromise;
     }
     scope.beginClose();
-    pollJob?.cancel();
-    pollJob = undefined;
+    scheduler.beginClose();
+    prepared.stop();
     subscriptions.clear();
     replacementGenerations.clear();
     replacements.clear();
@@ -743,11 +720,18 @@ export function createControlUiSessionPullRequestSubscriptions(
       state.cacheLifetime.abort(null);
     }
     keyStates.clear();
-    stopPromise = scope.drain().then(() => {
+    stopPromise = Promise.all([scope.drain(), scheduler.stop()]).then(() => {
       inflight.clear();
     });
     return stopPromise;
   };
 
-  return { replace, unsubscribe, pollNow, stop };
+  return {
+    read: prepared.read,
+    readPrepared: prepared.readPrepared,
+    replace,
+    unsubscribe,
+    pollNow,
+    stop,
+  };
 }

@@ -18,6 +18,7 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { validateSessionTranscriptContextAnchor } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
+import { createBackgroundWorkOwner } from "../../process/background-work.js";
 import {
   getGatewayRestartDrainSignal,
   runWithGatewayDetachedWorkAdmission,
@@ -31,9 +32,10 @@ import { buildSkillExperienceReviewPrompt } from "./experience-review-prompt.js"
 import type { ExperienceReviewCandidate } from "./experience-review-scheduler.js";
 import { SKILL_WORKSHOP_MAINTENANCE_TOOLS } from "./maintenance-prompt.js";
 import { assertSkillReviewRunSucceeded } from "./review-outcome.js";
-import { runSkillWorkshopReview } from "./review-run.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import type { SkillWorkshopProposalMutationBudget } from "./types.js";
+
+const reviews = createBackgroundWorkOwner({ owner: "core:skill-workshop", maxConcurrent: 1 });
 
 export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
@@ -66,11 +68,9 @@ export async function prepareSkillExperienceReviewCandidate(
     agentAccountId: foreground.agentAccountId,
     messageProvider: foreground.messageProvider,
     messageChannel: foreground.messageChannel,
-    chatType: foreground.chatType,
     groupId: foreground.groupId,
     groupChannel: foreground.groupChannel,
     groupSpace: foreground.groupSpace,
-    memberRoleIds: foreground.memberRoleIds,
     spawnedBy: foreground.spawnedBy,
     senderId: foreground.senderId,
     senderName: foreground.senderName,
@@ -219,8 +219,11 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
       },
       assertSourceCurrent,
     });
-    const run = () =>
-      runSkillWorkshopReview({
+    const run = async () => {
+      const reviewAbortSignal = AbortSignal.any([getGatewayRestartDrainSignal(), abortSignal]);
+      const reviewParams: Parameters<
+        typeof import("../../agents/embedded-agent.js").runEmbeddedAgent
+      >[0] = {
         ...foregroundPromptContext,
         preparedRunAdmission,
         sessionId: reviewSession.sessionId,
@@ -234,7 +237,7 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
         permissionMode: sourceEntry.permissionMode ?? foregroundPromptContext.permissionMode,
         ...(executionRoot ? { skillsSnapshot: { prompt: "", skills: [] } } : {}),
         config,
-        abortSignal,
+        abortSignal: reviewAbortSignal,
         prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }, mode),
         provider: candidate.ctx.modelProviderId,
         model: candidate.ctx.modelId,
@@ -258,7 +261,25 @@ async function runSkillExperienceReviewInner(candidate: ExperienceReviewCandidat
           ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
         },
         ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
-      });
+        lane: reviews.lane,
+        agentHarnessId: "openclaw",
+        agentHarnessRuntimeOverride: "openclaw",
+        // Review prompts and cloned prefixes are sized for this exact model.
+        modelSelectionLocked: true,
+        modelFallbacksOverride: [],
+        requestedRouteResolution: "resolved",
+        disableTrajectory: true,
+        cleanupBundleMcpOnRunEnd: true,
+        verboseLevel: "off",
+      };
+      reviewAbortSignal.throwIfAborted();
+      try {
+        const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
+        return await runEmbeddedAgent(reviewParams);
+      } finally {
+        preparedRunAdmission.close();
+      }
+    };
     const embeddedResult = capability
       ? await runWithCronCreatorAuthorityCapability(capability, run)
       : await run();

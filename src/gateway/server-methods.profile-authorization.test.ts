@@ -1,11 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileListItem,
-  linkEmail,
-} from "../state/user-profiles.js";
+import { linkEmail } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail, getUserProfileListItem } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { READ_SCOPE, SESSION_READ_SCOPE } from "./operator-scopes.js";
@@ -540,7 +537,6 @@ describe("Gateway pending-profile authorization", () => {
       "skills.library.import",
       "skills.library.upload",
       "taskSuggestions.list",
-      "tasks.list",
       "users.github.status",
       "users.github.authorize.start",
       "users.github.authorize.poll",

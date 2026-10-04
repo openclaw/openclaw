@@ -6,7 +6,6 @@ import * as leaseStore from "../state/openclaw-state-lease-store.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { commitPluginInstallRecordsWithConfig } from "./install-record-commit.js";
 import { listRecoveredManagedNpmInstallCandidates } from "./installed-plugin-index-record-reader.js";
-import { readPersistedInstalledPluginIndexRowSync } from "./installed-plugin-index-record-state.js";
 import { readPersistedInstalledPluginIndexInstallRecords } from "./installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "./installed-plugin-index-store.js";
 import {
@@ -16,8 +15,11 @@ import {
   resolveRetainedManagedNpmInstallMarkerPath,
 } from "./managed-npm-retention.js";
 import { withPluginLifecycleLease } from "./plugin-lifecycle-lease.js";
-import { publishPluginSourceAdmission } from "./plugin-source-admission-store.js";
-import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
+import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-store.js";
+import {
+  readPersistedInstalledPluginIndexRowSync,
+  seedInstalledPluginIndex,
+} from "./test-helpers/installed-plugin-index.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 function npmRecord(packageName: string, installPath: string): PluginInstallRecord {
@@ -51,7 +53,6 @@ describe("retained managed npm record commits", () => {
       const removedPath = records.removed!.installPath!;
       const configBefore = fs.readFileSync(state.configPath, "utf8");
       const publication = {
-        env: state.env,
         pluginId: unchanged.pluginId,
         rootDir: unchanged.rootDir,
         installRecordHash: unchanged.installRecordHash,
@@ -63,6 +64,7 @@ describe("retained managed npm record commits", () => {
           nativeNamespaces: {},
         },
       };
+      const publish = createPluginSourceAdmissionPublisher({ env: state.env })!;
       const failure = new Error("config commit failed after plugin retirement");
       let published: boolean | undefined;
       let publicationRewroteIndex: boolean | undefined;
@@ -75,7 +77,7 @@ describe("retained managed npm record commits", () => {
             beforeCommit: async () => {
               expect(hasRetainedManagedNpmInstallMarker(removedPath)).toBe(true);
               const before = readPersistedInstalledPluginIndexRowSync({ env: state.env });
-              published = await publishPluginSourceAdmission(publication);
+              published = await publish(publication);
               publicationRewroteIndex =
                 readPersistedInstalledPluginIndexRowSync({ env: state.env })?.value_json !==
                 before?.value_json;
@@ -90,7 +92,7 @@ describe("retained managed npm record commits", () => {
       expect(published).toBe(false);
       expect(publicationRewroteIndex).toBe(false);
 
-      expect(await publishPluginSourceAdmission(publication)).toBe(true);
+      expect(await publish(publication)).toBe(true);
       expect(
         JSON.parse(readPersistedInstalledPluginIndexRowSync({ env: state.env })!.value_json),
       ).toMatchObject({

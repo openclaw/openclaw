@@ -3,7 +3,7 @@ import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { FsSafeError, readRegularFile } from "openclaw/plugin-sdk/security-runtime";
 import { asRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveBrowserActRequestTimeoutMs } from "../../browser/act-policy.js";
-import type { browserAct } from "../../browser/client-actions-core.js";
+import type { browserAct } from "../../browser/client-actions.js";
 import type { BrowserActRequest, BrowserFormField } from "../../browser/client-actions.types.js";
 import { normalizeBrowserFormFields } from "../../browser/form-fields.js";
 import {
@@ -79,13 +79,13 @@ export function requireRef(ref: string | undefined) {
   return refValue;
 }
 
-async function readFile(filePath: string, maxBytes?: number): Promise<string> {
-  if (maxBytes === undefined) {
-    return await fs.readFile(filePath, "utf8");
-  }
+async function readActionsFile(filePath: string): Promise<string> {
   try {
     // Preserve existing symlinked inputs while rejecting oversized files and FIFOs.
-    const { buffer } = await readRegularFile({ filePath: await fs.realpath(filePath), maxBytes });
+    const { buffer } = await readRegularFile({
+      filePath: await fs.realpath(filePath),
+      maxBytes: ACTIONS_INPUT_MAX_BYTES,
+    });
     return buffer.toString("utf8");
   } catch (cause) {
     if (cause instanceof FsSafeError && cause.code === "too-large") {
@@ -102,7 +102,9 @@ export async function readFields(opts: {
   if (opts.fields !== undefined && opts.fieldsFile !== undefined) {
     throw new Error("Specify only one of --fields or --fields-file");
   }
-  const payload = opts.fieldsFile ? await readFile(opts.fieldsFile) : (opts.fields ?? "");
+  const payload = opts.fieldsFile
+    ? await fs.readFile(opts.fieldsFile, "utf8")
+    : (opts.fields ?? "");
   if (!payload.trim()) {
     throw new Error("fields are required");
   }
@@ -128,16 +130,13 @@ function createActionsInputTooLargeError(source: string, cause?: unknown): FsSaf
   );
 }
 
-async function readStdinText(
-  stream: NodeJS.ReadableStream = process.stdin,
-  maxBytes = ACTIONS_INPUT_MAX_BYTES,
-): Promise<string> {
+async function readStdinText(): Promise<string> {
   const chunks: Buffer[] = [];
   let total = 0;
-  for await (const chunk of stream) {
+  for await (const chunk of process.stdin) {
     const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
     total += buf.length;
-    if (total > maxBytes) {
+    if (total > ACTIONS_INPUT_MAX_BYTES) {
       throw createActionsInputTooLargeError("--actions-file - stdin");
     }
     chunks.push(buf);
@@ -155,7 +154,7 @@ export async function readActionsPayload(opts: {
   if (opts.actionsFile) {
     return opts.actionsFile === "-"
       ? await readStdinText()
-      : await readFile(opts.actionsFile, ACTIONS_INPUT_MAX_BYTES);
+      : await readActionsFile(opts.actionsFile);
   }
   return opts.actions ?? "";
 }

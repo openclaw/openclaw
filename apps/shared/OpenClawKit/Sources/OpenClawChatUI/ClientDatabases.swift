@@ -605,7 +605,7 @@ extension OpenClawClientDatabases {
                 try self.writeLegacySnapshot(ownedSnapshot)
                 // Preserve bytes for unregistered gateways rather than
                 // importing or destroying state whose ownership is unknown.
-                let forgottenGatewayHashes = try forgottenGatewayHashesForLegacyImport()
+                let forgottenGatewayHashes = try self.stateQueue.read(Self.forgottenGatewayHashesForLegacyImport)
                 let allLegacyGatewaysAccountedFor = legacyGatewayIDs.allSatisfy { gatewayID in
                     registeredGatewayIDs?.contains(gatewayID) == true ||
                         forgottenGatewayHashes.contains(Self.gatewayIdentityHash(gatewayID))
@@ -731,12 +731,7 @@ extension OpenClawClientDatabases {
 
     private func writeLegacySnapshot(_ snapshot: LegacySnapshot) throws {
         try self.stateQueue.write { db in
-            let forgottenGatewayHashes = try Set(String.fetchAll(
-                db,
-                sql: """
-                SELECT gateway_hash FROM forgotten_gateways
-                WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
-                """))
+            let forgottenGatewayHashes = try Self.forgottenGatewayHashesForLegacyImport(db)
             for identity in snapshot.routingIdentities
                 where !forgottenGatewayHashes.contains(Self.gatewayIdentityHash(identity.gatewayID))
             {
@@ -801,15 +796,13 @@ extension OpenClawClientDatabases {
         }
     }
 
-    private func forgottenGatewayHashesForLegacyImport() throws -> Set<String> {
-        try self.stateQueue.read { db in
-            try Set(String.fetchAll(
-                db,
-                sql: """
-                SELECT gateway_hash FROM forgotten_gateways
-                WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
-                """))
-        }
+    private static func forgottenGatewayHashesForLegacyImport(_ db: Database) throws -> Set<String> {
+        try Set(String.fetchAll(
+            db,
+            sql: """
+            SELECT gateway_hash FROM forgotten_gateways
+            WHERE cleanup_phase IN (0, 2, 3) OR restore_finalized = 1
+            """))
     }
 
     static func insertOutboxAttachments(

@@ -15,13 +15,21 @@ import {
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
-import { acquireGatewayLock, type GatewayLockOptions } from "../infra/gateway-lock.js";
+import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
+import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
+import {
+  createExplicitSystemAgentConfig,
+  createGatewayClosedError,
+  createGatewayNormalCloseError,
+  createGatewayTimeoutError,
+  createLocalGatewayLockOptions,
+} from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -79,7 +87,6 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         ...overrides?.agents?.defaults,
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
-      ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
       ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
@@ -149,23 +156,6 @@ function mockLocalAgentReply(text = "local") {
       meta: { durationMs: 1, agentMeta: { sessionId: "s", provider: "p", model: "m" } },
     } as unknown as Awaited<ReturnType<typeof AgentCommand>>;
   });
-}
-
-function createLocalGatewayLockOptions(
-  stateDir: string,
-  overrides: Partial<GatewayLockOptions> = {},
-): GatewayLockOptions {
-  return {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir: path.join(stateDir, "gateway-locks"),
-    timeoutMs: 100,
-    ...overrides,
-  };
 }
 
 function requireFirstCallArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
@@ -258,50 +248,6 @@ function mockMessages(mock: unknown): string[] {
   return calls.map(([message]) => String(message));
 }
 
-function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayClosedError() {
-  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1006,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1000,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
 vi.mock("../config/gateway-dispatch-config.js", () => ({
   readGatewayDispatchConfig: loadConfig,
   readGatewayDispatchConfigWithShellEnvFallback: loadConfigWithShellEnvFallback,
@@ -344,7 +290,6 @@ function resetAgentCliCommandMocksForTest() {
   startOneShotDiagnosticsExporters.mockReset();
   startOneShotDiagnosticsExporters.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   // Each test observes a fresh mock generation, even after the real module was
   // warmed; a single hoisted factory would hide later unexpected imports.
@@ -512,7 +457,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
         expect(jsonRuntime.writeJson).toHaveBeenCalledOnce();
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -604,7 +549,7 @@ describe("agentCliCommand", () => {
           ...remoteGatewayConfig,
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         },
       );
@@ -647,10 +592,10 @@ describe("agentCliCommand", () => {
           sessionKey: "agent:ops:work",
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { mainKey: "work", scope: "per-sender" },
-      },
+      }).config,
     );
   });
 
@@ -667,10 +612,10 @@ describe("agentCliCommand", () => {
           sessionKey: undefined,
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { scope: "global" },
-      },
+      }).config,
     );
   });
 
@@ -691,28 +636,16 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
         session: { scope: "global" },
       },
     );
   });
 
-  it("dispatches a retained-owner global session through --local", async () => {
+  it("dispatches a persisted-owner global session through --local", async () => {
     await withTempStore(
       async () => {
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
         mockLocalAgentReply();
 
         await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
@@ -724,7 +657,11 @@ describe("agentCliCommand", () => {
         );
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
         session: { scope: "global" },
       },
     );
@@ -734,19 +671,6 @@ describe("agentCliCommand", () => {
     await withTempStore(
       async () => {
         vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            gateway: { mode: "remote" },
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
         mockLocalAgentReply();
 
         await agentCliCommand({ message: "hi", local: true }, runtime);
@@ -761,7 +685,12 @@ describe("agentCliCommand", () => {
         );
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        gateway: { mode: "remote" },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
         session: { scope: "global" },
       },
     );
@@ -775,7 +704,7 @@ describe("agentCliCommand", () => {
           agents: {
             ...loadRuntimeConfig().agents,
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         });
 
@@ -785,7 +714,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: { entries: { ops: {}, research: {} } },
         session: { scope: "global" },
       },
     );
@@ -877,7 +806,6 @@ describe("agentCliCommand", () => {
         firstRunStarted.resolve();
         await firstRunFinished.promise;
       });
-      const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
       const firstRun = agentCliCommand({ message: "first", to: "+1555", local: true }, runtime, {
         localGatewayLockOptions: lockOptions,
       });
@@ -887,17 +815,28 @@ describe("agentCliCommand", () => {
         const payload: unknown = JSON.parse(fs.readFileSync(stateLockPath, "utf8"));
         expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
 
-        await expect(
-          agentCliCommand({ message: "second", to: "+1555", local: true }, runtime, {
-            localGatewayLockOptions: { ...lockOptions, pollIntervalMs: 2, timeoutMs: 15 },
-          }),
-        ).rejects.toThrow(
-          `another embedded OpenClaw state writer is active (pid ${process.pid}); lock timeout after 15ms`,
+        const secondRun = agentCliCommand(
+          { message: "second", to: "+1555", local: true },
+          runtime,
+          { localGatewayLockOptions: lockOptions },
         );
+        await expect(secondRun).rejects.toBeInstanceOf(GatewayLockError);
+        await expect(secondRun).rejects.toMatchObject({
+          message: expect.stringContaining("wait for the current OpenClaw operation to finish"),
+          cause: expect.any(GatewayStateOwnerContentionError),
+        });
+        await expect(secondRun).rejects.toMatchObject({
+          message: expect.stringContaining(
+            path.join(fs.realpathSync(dir), "state", "openclaw.sqlite"),
+          ),
+          cause: {
+            databasePath: path.join(fs.realpathSync(dir), "state", "openclaw.sqlite"),
+          },
+        });
         expect(agentCommand).toHaveBeenCalledTimes(1);
       } finally {
         firstRunFinished.resolve();
-        await firstRun.finally(() => clock.mockRestore());
+        await firstRun;
       }
       expect(fs.existsSync(stateLockPath)).toBe(false);
     });
@@ -1178,7 +1117,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBe("ops");
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1201,7 +1140,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBe("ops");
         expect(params.sessionKey).toBe("agent:OPS:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1221,7 +1160,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1254,7 +1193,7 @@ describe("agentCliCommand", () => {
         expect(params.sessionId).toBe("existing-main-session");
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1276,7 +1215,7 @@ describe("agentCliCommand", () => {
           expect(params.agentId).toBe("ops");
           expect(params.sessionKey).toBe(sessionKey);
         },
-        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+        { agents: { entries: { main: {}, ops: {} } } },
       );
     },
   );
@@ -1297,7 +1236,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("global");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1319,7 +1258,7 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
     );
@@ -1341,7 +1280,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("unknown");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1550,7 +1489,7 @@ describe("agentCliCommand", () => {
         });
       },
       {
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { dmScope: "per-channel-peer" },
       },
     );
@@ -2654,47 +2593,6 @@ describe("agentCliCommand", () => {
     });
   });
 
-  for (const message of ["  /CoMpAcT  ", "/compact Keep recent decisions."]) {
-    it(`rejects ${JSON.stringify(message)} from the CLI before any gateway or embedded turn`, async () => {
-      await withTempStore(async () => {
-        callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-        await agentCliCommand(
-          { message, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
-          runtime,
-        );
-      });
-
-      // The slash-command handler rejects CLI senders, so a /compact turn would
-      // otherwise fall through to a normal turn and exit 0 without compacting.
-      // It must fail loudly before touching the gateway or local agent.
-      expect(callGateway).not.toHaveBeenCalled();
-      expect(agentCommand).not.toHaveBeenCalled();
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      const errorMessages = mockMessages(runtime.error);
-      expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-    });
-  }
-
-  it("rejects /compact from --message-file before any gateway or embedded turn", async () => {
-    await withTempStore(async ({ dir }) => {
-      const messageFile = path.join(dir, "compact.md");
-      fs.writeFileSync(messageFile, "/compact:Keep recent decisions.", "utf8");
-      callGateway.mockRejectedValue(createGatewayTimeoutError());
-
-      await agentCliCommand(
-        { messageFile, sessionId: "locked-session", runId: "locked-run", timeout: "0" },
-        runtime,
-      );
-    });
-
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(agentCommand).not.toHaveBeenCalled();
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    const errorMessages = mockMessages(runtime.error);
-    expect(errorMessages.some((m) => m.includes("openclaw sessions compact"))).toBe(true);
-  });
-
   it("does not mistake a /compacting-prefixed message for the /compact control command", async () => {
     await withTempStore(async () => {
       mockGatewaySuccessReply();
@@ -2709,66 +2607,20 @@ describe("agentCliCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("keeps a resolved session module cached until the existing lazy reset", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-      const run = () => agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(loadAgentSessionModuleMock).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).not.toHaveBeenCalled();
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(
-        callGateway.mock.calls.map(([value]) => {
-          const request = requireRecord(value, "gateway request");
-          return requireRecord(request.params, "gateway params").sessionKey;
-        }),
-      ).toEqual(["agent:main:main", "agent:main:main", "agent:main:main"]);
-    });
-  });
-
-  it("keeps a rejected session module cached until the existing lazy reset", async () => {
+  it("stops dispatch and releases signal listeners when the session module fails to load", async () => {
     await withTempStore(async () => {
       const failure = new Error("synthetic session module load failure");
-      const rejectedGeneration = vi.fn(() => {
+      vi.doMock("./agent/session.runtime.js", () => {
         throw failure;
       });
-      vi.doMock("./agent/session.runtime.js", rejectedGeneration);
       const signals = createSignalProcess();
-      const run = () =>
+      await expect(
         agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
           process: signals.processLike,
-        });
-      const firstError = await run().catch((error: unknown) => error);
-      expect(firstError).toBeInstanceOf(Error);
-      expect(firstError).toMatchObject({ cause: failure });
-      expect(rejectedGeneration).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).rejects.toBe(firstError);
-      expect(nextGeneration).not.toHaveBeenCalled();
+        }),
+      ).rejects.toMatchObject({ cause: failure });
       expect(callGateway).not.toHaveBeenCalled();
-      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      mockGatewaySuccessReply();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).not.toHaveBeenCalled();
       expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
     });
   });

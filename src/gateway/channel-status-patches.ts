@@ -78,17 +78,15 @@ export function channelReadyPatch<TExtras extends ReadyChannelStatusExtras>(
 export function channelReadyPatch(
   extras: ReadyChannelStatusExtras = {},
 ): ReadyChannelStatusPatch & ReadyChannelStatusExtras {
-  return Object.assign(
-    {
-      running: true as const,
-      connected: true as const,
-      lifecycle: "ready" as const,
-      lastConnectedAt: Date.now(),
-      lastError: null,
-      terminalDisconnect: undefined,
-    },
-    extras,
-  );
+  return {
+    running: true,
+    connected: true,
+    lifecycle: "ready",
+    lastConnectedAt: Date.now(),
+    lastError: null,
+    terminalDisconnect: undefined,
+    ...extras,
+  };
 }
 
 /** Creates a terminal blocked patch with a required operator-facing error. */
@@ -101,14 +99,12 @@ export function channelBlockedPatch(
   lastError: string,
   extras: BlockedChannelStatusExtras = {},
 ): BlockedChannelStatusPatch & BlockedChannelStatusExtras {
-  return Object.assign(
-    {
-      lifecycle: "blocked" as const,
-      terminalDisconnect: true as const,
-      lastError,
-    },
-    extras,
-  );
+  return {
+    lifecycle: "blocked",
+    terminalDisconnect: true,
+    lastError,
+    ...extras,
+  };
 }
 
 /** Classifies startup failures before transport cleanup or retry policy can hide their cause. */
@@ -137,12 +133,42 @@ export function channelStoppedPatch<TExtras extends StoppedChannelStatusExtras>(
 export function channelStoppedPatch(
   extras: StoppedChannelStatusExtras = {},
 ): StoppedChannelStatusPatch & StoppedChannelStatusExtras {
-  return Object.assign(
-    {
-      running: false as const,
-      connected: false as const,
-      lifecycle: "stopped" as const,
-    },
-    extras,
-  );
+  return {
+    running: false,
+    connected: false,
+    lifecycle: "stopped",
+    ...extras,
+  };
+}
+
+export function sanitizeAbortedTaskStatusPatch(
+  patch: ChannelAccountSnapshot,
+  current: ChannelAccountSnapshot,
+): ChannelAccountSnapshot {
+  const next = { ...patch };
+  delete next.running;
+  delete next.restartPending;
+  delete next.reconnectAttempts;
+  delete next.lastStartAt;
+  delete next.lastStopAt;
+  delete next.lifecycle;
+
+  // A stale task may still emit a late "connected" heartbeat after the gateway
+  // has already aborted it and marked restart recovery pending. Do not let that
+  // old task make the stopped runtime look connected again.
+  if (next.connected === true) {
+    delete next.connected;
+    delete next.lastConnectedAt;
+    delete next.lastEventAt;
+    delete next.lastTransportActivityAt;
+  }
+
+  // Preserve actionable lifecycle diagnostics (for example a stop-timeout
+  // recovery error) against late stale-task status patches that merely clear
+  // plugin transport errors.
+  if (next.lastError === null && current.lastError) {
+    delete next.lastError;
+  }
+
+  return next;
 }

@@ -1,5 +1,6 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type { SessionCatalogEntrySnapshot } from "openclaw/plugin-sdk/session-catalog";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 // Codex supervision tests cover passive listing and safe local session takeover.
 /* oxlint-disable typescript/unbound-method -- assertions inspect vi.fn-backed object methods, not unbound class methods. */
@@ -41,6 +42,12 @@ import {
   type PluginRuntime,
 } from "./session-catalog.test-helpers.js";
 
+function continueSource(
+  params: Omit<Parameters<typeof continueLocalCodexSession>[0], "config" | "threadId">,
+) {
+  return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
+}
+
 describe("Codex supervision catalog", () => {
   it("refreshes bulk adoption authority after a generation changes or a binding disappears", async () => {
     const state = createCodexSqliteTestBindingStateStore({
@@ -54,6 +61,10 @@ describe("Codex supervision catalog", () => {
       entry: adoptedEntry({ sourceThreadId, sessionId: `session-${sourceThreadId}` }),
     }));
     const { runtime } = createRuntime({ entries });
+    const sessionEntries: SessionCatalogEntrySnapshot = {
+      revision: {},
+      entriesForAgent: () => entries,
+    };
     try {
       for (const [index, sourceThreadId] of ["first", "second"].entries()) {
         await seedSupervisionBinding({
@@ -63,13 +74,15 @@ describe("Codex supervision catalog", () => {
           sourceThreadId,
         });
       }
-      const lookupMany = vi.spyOn(state, "lookupMany");
+      const lookupMany = vi.spyOn(state.asyncReads, "lookupMany");
+      const syncLookupMany = vi.spyOn(state, "lookupMany");
       const lookup = vi.spyOn(state, "lookup");
       const list = () =>
         listCodexSessionCatalog({
           bindingStore,
           config,
           runtime,
+          sessionEntries,
           control: createControl({
             listPage: vi.fn(async () => ({
               sessions: ["first", "second"].map((threadId) => ({
@@ -84,6 +97,7 @@ describe("Codex supervision catalog", () => {
         entries.map((entry) => entry.sessionKey),
       );
       entries[0]!.entry.sessionId = "successor";
+      sessionEntries.revision = {};
       expect((await list()).hosts[0]?.sessions.map((entry) => entry.sessionKey)).toEqual([
         undefined,
         entries[1]!.sessionKey,
@@ -111,11 +125,80 @@ describe("Codex supervision catalog", () => {
         undefined,
       ]);
       expect(lookupMany).toHaveBeenCalled();
+      expect(syncLookupMany).not.toHaveBeenCalled();
       expect(lookup).not.toHaveBeenCalled();
     } finally {
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
     }
+  });
+
+  it("reuses adoption preparation across catalog lists until the entry revision changes", async () => {
+    const { runtime, entries } = createRuntime({
+      entries: Array.from({ length: 3_000 }, (_, index) => ({
+        sessionKey: `agent:main:unrelated-${index}`,
+        entry: { sessionId: `unrelated-${index}`, updatedAt: 1 },
+      })),
+    });
+    const sourceThreadId = "adopted-source";
+    const sessionKey = supervisionSessionKey(sourceThreadId);
+    const sessionId = "adopted-session";
+    const adopted = {
+      sessionKey,
+      entry: adoptedEntry({ sourceThreadId, sessionId }),
+    };
+    entries.push(adopted);
+    let inspectedEntries = 0;
+    const catalogEntries = entries.map((summary) => ({
+      agentId: "main",
+      sessionKey: summary.sessionKey,
+      get entry() {
+        inspectedEntries++;
+        return summary.entry;
+      },
+    }));
+    const sessionEntries: SessionCatalogEntrySnapshot = {
+      revision: {},
+      entriesForAgent: () => entries,
+      entriesForCatalog: () => catalogEntries,
+    };
+    const bindingStore = createCodexTestBindingStore();
+    await seedSupervisionBinding({ bindingStore, sessionId, sessionKey, sourceThreadId });
+    const control = createControl({
+      listPage: vi.fn(async () => ({
+        sessions: [{ threadId: sourceThreadId, status: "idle", archived: false as const }],
+      })),
+    });
+    const list = () =>
+      listCodexSessionCatalog({ bindingStore, config, runtime, control, sessionEntries });
+    expect((await list()).hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
+    const coldInspections = inspectedEntries;
+    const started = performance.now();
+    const cpuBefore = process.threadCpuUsage();
+    let result: Awaited<ReturnType<typeof list>> | undefined;
+    for (let listIndex = 0; listIndex < 100; listIndex++) {
+      result = await list();
+    }
+    const cpu = process.threadCpuUsage(cpuBefore);
+    const warmInspections = inspectedEntries - coldInspections;
+    console.info(
+      "catalog adoption preparation measurements",
+      JSON.stringify({
+        localSessionCount: entries.length,
+        warmLists: 100,
+        coldInspections,
+        warmInspections,
+        wallMs: performance.now() - started,
+        threadCpuMs: (cpu.user + cpu.system) / 1_000,
+      }),
+    );
+    expect(result?.hosts[0]?.sessions[0]?.sessionKey).toBe(sessionKey);
+    expect(warmInspections).toBe(0);
+
+    adopted.entry = { ...adopted.entry, initializationPending: true };
+    sessionEntries.revision = {};
+    expect((await list()).hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
+    expect(inspectedEntries).toBeGreaterThan(coldInspections);
   });
 
   it("reports duplicate adoption across agents before decoding a later malformed bulk row", async () => {
@@ -126,7 +209,7 @@ describe("Codex supervision catalog", () => {
     });
     const bindingStore = createLazyCodexAppServerBindingStore(state);
     const cohortConfig: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }, { id: "beta" }, { id: "gamma" }] },
+      agents: { entries: { main: {}, beta: {}, gamma: {} } },
     };
     const duplicates = ["main", "beta"].map((agentId) => ({
       sessionKey: `agent:${agentId}:${supervisionSessionInputKey("duplicate")}`,
@@ -154,15 +237,15 @@ describe("Codex supervision catalog", () => {
         }),
       );
       state.register(key, { version: 1, state: "active", binding: { threadId: "", cwd: "/repo" } });
-      const lookupMany = vi.spyOn(state, "lookupMany");
+      const lookupMany = vi.spyOn(state.asyncReads, "lookupMany");
       await expect(
-        listAdoptedSessionEntries({ bindingStore, config: cohortConfig, runtime }),
+        listAdoptedSessionEntries({ agentId: "main", bindingStore, config: cohortConfig, runtime }),
       ).rejects.toThrow(
         "multiple OpenClaw sessions adopt Codex thread duplicate from the same home",
       );
       entries.splice(1, 1);
       await expect(
-        listAdoptedSessionEntries({ bindingStore, config: cohortConfig, runtime }),
+        listAdoptedSessionEntries({ agentId: "main", bindingStore, config: cohortConfig, runtime }),
       ).rejects.toThrow(`Invalid Codex app-server binding row: ${key}`);
       expect(lookupMany).toHaveBeenCalledTimes(2);
     } finally {
@@ -429,7 +512,7 @@ describe("Codex supervision actions", () => {
     ]);
   });
 
-  it("lists and adopts a local session under the retained compatibility owner", async () => {
+  it("lists and adopts a local session under the selected owner", async () => {
     const runtimeConfig = compatibilityOwnerConfig();
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
@@ -437,6 +520,7 @@ describe("Codex supervision actions", () => {
     const control = createEligibleControl();
 
     const continued = await continueLocalCodexSession({
+      agentId: "alpha",
       api,
       bindingStore,
       config: runtimeConfig,
@@ -444,6 +528,7 @@ describe("Codex supervision actions", () => {
       threadId: "thread-1",
     });
     const listed = await listCodexSessionCatalog({
+      agentId: "alpha",
       bindingStore,
       config: runtimeConfig,
       runtime,
@@ -479,20 +564,16 @@ describe("Codex supervision actions", () => {
       userMessageCount: number;
     }> = [];
 
-    const first = await continueLocalCodexSession({
+    const first = await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
-    const second = await continueLocalCodexSession({
+    const second = await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
 
@@ -583,7 +664,7 @@ describe("Codex supervision actions", () => {
 
   it("does not join concurrent local continues across explicit agent owners", async () => {
     const runtimeConfig = {
-      agents: { ownership: "explicit", list: [{ id: "alpha" }, { id: "beta" }] },
+      agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
     } as OpenClawConfig;
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime, runtimeConfig);
@@ -656,12 +737,10 @@ describe("Codex supervision actions", () => {
       userMessageCount: number;
     }> = [];
 
-    await continueLocalCodexSession({
+    await continueSource({
       api,
       bindingStore,
-      config,
       control,
-      threadId: "thread-1",
       onContinued: (baseline) => baselines.push(baseline),
     });
 
@@ -675,19 +754,16 @@ describe("Codex supervision actions", () => {
     ]);
   });
 
-  it("keeps adopted sessions discoverable when the configured default agent changes", async () => {
-    const originalConfig = {
-      agents: { list: [{ id: "alpha", default: true }, { id: "beta" }] },
-    } as OpenClawConfig;
-    const changedConfig = {
-      agents: { list: [{ id: "alpha" }, { id: "beta", default: true }] },
-    } as OpenClawConfig;
+  it("keeps adopted sessions discoverable when the configured system agent changes", async () => {
+    const originalConfig = compatibilityOwnerConfig("alpha");
+    const changedConfig = compatibilityOwnerConfig("beta");
     const { runtime, createSessionEntry } = createRuntime();
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
 
     const created = await continueLocalCodexSession({
+      agentId: "alpha",
       api,
       bindingStore,
       config: originalConfig,
@@ -695,6 +771,7 @@ describe("Codex supervision actions", () => {
       threadId: "thread-1",
     });
     const reopened = await continueLocalCodexSession({
+      agentId: "alpha",
       api,
       bindingStore,
       config: changedConfig,
@@ -702,6 +779,7 @@ describe("Codex supervision actions", () => {
       threadId: "thread-1",
     });
     const catalog = await listCodexSessionCatalog({
+      agentId: "alpha",
       bindingStore,
       config: changedConfig,
       runtime,
@@ -731,13 +809,7 @@ describe("Codex supervision actions", () => {
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
 
-    const firstContinue = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const firstContinue = continueSource({ api, bindingStore, control });
     const pending: Promise<unknown>[] = [firstContinue];
     try {
       await Promise.race([
@@ -757,13 +829,7 @@ describe("Codex supervision actions", () => {
       expect(duringImport.hosts[0]?.sessions[0]).not.toHaveProperty("sessionKey");
       expect(entries[0]?.entry.initializationPending).toBe(true);
       let secondSettled = false;
-      const secondContinue = continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }).then((result) => {
+      const secondContinue = continueSource({ api, bindingStore, control }).then((result) => {
         secondSettled = true;
         return result;
       });
@@ -815,13 +881,7 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
-    const continued = await continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const continued = await continueSource({ api, bindingStore, control });
 
     await expect(archiveTestSession({ control, bindingStore, runtime })).rejects.toThrow(
       "cannot be archived until its OpenClaw branch starts",
@@ -866,13 +926,7 @@ describe("Codex supervision actions", () => {
     const { api } = createGatewayApi(runtime);
     const bindingStore = createCodexTestBindingStore();
     const control = createEligibleControl();
-    const continuing = continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const continuing = continueSource({ api, bindingStore, control });
     const pending: Promise<unknown>[] = [continuing];
     try {
       await Promise.race([

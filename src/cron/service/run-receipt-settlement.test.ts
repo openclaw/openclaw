@@ -2,26 +2,34 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
+import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import * as stateRead from "../../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { readCronRunHistoryPageForTests } from "../run-history.test-support.js";
 import { CronService, type CronEvent } from "../service.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
-import { loadedCronStoreFromRows, loadCronRows } from "../store/row-codec.js";
+import { loadCronRows, loadedCronStoreFromRows } from "../store/row-codec.js";
 import {
-  claimCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
 import { cronStreamScheduleKey } from "../stream-schedule.js";
 import type { CronJob } from "../types.js";
+import * as runtimeMutation from "./runtime-mutation.js";
 
 const onExitSchedule = { kind: "on-exit", command: "true" } as const;
 
@@ -49,8 +57,10 @@ function makeService(
   storePath: string,
   runCommandJob: NonNullable<ConstructorParameters<typeof CronService>[0]["runCommandJob"]>,
   onEvent?: ConstructorParameters<typeof CronService>[0]["onEvent"],
+  scheduler: GatewayScheduler = createTestGatewayScheduler(),
 ) {
   return new CronService({
+    scheduler,
     storePath,
     cronEnabled: true,
     log: logger,
@@ -85,6 +95,7 @@ describe("cron run receipt settlement", () => {
         return { status: "ok" as const };
       };
       const service = new CronService({
+        scheduler: createTestGatewayScheduler(),
         storePath,
         cronEnabled: true,
         log: logger,
@@ -210,13 +221,18 @@ describe("cron run receipt settlement", () => {
       };
       await saveCronStore(storePath, { version: 1, jobs: [job] });
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+        claimCronRunReceiptInDatabaseForTest({
+          database: db,
+          prepared,
+          resolveAgentId: () => "alpha",
+        }),
       );
       job.state.runningReceiptId = receipt.receiptId;
       await saveCronStore(storePath, { version: 1, jobs: [job] });
@@ -290,13 +306,18 @@ describe("cron run receipt settlement", () => {
     };
     await saveCronStore(storePath, { version: 1, jobs: [job] });
     const prepared = prepareCronRunReceiptClaim({
+      observed: undefined,
       storePath,
       job,
       agentId: "alpha",
       startedAtMs,
     });
     const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-      claimCronRunReceiptInDatabase({ database: db, prepared, resolveAgentId: () => "alpha" }),
+      claimCronRunReceiptInDatabaseForTest({
+        database: db,
+        prepared,
+        resolveAgentId: () => "alpha",
+      }),
     );
     // Process exit drops the local liveness claim but leaves the durable receipt.
     releaseLocalCronRunReceiptOwnership(receipt);
@@ -375,8 +396,27 @@ describe("cron run receipt settlement", () => {
         return await releaseRunner.promise;
       });
       const successorRunner = vi.fn(async () => ({ status: "ok" as const }));
-      const successor = makeService(storePath, successorRunner);
+      const clock = createGatewaySchedulerClock(now);
+      const successor = makeService(
+        storePath,
+        successorRunner,
+        undefined,
+        createTestGatewayScheduler(clock.clock),
+      );
       const stoppedObserver = makeService(storePath, successorRunner);
+      const receiptFinishes: Promise<void>[] = [];
+      const finishStarted = createDeferred();
+      const executeMutation = runtimeMutation.runCronRuntimeMutation;
+      const mutation = vi
+        .spyOn(runtimeMutation, "runCronRuntimeMutation")
+        .mockImplementation((params) => {
+          const completion = executeMutation(params);
+          if (params.type === "cron.finishReceipt") {
+            receiptFinishes.push(completion);
+            finishStarted.resolve();
+          }
+          return completion;
+        });
       const settlementAbort = new AbortController();
       const first =
         trigger === "startup" ? owner.start() : owner.run(job.id, "force").then(() => undefined);
@@ -423,7 +463,7 @@ describe("cron run receipt settlement", () => {
         const database = openOpenClawStateDatabase().db;
         if (trigger === "manual-finish-retry") {
           database.exec(`
-            CREATE TEMP TRIGGER reject_on_exit_receipt_finish
+            CREATE TRIGGER reject_on_exit_receipt_finish
             BEFORE UPDATE ON cron_run_receipts
             WHEN OLD.job_id = '${job.id}' AND NEW.status != 'running'
             BEGIN SELECT RAISE(ABORT, 'receipt finish temporarily unavailable'); END;
@@ -449,8 +489,13 @@ describe("cron run receipt settlement", () => {
           });
           database.exec("DROP TRIGGER reject_on_exit_receipt_finish");
         }
-        // Allow the retained receipt retry and foreign-owner reconciliation to run.
+        // Join the real receipt write before advancing the successor's polling clock.
+        // Advancing fake time alone cannot settle worker I/O or its retained retry.
+        await finishStarted.promise;
         await vi.advanceTimersByTimeAsync(2_000);
+        await Promise.allSettled(receiptFinishes);
+        expect(latestReceiptStatus(storePath, job.id)).toBe("error");
+        await clock.advanceBy(2_000);
         await expect(settlement).resolves.toEqual({ ok: true, ran: true });
         expect(onReserved).toHaveBeenCalledOnce();
         expect((await successor.readJob(job.id))?.enabled).toBe(false);
@@ -460,6 +505,8 @@ describe("cron run receipt settlement", () => {
         settlementAbort.abort();
         releaseRunner.resolve({ status: "ok", summary: "late runner settled" });
         await first.catch(() => undefined);
+        await Promise.allSettled(receiptFinishes);
+        mutation.mockRestore();
         owner.stop();
         successor.stop();
         stoppedObserver.stop();
@@ -487,7 +534,13 @@ describe("cron run receipt settlement", () => {
       }
       return { status: "ok" as const };
     });
-    const service = makeService(storePath, runCommandJob);
+    const clock = createGatewaySchedulerClock(Date.now());
+    const service = makeService(
+      storePath,
+      runCommandJob,
+      undefined,
+      createTestGatewayScheduler(clock.clock),
+    );
     const controller = new AbortController();
     let manual: ReturnType<CronService["run"]> | undefined;
     const onReserved = vi.fn(() => {
@@ -527,7 +580,7 @@ describe("cron run receipt settlement", () => {
       await service.update(job.id, { payload: { kind: "command", argv: ["updated"] } });
       releaseManual.resolve({ status: "ok" });
       await manual;
-      await vi.advanceTimersByTimeAsync(2_000);
+      await clock.advanceBy(2_000);
       await expect(observedExit).resolves.toEqual({ ok: true, ran: true });
       expect(onReserved).toHaveBeenCalledOnce();
       expect(runCommandJob).toHaveBeenCalledTimes(2);

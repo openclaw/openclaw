@@ -29,6 +29,7 @@ import {
 import { readLogFileSize } from "./logs.ts";
 import {
   canConnectToLoopbackPort,
+  captureGatewayProcess,
   hasChildExited,
   resolveCommandSpawnInvocation,
   runCommand,
@@ -164,17 +165,8 @@ export async function runInstallerSmoke(params: {
   logPath: string;
 }) {
   const script = buildInstallerSmokeScript(params);
-  if (process.platform === "win32") {
-    await runPowerShellScript(script, {
-      cwd: params.lane.homeDir,
-      env: params.env,
-      logPath: params.logPath,
-      timeoutMs: installTimeoutMs(),
-    });
-    return;
-  }
-
-  await runPosixShellScript(script, {
+  const runScript = process.platform === "win32" ? runPowerShellScript : runPosixShellScript;
+  await runScript(script, {
     cwd: params.lane.homeDir,
     env: params.env,
     logPath: params.logPath,
@@ -182,20 +174,14 @@ export async function runInstallerSmoke(params: {
   });
 }
 
-export function buildWindowsPathBootstrapScript(
-  options: { includeCurrentProcessPath?: boolean } = {},
-) {
-  const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+function buildWindowsPathBootstrapScript() {
   // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
   // stale runner image entries while still merging newly persisted user and machine paths.
-  const pathCandidates = includeCurrentProcessPath
-    ? "@($env:Path, $userPath, $machinePath)"
-    : "@($userPath, $machinePath)";
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
 $segments = New-Object System.Collections.Generic.List[string]
-foreach ($candidate in ${pathCandidates}) {
+foreach ($candidate in @($env:Path, $userPath, $machinePath)) {
   foreach ($segment in ($candidate -split ';')) {
     if ([string]::IsNullOrWhiteSpace($segment)) {
       continue
@@ -387,22 +373,6 @@ export async function resolveInstalledGatewayStopArgs(params: {
   return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
 }
 
-async function readInstalledUpdateStatus(params: {
-  cliPath: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  logPath: string;
-}) {
-  return runInstalledCli({
-    cliPath: params.cliPath,
-    args: ["update", "status", "--json"],
-    cwd: params.cwd,
-    env: params.env,
-    logPath: params.logPath,
-    timeoutMs: 2 * 60 * 1000,
-  });
-}
-
 export async function ensureDevUpdateGitInstall(params: {
   lane: LaneState;
   env: NodeJS.ProcessEnv;
@@ -410,7 +380,9 @@ export async function ensureDevUpdateGitInstall(params: {
   logsDir: string;
   requestedRef: string;
 }) {
-  const updateStatus = await readInstalledUpdateStatus({
+  const updateStatus = await runInstalledCli({
+    args: ["update", "status", "--json"],
+    timeoutMs: 2 * 60 * 1000,
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
     env: params.env,
@@ -516,39 +488,7 @@ export async function startManualGatewayFromInstalledCli(params: {
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     windowsHide: true,
   });
-  child.stdout?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    gatewayLog.write(chunk);
-  });
-  let resolveChildClose: () => void;
-  const childClosePromise = new Promise<void>((resolvePromise) => {
-    resolveChildClose = resolvePromise;
-  });
-  let closeLogPromise: Promise<void> | undefined;
-  const closeLog = () => {
-    closeLogPromise ??= new Promise<void>((resolvePromise) => {
-      gatewayLog.once("error", () => resolvePromise());
-      gatewayLog.end(() => resolvePromise());
-    });
-    return closeLogPromise;
-  };
-  child.once("close", () => {
-    resolveChildClose();
-    void closeLog();
-  });
-  child.once("error", () => {
-    resolveChildClose();
-    void closeLog();
-  });
-  return {
-    child,
-    closeLog,
-    launchLogOffset,
-    logPath: params.logPath,
-    waitForClose: () => childClosePromise,
-  };
+  return captureGatewayProcess(child, gatewayLog, { launchLogOffset, logPath: params.logPath });
 }
 
 async function resolveInstalledGatewayStatusArgs(params: {

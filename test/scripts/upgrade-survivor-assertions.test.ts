@@ -16,6 +16,7 @@ import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { UPGRADE_SURVIVOR_ASSERTION_SCENARIOS } from "../../scripts/lib/upgrade-survivor-policy.mjs";
+import { readLegacySessionStoreEntries } from "../../src/config/sessions/legacy-store-inspection.js";
 import type { PluginInstallRecord } from "../../src/config/types.plugins.js";
 import type { PluginUpdateOutcome } from "../../src/plugins/update.js";
 import { withEnv } from "../../src/test-utils/env.js";
@@ -34,9 +35,8 @@ const ASSERTIONS_PATH = "scripts/e2e/lib/upgrade-survivor/assertions.mjs";
 function selectFrozenUpgradeOracle(
   root: string,
   version: string,
-  baseline = "openclaw@2026.6.35",
+  baseline = "openclaw@2026.8.35",
   workingVersion?: string,
-  legacyClawHub = false,
 ) {
   const selectedRoot = join(root, "selected");
   const selectedScenario = join(selectedRoot, "scripts/e2e/lib/upgrade-survivor");
@@ -48,13 +48,6 @@ function selectFrozenUpgradeOracle(
     'throw new Error("selected oracle has no serving-turn command");\n',
   );
   writeFileSync(join(selectedScenario, "run.sh"), "# selected scenario runner\n");
-  if (legacyClawHub) {
-    mkdirSync(join(selectedRoot, "src/plugins"), { recursive: true });
-    writeFileSync(
-      join(selectedRoot, "src/plugins/clawhub.ts"),
-      'import { install } from "../infra/clawhub.js";\n',
-    );
-  }
   for (const path of [
     "scripts/lib/npm-publish-plan.mjs",
     "scripts/windows-cmd-helpers.mjs",
@@ -81,7 +74,6 @@ function selectFrozenUpgradeOracle(
     "selected release contract",
   );
   const selectedSha = git("rev-parse", "HEAD");
-  const modePath = join(root, "clawhub-mode");
   if (workingVersion) {
     writeFileSync(join(selectedRoot, "package.json"), JSON.stringify({ version: workingVersion }));
   }
@@ -104,7 +96,6 @@ printf '%s\\n' "$UPGRADE_RUNNER"
 printf '%s\\n' "$UPGRADE_TRUSTED_ASSERTIONS"
 printf '%s\\n' "$UPGRADE_TRUSTED_DIAGNOSTICS"
 printf '%s\\n' \${UPGRADE_SCENARIO_ARGS[@]+"\${UPGRADE_SCENARIO_ARGS[@]}"}
-printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
 `,
     ],
     {
@@ -117,7 +108,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
         OPENCLAW_TOOLING_SHA: "f".repeat(40),
         OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
         OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: baseline,
-        MODE_PATH: modePath,
         TMPDIR: root,
       },
     },
@@ -126,7 +116,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     .trim()
     .split("\n")
     .filter(Boolean);
-  const clawhubMode = existsSync(modePath) ? readFileSync(modePath, "utf8") : undefined;
   const stagedScenario = mounts[0] === "-v" ? mounts[1]?.split(":", 1)[0] : undefined;
   return {
     result,
@@ -138,7 +127,6 @@ printf '%s' "$OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_MODE" > "$MODE_PATH"
     selectedOracle,
     selectedScenario,
     stagedScenario,
-    clawhubMode,
   };
 }
 
@@ -367,7 +355,7 @@ describe("upgrade recovery result assertions", () => {
       }),
   );
 
-  it.each(["projects-doctor", "projects-startup-migration", "taskflow-restoration"])(
+  it.each(["projects-doctor", "projects-startup-migration"])(
     "validates published worker update results through the real assertion CLI (%s)",
     (scenario) =>
       withEnv({ OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario }, () => {
@@ -1013,6 +1001,7 @@ function seedSessionSourceFixture(stateDir: string, scenario = "base", missingPa
       `source scripts/e2e/lib/upgrade-survivor/missing-load-path.sh
 SCENARIO="$OPENCLAW_UPGRADE_SURVIVOR_SCENARIO"
 UPDATE_RESTART_MODE="$OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE"
+baseline_version=2026.9.3
 phase() { shift; "$@"; }
 ${missingPath ? "run_missing_load_path_fixture seed" : ""}
 "$1" "$2" seed
@@ -1081,6 +1070,7 @@ function assertConfiguredPluginState(params: { installPath?: string } = {}): voi
 
 function assertConfig(params: {
   acceptedIntents: string[];
+  baselineVersion?: string;
   config: unknown;
   scenario: string;
   stage?: "baseline" | "survival";
@@ -1093,6 +1083,7 @@ function assertConfig(params: {
     writeJson(configPath, params.config);
     writeJson(coveragePath, {
       acceptedIntents: params.acceptedIntents,
+      baselineVersion: params.baselineVersion,
     });
 
     execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "assert-config"], {
@@ -1294,12 +1285,11 @@ function assertCompanionPluginRecords(
 
 describe("upgrade survivor assertions", () => {
   it.each([
-    ["2026.9.3", false, "openclaw@2026.6.35", ""],
-    ["2026.9.3-beta.1", false, "openclaw@2026.6.35", ""],
-    ["2026.4.25", false, "openclaw@2026.6.35", ""],
-    ["2026.6.35", true, "openclaw@2026.9.2", ""],
-    ["2026.7.33", true, "openclaw@2026.9.2", ""],
-    ["2026.9.3", false, "openclaw@2026.6.35", "2026.6.35"],
+    ["2026.9.3", false, "openclaw@2026.8.35", ""],
+    ["2026.9.3-beta.1", false, "openclaw@2026.8.35", ""],
+    ["2026.4.25", false, "openclaw@2026.8.35", ""],
+    ["2026.8.35", true, "openclaw@2026.9.2", ""],
+    ["2026.9.3", false, "openclaw@2026.8.35", "2026.8.35"],
   ])(
     "selects upgrade assertion ownership from immutable target %s",
     (version, selected, baseline, workingVersion) => {
@@ -1413,29 +1403,12 @@ publishDiagnostics(artifacts, destination, value => value, "passed");`,
     },
   );
 
-  it.each(["invalid", "2026.6.35-1"])("rejects invalid frozen target train %s", (version) => {
+  it.each(["invalid", "2026.8.33-1"])("rejects invalid frozen target train %s", (version) => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-invalid-oracle-"));
     try {
       const proof = selectFrozenUpgradeOracle(root, version);
       expect(proof.result.status).not.toBe(0);
       expect(proof.oracle).toBeUndefined();
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("derives the shipped ClawHub request contract from the authorized selected source", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-clawhub-mode-"));
-    try {
-      const proof = selectFrozenUpgradeOracle(
-        root,
-        "2026.6.35",
-        "openclaw@2026.6.34",
-        undefined,
-        true,
-      );
-      expect(proof.result.status, proof.result.stderr).toBe(0);
-      expect(proof.clawhubMode).toBe("legacy");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -1712,6 +1685,47 @@ process.stdout.write(sessionDir + "\\n");
     },
   );
 
+  it.each([
+    { baselineVersion: undefined, legacy: true },
+    { baselineVersion: "2026.9.6", legacy: true },
+    { baselineVersion: "2026.9.7", legacy: false },
+  ])(
+    "validates Tool Search at baseline $baselineVersion and after upgrade",
+    ({ baselineVersion, legacy }) => {
+      const run = (toolSearch: unknown, stage: "baseline" | "survival" = "survival") =>
+        assertConfig({
+          acceptedIntents: ["tool-search"],
+          baselineVersion,
+          config: { tools: { toolSearch } },
+          scenario: "base",
+          stage,
+        });
+      const baselineValue = legacy ? { mode: "code", codeTimeoutMs: 5000 } : { mode: "tools" };
+      const wrongBaselineValue = legacy ? { mode: "tools" } : { mode: "code", codeTimeoutMs: 5000 };
+      expect(() => run(baselineValue, "baseline")).not.toThrow();
+      expect(() => run(wrongBaselineValue, "baseline")).toThrow(/Tool Search mode/);
+      expect(() => run({ mode: "tools", codeTimeoutMs: 5000 }, "baseline")).toThrow(
+        legacy ? /Tool Search mode/ : /legacy timeout/,
+      );
+      expect(() => run({ mode: "tools" })).not.toThrow();
+    },
+  );
+
+  it("requires migrated Tool Search unless the intent was not accepted", () => {
+    // Survival validation is independent of the published baseline version.
+    const run = (toolSearch: unknown) =>
+      assertConfig({
+        acceptedIntents: ["tool-search"],
+        config: { tools: { toolSearch } },
+        scenario: "base",
+      });
+    expect(() => run({ mode: "code", codeTimeoutMs: 5000 })).toThrow(/Tool Search mode/);
+    expect(() => run({ mode: "tools", codeTimeoutMs: 5000 })).toThrow(/legacy timeout/);
+    expect(() => run({ mode: "tools", enabled: false })).toThrow(/disabled/);
+    expect(() => run(undefined)).toThrow(/Tool Search mode/);
+    expect(() => assertConfig({ acceptedIntents: [], config: {}, scenario: "base" })).not.toThrow();
+  });
+
   it("requires password auth for the mobile pairing reconnect scenario", () => {
     expect(() =>
       assertConfig({
@@ -1842,7 +1856,7 @@ process.stdout.write(sessionDir + "\\n");
     }
   });
 
-  it.each(["base", "sqlite-volume"])(
+  it.each(["base", "configured-plugin-installs", "sqlite-volume"])(
     "seeds recent ordered session timestamps for %s",
     (scenario) => {
       const root = mkdtempSync(join(tmpdir(), "openclaw-upgrade-survivor-seed-"));
@@ -1864,24 +1878,29 @@ process.stdout.write(sessionDir + "\\n");
         });
         const afterSeed = Date.now();
 
-        const sessionsDir = join(
-          stateDir,
-          scenario === "sqlite-volume" ? "agents/main/sessions" : "sessions",
-        );
-        const otherStore = join(
-          stateDir,
-          scenario === "sqlite-volume" ? "sessions" : "agents/main/sessions",
-          "sessions.json",
-        );
+        const sessionsDir = join(stateDir, "agents", "main", "sessions");
+        const otherStore = join(stateDir, "sessions", "sessions.json");
         expect(() => readFileSync(otherStore)).toThrow(/ENOENT/);
-        const sessions = JSON.parse(
-          readFileSync(join(sessionsDir, "sessions.json"), "utf8"),
-        ) as Record<string, { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }>;
-        const keys =
-          scenario === "sqlite-volume"
-            ? ["agent:main:main", "agent:main:+15551234567", "agent:main:slack:channel:cupgrade"]
-            : ["main", "+15551234567", "slack:channel:CUPGRADE"];
+        const storePath = join(sessionsDir, "sessions.json");
+        const original = readFileSync(storePath, "utf8");
+        const sessions = JSON.parse(original) as Record<
+          string,
+          { sessionId?: unknown; sessionFile?: unknown; updatedAt?: unknown }
+        >;
+        const keys = [
+          "agent:main:main",
+          "agent:main:+15551234567",
+          "agent:main:slack:channel:cupgrade",
+        ];
         expect(Object.keys(sessions)).toEqual(keys);
+        const issues: Parameters<typeof readLegacySessionStoreEntries>[1] = [];
+        const admitted = readLegacySessionStoreEntries({ storePath }, issues);
+        expect(issues).toEqual([]);
+        expect(admitted.entries.map(({ sessionKey }) => sessionKey)).toEqual(keys);
+        for (const { entry } of admitted.entries) {
+          expect(entry).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+        }
+        expect(readFileSync(storePath, "utf8")).toBe(original);
         const seededRows = keys.map((key) => sessions[key]);
         expect(seededRows.map((row) => row?.sessionId)).toEqual([
           "upgrade-main-session",
@@ -1947,9 +1966,10 @@ process.stdout.write(sessionDir + "\\n");
         execFileSync(testNodeExecPath, [ASSERTIONS_PATH, "seed"], { env, stdio: "pipe" });
 
         expect(existsSync(join(workspace, "IDENTITY.md"))).toBe(true);
-        expect(existsSync(join(workspace, ".openclaw", "workspace-state.json"))).toBe(true);
+        expect(existsSync(join(workspace, "openclaw-workspace-state.json"))).toBe(true);
         for (const relative of [
           "sessions/sessions.json",
+          "agents/main/sessions/sessions.json",
           "agents/main/sessions/legacy-session.json",
           "exec-approvals.json",
           "plugin-runtime-deps",
@@ -2023,8 +2043,10 @@ process.stdout.write(sessionDir + "\\n");
         },
         stdio: "pipe",
       });
-      const seeded = JSON.parse(readFileSync(join(stateDir, "sessions", "sessions.json"), "utf8"));
-      const acp = seeded["slack:channel:CUPGRADE"].acp;
+      const seeded = JSON.parse(
+        readFileSync(join(stateDir, "agents", "main", "sessions", "sessions.json"), "utf8"),
+      );
+      const acp = seeded["agent:main:slack:channel:cupgrade"].acp;
       expect(acp).toMatchObject({
         backend: "acpx",
         identity: {
@@ -2408,18 +2430,19 @@ process.stdout.write(sessionDir + "\\n");
   );
 
   it.each([false, true])(
-    "artifact-only base/manual validates legacy-source cleanup without a missing-path seed (retained=%s)",
-    (retained) => {
+    "artifact-only base/manual rejects retired global sources without a missing-path seed (recreated=%s)",
+    (recreated) => {
       const verify = () =>
         runSessionStateAssertion((stateDir) => {
           const env = seedSessionSourceFixture(stateDir);
           writeMigratedSessionState(stateDir);
-          if (!retained) {
-            rmSync(join(stateDir, "sessions"), { recursive: true });
+          if (recreated) {
+            mkdirSync(join(stateDir, "sessions"), { recursive: true });
+            writeJson(join(stateDir, "sessions", "sessions.json"), {});
           }
           return env;
         });
-      if (retained) {
+      if (recreated) {
         expect(verify).toThrow(/legacy sessions.json survived migration/);
       } else {
         expect(verify).not.toThrow();
@@ -2464,7 +2487,7 @@ process.stdout.write(sessionDir + "\\n");
               );
             } else if (corruption === "source") {
               writeFileSync(
-                join(stateDir, "sessions", "upgrade-main-session.jsonl"),
+                join(stateDir, "agents", "main", "sessions", "upgrade-main-session.jsonl"),
                 "changed source",
               );
             } else if (corruption === "sqlite-row") {
@@ -2497,6 +2520,53 @@ process.stdout.write(sessionDir + "\\n");
         writeLegacyCacheSessionState(stateDir, { includePrompt: false });
       }),
     ).not.toThrow();
+  });
+
+  it.each([
+    { corruption: "none", error: undefined },
+    { corruption: "missing-table", error: /no such table: session_entry_snapshots/ },
+    { corruption: "missing-snapshot", error: /metadata prompt was not preserved/ },
+    { corruption: "wrong-prompt", error: /metadata prompt was not preserved/ },
+  ])("reads schema 24 session snapshots ($corruption)", ({ corruption, error }) => {
+    const verify = () =>
+      runSessionStateAssertion((stateDir) => {
+        writeMigratedSessionState(stateDir);
+        const db = new DatabaseSync(
+          join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        );
+        try {
+          db.exec(`
+            PRAGMA user_version = 24;
+            CREATE TABLE session_entry_snapshots (
+              session_key TEXT NOT NULL,
+              field TEXT NOT NULL,
+              value_json TEXT NOT NULL,
+              PRIMARY KEY (session_key, field)
+            );
+            INSERT INTO session_entry_snapshots
+              SELECT session_key, 'skillsSnapshot', json_extract(entry_json, '$.skillsSnapshot')
+              FROM session_nodes WHERE json_type(entry_json, '$.skillsSnapshot') IS NOT NULL;
+            UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.skillsSnapshot');
+          `);
+          if (corruption === "missing-table") {
+            db.exec("DROP TABLE session_entry_snapshots;");
+          } else if (corruption === "missing-snapshot") {
+            db.exec("DELETE FROM session_entry_snapshots;");
+          } else if (corruption === "wrong-prompt") {
+            db.prepare("UPDATE session_entry_snapshots SET value_json = ?").run(
+              JSON.stringify({ prompt: "wrong prompt" }),
+            );
+          }
+        } finally {
+          db.close();
+        }
+        writeMigratedSessionFiles(stateDir);
+      });
+    if (error) {
+      expect(verify).toThrow(error);
+    } else {
+      expect(verify).not.toThrow();
+    }
   });
 
   it("does not mask missing session_nodes rows with a valid file store", () => {

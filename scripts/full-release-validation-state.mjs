@@ -38,6 +38,7 @@ import {
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
+  releaseManifestChildEvidence,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
@@ -89,7 +90,10 @@ function positiveInteger(value, label) {
 async function abortableSleep(milliseconds, signal) {
   let abortError;
   await new Promise((resolve) => {
-    const timer = setTimeout(resolve, milliseconds);
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
+      resolve();
+    }, milliseconds);
     const abort = () => {
       clearTimeout(timer);
       abortError = signal?.reason instanceof Error ? signal.reason : new Error("operation aborted");
@@ -418,6 +422,7 @@ async function validateReuse(executionPlan, signal) {
         validateReusableReleaseChild(selection, {
           repository: executionPlan.repository,
           targetSha: executionPlan.targetSha,
+          workflowSha: executionPlan.workflowSha,
           role,
           inputs: selection.inputs,
         }),
@@ -604,12 +609,12 @@ function readArtifact(path, label) {
   }
 }
 
-function verifyMode() {
-  const expected = {
+function stateArtifactExpected(attemptLabel = "parent run attempt") {
+  return {
     publicationAdmissionContract:
       process.env.FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT || undefined,
     sourceAdmissionContract: process.env.FULL_RELEASE_SOURCE_ADMISSION_CONTRACT || undefined,
-    maxParentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
+    maxParentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, attemptLabel),
     parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
     repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
     releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
@@ -618,6 +623,10 @@ function verifyMode() {
     workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
     workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
   };
+}
+
+function verifyMode() {
+  const expected = stateArtifactExpected();
   const verified = verifyReleaseStateArtifacts(
     readArtifact(
       requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),
@@ -704,6 +713,7 @@ function manifestContextFromEnvironment(source) {
     validationInputs: inputs,
     publicationArtifacts: {
       npmPreflight: JSON.parse(env.QUALIFIED_NPM_BUNDLE_JSON || "null"),
+      pluginNpm: JSON.parse(env.PREPARED_PLUGIN_NPM_JSON || "null"),
       docker: env.PREPARED_DOCKER_MANIFEST_SHA256
         ? {
             preparedRunId: env.PREPARED_DOCKER_RUN_ID,
@@ -995,10 +1005,6 @@ async function writeManifestMode() {
   );
 }
 
-function candidateRequestFromInputs(planInputs) {
-  return validateFullReleaseCandidateRequest(planInputs.candidateRequestInput);
-}
-
 function candidateRequestFromEnvironment() {
   return validateFullReleaseCandidateRequest(
     JSON.parse(requiredString(process.env.CANDIDATE_REQUEST_JSON, "candidate request JSON")),
@@ -1016,10 +1022,6 @@ function evidenceReuseFromInputs(planInputs, sourceManifest = {}) {
     selectedRunId: stringValue(planInputs.evidenceRunId),
     sourceManifest,
   };
-}
-
-function trustedWorkflowFromInputs(planInputs) {
-  return planInputs.trustedWorkflow;
 }
 
 function candidateFromInputs(planInputs, gates) {
@@ -1110,10 +1112,10 @@ async function planMode() {
   const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
   const candidate = candidateFromInputs(planInputs, built.gates);
-  const candidateRequest = candidateRequestFromInputs(planInputs);
+  const candidateRequest = validateFullReleaseCandidateRequest(planInputs.candidateRequestInput);
   const abortController = new AbortController();
   let finished = false;
-  let plan = buildReleaseExecutionPlanArtifact({
+  const artifactInputs = {
     attemptEvidenceVersion,
     sourceAdmissionContract: planInputs.sourceAdmissionContract,
     sourceAdmission: planInputs.sourceAdmission,
@@ -1121,7 +1123,6 @@ async function planMode() {
     publicationAdmission: planInputs.publicationAdmission,
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
-    knownFlakyJobs: planInputs.knownFlakyJobs,
     children: hydrateReusedPlan(built.children, { childReuse: planInputs.childReuse ?? {} }),
     childReuse: planInputs.childReuse,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
@@ -1131,24 +1132,17 @@ async function planMode() {
     rerunGroup: expected.rerunGroup,
     telegramWaiver: planInputs.telegramWaiver,
     targetVersion: planInputs.targetVersion,
-    trustedWorkflow: trustedWorkflowFromInputs(planInputs),
-  });
+    trustedWorkflow: planInputs.trustedWorkflow,
+  };
+  let plan = buildReleaseExecutionPlanArtifact(artifactInputs);
   const stop = () => {
     if (finished) {
       return;
     }
     abortController.abort(new Error("execution plan collection cancelled"));
     plan = buildReleaseExecutionPlanArtifact({
+      ...plan,
       attemptEvidenceVersion,
-      sourceAdmissionContract: plan.sourceAdmissionContract,
-      sourceAdmission: plan.sourceAdmission,
-      publicationAdmissionContract: plan.publicationAdmissionContract,
-      publicationAdmission: plan.publicationAdmission,
-      blockers: plan.blockers,
-      candidate: plan.candidate,
-      coveragePolicy: plan.coveragePolicy,
-      children: plan.children,
-      childReuse: plan.childReuse,
       errors: [
         ...plan.errors,
         {
@@ -1157,18 +1151,13 @@ async function planMode() {
           message: "execution plan collector received a termination signal",
         },
       ],
-      evidenceReuse: plan.evidenceReuse,
       expected: {
         ...expected,
         candidateRequest: plan.candidateRequest,
         parentRunAttempt: currentAttempt,
       },
-      gates: plan.gates,
       releaseProfile: expected.releaseProfile,
       rerunGroup: expected.rerunGroup,
-      telegramWaiver: plan.telegramWaiver,
-      targetVersion: plan.targetVersion,
-      trustedWorkflow: plan.trustedWorkflow,
     });
     writeExecutionPlan(outputPath, plan);
     finished = true;
@@ -1182,25 +1171,11 @@ async function planMode() {
     return;
   }
   plan = buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion,
-    sourceAdmissionContract: planInputs.sourceAdmissionContract,
-    sourceAdmission: planInputs.sourceAdmission,
-    publicationAdmissionContract: planInputs.publicationAdmissionContract,
-    publicationAdmission: planInputs.publicationAdmission,
+    ...artifactInputs,
     blockers: reuse.blockers,
-    candidate,
-    coveragePolicy: planInputs.coveragePolicy,
     children: reuse.children,
-    childReuse: planInputs.childReuse,
     errors: reuse.errors,
     evidenceReuse: evidenceReuseFromInputs(planInputs, reuse.sourceManifest),
-    expected: { ...expected, candidateRequest, parentRunAttempt: currentAttempt },
-    gates: built.gates,
-    releaseProfile: expected.releaseProfile,
-    rerunGroup: expected.rerunGroup,
-    telegramWaiver: planInputs.telegramWaiver,
-    targetVersion: planInputs.targetVersion,
-    trustedWorkflow: trustedWorkflowFromInputs(planInputs),
   });
   writeExecutionPlan(outputPath, plan);
   finished = true;
@@ -1239,10 +1214,6 @@ async function collectMode(mode) {
     },
   );
   const plan = executionPlan.children;
-  const policy = {
-    releaseProfile,
-    workflowRef: expected.workflowRef,
-  };
   const gateFailures = releasePlanGateFailures(executionPlan.gates);
   const failFast = mode === "decision" && process.env.FAIL_FAST === "true";
   const pollIntervalMs =
@@ -1296,7 +1267,6 @@ async function collectMode(mode) {
         },
       ],
       localFailures: gateFailures,
-      ...policy,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1365,7 +1335,6 @@ async function collectMode(mode) {
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
       extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
       localFailures: gateFailures,
-      ...policy,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1393,7 +1362,6 @@ async function collectMode(mode) {
             ...cancellationErrors,
           ],
           localFailures: gateFailures,
-          ...policy,
         });
       }
     }
@@ -1447,19 +1415,7 @@ function readStateCandidates(root, prefix, runId, maxParentRunAttempt, filename)
 }
 
 async function validateManifestMode() {
-  const expected = {
-    publicationAdmissionContract:
-      process.env.FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT || undefined,
-    sourceAdmissionContract: process.env.FULL_RELEASE_SOURCE_ADMISSION_CONTRACT || undefined,
-    maxParentRunAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
-    parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
-    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
-    releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
-    rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
-    targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
-    workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
-    workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
-  };
+  const expected = stateArtifactExpected();
   const manifestPath = requiredString(
     process.env.RELEASE_VALIDATION_MANIFEST_PATH,
     "release validation manifest path",
@@ -1533,25 +1489,7 @@ async function validateManifestMode() {
     ? Object.fromEntries(
         Object.entries(drain.children).map(([key, child]) => [
           key,
-          {
-            compositeJobsSha256: child.compositeJobsSha256,
-            dispatchActor: child.dispatchActor,
-            effectiveRunAttempt: child.runAttempt,
-            jobs: child.timing.jobs.map((job) => ({
-              acceptedRunAttempt: job.acceptedRunAttempt,
-              completedAt: job.completedAt,
-              conclusion: job.conclusion,
-              name: job.name,
-              startedAt: job.startedAt,
-              status: job.status,
-              url: job.url,
-            })),
-            observedRunAttempts: child.observedRunAttempts,
-            plannedRunAttempt: child.plannedRunAttempt,
-            repository: child.repository,
-            runId: child.runId,
-            triggeringActor: child.triggeringActor,
-          },
+          releaseManifestChildEvidence(child),
         ]),
       )
     : undefined;
@@ -1571,27 +1509,12 @@ async function validateManifestMode() {
   ) {
     throw new Error("release validation manifest differs from the immutable execution plan");
   }
-  rawManifest.advisoryJobs = [];
+  rawManifest.advisoryJobs = manifest.advisoryJobs;
   writeArtifact(manifestPath, rawManifest);
 }
 
 function selectMode() {
-  const expected = {
-    publicationAdmissionContract:
-      process.env.FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT || undefined,
-    sourceAdmissionContract: process.env.FULL_RELEASE_SOURCE_ADMISSION_CONTRACT || undefined,
-    maxParentRunAttempt: positiveInteger(
-      process.env.GITHUB_RUN_ATTEMPT,
-      "current parent run attempt",
-    ),
-    parentRunId: requiredString(process.env.GITHUB_RUN_ID, "parent run ID"),
-    repository: requiredString(process.env.GITHUB_REPOSITORY, "GitHub repository"),
-    releaseProfile: requiredString(process.env.RELEASE_PROFILE, "release profile"),
-    rerunGroup: requiredString(process.env.RERUN_GROUP, "rerun group"),
-    targetSha: requiredString(process.env.TARGET_SHA, "target SHA"),
-    workflowRef: requiredString(process.env.GITHUB_REF_NAME, "workflow ref"),
-    workflowSha: requiredString(process.env.GITHUB_SHA, "workflow SHA"),
-  };
+  const expected = stateArtifactExpected("current parent run attempt");
   const selected = selectReleaseStateArtifacts(
     readArtifact(
       requiredString(process.env.RELEASE_EXECUTION_PLAN_PATH, "execution plan path"),

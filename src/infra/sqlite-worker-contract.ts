@@ -7,6 +7,12 @@ import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js"
 import type { SqliteWorkerTransferHandle } from "./sqlite-worker-transfer.js";
 
 export type SqliteWorkerOperations = Record<string, { input: unknown; output: unknown }>;
+/** Process-private locator; live owner admission remains separate from this identity. */
+export type SqliteWorkerEphemeralTarget = {
+  kind: "ephemeral";
+  handle: string;
+  incarnation: string;
+};
 export type SqliteWorkerCommand<Operations extends SqliteWorkerOperations> = {
   [Key in keyof Operations]: { type: Key; input: Operations[Key]["input"] };
 }[keyof Operations];
@@ -52,18 +58,10 @@ export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
   close(): Promise<void>;
 };
 
-/** Optional maintenance budget; ordinary operations keep the database's default lock wait. */
-export type SqliteWorkerStateLifecycle = boolean | { waitMs: number; maxPollIntervalMs?: number };
-
 export type SqliteWorkerRequest = {
   id: number;
   actor: number;
   stateContext?: SqliteWorkerStateContext;
-  gatewaySchemaFence?: MessagePort;
-  maintenanceSchemaFence?: MessagePort;
-  stateLifecycle?: MessagePort;
-  workerStateLifecycle?: { deadlineNs: bigint; maxPollIntervalMs?: number };
-  lifecyclePreparation?: MessagePort;
   operationAdmission?: MessagePort;
   stateDatabasePath?: string;
 } & (
@@ -72,6 +70,7 @@ export type SqliteWorkerRequest = {
       moduleUrl: string;
       sourceLoaderUrl?: string;
       databasePath: string;
+      target?: SqliteWorkerEphemeralTarget;
       existingIdentity?: string;
       openAdmission?: "input" | "identity";
       input: Uint8Array;

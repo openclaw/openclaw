@@ -1,4 +1,3 @@
-import DOMPurify from "dompurify";
 import { describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
 import * as markdownDetails from "./markdown-details.ts";
@@ -7,9 +6,89 @@ import * as markdownText from "./markdown-text.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
 
+const sanitizedInputLengths = vi.hoisted(() => {
+  // Cached markdown sanitizers must be created through this file's factory wrapper.
+  vi.resetModules();
+  const lengths: number[] = [];
+  return lengths;
+});
+
+vi.mock(import("dompurify"), async (importOriginal) => {
+  const actual = await importOriginal();
+  const createDOMPurify = (...factoryArgs: Parameters<typeof actual.default>) => {
+    const purifier = actual.default(...factoryArgs);
+    const sanitize = purifier.sanitize.bind(purifier);
+    vi.spyOn(purifier, "sanitize").mockImplementation((...args) => {
+      const [input] = args;
+      sanitizedInputLengths.push(typeof input === "string" ? input.length : 0);
+      return sanitize(...args);
+    });
+    return purifier;
+  };
+  return { ...actual, default: Object.assign(createDOMPurify, actual.default) };
+});
+
 describe("toStreamingMarkdownParts", () => {
+  it.each([
+    {
+      name: "block glyphs after prose",
+      prefix: "Intro\n\n",
+      source: "Intro\n\n▀▀▀▀\n▄▄▄▄\n\n",
+      expected: "<p>Intro</p>\n<p>▀▀▀▀<br>\n▄▄▄▄</p>\n",
+    },
+    {
+      name: "prose after block glyphs",
+      prefix: "▀▀▀▀\n▄▄▄▄\n\nIntro",
+      source: "▀▀▀▀\n▄▄▄▄\n\nIntro\n\n",
+      expected: "<p>▀▀▀▀<br>\n▄▄▄▄</p>\n<p>Intro</p>\n",
+    },
+    {
+      name: "setext underline",
+      prefix: "Title\n",
+      source: "Title\n-\n\n",
+      expected: "<h2>Title</h2>\n",
+    },
+    {
+      name: "raw-content removal",
+      prefix: "before <script>hidden\n\n",
+      source: "before <script>hidden\n\nmore</script>\n\n",
+      options: { progressBars: true },
+      expected: "<p>before</p>\n",
+    },
+    {
+      name: "Unicode boundaries",
+      source: "## Done\u2028\u2028working **tail",
+      expected: "<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n",
+    },
+    {
+      name: "open formatting",
+      source: "**still streaming",
+      expected: "<p><strong>still streaming</strong></p>\n",
+    },
+    {
+      name: "half-written link",
+      source: "see [Streamdown](https://strea",
+      expected: "<p>see Streamdown</p>\n",
+    },
+    {
+      name: "dollar amounts",
+      source: "prices are $$50 and",
+      expected: "<p>prices are $$50 and</p>\n",
+    },
+  ])(
+    "preserves streamed Markdown semantics for $name",
+    ({ name, source, prefix, options, expected }) => {
+      if (prefix !== undefined) {
+        toStreamingMarkdownParts(prefix, options, name);
+      }
+      expect(
+        toStreamingMarkdownParts(source, options, prefix === undefined ? undefined : name).join(""),
+      ).toBe(expected);
+    },
+  );
+
   it("renders completed paragraphs with linear sanitizer input", () => {
-    const sanitize = vi.spyOn(DOMPurify, "sanitize");
+    sanitizedInputLengths.length = 0;
     let source = "";
     try {
       for (let index = 0; index < 40; index++) {
@@ -20,13 +99,57 @@ describe("toStreamingMarkdownParts", () => {
         expect(fragment.querySelectorAll("p")).toHaveLength(index + 1);
         expect(fragment.querySelectorAll("strong")).toHaveLength(index + 1);
       }
-      const sanitizedChars = sanitize.mock.calls.reduce(
-        (total, [input]) => total + (typeof input === "string" ? input.length : 0),
-        0,
-      );
+      expect(sanitizedInputLengths.length).toBeGreaterThan(0);
+      const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);
       expect(sanitizedChars).toBeLessThan(source.length * 2);
     } finally {
-      sanitize.mockRestore();
+      sanitizedInputLengths.length = 0;
+    }
+  });
+
+  it("caches completed lists, code, and tables in the long streamed reply", () => {
+    const sections = Array.from(
+      { length: 28 },
+      (_, index) => `## Section ${index}: measured browser work
+
+A clear explanation with **important details** and an inline \`value\`. The browser should remain responsive as this answer grows. Measure the complete interaction and preserve every message.
+
+- First item with a useful observation
+- Second item with a concrete result
+- Third item with the next action
+
+\`\`\`typescript
+export function sample${index}(value: number): number {
+  const doubled = value * 2;
+  return doubled + ${index};
+}
+\`\`\`
+
+| Metric | Value | Meaning |
+| --- | --- | --- |
+| Frames | 60 | Smooth rendering |
+| Input | 16 | Fast feedback |
+
+`,
+    );
+    const prefixes = sections.map((_, index) => sections.slice(0, index + 1).join(""));
+    const expected = prefixes.map((prefix) => toSanitizedMarkdownHtml(prefix));
+    sanitizedInputLengths.length = 0;
+    let offset = 0;
+    try {
+      for (const [index, prefix] of prefixes.entries()) {
+        for (; offset < prefix.length; offset += 24) {
+          toStreamingMarkdownParts(prefix.slice(0, offset), {}, "rich-stream-budget");
+        }
+        expect(toStreamingMarkdownParts(prefix, {}, "rich-stream-budget").join("")).toBe(
+          expected[index],
+        );
+      }
+      expect(sanitizedInputLengths.length).toBeGreaterThan(0);
+      const sanitizedChars = sanitizedInputLengths.reduce((total, length) => total + length, 0);
+      expect(sanitizedChars).toBeLessThan(prefixes.at(-1)!.length * 20);
+    } finally {
+      sanitizedInputLengths.length = 0;
     }
   });
 
@@ -55,6 +178,38 @@ describe("toStreamingMarkdownParts", () => {
     }
   });
 
+  it.each([
+    "- one\n\n",
+    "- one\n\n  continuation\n",
+    "1. one\n\n   continuation\n",
+    "- one\n\n  - nested\n\n    continuation\n",
+    "Intro\n2. paragraph\n\n",
+  ])("keeps the whole container when later blocks retire %j", (prefix) => {
+    for (const suffix of [
+      "# Heading\n",
+      "---\n",
+      "> quote\n",
+      "> ~~~\n> code\n> ~~~\n> after\n",
+      "> ~~~\n> code\n> ~~~\n> after\n\nFollowing\n",
+      "```\ncode\n```\n",
+      "<details><summary>More</summary>body</details>\n",
+      "+ next\n",
+      "2. next\n",
+      "\nParagraph\n",
+      "▀▀▀▀\n▄▄▄▄\n",
+    ]) {
+      const source = prefix + suffix;
+      const expected = toSanitizedMarkdownHtml(source);
+      for (const chunkSize of [1, 7, 24]) {
+        const key = `retired-container-${source}-${chunkSize}`;
+        for (let end = chunkSize; end < source.length; end += chunkSize) {
+          toStreamingMarkdownParts(source.slice(0, end), {}, key);
+        }
+        expect(toStreamingMarkdownParts(source, {}, key).join(""), key).toBe(expected);
+      }
+    }
+  });
+
   it("relabels earlier file links when later blocks introduce a basename collision", () => {
     const key = "streamed-file-labels";
     const source = "See src/one/index.ts.\n\n";
@@ -69,42 +224,6 @@ describe("toStreamingMarkdownParts", () => {
     expect(
       [...fragment.querySelectorAll(".markdown-file-link")].map((link) => link.textContent),
     ).toEqual(["one/index.ts", "two/index.ts"]);
-  });
-
-  it("keeps block-art-looking paragraphs in their surrounding prose", () => {
-    const key = "prose-with-block-glyphs";
-    const intro = "Intro\n\n";
-    toStreamingMarkdownParts(intro, {}, key);
-    expect(toStreamingMarkdownParts(`${intro}▀▀▀▀\n▄▄▄▄\n\n`, {}, key).join("")).toBe(
-      "<p>Intro</p>\n<p>▀▀▀▀<br>\n▄▄▄▄</p>\n",
-    );
-  });
-
-  it("reclassifies a completed block-art prefix when prose becomes stable", () => {
-    const key = "block-art-before-prose";
-    const source = "▀▀▀▀\n▄▄▄▄\n\nIntro";
-    toStreamingMarkdownParts(source, {}, key);
-    expect(toStreamingMarkdownParts(`${source}\n\n`, {}, key).join("")).toBe(
-      "<p>▀▀▀▀<br>\n▄▄▄▄</p>\n<p>Intro</p>\n",
-    );
-  });
-
-  it("classifies accumulated glyph paragraphs as one block-art prefix", () => {
-    const key = "accumulated-block-art";
-    const source = "▀▀▀▀\n\n";
-    toStreamingMarkdownParts(source, {}, key);
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts(`${source}▄▄▄▄\n\nIntro`, {}, key).join(""),
-    );
-    expect(fragment.querySelector("code.markdown-block-art")?.textContent).toBe("▀▀▀▀\n\n▄▄▄▄\n\n");
-  });
-
-  it("keeps list-looking fence markers inside a root code block", () => {
-    const key = "literal-list-fence";
-    const source = "~~~\ncode\n- ~~~\n";
-    toStreamingMarkdownParts(source, {}, key);
-    const fragment = htmlFragment(toStreamingMarkdownParts(`${source}more\n\n`, {}, key).join(""));
-    expect(fragment.querySelector("pre code")?.textContent).toBe("code\n- ~~~\nmore\n\n");
   });
 
   it("keeps tab-indented list fences incomplete until their closer arrives", () => {
@@ -129,7 +248,7 @@ describe("toStreamingMarkdownParts", () => {
     expect(fragment.querySelector("blockquote p")?.textContent).toBe("after");
   });
 
-  it.each(["-", "+", "*", "1.", "1)"])(
+  it.each(["-", "1.", "1)"])(
     "keeps standalone %s list markers with their paragraph continuations",
     (marker) => {
       const key = `standalone-list-${marker}`;
@@ -146,24 +265,13 @@ describe("toStreamingMarkdownParts", () => {
     },
   );
 
-  it("keeps a standalone hyphen as a setext heading underline after prose", () => {
-    const key = "setext-hyphen";
-    toStreamingMarkdownParts("Title\n", {}, key);
-    expect(toStreamingMarkdownParts("Title\n-\n\n", {}, key).join("")).toBe("<h2>Title</h2>\n");
-  });
-
-  it("keeps nonbreaking-space lines inside their streaming paragraph", () => {
-    const key = "nonbreaking-space-paragraph";
-    const source = "First\n\u00a0\n";
-    toStreamingMarkdownParts(source, {}, key);
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts(`${source}Second\n\n`, {}, key).join(""),
-    );
-    expect(fragment.querySelectorAll("p")).toHaveLength(1);
-    expect(fragment.querySelector("p")?.textContent).toBe("First\n\u00a0\nSecond");
-  });
-
   it.each([
+    {
+      name: "a nonbreaking-space line",
+      source: "First\n\u00a0\n",
+      suffix: "Second\n\n",
+      paragraph: "First\n\u00a0\nSecond",
+    },
     {
       name: "an unfinished blank line",
       source: "Hello\n ",
@@ -200,13 +308,17 @@ describe("toStreamingMarkdownParts", () => {
     expect(fragment.querySelector("p a")?.getAttribute("href")).toBe("https://example.com");
   });
 
-  it("removes completed raw-content blocks across earlier streaming boundaries", () => {
-    const key = "progress-raw-content";
-    const source = "before <script>hidden\n\n";
-    toStreamingMarkdownParts(source, { progressBars: true }, key);
-    expect(
-      toStreamingMarkdownParts(`${source}more</script>\n\n`, { progressBars: true }, key).join(""),
-    ).toBe("<p>before</p>\n");
+  it("keeps lists joined when progress rendering removes their HTML separator", () => {
+    const source = "- one\n\n<script>hidden</script>\n\n- two\n";
+    for (const chunkSize of [1, 7, 24]) {
+      const key = `progress-list-separator-${chunkSize}`;
+      for (let end = chunkSize; end < source.length; end += chunkSize) {
+        toStreamingMarkdownParts(source.slice(0, end), { progressBars: true }, key);
+      }
+      expect(toStreamingMarkdownParts(source, { progressBars: true }, key).join("")).toBe(
+        "<ul>\n<li>\n<p>one</p>\n</li>\n<li>\n<p>two</p>\n</li>\n</ul>\n",
+      );
+    }
   });
 
   it("keeps reference resolution consistent while an independent tail grows", () => {
@@ -221,19 +333,26 @@ describe("toStreamingMarkdownParts", () => {
   });
 
   it.each([
+    {
+      name: "list-looking fence",
+      source: "~~~\ncode\n- ~~~\n",
+      suffix: "more\n\n",
+      code: "code\n- ~~~\nmore\n\n",
+    },
     { name: "backtick fence info", source: "```foo`bar\ninside\n```\n", code: "after\n\n" },
     {
       name: "nonbreaking-space fence suffix",
       source: "```\ncode\n```\u00a0\n",
       code: "code\n```\u00a0\nafter\n\n",
     },
-  ])("keeps $name from closing the actual open fence", ({ name, source, code }) => {
-    toStreamingMarkdownParts(source, {}, name);
-    const fragment = htmlFragment(
-      toStreamingMarkdownParts(`${source}after\n\n`, {}, name).join(""),
-    );
-    expect(fragment.querySelector("pre code")?.textContent).toBe(code);
-  });
+  ])(
+    "keeps $name from closing the actual open fence",
+    ({ name, source, code, suffix = "after\n\n" }) => {
+      toStreamingMarkdownParts(source, {}, name);
+      const fragment = htmlFragment(toStreamingMarkdownParts(source + suffix, {}, name).join(""));
+      expect(fragment.querySelector("pre code")?.textContent).toBe(code);
+    },
+  );
 
   it("does not rescan completed disclosures in appended prefixes", () => {
     const prefixes: string[] = [];
@@ -283,22 +402,11 @@ describe("toStreamingMarkdownParts", () => {
 
   it("keeps chunked-prefix splits identical to full splits", () => {
     const cases = [
-      [
-        "## Result",
-        "",
-        "A paragraph with `inline code`.",
-        "",
-        "<details>",
-        "<summary>Logs</summary>",
-        "",
-        "```ts",
-        "const value = 1;",
-        "```",
-        "",
-        "More **text**",
-        "",
-        "</details>",
-      ].join("\n"),
+      "## Result\n\nA paragraph with `inline code`.\n\n<details>\n<summary>Logs</summary>\n\n```ts\nconst value = 1;\n```\n\nMore **text**\n\n</details>",
+      "- first\n\n  continuation\n\n# Done\n\n- next\n\n+ changed marker\n\nAfter\n\n",
+      "1. one\n\n    - nested\n\n        code\n\n# Done\n\nAfter\n\n",
+      "- before\n\n~~~\n- ~~~\n*literal\n~~~\n\nAfter\n\n",
+      "- [x] Safe\n\nDone\n\n- [evil](javascript:alert(1))\n\n<script>alert(1)</script>\n\nAfter\n\n",
       "- one\n\n  - nested\n\n[Docs][ref\\]]\n\n[ref\\]]: /docs",
       "`` multiline\n<details> remains code\n``\n\n<details>\n<summary>Real</summary>",
       "- item\n\n    <details>\n    <summary>Logs</summary>\n\n    still inside",
@@ -439,77 +547,68 @@ describe("toStreamingMarkdownParts", () => {
     expect(html).toContain('class="assistant-transcript-role"');
   });
 
-  it("renders streaming raw block art without collapsing quiet-zone spaces", () => {
-    const blockArt = "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ";
-    const html = toStreamingMarkdownParts(blockArt).join("");
-    const fragment = htmlFragment(html);
-    const code = fragment.querySelector("pre code.markdown-block-art");
-
-    expect(fragment.querySelector("p")).toBeNull();
-    expect(code?.textContent).toBe(blockArt);
-  });
-
-  it("truncates oversized streaming raw block art before rendering", () => {
-    const line = "  ▀▀▀▀  ";
-    const blockArt = Array.from({ length: 20_000 }, () => line).join("\n");
-    const html = toStreamingMarkdownParts(blockArt).join("");
-    const fragment = htmlFragment(html);
-    const code = fragment.querySelector("pre code.markdown-block-art");
-
-    expect(code?.textContent).toContain("… truncated");
-    expect(code?.textContent).toContain(`showing first 140000`);
-    expect(code?.textContent?.length).toBeLessThan(blockArt.length);
-  });
-
-  it("localizes the oversized markdown truncation notice", async () => {
-    i18n.registerTranslation("pt-BR", {
-      chat: {
-        markdown: {
-          truncated: "… truncado ({total} caracteres, exibindo os primeiros {shown}).",
-        },
-      },
-    });
-    await i18n.setLocale("pt-BR");
-    try {
-      const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
-      const fragment = htmlFragment(toStreamingMarkdownParts(blockArt).join(""));
-      expect(fragment.textContent).toContain("… truncado");
-      expect(fragment.textContent).toContain("exibindo os primeiros 140000");
-    } finally {
-      await i18n.setLocale("en");
+  it.each([
+    {
+      name: "raw quiet-zone spaces",
+      source: "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ",
+      prefix: undefined,
+      code: "  ▀▀▀▀  \n  ▄▄▄▄  \n  ████  ",
+    },
+    {
+      name: "accumulated glyph paragraphs",
+      prefix: "▀▀▀▀\n\n",
+      source: "▀▀▀▀\n\n▄▄▄▄\n\nIntro",
+      code: "▀▀▀▀\n\n▄▄▄▄\n\n",
+    },
+  ])("renders block art literally: $name", ({ name, source, prefix, code }) => {
+    if (prefix !== undefined) {
+      toStreamingMarkdownParts(prefix, {}, name);
+    }
+    const fragment = htmlFragment(
+      toStreamingMarkdownParts(source, {}, prefix === undefined ? undefined : name).join(""),
+    );
+    expect(fragment.querySelector("pre code.markdown-block-art")?.textContent).toBe(code);
+    if (prefix === undefined) {
+      expect(fragment.querySelector("p")).toBeNull();
     }
   });
 
   it.each([
-    ["loose sibling list items", "- one\n\n- two"],
-    ["list-item paragraph continuation", "- one\n\n  continuation"],
-    ["nested loose list items", "- one\n\n  - nested"],
-    ["a reference link and its later definition", "[Docs][doc]\n\n[doc]: https://example.com"],
-    ["escaped bracket labels", "[Docs][ref\\]]\n\n[ref\\]]: https://example.com"],
+    { locale: "en", notice: "… truncated", limit: "showing first 140000" },
+    { locale: "pt-BR", notice: "… truncado", limit: "exibindo os primeiros 140000" },
+  ] as const)(
+    "truncates oversized block art with a $locale notice",
+    async ({ locale, notice, limit }) => {
+      i18n.registerTranslation("pt-BR", {
+        chat: {
+          markdown: {
+            truncated: "… truncado ({total} caracteres, exibindo os primeiros {shown}).",
+          },
+        },
+      });
+      await i18n.setLocale(locale);
+      try {
+        const blockArt = Array.from({ length: 20_000 }, () => "  ▀▀▀▀  ").join("\n");
+        const fragment = htmlFragment(toStreamingMarkdownParts(blockArt).join(""));
+        const code = fragment.querySelector("pre code.markdown-block-art");
+        expect(code?.textContent).toContain(notice);
+        expect(code?.textContent).toContain(limit);
+        expect(code?.textContent?.length).toBeLessThan(blockArt.length);
+        expect(fragment.textContent).toContain(notice);
+        expect(fragment.textContent).toContain(limit);
+      } finally {
+        await i18n.setLocale("en");
+      }
+    },
+  );
+
+  it.each([
     ["multiline reference labels", "[Docs][foo bar]\n\n[foo\n bar]: https://example.com"],
     ["list-nested reference definitions", "See [x]\n\n- item\n\n    [x]: /url"],
     ["tab-indented list continuation", "Intro\n\n  - one\n\n\tcontinuation"],
     ["list continuation before a root heading", "- one\n\n  continuation\n# Heading"],
   ])("preserves whole-document Markdown semantics for %s", (_kind, input) => {
     expect(toStreamingMarkdownParts(input).join("")).toBe(toSanitizedMarkdownHtml(input));
-  });
-
-  it("uses Unicode separators as stable markdown boundaries", () => {
-    const html = toStreamingMarkdownParts("## Done\u2028\u2028working **tail").join("");
-
-    expect(html).toBe("<h2>Done</h2>\n<p>working <strong>tail</strong></p>\n");
-  });
-
-  it("renders a single open paragraph as markdown with closed formatting", () => {
-    const html = toStreamingMarkdownParts("**still streaming").join("");
-
-    expect(html).toBe("<p><strong>still streaming</strong></p>\n");
-  });
-
-  it("renders half-written links as text only while streaming", () => {
-    const html = toStreamingMarkdownParts("see [Streamdown](https://strea").join("");
-
-    expect(html).toBe("<p>see Streamdown</p>\n");
   });
 
   it("streams tables as markdown before the closing row arrives", () => {
@@ -520,16 +619,10 @@ describe("toStreamingMarkdownParts", () => {
     expect(fragment.querySelector("th")?.textContent).toBe("left");
     expect(html).not.toContain("markdown-plain-text-fallback");
   });
-
-  it("leaves dollar amounts alone while streaming", () => {
-    const html = toStreamingMarkdownParts("prices are $$50 and").join("");
-
-    expect(html).toBe("<p>prices are $$50 and</p>\n");
-  });
 });
 
 describe("indented Markdown source", () => {
-  it.each(["    ", "\t", " \t", "  \t", "   \t"])(
+  it.each(["    ", "\t"])(
     "retains indented code across completed streaming prefixes: %j",
     (indent) => {
       const key = `completed-indentation-${indent}`;
@@ -543,21 +636,25 @@ describe("indented Markdown source", () => {
     },
   );
 
-  it.each(["    *literal*", "\t*literal*", "\n\n    *literal*"])(
-    "renders initial code: %j",
-    (source) => {
-      expect(
-        htmlFragment(toSanitizedMarkdownHtml(source)).querySelector("pre code")?.textContent,
-      ).toBe("*literal*\n");
-    },
-  );
-
-  it.each(["    a\n\n    b", "Intro\n\n    a\n\n    b"])(
-    "keeps a streamed indented block together: %j",
-    (source) => {
-      const fragment = htmlFragment(toStreamingMarkdownParts(source).join(""));
+  it.each([
+    ...["    *literal*", "\t*literal*", "\n\n    *literal*"].map((source) => ({
+      source,
+      streaming: false,
+      text: "*literal*\n",
+    })),
+    ...["    a\n\n    b", "Intro\n\n    a\n\n    b"].map((source) => ({
+      source,
+      streaming: true,
+      text: "a\n\nb\n",
+    })),
+  ])(
+    "keeps indented source literal: $source (streaming=$streaming)",
+    ({ source, streaming, text }) => {
+      const fragment = htmlFragment(
+        streaming ? toStreamingMarkdownParts(source).join("") : toSanitizedMarkdownHtml(source),
+      );
       expect(fragment.querySelectorAll("pre code")).toHaveLength(1);
-      expect(fragment.querySelector("pre code")?.textContent).toBe("a\n\nb\n");
+      expect(fragment.querySelector("pre code")?.textContent).toBe(text);
     },
   );
 

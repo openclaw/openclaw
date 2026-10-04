@@ -7,6 +7,7 @@ import {
   resolveCompletedActivityWrappers,
 } from "../agents/agent-activity-presentation.js";
 import { isProcessPollResultDetails } from "../agents/bash-tools.process-schema.js";
+import { unwrapToolCallForDisplay } from "../agents/tool-display-call.js";
 import {
   inferToolMetaFromArgsCore,
   isCommandBearingToolCall,
@@ -71,6 +72,7 @@ type AgentActivityEventDataByStream = {
 type ToolActivityInput = {
   toolCallId: string;
   name: string;
+  presentationName?: string;
   phase: "start" | "update" | "result";
   args?: unknown;
   result?: unknown;
@@ -86,8 +88,15 @@ export function projectAgentToolActivity(
 ): AgentItemEventData;
 export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivityItem;
 export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivityItem {
-  const meta = tool.meta ?? inferToolMetaFromArgsCore(tool.name, tool.args);
-  const label = resolveToolDisplay({ name: tool.name }).label;
+  const input = { name: tool.name, args: tool.args };
+  const unwrapped = unwrapToolCallForDisplay(input);
+  // History may omit executed args; its presentation name is then a name-only fallback.
+  const call =
+    unwrapped === input && tool.presentationName
+      ? { name: tool.presentationName, args: tool.args }
+      : unwrapped;
+  const meta = tool.meta ?? inferToolMetaFromArgsCore(call.name, call.args);
+  const label = resolveToolDisplay(call).label;
   const details = asOptionalRecord(asOptionalRecord(tool.result)?.details);
   const approval =
     tool.phase === "result" &&
@@ -96,13 +105,19 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
   const status =
     tool.phase !== "result"
       ? "running"
-      : approval || skipped
-        ? "blocked"
-        : tool.status === "unknown"
-          ? undefined
-          : (tool.status ??
-            (tool.isError === true ? "failed" : tool.isError === false ? "completed" : undefined));
-  return projectAgentActivityItem(
+      : skipped && details.deniedReason === "steering"
+        ? "skipped"
+        : approval || skipped
+          ? "blocked"
+          : tool.status === "unknown"
+            ? undefined
+            : (tool.status ??
+              (tool.isError === true
+                ? "failed"
+                : tool.isError === false
+                  ? "completed"
+                  : undefined));
+  const activity: AgentActivityItem = projectAgentActivityItem(
     {
       itemId: `tool:${tool.toolCallId}`,
       toolCallId: tool.toolCallId,
@@ -125,11 +140,13 @@ export function projectAgentToolActivity(tool: ToolActivityInput): AgentActivity
         : {}),
       ...(skipped ? { summary: "Skipped" } : {}),
       ...(meta ? { meta } : {}),
-      commandBearing: isCommandBearingToolCall(tool.name, tool.args),
+      commandBearing: isCommandBearingToolCall(call.name, call.args),
       ...(tool.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
     },
     { args: tool.args, result: tool.result, nativeOperation: tool.nativeOperation },
   );
+  // Outcome and visibility still belong to the original execution facts.
+  return { ...activity, name: call.name };
 }
 
 export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem[] };
@@ -137,10 +154,7 @@ export type AgentHistoryActivity = { messageId: string; items: AgentActivityItem
 export function projectAgentHistoryActivity(
   messages: ReadonlyArray<{ messageId: string; message: unknown }>,
 ): AgentHistoryActivity[] {
-  const facts = new Map<
-    string,
-    Parameters<typeof projectAgentToolActivity>[0] & ToolCallIdentity
-  >();
+  const facts = new Map<string, ToolActivityInput & ToolCallIdentity>();
   let turn = 0;
   const entries = messages.map(({ messageId, message }) => {
     const record = asOptionalRecord(message);
@@ -264,6 +278,10 @@ export function projectAgentHistoryActivity(
           runId,
           parentToolCallId,
           name,
+          presentationName: unwrapToolCallForDisplay({
+            name,
+            args: executedArgs ?? block.arguments ?? block.args ?? block.input,
+          }).name,
           phase: "result",
           args: executedArgs,
         });

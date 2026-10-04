@@ -32,6 +32,7 @@ import {
   resolveSessionSharingRole,
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import {
   createSessionMutationTestClient as client,
@@ -115,6 +116,8 @@ describe("sessions.patch", () => {
             presentation: "expanded",
           });
           expect(saved.details).toEqual({ ok: true, sessionKey, defaultPresentation: "expanded" });
+          // Finish the saved row's publication before the durability probe closes storage.
+          await flushPendingSessionsChangedEvents(requestContext);
           const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
           expect(await closeOpenClawAgentDatabaseByPathAsync(database.path)).toBe(true);
           expect(loadSessionEntry(scope)).toMatchObject({
@@ -195,110 +198,128 @@ describe("sessions.patch", () => {
     });
   });
 
-  it.each(["thinking", "context", "both"] as const)(
-    "persists %s preference clears with an agent model rollback marker",
-    async (field) => {
-      await withSessionMutationState(async (state) => {
-        const sessionKey = "agent:main:rollback-preferences";
-        const scope = { agentId: "main", env: state.env, sessionKey };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "rollback-preferences",
-          updatedAt: 1,
-          providerOverride: "anthropic",
-          modelOverride: "claude-sonnet-4-6",
-          thinkingLevel: "high",
-          contextWindow: "extended",
-          modelFallback: {
-            prevProvider: "openai",
-            prevModel: "gpt-5.4",
-            prevThinkingLevel: "high",
-            prevContextWindow: "extended",
-            ts: 1,
-            source: "agent-patch",
-          },
-        });
-        const respond = vi.fn();
-        await sessionMutationHandlers["sessions.patch"]!({
-          params: {
-            key: sessionKey,
-            ...(field !== "context" ? { thinkingLevel: null } : {}),
-            ...(field !== "thinking" ? { contextWindow: null } : {}),
-          },
-          client: client(),
-          context: context({}),
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
-        const entry = loadSessionEntry(scope);
-        expect(entry?.thinkingLevel).toBe(field === "context" ? "high" : undefined);
-        expect(entry?.contextWindow).toBe(field === "thinking" ? "extended" : undefined);
-        expect(entry?.modelFallback).toMatchObject({
+  it("persists preference clears with an agent model rollback marker", async () => {
+    await withSessionMutationState(async (state) => {
+      const sessionKey = "agent:main:rollback-preferences";
+      const scope = { agentId: "main", env: state.env, sessionKey };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "rollback-preferences",
+        updatedAt: 1,
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4-6",
+        thinkingLevel: "high",
+        contextWindow: "extended",
+        modelFallback: {
           prevProvider: "openai",
           prevModel: "gpt-5.4",
+          prevThinkingLevel: "high",
+          prevContextWindow: "extended",
           ts: 1,
           source: "agent-patch",
-        });
-        expect(entry?.modelFallback?.prevThinkingLevel).toBe(
-          field === "context" ? "high" : undefined,
+        },
+      });
+      const respond = vi.fn();
+      await sessionMutationHandlers["sessions.patch"]!({
+        params: {
+          key: sessionKey,
+          thinkingLevel: null,
+          contextWindow: null,
+        },
+        client: client(),
+        context: context({}),
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+      const entry = loadSessionEntry(scope);
+      expect(entry?.thinkingLevel).toBeUndefined();
+      expect(entry?.contextWindow).toBeUndefined();
+      expect(entry?.modelFallback).toMatchObject({
+        prevProvider: "openai",
+        prevModel: "gpt-5.4",
+        ts: 1,
+        source: "agent-patch",
+      });
+      expect(entry?.modelFallback?.prevThinkingLevel).toBeUndefined();
+      expect(entry?.modelFallback?.prevContextWindow).toBeUndefined();
+    });
+  });
+
+  it.each([
+    { kind: "failed", message: "Permissions were saved" },
+    { kind: "unsupported", message: "Stop the run" },
+  ] as const)(
+    "preserves the correct saved mode after a $kind live permission update",
+    async ({ kind, message }) => {
+      await withSessionMutationState(async (state) => {
+        const failed = kind === "failed";
+        const sessionId = failed ? "failed-permission-update" : "unsupported-permissions";
+        const sessionKey = `agent:main:${sessionId}`;
+        await upsertSessionEntryCore(
+          { agentId: "main", env: state.env, sessionKey },
+          { sessionId, updatedAt: 1, permissionMode: "guarded" },
         );
-        expect(entry?.modelFallback?.prevContextWindow).toBe(
-          field === "thinking" ? "extended" : undefined,
-        );
+        const abort = vi.fn();
+        const handle = failed
+          ? {
+              ...createEmbeddedRunHandle({ abort }),
+              applyPermissionMode: async () => {
+                throw new Error("Runtime update failed");
+              },
+            }
+          : createEmbeddedRunHandle();
+        const patched = vi.fn(async () => {});
+        if (failed) {
+          registerInternalHook("session:patch", patched);
+        }
+        setActiveEmbeddedRun(sessionId, handle, sessionKey);
+        const respond = vi.fn();
+        try {
+          await sessionMutationHandlers["sessions.patch"]!({
+            params: {
+              key: sessionKey,
+              permissionMode: "read-only",
+              ...(failed ? { label: "Updated session" } : {}),
+            },
+            client: client(),
+            context: context({}),
+            respond,
+          } as never);
+          expect(respond).toHaveBeenCalledWith(
+            false,
+            undefined,
+            expect.objectContaining({ message: expect.stringContaining(message) }),
+          );
+          if (failed) {
+            expect(abort).toHaveBeenCalledOnce();
+            expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject(
+              {
+                permissionMode: "read-only",
+                label: "Updated session",
+              },
+            );
+            expect(patched).toHaveBeenCalledWith(
+              expect.objectContaining({
+                sessionKey,
+                context: expect.objectContaining({
+                  sessionEntry: expect.objectContaining({ permissionMode: "read-only" }),
+                }),
+              }),
+            );
+          } else {
+            expect(
+              loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
+            ).toBe("guarded");
+          }
+          expect(isSessionPermissionChangePending(sessionId)).toBe(false);
+        } finally {
+          if (failed) {
+            unregisterInternalHook("session:patch", patched);
+          }
+          clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+        }
       });
     },
   );
-
-  it("publishes saved settings when applying permissions to the active run fails", async () => {
-    await withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:failed-permission-update";
-      const sessionId = "failed-permission-update";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        { sessionId, updatedAt: 1, permissionMode: "guarded" },
-      );
-      const abort = vi.fn();
-      const handle = {
-        ...createEmbeddedRunHandle({ abort }),
-        applyPermissionMode: async () => {
-          throw new Error("Runtime update failed");
-        },
-      };
-      const patched = vi.fn(async () => {});
-      registerInternalHook("session:patch", patched);
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      const respond = vi.fn();
-      try {
-        await sessionMutationHandlers["sessions.patch"]!({
-          params: { key: sessionKey, permissionMode: "read-only", label: "Updated session" },
-          client: client(),
-          context: context({}),
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: expect.stringContaining("Permissions were saved") }),
-        );
-        expect(abort).toHaveBeenCalledOnce();
-        expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject({
-          permissionMode: "read-only",
-          label: "Updated session",
-        });
-        expect(patched).toHaveBeenCalledWith(
-          expect.objectContaining({
-            sessionKey,
-            context: expect.objectContaining({
-              sessionEntry: expect.objectContaining({ permissionMode: "read-only" }),
-            }),
-          }),
-        );
-        expect(isSessionPermissionChangePending(sessionId)).toBe(false);
-      } finally {
-        unregisterInternalHook("session:patch", patched);
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      }
-    });
-  });
 
   it.each([false, true])(
     "serializes permission changes through live-runtime acknowledgement (catalog preparation=%s)",
@@ -550,39 +571,6 @@ describe("sessions.patch", () => {
     },
   );
 
-  it("refuses unsupported live permission changes before saving a misleading mode", async () => {
-    await withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:unsupported-permissions";
-      const sessionId = "unsupported-permissions";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        { sessionId, updatedAt: 1, permissionMode: "guarded" },
-      );
-      const handle = createEmbeddedRunHandle();
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      const respond = vi.fn();
-      try {
-        await sessionMutationHandlers["sessions.patch"]!({
-          params: { key: sessionKey, permissionMode: "read-only" },
-          client: client(),
-          context: context({}),
-          respond,
-        } as never);
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ message: expect.stringContaining("Stop the run") }),
-        );
-        expect(
-          loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.permissionMode,
-        ).toBe("guarded");
-        expect(isSessionPermissionChangePending(sessionId)).toBe(false);
-      } finally {
-        clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      }
-    });
-  });
-
   it("keeps a newly created session visible to its identified non-admin creator", async () => {
     await withSessionMutationState(async (state) => {
       const profileId = ensureProfileForEmail(`patch-creator-${caseNumber}@example.test`).id;
@@ -646,147 +634,120 @@ describe("sessions.patch", () => {
 });
 
 describe("sessions.assignOwner", () => {
-  it("serializes assignment with an active session lifecycle mutation", async () => {
-    await withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:lifecycle-handoff";
-      const sessionId = "session-lifecycle-handoff";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
-        },
-      );
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      } as OpenClawConfig;
-      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
-      if (!target) {
-        throw new Error("expected lifecycle assignment target");
-      }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const lifecycle = runExclusiveSessionLifecycleMutation({
-        scope: target.storePath,
-        identities: [target.storeKey, sessionId],
-        run: async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      });
-      await entered.promise;
-      const assignment = invoke({
-        cfg,
-        client: client("profile-viewer"),
-        request: { key: sessionKey, owner: { type: "agent", id: "research" } },
-      });
-      try {
-        await expect(
-          Promise.race([
-            assignment.then(() => "settled" as const),
-            new Promise<"blocked">((resolve) => {
-              setImmediate(() => resolve("blocked"));
-            }),
-          ]),
-        ).resolves.toBe("blocked");
-        expect(
-          loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
-        ).toBeUndefined();
-      } finally {
-        release.resolve();
-        await lifecycle;
-      }
-      await expect(assignment).resolves.toMatchObject({
-        responses: [[true, { owner: { actor: { type: "agent", id: "research" } } }, undefined]],
-      });
-    });
-  });
-
-  it("rejects an assignment whose requester authority ends while queued", async () => {
-    await withSessionMutationState(async (state) => {
-      const sessionKey = "agent:main:revoked-handoff";
-      const sessionId = "session-revoked-handoff";
-      await upsertSessionEntryCore(
-        { agentId: "main", env: state.env, sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
-        },
-      );
-      const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-      } as OpenClawConfig;
-      const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
-      if (!target) {
-        throw new Error("expected queued assignment target");
-      }
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const lifecycle = runExclusiveSessionLifecycleMutation({
-        scope: target.storePath,
-        identities: [target.storeKey, sessionId],
-        run: async () => {
-          entered.resolve();
-          await release.promise;
-        },
-      });
-      await entered.promise;
-      let requesterCurrent = true;
-      const assignment = invoke({
-        cfg,
-        client: client("profile-viewer"),
-        request: { key: sessionKey, owner: { type: "agent", id: "research" } },
-        authorizationOverride: {
-          assertCurrent: () => {
-            if (!requesterCurrent) {
-              throw new Error("assignment requester authority ended");
-            }
+  it.each([false, true])(
+    "serializes assignment and checks queued requester authority (revoked=%s)",
+    async (revokeRequester) => {
+      await withSessionMutationState(async (state) => {
+        const handoff = revokeRequester ? "revoked-handoff" : "lifecycle-handoff";
+        const sessionKey = `agent:main:${handoff}`;
+        const sessionId = `session-${handoff}`;
+        await upsertSessionEntryCore(
+          { agentId: "main", env: state.env, sessionKey },
+          {
+            sessionId,
+            updatedAt: 1,
+            visibility: "shared",
+            createdActor: { type: "human", source: "profile", id: "profile-creator" },
           },
-          assertTargetCurrent: () => {},
-        },
+        );
+        const cfg = {
+          agents: { ownership: "explicit", entries: { main: {}, research: {} } },
+        } as OpenClawConfig;
+        const target = resolveSessionSharingTarget({ cfg, sessionKey, agentId: "main" });
+        if (!target) {
+          throw new Error("expected lifecycle assignment target");
+        }
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const lifecycle = runExclusiveSessionLifecycleMutation("assign-owner", {
+          scope: target.storePath,
+          identities: [target.storeKey, sessionId],
+          run: async () => {
+            entered.resolve();
+            await release.promise;
+          },
+        });
+        await entered.promise;
+        let requesterCurrent = true;
+        const assignment = invoke({
+          cfg,
+          client: client("profile-viewer"),
+          request: { key: sessionKey, owner: { type: "agent", id: "research" } },
+          ...(revokeRequester
+            ? {
+                authorizationOverride: {
+                  assertCurrent: () => {
+                    if (!requesterCurrent) {
+                      throw new Error("assignment requester authority ended");
+                    }
+                  },
+                  assertTargetCurrent: () => {},
+                },
+              }
+            : {}),
+        });
+        try {
+          await expect(
+            Promise.race([
+              assignment.then(() => "settled" as const),
+              new Promise<"blocked">((resolve) => {
+                setImmediate(() => resolve("blocked"));
+              }),
+            ]),
+          ).resolves.toBe("blocked");
+          expect(
+            loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
+          ).toBeUndefined();
+          if (revokeRequester) {
+            requesterCurrent = false;
+          }
+        } finally {
+          release.resolve();
+          await lifecycle;
+        }
+        if (revokeRequester) {
+          await expect(assignment).rejects.toThrow("assignment requester authority ended");
+          expect(
+            loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
+          ).toBeUndefined();
+        } else {
+          await expect(assignment).resolves.toMatchObject({
+            responses: [[true, { owner: { actor: { type: "agent", id: "research" } } }, undefined]],
+          });
+        }
       });
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      requesterCurrent = false;
-      release.resolve();
-      await lifecycle;
-      await expect(assignment).rejects.toThrow("assignment requester authority ended");
-      expect(
-        loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
-      ).toBeUndefined();
-    });
-  });
+    },
+  );
 
-  it("records the trusted in-process agent tool caller as the assigning agent", async () => {
+  it("assigns an agent-created session to a human without changing its provenance", async () => {
     await withSessionMutationState(async (state) => {
       const sessionKey = "agent:main:handoff";
+      const ownerProfile = ensureProfileForEmail("requester@example.test");
       await upsertSessionEntryCore(
         { agentId: "main", env: state.env, sessionKey },
         {
           sessionId: "session-handoff",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: "profile-creator" },
+          createdVia: "spawn",
+          createdActor: { type: "agent", id: "main" },
+          createdAt: 1,
+          parentSessionKey: "agent:main:main",
         },
       );
       const cfg = {
         agents: {
-          list: [
-            { id: "main", default: true },
-            { id: "research", identity: { name: "Research" } },
-          ],
+          entries: {
+            main: {},
+            research: { identity: { name: "Research" } },
+          },
         },
       } as OpenClawConfig;
       const requestContext = context(cfg);
       await expect(
         dispatchGatewayMethodInProcess(
           "sessions.assignOwner",
-          { key: sessionKey, owner: { type: "agent", id: "research" } },
+          { key: sessionKey, owner: { type: "human", id: ownerProfile.id } },
           {
             forceSyntheticClient: true,
             agentToolCaller: {
@@ -801,7 +762,7 @@ describe("sessions.assignOwner", () => {
         ok: true,
         key: sessionKey,
         owner: {
-          actor: { type: "agent", id: "research", label: "Research" },
+          actor: { type: "human", id: ownerProfile.id },
           assignedBy: { type: "agent", id: "main" },
         },
       });
@@ -809,8 +770,15 @@ describe("sessions.assignOwner", () => {
       expect(
         loadSessionEntry({ agentId: "main", env: state.env, sessionKey })?.owner,
       ).toMatchObject({
-        actor: { type: "agent", id: "research" },
+        actor: { type: "human", id: ownerProfile.id },
         assignedBy: { type: "agent", id: "main" },
+      });
+      expect(loadSessionEntry({ agentId: "main", env: state.env, sessionKey })).toMatchObject({
+        createdVia: "spawn",
+        createdActor: { type: "agent", id: "main" },
+        createdAt: 1,
+        parentSessionKey: "agent:main:main",
+        visibility: "shared",
       });
     });
   });
@@ -831,10 +799,10 @@ describe("sessions.assignOwner", () => {
         );
         const cfg = {
           agents: {
-            list: [
-              { id: "main", default: true },
-              { id: "research", identity: { name: "Research" } },
-            ],
+            entries: {
+              main: {},
+              research: { identity: { name: "Research" } },
+            },
           },
         } as OpenClawConfig;
         vi.spyOn(Date, "now").mockReturnValue(4242);
@@ -916,7 +884,7 @@ describe("sessions.assignOwner", () => {
         },
       );
       const cfg = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: { entries: { main: {}, research: {} } },
       } as OpenClawConfig;
       const request = { key: sessionKey, owner: { type: "agent", id: "research" } };
       const hidden = await invoke({ cfg, client: client("profile-viewer"), request });

@@ -13,6 +13,7 @@ import {
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { registerCurrentCoreServiceReceiptTests } from "./update-command-current-core-service-receipt.test-support.js";
 import {
   createManagedServiceIdentityFixture,
   registerServiceInstallationConvergenceTests,
@@ -179,6 +180,10 @@ describe("successful update finalization ordering", () => {
   });
 
   registerForegroundFinalizationTests({ tempDirs, mocks });
+  registerCurrentCoreServiceReceiptTests({
+    makeHome: () => tempDirs.make("current-core-service-receipt-"),
+    mocks,
+  });
   registerServiceInstallationConvergenceTests(() => tempDirs.make("update-install-drift-"), mocks);
 
   it("keeps an absent service out of already-current maintenance steps", async () => {
@@ -805,7 +810,10 @@ describe("successful update finalization ordering", () => {
           ...(restartFailed ? ["rollback"] : []),
         ]);
         expect(mocks.stopService).not.toHaveBeenCalled();
-        expect(oldRecovery.restore).toHaveBeenCalledWith(true, expect.any(Function), undefined);
+        expect(oldRecovery.restore.mock.lastCall?.slice(0, 2)).toEqual([
+          true,
+          expect.any(Function),
+        ]);
         expect(oldRecovery.complete).toHaveBeenLastCalledWith(outcome !== "unverified");
         expect(windowsEvents.at(-1)).toBe("old-complete");
         expect(getUpdateRun(run.runId, { env: serviceEnv })).toMatchObject({

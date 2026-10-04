@@ -1,6 +1,3 @@
-/**
- * Coordinates provider auth, profile rotation, and runtime auth refresh.
- */
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import type { Model } from "../../../llm/types.js";
@@ -15,14 +12,11 @@ import {
   resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { OAuthRefreshFailureError } from "../../auth-profiles/oauth-refresh-failure.js";
-import {
-  classifyFailoverReason,
-  isFailoverErrorMessage,
-  type FailoverReason,
-} from "../../embedded-agent-helpers.js";
+import { classifyFailoverReason } from "../../embedded-agent-helpers.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldUseTransientCooldownProbeSlot } from "../../failover-policy.js";
 import { getFailoverErrorCode } from "../../failover/error.js";
+import type { FailoverReason } from "../../failover/signal.js";
 import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { resolveProviderModelAuthPolicy } from "../../model-auth-policy.js";
 import {
@@ -32,10 +26,8 @@ import {
 } from "../../model-auth.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import { providerModelRouteAcceptsAuthMode } from "../../provider-model-route-auth.js";
-import {
-  applyPreparedRuntimeAuthToModel,
-  type ModelProviderRequestTransportOverrides,
-} from "../../provider-request-config.js";
+import { applyPreparedRuntimeAuthToModel } from "../../provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "../../provider-request-config.types.js";
 import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-protection.js";
 import { unwrapSecretSentinelsForProviderEgress } from "../../provider-secret-egress.js";
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
@@ -156,19 +148,6 @@ export function createEmbeddedRunAuthController(params: {
   const baseRuntimeModel = state.models.runtime;
   const baseEffectiveModel = state.models.effective;
 
-  const commitPreparedModel = (
-    preparedModel:
-      | Awaited<ReturnType<NonNullable<typeof params.prepareModelForAuthProfile>>>
-      | undefined,
-  ) => {
-    preparedModel?.commit();
-    if (preparedModel?.authRequirement) {
-      return;
-    }
-    state.models.runtime = baseRuntimeModel;
-    state.models.effective = baseEffectiveModel;
-  };
-
   const applyPreparedRuntimeRequestOverrides = (paramsForApply: {
     runtimeModel: Model;
     preparedAuth: {
@@ -256,8 +235,7 @@ export function createEmbeddedRunAuthController(params: {
     const refreshGeneration = runtimeAuthState.generation;
     const refreshProfileId = runtimeAuthState.profileId;
     const refreshPromise: Promise<void> = (async () => {
-      const currentRuntimeAuthState = state.runtimeAuthState;
-      const sourceApiKey = currentRuntimeAuthState?.sourceApiKey.trim() ?? "";
+      const sourceApiKey = runtimeAuthState.sourceApiKey.trim();
       if (!sourceApiKey) {
         throw new Error(`Runtime auth refresh requires a source credential.`);
       }
@@ -266,8 +244,8 @@ export function createEmbeddedRunAuthController(params: {
       const preparedAuth = await prepareRuntimeAuthForModel({
         runtimeModel,
         apiKey: sourceApiKey,
-        authMode: currentRuntimeAuthState?.authMode ?? "unknown",
-        profileId: currentRuntimeAuthState?.profileId,
+        authMode: runtimeAuthState.authMode,
+        profileId: runtimeAuthState.profileId,
       });
       if (!preparedAuth?.apiKey) {
         throw new Error(
@@ -365,26 +343,17 @@ export function createEmbeddedRunAuthController(params: {
           if (activeRuntimeAuthState) {
             activeRuntimeAuthState.refreshTimer = retryTimer;
           }
-          if (state.runtimeAuthRefreshCancelled && activeRuntimeAuthState) {
-            clearTimeout(retryTimer);
-            activeRuntimeAuthState.refreshTimer = undefined;
-          }
         });
     }, delayMs);
     runtimeAuthState.refreshTimer = timer;
-    if (state.runtimeAuthRefreshCancelled) {
-      clearTimeout(timer);
-      runtimeAuthState.refreshTimer = undefined;
-    }
   };
 
   const resolveAuthProfileFailoverReason = (failoverParams: {
     allInCooldown: boolean;
     message: string;
-    profileIds?: Array<string | undefined>;
   }): FailoverReason => {
     if (failoverParams.allInCooldown) {
-      const profileIds = (failoverParams.profileIds ?? params.profileCandidates).filter(
+      const profileIds = params.profileCandidates.filter(
         (id): id is string => typeof id === "string" && id.length > 0,
       );
       return (
@@ -394,10 +363,7 @@ export function createEmbeddedRunAuthController(params: {
         }) ?? "unknown"
       );
     }
-    const classified = classifyFailoverReason(failoverParams.message, {
-      provider: params.provider,
-    });
-    return classified ?? "auth";
+    return classifyFailoverReason(failoverParams.message, { provider: params.provider }) ?? "auth";
   };
 
   const recordOAuthRefreshFailure = async (
@@ -457,7 +423,6 @@ export function createEmbeddedRunAuthController(params: {
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
-      profileIds: params.profileCandidates,
     });
     const message =
       failoverParams.message?.trim() ||
@@ -466,9 +431,6 @@ export function createEmbeddedRunAuthController(params: {
         reason,
         provider,
         allInCooldown: failoverParams.allInCooldown,
-        causeText: failoverParams.error
-          ? formatErrorMessage(failoverParams.error).trim()
-          : undefined,
         recoveryHint: buildProviderAuthRecoveryHint({
           provider,
           config: params.config,
@@ -544,7 +506,11 @@ export function createEmbeddedRunAuthController(params: {
       const runtimeModel = preparedModel?.runtimeModel ?? state.models.runtime;
       throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
-    commitPreparedModel(preparedModel);
+    preparedModel?.commit();
+    if (!preparedModel?.authRequirement) {
+      state.models.runtime = baseRuntimeModel;
+      state.models.effective = baseEffectiveModel;
+    }
     const runtimeModel = state.models.runtime;
     // AWS's default credential chain has no explicit key. The sentinel admits
     // runtime auth preparation or, without a plugin token, SDK request signing.
@@ -673,9 +639,6 @@ export function createEmbeddedRunAuthController(params: {
     retried: boolean,
   ): Promise<boolean> => {
     if (!state.runtimeAuthState || retried) {
-      return false;
-    }
-    if (!isFailoverErrorMessage(errorText, { provider: params.provider })) {
       return false;
     }
     if (classifyFailoverReason(errorText, { provider: params.provider }) !== "auth") {

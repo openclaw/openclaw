@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SecretInput } from "../../../config/types.secrets.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveManifestDeprecatedProviderAuthChoice } from "../../../plugins/provider-auth-choices.js";
-import { normalizeSecretInputModeInput } from "../../../plugins/provider-auth-input.js";
 import type {
   ProviderNonInteractiveApiKeyCredentialParams,
   ProviderNonInteractiveApiKeyResult,
@@ -47,22 +46,13 @@ export async function applyNonInteractiveAuthChoice(params: {
     env: process.env,
   });
   const nextConfig = params.nextConfig;
-  const requestedSecretInputMode = normalizeSecretInputModeInput(opts.secretInputMode);
-  if (opts.secretInputMode && !requestedSecretInputMode) {
-    rejectOnboardingOption(
-      opts,
-      runtime,
-      `Invalid --secret-input-mode. Use "plaintext" or "ref", or run ${formatCliCommand("openclaw onboard")} for interactive setup.`,
-    );
-    return null;
-  }
   const toStoredSecretInput = (paramsLocal: {
     resolved: ProviderNonInteractiveApiKeyResult;
     provider: string;
     envVarName?: string;
   }): SecretInput | null => {
     const { resolved } = paramsLocal;
-    if (requestedSecretInputMode !== "ref") {
+    if (opts.secretInputMode !== "ref") {
       return resolved.key;
     }
     if (resolved.source !== "env" || !resolved.envVarName) {
@@ -96,7 +86,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime,
       agentDir: params.target.agentDir,
       workspaceDir: params.target.workspaceDir,
-      secretInputMode: requestedSecretInputMode,
+      secretInputMode: opts.secretInputMode,
       json: opts.json,
     });
   const toApiKeyCredential = (
@@ -153,7 +143,6 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   const validAuthChoices = formatAuthChoiceChoicesForCli({
-    includeSkip: true,
     config: nextConfig,
     workspaceDir: params.target.workspaceDir,
     env: process.env,
@@ -223,7 +212,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       let customApiKeyInput: SecretInput | undefined;
       if (
         resolvedCustomApiKey &&
-        (requestedSecretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
+        (opts.secretInputMode !== "ref" || resolvedCustomApiKey.source !== "profile")
       ) {
         // Profile ownership stays in the auth store; serializing its resolved
         // value would expose plaintext and overwrite an existing SecretRef.

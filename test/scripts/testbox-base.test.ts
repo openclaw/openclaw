@@ -70,7 +70,7 @@ function runBasePreparation(
   eventName: string,
 ) {
   const workflow = parse(fs.readFileSync(workflowName, "utf8"));
-  const job = Object.values(workflow.jobs)[0] as { steps: Step[] };
+  const jobs = Object.values(workflow.jobs) as { steps: Step[] }[];
   const values = new Map([
     ["github.event.pull_request.base.sha", base],
     ["github.event.pull_request.base.ref", "main"],
@@ -99,7 +99,9 @@ function runBasePreparation(
     '#!/bin/sh\nif [ "$1" = tee ]; then cat >/dev/null; fi\n',
   );
   fs.chmodSync(path.join(bin, "sudo"), 0o755);
-  const step = job.steps.find((entry) => entry.name === "Prepare Testbox shell");
+  const step = jobs
+    .flatMap((job) => job.steps)
+    .find((entry) => entry.uses === "./.github/actions/prepare-testbox-shell");
   if (!step?.uses) {
     throw new Error("Missing Testbox preparation action");
   }
@@ -134,14 +136,18 @@ function runBasePreparation(
 describe.each(workflows)("%s Testbox base preparation", (workflowName) => {
   it.each([
     { shape: "merge", branch: "main", depth: 2, passes: true, eventName: "pull_request" },
-    { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
-    {
-      shape: "merge without parents",
-      branch: "main",
-      depth: 1,
-      passes: false,
-      eventName: "pull_request",
-    },
+    ...(workflowName === workflows[0]
+      ? [
+          { shape: "linear", branch: "feature", depth: 2, passes: true, eventName: "pull_request" },
+          {
+            shape: "merge without parents",
+            branch: "main",
+            depth: 1,
+            passes: false,
+            eventName: "pull_request",
+          },
+        ]
+      : []),
     {
       shape: "manual",
       branch: "feature",

@@ -3,6 +3,7 @@ import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runti
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import {
   WHATSAPP_CONNECTION_CONTROLLER_CAPABILITY,
   WHATSAPP_CONNECTION_OWNER_PENDING_CAPABILITY,
@@ -54,7 +55,6 @@ type TimerHandle = ReturnType<typeof setInterval>;
 type WaSocket = Awaited<ReturnType<typeof createWaSocket>>;
 
 export type ManagedWhatsAppListener = ActiveWebListener & {
-  close?: () => Promise<void>;
   onClose?: Promise<WebListenerCloseReason>;
   signalClose?: (reason?: WebListenerCloseReason) => void;
 };
@@ -531,9 +531,7 @@ export class WhatsAppConnectionController {
   }
 
   getSelfIdentity(): WhatsAppSelfIdentity | null {
-    const user = this.socketRef.current?.user as
-      | { id?: string | null; lid?: string | null }
-      | undefined;
+    const user = this.socketRef.current?.user;
     if (!user) {
       return null;
     }
@@ -942,19 +940,11 @@ export class WhatsAppConnectionController {
 
   private async waitForSetupStep<T>(task: Promise<T>): Promise<T> {
     this.throwIfSetupStopped();
-    const signal = this.setupAbortController.signal;
-    let onAbort: (() => void) | undefined;
-    const aborted = new Promise<never>((_resolve, reject) => {
-      onAbort = () => reject(stoppedControllerError());
-      signal.addEventListener("abort", onAbort, { once: true });
-    });
-    try {
-      return await Promise.race([task, aborted]);
-    } finally {
-      if (onAbort) {
-        signal.removeEventListener("abort", onAbort);
-      }
-    }
+    return await racePromiseWithAbortSignal(
+      task,
+      this.setupAbortController.signal,
+      stoppedControllerError,
+    );
   }
 
   private async ensureConnectionOwnership(): Promise<void> {

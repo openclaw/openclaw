@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { Model } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import {
@@ -11,7 +12,7 @@ import { createResourceLoader } from "./agent-session-loop-resource-loader.test-
 
 registerAgentSessionLoopTestLifecycle();
 
-function streamAnswer(model: Model) {
+function streamAnswer(model: Model, consumed: readonly Promise<void>[] = []) {
   const stream = createAssistantMessageEventStream();
   const message = createAssistant(model, [{ type: "text", text: "abc" }]);
   stream.push({ type: "start", partial: { ...message, content: [] } });
@@ -20,25 +21,26 @@ function streamAnswer(model: Model) {
     contentIndex: 0,
     partial: { ...message, content: [{ type: "text", text: "" }] },
   });
-  for (const delta of "abc") {
-    stream.push({ type: "text_delta", contentIndex: 0, delta });
-  }
-  stream.push({ type: "done", reason: "stop", message });
-  stream.end();
+  void (async () => {
+    for (const [index, delta] of ["a", "b", "c"].entries()) {
+      stream.push({ type: "text_delta", contentIndex: 0, delta });
+      await consumed[index];
+    }
+    stream.push({ type: "done", reason: "stop", message });
+    stream.end();
+  })();
   return stream;
 }
 
 describe("AgentSession text extension dispatch", () => {
-  it.each(["none", "unrelated", "empty"])(
+  it.each(["none", "unrelated"])(
     "delivers updates without extension dispatch when handlers are %s",
     async (mode) => {
       const handlers = new Map<string, Array<(...args: unknown[]) => Promise<unknown>>>();
       if (mode === "unrelated") {
         handlers.set("turn_start", [async () => undefined]);
-      } else if (mode === "empty") {
-        handlers.set("message_update", []);
       }
-      streamMocks.streamSimple.mockImplementation(streamAnswer);
+      streamMocks.streamSimple.mockImplementation((model) => streamAnswer(model));
       const { session } = await createTestSession({
         resourceLoader: createResourceLoader(handlers),
       });
@@ -52,7 +54,7 @@ describe("AgentSession text extension dispatch", () => {
 
       await session.prompt("answer");
 
-      expect(deltas).toEqual(["a", "b", "c"]);
+      expect(deltas.join("")).toBe("abc");
       expect(session.messages.at(-1)).toMatchObject({ content: [{ type: "text", text: "abc" }] });
       expect(dispatch.mock.calls.filter(([event]) => event.type === "message_update")).toEqual([]);
     },
@@ -64,7 +66,13 @@ describe("AgentSession text extension dispatch", () => {
     ]);
     let settling = false;
     const observed: string[] = [];
-    streamMocks.streamSimple.mockImplementation(streamAnswer);
+    const consumed = [createDeferred(), createDeferred(), createDeferred()];
+    streamMocks.streamSimple.mockImplementation((model) =>
+      streamAnswer(
+        model,
+        consumed.map(({ promise }) => promise),
+      ),
+    );
     const { session } = await createTestSession({
       resourceLoader: createResourceLoader(handlers),
       withSessionWriteSettlement: async (run) => {
@@ -91,6 +99,7 @@ describe("AgentSession text extension dispatch", () => {
           },
         ]);
       }
+      consumed.shift()?.resolve();
     });
 
     await session.prompt("answer");

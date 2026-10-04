@@ -27,13 +27,7 @@ export function materializeAuthStorageStore(
                 isDeepStrictEqual(candidate.tokenRef, credential.tokenRef)
               : false,
         );
-      const needsMaterializedRef =
-        (credential.type === "api_key" && Boolean(credential.keyRef)) ||
-        (credential.type === "token" && Boolean(credential.tokenRef));
-      return [
-        profileId,
-        needsMaterializedRef && runtimeCredential ? runtimeCredential : credential,
-      ];
+      return [profileId, runtimeCredential ?? credential];
     }),
   );
   return { ...store, profiles };

@@ -67,7 +67,6 @@ describe("clearRemovedQueuedAuthProfiles", () => {
     queue.summarySources.push(source(summarized));
     queue.summaryElisions.push({
       contextKey: "context",
-      count: 1,
       sources: [source(elided)],
       summaryLines: ["pending summary"],
       sourceRefs: new WeakMap(),
@@ -120,7 +119,6 @@ describe("refreshQueuedFollowupSession", () => {
     queue.summarySources.push(summarizedRun);
     queue.summaryElisions.push({
       contextKey: "context",
-      count: 2,
       sources: [
         {
           prompt: "elided summary",
@@ -141,34 +139,17 @@ describe("refreshQueuedFollowupSession", () => {
       nextAuthProfileIdSource: undefined,
     });
 
-    expect(queue.lastRun).toEqual({
+    const expectedRun = {
       ...makeRun(),
       provider: "openai",
       model: "gpt-4o",
       authProfileId: undefined,
       authProfileIdSource: undefined,
-    });
-    expect(queue.items[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(queue.summarySources[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual({
-      ...makeRun(),
-      provider: "openai",
-      model: "gpt-4o",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
+    };
+    expect(queue.lastRun).toEqual(expectedRun);
+    expect(queue.items[0]?.run).toEqual(expectedRun);
+    expect(queue.summarySources[0]?.run).toEqual(expectedRun);
+    expect(queue.summaryElisions[0]?.sources[0]?.run).toEqual(expectedRun);
   });
 
   it("retargets queued runs with user model override source", () => {
@@ -276,57 +257,15 @@ describe("refreshQueuedFollowupSession", () => {
   });
 
   it.each([
-    {
-      source: "turn",
-      current: "high",
-      stored: "off",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "high",
-    },
-    {
-      source: "turn",
-      current: "off",
-      stored: "high",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "low",
-    },
-    {
-      source: "default",
-      current: "high",
-      stored: "high",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "medium",
-    },
-    {
-      source: undefined,
-      current: "high",
-      stored: "low",
-      model: "gpt-5.6-sol",
-      reasoning: true,
-      expected: "low",
-    },
-    {
-      source: "turn",
-      current: "ultra",
-      stored: "off",
-      model: "gpt-5.6-luna",
-      reasoning: true,
-      expected: "ultra",
-    },
-    {
-      source: "turn",
-      current: "high",
-      stored: "off",
-      model: "non-reasoner",
-      reasoning: false,
-      expected: "off",
-    },
+    ["turn", "high", "off", "gpt-5.6-sol", true, "high"],
+    ["turn", "off", "high", "gpt-5.6-sol", true, "low"],
+    ["default", "high", "high", "gpt-5.6-sol", true, "medium"],
+    [undefined, "high", "low", "gpt-5.6-sol", true, "low"],
+    ["turn", "ultra", "off", "gpt-5.6-luna", true, "ultra"],
+    ["turn", "high", "off", "non-reasoner", false, "off"],
   ] as const)(
-    "retargets $source thinking $current with stored $stored to $model as $expected",
-    ({ source, current, stored, model, reasoning, expected }) => {
+    "retargets %s thinking %s with stored %s to %s (reasoning %s) as %s",
+    (source, current, stored, model, reasoning, expected) => {
       const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
       const runs = Array.from({ length: 4 }, () => ({
         ...makeRun(),
@@ -343,7 +282,6 @@ describe("refreshQueuedFollowupSession", () => {
       queue.summarySources.push(wrap(runs[2]!));
       queue.summaryElisions.push({
         contextKey: "elided",
-        count: 1,
         sources: [wrap(runs[3]!)],
         summaryLines: ["queued"],
         sourceRefs: new WeakMap(),
@@ -523,7 +461,6 @@ describe("getFollowupQueue", () => {
     ] as const) {
       queue.summaryElisions.push({
         contextKey,
-        count,
         sources: Array.from({ length: count }, () => ({
           prompt: contextKey,
           enqueuedAt: Date.now(),

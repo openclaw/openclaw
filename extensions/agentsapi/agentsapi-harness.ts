@@ -6,10 +6,12 @@ import {
   type AgentHarnessAttemptParamsV2,
   type AgentHarnessV2,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { captureNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import { prepareNativeSessionGenerationAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import { createAgentsApiBindings } from "./agentsapi-bindings.js";
+import { runAgentsApiIsolatedCompletion } from "./agentsapi-isolated-completion.js";
+import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
 
 const AGENTS_API_NATIVE_TOOL_REQUIREMENTS = [
   "exec",
@@ -26,6 +28,8 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
   let disposed = false;
   let closing = false;
   const runningSessions = new Map<string, number>();
+  const isolatedRuns = new Map<AbortController, Promise<unknown>>();
+  const promptHistories: AgentsApiPromptHistories = new WeakMap();
   let bindings: ReturnType<typeof createAgentsApiBindings> | undefined;
   const getBindings = () => (bindings ??= createAgentsApiBindings(runtime));
   const assertCurrent = () => {
@@ -74,13 +78,31 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       }
       return { supported: true };
     },
+    runIsolatedCompletionV2: (params) => {
+      assertCurrent();
+      if (closing) {
+        throw new Error("Agents API harness is closing");
+      }
+      const controller = new AbortController();
+      const pending = runAgentsApiIsolatedCompletion(
+        {
+          ...params,
+          abortSignal: params.abortSignal
+            ? AbortSignal.any([params.abortSignal, controller.signal])
+            : controller.signal,
+        },
+        assertCurrent,
+      );
+      isolatedRuns.set(controller, pending);
+      return pending.finally(() => isolatedRuns.delete(controller));
+    },
     runAttempt: async (params) => {
       assertCurrent();
       if (closing) {
         throw new Error("Agents API harness is closing");
       }
       const target = validateAgentsApiInput(params);
-      const authority = captureNativeSessionGenerationAuthority({
+      const captured = await prepareNativeSessionGenerationAuthority({
         target,
         config: params.config,
         storePath: target.storePath,
@@ -93,12 +115,13 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
             `Agents API session generation is no longer current: ${sessionId}`,
           ),
       });
-      authority.assertCurrent();
+      const authority = captured.authority;
+      authority.assertLegacyCurrent();
       runningSessions.set(params.sessionId, (runningSessions.get(params.sessionId) ?? 0) + 1);
       try {
         return await getBindings().withSession(
           params.sessionId,
-          () => authority.assertCurrent(),
+          () => authority.assertLegacyCurrent(),
           (binding, bind, assertLeaseCurrent) => {
             if (closing) {
               throw new Error("Agents API harness is closing");
@@ -108,7 +131,7 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
               binding,
               bind,
               () => {
-                authority.assertCurrent();
+                authority.assertLegacyCurrent();
                 assertLeaseCurrent();
               },
               () => {
@@ -116,6 +139,8 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
                 assertLeaseCurrent();
               },
               target,
+              () => runtime.config.current().plugins?.entries?.agentsapi?.config,
+              promptHistories,
             );
           },
         );
@@ -147,6 +172,10 @@ export function createAgentsApiHarness(runtime: PluginRuntime): AgentHarnessV2 {
       ),
     dispose: async () => {
       closing = true;
+      for (const controller of isolatedRuns.keys()) {
+        controller.abort();
+      }
+      await Promise.allSettled(isolatedRuns.values());
       await Promise.all(
         [...runningSessions.keys()].map((sessionId) =>
           abortAndDrainAgentHarnessRun({ sessionId, settleMs: 95_000 }),
@@ -173,38 +202,27 @@ function validateAgentsApiInput(params: AgentHarnessAttemptParamsV2) {
     AGENTS_API_NATIVE_TOOL_REQUIREMENTS.some((name) => !runtimeToolAllowed(name))
   ) {
     throw new AgentHarnessPreflightError(
-      "Agents API cannot enforce this run's restrictions on hosted shell, file, or web-search tools.",
-      { scope: "harness" },
+      "Agents API cannot enforce this run's restrictions on native shell, file, or web-search tools.",
+      {
+        scope: "harness",
+        userMessage:
+          "Agents API cannot run with this chat's tool restrictions because it cannot enforce them on native tools. Choose a harness that supports these restrictions or update the tool settings.",
+      },
     );
   }
-  const target = params.sessionTarget;
-  if (
-    !target?.agentId ||
-    !target.sessionId ||
-    !target.sessionKey ||
-    !target.storePath ||
-    target.sessionId !== params.sessionId ||
-    target.agentId !== params.agentId ||
-    target.sessionKey !== params.sessionKey
-  ) {
-    throw new Error("Agents API requires a matching host-prepared session target");
-  }
+  const target = requireAgentsApiSessionTarget(params);
   if (!params.resolvedApiKey) {
     throw new Error("Agents API MVP requires an OpenAI API key");
   }
-  if (params.images?.length || params.sandbox) {
-    throw new Error(
-      "Agents API MVP supports text and its hosted VM only; images and Gateway sandbox placement are unsupported",
-    );
+  if (params.sandbox) {
+    throw new AgentHarnessPreflightError("Agents API does not support Gateway sandbox placement.", {
+      scope: "harness",
+      userMessage:
+        "Agents API cannot run in the configured Gateway sandbox. Choose a harness that supports Gateway sandbox placement before retrying.",
+    });
   }
   if (params.contextEngine && params.contextEngine.info.id !== "legacy") {
     throw new Error("Agents API MVP currently supports only the default legacy context engine");
   }
-  return {
-    ...target,
-    agentId: target.agentId,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-    storePath: target.storePath,
-  };
+  return target;
 }

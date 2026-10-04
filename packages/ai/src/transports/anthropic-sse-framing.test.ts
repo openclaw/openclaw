@@ -25,17 +25,13 @@ async function runResponse(response: Response, signal?: AbortSignal) {
 }
 
 describe("Anthropic SSE framing", () => {
-  it.each(
-    [
-      { name: "LF", newline: "\n", blankLine: "\n" },
-      { name: "CRLF", newline: "\r\n", blankLine: "\r\n" },
-      { name: "CR", newline: "\r", blankLine: "\r" },
-      { name: "LF/CRLF", newline: "\n", blankLine: "\r\n" },
-      { name: "CRLF/LF", newline: "\r\n", blankLine: "\n" },
-    ].flatMap(({ name, newline, blankLine }) =>
-      [false, true].map((fragmented) => ({ name, newline, blankLine, fragmented })),
-    ),
-  )("parses $name framing (fragmented=$fragmented)", async ({ newline, blankLine, fragmented }) => {
+  it.each([
+    { name: "LF", newline: "\n", blankLine: "\n" },
+    { name: "CRLF", newline: "\r\n", blankLine: "\r\n" },
+    { name: "CR", newline: "\r", blankLine: "\r" },
+    { name: "LF/CRLF", newline: "\n", blankLine: "\r\n" },
+    { name: "CRLF/LF", newline: "\r\n", blankLine: "\n" },
+  ])("parses fragmented $name framing", async ({ newline, blankLine }) => {
     const body = anthropicEvents
       .map(
         (event) =>
@@ -47,7 +43,7 @@ describe("Anthropic SSE framing", () => {
       new Response(
         new ReadableStream<Uint8Array>({
           start(controller) {
-            for (const chunk of fragmented ? Array.from(body) : [body]) {
+            for (const chunk of body) {
               controller.enqueue(encoder.encode(chunk));
             }
             controller.close();

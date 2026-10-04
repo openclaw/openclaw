@@ -116,6 +116,11 @@ type ChatScrollOptions = {
 type PendingChatScroll = { manual: boolean; cancel: () => void };
 const pendingChatScrolls = new WeakMap<ChatScrollHost, PendingChatScroll>();
 
+/** A queued reader command owns the next viewport movement, including geometric follow. */
+export function canAutoFollowChat(host: ChatScrollHost): boolean {
+  return !host.chatFollowLocked && !pendingChatScrolls.get(host)?.manual;
+}
+
 export function cancelChatScroll(host: ChatScrollHost): void {
   pendingChatScrolls.get(host)?.cancel();
 }
@@ -217,13 +222,23 @@ function queueChatScroll(
   };
   pendingChatScrolls.set(host, request);
   const enqueue = (complete?: () => void) => {
-    frame = requestAnimationFrame(() => {
+    const apply = () => {
       if (pendingChatScrolls.get(host) !== request) {
         return;
       }
       pendingChatScrolls.delete(host);
       complete?.();
       applyChatScroll(host, force, smooth, options);
+    };
+    frame = requestAnimationFrame(() => {
+      // The composer viewport and appended rows commit their measured sizes in
+      // ResizeObserver after rAF. Starting a smooth send against their estimates
+      // makes the virtualizer snap to a revised target on its next frame.
+      if (request.manual && smooth && resolveScrollBehavior() === "smooth") {
+        frame = requestAnimationFrame(apply);
+      } else {
+        apply();
+      }
     });
     return request.cancel;
   };

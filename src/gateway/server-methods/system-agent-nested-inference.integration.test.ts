@@ -5,7 +5,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
@@ -19,8 +23,14 @@ import {
 } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { runSystemAgentTurnWithDeps } from "../../system-agent/agent-turn.test-support.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
@@ -80,7 +90,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     for (const engine of engines.splice(0)) {
       await engine.dispose();
     }
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
@@ -242,9 +254,9 @@ async function createConversation() {
 }
 
 describe("system-agent nested inference through real Gateway admission", () => {
-  it.each(["chat", "greeting"] as const)(
+  it.for(["chat", "greeting"] as const)(
     "completes %s while its parent occupies the only main slot",
-    async (entry) => {
+    async (entry, { signal }) => {
       const conversation = await createConversation();
       expect(getCommandLaneSnapshot(CommandLane.Main).maxConcurrent).toBe(1);
       const releaseParent = createDeferred();
@@ -260,10 +272,14 @@ describe("system-agent nested inference through real Gateway admission", () => {
         throw new Error("gateway handler did not start");
       }
       try {
-        const observation = await withTestTimeout(
-          conversation.observed.promise,
-          2_000,
-          "fixture did not reach the real runner admission boundary",
+        // The parent holds the process-wide main lane until finally; bind the wait to the test.
+        const observation = await withinTest(
+          awaitGateBeforeSettlement(
+            conversation.observed.promise,
+            handler,
+            "fixture did not reach the real runner admission boundary",
+          ),
+          signal,
         );
         await new Promise<void>((resolve) => {
           setImmediate(resolve);

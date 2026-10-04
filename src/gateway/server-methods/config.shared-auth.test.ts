@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -251,7 +252,7 @@ describe("config shared auth disconnects", () => {
         !claimed && method !== "config.set" ? 1 : 0,
       );
       if (!claimed) {
-        expect(enforceGeneration).toHaveBeenCalledWith(nextConfig);
+        expect(enforceGeneration).toHaveBeenCalledWith(nextConfig, tokenAuthConfig("old-token"));
         expect(respond).toHaveBeenCalledBefore(enforceGeneration);
       }
     },
@@ -325,6 +326,43 @@ describe("config shared auth disconnects", () => {
     )(options);
     await flushConfigHandlerMicrotasks();
 
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "next-hash" }),
+      undefined,
+    );
+  });
+
+  it("withholds config acknowledgement until its restart sentinel write settles", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+    const started = createDeferred();
+    const release = createDeferred();
+    restartSentinelMocks.writeRestartSentinel.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.apply",
+      params: {
+        raw: JSON.stringify(tokenAuthConfig("new-token")),
+        baseHash: "base-hash",
+        restartDelayMs: 1000,
+      },
+    });
+    const handler = expectDefined(configHandlers["config.apply"], "config.apply handler");
+    const operation = Promise.resolve(handler(options));
+    try {
+      await awaitGateBeforeSettlement(
+        started.promise,
+        operation,
+        "Config did not reach sentinel persistence",
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await operation;
+    }
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ ok: true, hash: "next-hash" }),
@@ -530,7 +568,7 @@ describe("config shared auth disconnects", () => {
     expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("disconnects gateway-auth clients after an unclaimed trusted-proxy policy write responds", async () => {
+  it("leaves unclaimed trusted-proxy grant writes to per-client policy reconciliation", async () => {
     runtimeApplication.claimed = false;
     mockPreviousConfig(
       trustedProxyConfig({
@@ -539,7 +577,7 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { respond, disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
       {
         gateway: {
           auth: {
@@ -554,11 +592,10 @@ describe("config shared auth disconnects", () => {
     );
 
     expectNoDirectRestart();
-    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledBefore(disconnectClientsUsingSharedGatewayAuth);
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
-  it("disconnects gateway-auth clients after an unclaimed trusted-proxy source write responds", async () => {
+  it("does not revoke every shared-auth source after an unclaimed trusted-proxy transport write", async () => {
     runtimeApplication.claimed = false;
     mockPreviousConfig(
       trustedProxyConfig({
@@ -566,7 +603,7 @@ describe("config shared auth disconnects", () => {
       }),
     );
 
-    const { respond, disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
+    const { disconnectClientsUsingSharedGatewayAuth } = await runConfigPatch(
       {
         gateway: {
           trustedProxies: ["10.0.0.10"],
@@ -576,8 +613,7 @@ describe("config shared auth disconnects", () => {
     );
 
     expectNoDirectRestart();
-    expect(disconnectClientsUsingSharedGatewayAuth).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledBefore(disconnectClientsUsingSharedGatewayAuth);
+    expect(disconnectClientsUsingSharedGatewayAuth).not.toHaveBeenCalled();
   });
 
   it("does not disconnect gateway-auth clients when trusted-proxy lists are reordered", async () => {

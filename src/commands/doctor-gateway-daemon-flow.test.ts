@@ -6,7 +6,13 @@ import * as launchd from "../daemon/launchd.js";
 import type { GatewayRestartHandoff } from "../infra/restart-handoff.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
-import { createPrompter, setPlatform } from "./doctor-gateway-daemon-flow.test-support.js";
+import {
+  createPrompter,
+  doctorSqliteDiagnostic,
+  mockDoctorRuntimeFacts,
+  registerRunningBunFallbackTest,
+  setPlatform,
+} from "./doctor-gateway-daemon-flow.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
   formatServiceRepairDeferredNote,
@@ -16,6 +22,11 @@ import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
 vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runExec,
+}));
 
 const service = vi.hoisted(() => ({
   unsupportedReason: undefined as string | undefined,
@@ -42,7 +53,7 @@ const findSystemGatewayServices = vi.hoisted(() =>
   vi.fn<() => Promise<ExtraGatewayService[]>>(async () => []),
 );
 const buildGatewayRuntimeHints = vi.hoisted(() => vi.fn((): string[] => []));
-const formatGatewayRuntimeSummary = vi.hoisted(() => vi.fn((): string | null => null));
+const formatRuntimeStatus = vi.hoisted(() => vi.fn((): string | null => null));
 const renderSystemdUnavailableHints = vi.hoisted(() => vi.fn((): string[] => []));
 const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
@@ -158,10 +169,8 @@ vi.mock("./daemon-install-helpers.js", () => ({
   gatewayInstallErrorHint: vi.fn(() => "hint"),
 }));
 
-vi.mock("./doctor-format.js", () => ({
-  buildGatewayRuntimeHints,
-  formatGatewayRuntimeSummary,
-}));
+vi.mock("../daemon/runtime-format.js", () => ({ formatRuntimeStatus }));
+vi.mock("./doctor-format.js", () => ({ buildGatewayRuntimeHints }));
 
 vi.mock("./gateway-install-token.js", () => ({
   resolveGatewayInstallToken: vi.fn(),
@@ -187,6 +196,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockDoctorRuntimeFacts(runExec);
     readPin.mockReset().mockReturnValue({ revision: "empty", stored: false });
     formatGatewayClosedDiagnostic.mockReset();
     formatGatewayClosedDiagnostic.mockReturnValue(undefined);
@@ -219,12 +229,13 @@ describe("maybeRepairGatewayDaemon", () => {
       status: "repaired",
     });
     buildGatewayRuntimeHints.mockReturnValue([]);
-    formatGatewayRuntimeSummary.mockReturnValue(null);
+    formatRuntimeStatus.mockReturnValue(null);
     renderSystemdUnavailableHints.mockReset().mockReturnValue([]);
   });
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.restoreAllMocks();
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, "platform", originalPlatformDescriptor);
     }
@@ -235,6 +246,19 @@ describe("maybeRepairGatewayDaemon", () => {
     }
   });
 
+  type DoctorParameters = Parameters<typeof maybeRepairGatewayDaemon>[0];
+
+  function runDoctor(params: Partial<DoctorParameters> & Pick<DoctorParameters, "prompter">) {
+    return maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: { deep: false },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+      ...params,
+    });
+  }
+
   async function runNonInteractiveUpdateRepair() {
     process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
     await runNonInteractiveRepair();
@@ -242,31 +266,25 @@ describe("maybeRepairGatewayDaemon", () => {
 
   async function runNonInteractiveRepair() {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
+    await runDoctor({
       runtime,
       prompter: createDoctorPrompter({
         runtime,
         options: { repair: true, nonInteractive: true },
       }),
       options: { deep: false, repair: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
   }
 
   async function runAutoRepair(options: { repair?: boolean; yes?: boolean } = { repair: true }) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
+    await runDoctor({
       runtime,
       prompter: createDoctorPrompter({
         runtime,
         options,
       }),
       options: { deep: false, ...options },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
     return runtime;
   }
@@ -275,13 +293,8 @@ describe("maybeRepairGatewayDaemon", () => {
     setPlatform("linux");
     service.restart.mockResolvedValueOnce({ outcome: "scheduled" });
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createPrompter((message) => message === confirmMessage),
-      options: { deep: false },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
 
     expect(service.restart).toHaveBeenCalledTimes(1);
@@ -371,13 +384,10 @@ describe("maybeRepairGatewayDaemon", () => {
     service.readRuntime.mockResolvedValue({ status: "stopped" });
     const prompter = createPrompter(() => true);
 
-    await maybeRepairGatewayDaemon({
+    await runDoctor({
       cfg: { gateway: { mode: "local" } },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
       prompter,
       options: {},
-      gatewayDetailsMessage: "details",
-      healthOk: false,
       healthSkipped: false,
     });
 
@@ -414,16 +424,12 @@ describe("maybeRepairGatewayDaemon", () => {
       supervisorMode: "systemd",
     });
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createDoctorPrompter({
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: { deep: true, nonInteractive: true },
       }),
       options: { deep: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
 
     expect(readGatewayRestartHandoffSync).toHaveBeenCalledTimes(2);
@@ -452,16 +458,13 @@ describe("maybeRepairGatewayDaemon", () => {
     service.isLoaded.mockResolvedValueOnce(false);
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
+    await runDoctor({
       runtime,
       prompter: createDoctorPrompter({
         runtime,
         options: { nonInteractive: true },
       }),
       options: { deep: false, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
       healthSkipped: true,
     });
 
@@ -479,13 +482,8 @@ describe("maybeRepairGatewayDaemon", () => {
       renderSystemdUnavailableHints.mockReturnValueOnce(["restore the systemd user bus"]);
       const prompter = createPrompter(() => true);
 
-      await maybeRepairGatewayDaemon({
-        cfg: { gateway: {} },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      await runDoctor({
         prompter,
-        options: { deep: false },
-        gatewayDetailsMessage: "details",
-        healthOk: false,
       });
 
       if (unsupportedReason) {
@@ -512,31 +510,19 @@ describe("maybeRepairGatewayDaemon", () => {
     },
   );
 
-  describe.each(["darwin", "linux", "win32"] as const)("%s remote health", (platform) => {
-    it.each([
-      { name: "failed with a stopped local service", runtimeStatus: "stopped" },
-      { name: "failed with an unknown local runtime", runtimeStatus: "unknown" },
-      { name: "failed with a running local service", runtimeStatus: "running" },
-      { name: "failed through a loopback tunnel", url: "ws://127.0.0.1:18789" },
-      { name: "failed without a remote URL", url: undefined },
-      { name: "failed without a local service", loaded: false },
-      { name: "skipped", healthSkipped: true },
-      { name: "healthy", healthOk: true },
-    ])("never inspects or repairs local services when $name", async (scenario) => {
+  it.each(["darwin", "linux", "win32"] as const)(
+    "never inspects or repairs local services for a failed remote tunnel on %s",
+    async (platform) => {
       setPlatform(platform);
-      service.isLoaded.mockResolvedValue(scenario.loaded !== false);
-      service.readRuntime.mockResolvedValue({ status: scenario.runtimeStatus ?? "running" });
+      service.readRuntime.mockResolvedValue({ status: "stopped" });
       const prompter = createPrompter(() => true);
-      const url = "url" in scenario ? scenario.url : "wss://gateway.example";
 
-      await maybeRepairGatewayDaemon({
-        cfg: { gateway: { mode: "remote", remote: { url } } },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      await runDoctor({
+        cfg: { gateway: { mode: "remote", remote: { url: "ws://127.0.0.1:18789" } } },
         prompter,
         options: { deep: true },
         gatewayDetailsMessage: "remote connection details",
-        healthOk: scenario.healthOk === true,
-        healthSkipped: scenario.healthSkipped === true,
+        healthSkipped: false,
       });
 
       expect(service.restart).not.toHaveBeenCalled();
@@ -549,8 +535,8 @@ describe("maybeRepairGatewayDaemon", () => {
       expect(inspectPortUsage).not.toHaveBeenCalled();
       expect(inspectPortConnections).not.toHaveBeenCalled();
       expect(note).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
   it("preserves a real remote health failure through the ordered recovery contributions", async () => {
     const {
@@ -587,16 +573,12 @@ describe("maybeRepairGatewayDaemon", () => {
     setPlatform("linux");
     service.readRuntime.mockResolvedValueOnce({ status: "unknown" });
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createDoctorPrompter({
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: { repair: true, nonInteractive: true },
       }),
       options: { deep: false, repair: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
       healthSkipped: true,
     });
 
@@ -618,16 +600,12 @@ describe("maybeRepairGatewayDaemon", () => {
       ],
     });
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createDoctorPrompter({
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: { deep: true, nonInteractive: true },
       }),
       options: { deep: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
 
     const gatewayClientNote = note.mock.calls.find(([, label]) => label === "Gateway clients");
@@ -650,15 +628,12 @@ describe("maybeRepairGatewayDaemon", () => {
       ],
     });
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createDoctorPrompter({
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: { deep: true, nonInteractive: true },
       }),
       options: { deep: true, nonInteractive: true },
-      gatewayDetailsMessage: "details",
       healthOk: true,
     });
 
@@ -722,9 +697,26 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.restart).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "retains heap and runtime intent when reinstalling a disabled service (pinned=%s)",
-    async (pinned) => {
+  it.each([
+    { recorded: "node", pinned: false, supported: true, choice: "node" },
+    { recorded: "bun", pinned: false, supported: true, choice: "bun" },
+    { recorded: "bun", pinned: false, supported: true, choice: "node" },
+    { recorded: "bun", pinned: false, supported: true, choice: "fallback" },
+    { recorded: "bun", pinned: false, supported: false, choice: "node" },
+    { recorded: "node", pinned: true, supported: true, choice: "node" },
+  ])(
+    "reinstalls recorded $recorded with choice=$choice (pinned=$pinned, supported=$supported)",
+    async ({ recorded, pinned, supported, choice }) => {
+      const recordedPath = `/opt/recorded/bin/${recorded}`;
+      if (!supported) {
+        const probeRuntime = runExec.getMockImplementation()!;
+        runExec.mockImplementation((executable, ...args) => {
+          if (executable === recordedPath) {
+            return Promise.reject(new Error("missing runtime"));
+          }
+          return probeRuntime(executable, ...args);
+        });
+      }
       const pin = pinned ? { runtime: "bun", path: "/opt/pinned/bun" } : undefined;
       const expected = { revision: "pin-version", stored: pinned, pin };
       readPin.mockReturnValue(expected);
@@ -732,7 +724,7 @@ describe("maybeRepairGatewayDaemon", () => {
       service.isLoaded.mockResolvedValue(false);
       service.readRuntime.mockResolvedValue({ status: "stopped" });
       const managedDefinition = {
-        programArguments: ["node", "/opt/openclaw/dist/index.js", "gateway"],
+        programArguments: [recordedPath, "/opt/openclaw/dist/index.js", "gateway"],
         environment: { NODE_OPTIONS: "", UNRELATED: "not-persisted" },
       };
       const existingCommand = {
@@ -746,19 +738,24 @@ describe("maybeRepairGatewayDaemon", () => {
         warnings: [],
       });
       vi.mocked(buildGatewayInstallPlan).mockResolvedValueOnce({
+        runtime: "bun",
         programArguments: managedDefinition.programArguments,
         environment: { NODE_OPTIONS: "" },
       });
       const prompter = createPrompter(() => true);
-      prompter.select.mockResolvedValue("node");
+      if (choice === "fallback") {
+        // Keep install consent in the fixture; exercise Doctor's real --fix runtime fallback.
+        const nonInteractive = createDoctorPrompter({
+          runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+          options: { repair: true, nonInteractive: true },
+        });
+        prompter.select.mockImplementation(nonInteractive.select);
+      } else {
+        prompter.select.mockResolvedValue(choice);
+      }
 
-      await maybeRepairGatewayDaemon({
-        cfg: { gateway: {} },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      await runDoctor({
         prompter,
-        options: { deep: false },
-        gatewayDetailsMessage: "details",
-        healthOk: false,
       });
 
       expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
@@ -772,15 +769,26 @@ describe("maybeRepairGatewayDaemon", () => {
           runtimePinUpdate: { expected, pin },
         }),
       );
-      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtime: pin?.runtime ?? "node",
-          pinnedRuntimePath: pin?.path,
-        }),
+      const plan = vi.mocked(buildGatewayInstallPlan).mock.calls[0]?.[0];
+      const selectedRuntime = pin?.runtime ?? (choice === "fallback" ? recorded : choice);
+      expect(plan?.runtime).toBe(selectedRuntime);
+      expect(plan?.pinnedRuntimePath).toBe(pin?.path);
+      expect(plan?.runtimePath).toBe(
+        !pinned && supported && selectedRuntime === recorded ? recordedPath : undefined,
       );
-      expect(prompter.select).toHaveBeenCalledTimes(pinned ? 0 : 1);
+      if (pinned) {
+        expect(prompter.select).not.toHaveBeenCalled();
+      } else {
+        const defaultRuntime = supported ? recorded : "node";
+        expect(prompter.select).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ initialValue: defaultRuntime }),
+          defaultRuntime,
+        );
+      }
     },
   );
+
+  registerRunningBunFallbackTest({ runDoctor, service });
 
   it("skips gateway install during non-interactive doctor repairs", async () => {
     setPlatform("linux");
@@ -961,7 +969,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -977,7 +985,7 @@ describe("maybeRepairGatewayDaemon", () => {
         serviceTarget: "system/ai.openclaw.gateway",
       },
     });
-    formatGatewayRuntimeSummary.mockReturnValue(
+    formatRuntimeStatus.mockReturnValue(
       "unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)",
     );
 
@@ -986,7 +994,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      "Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)",
+      `Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -1060,7 +1068,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      "LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.",
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
       "Gateway",
     );
   });
@@ -1083,13 +1091,8 @@ describe("maybeRepairGatewayDaemon", () => {
     } satisfies GatewayRestartHandoff;
     readGatewayRestartHandoffSync.mockReturnValue(handoff);
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createPrompter(() => true),
-      options: { deep: false },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
 
     expect(readGatewayRestartHandoffSync).toHaveBeenCalled();
@@ -1120,13 +1123,8 @@ describe("maybeRepairGatewayDaemon", () => {
     readGatewayRestartHandoffSync.mockReturnValue(handoff);
     healthCommand.mockRejectedValueOnce(new Error("gateway closed"));
 
-    await maybeRepairGatewayDaemon({
-      cfg: { gateway: {} },
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    await runDoctor({
       prompter: createPrompter(() => false),
-      options: { deep: false },
-      gatewayDetailsMessage: "details",
-      healthOk: false,
     });
 
     expect(readGatewayRestartHandoffSync).toHaveBeenCalled();

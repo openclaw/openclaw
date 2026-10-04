@@ -15,12 +15,12 @@ import { createMockGatewayService, mockSystemAccountHome } from "../daemon/servi
 import { createSystemdCommandQuery } from "../daemon/systemd-command-query.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
 import * as gatewayLock from "../infra/gateway-lock.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import * as packageJson from "../infra/package-json.js";
 import * as portsInspect from "../infra/ports-inspect.js";
-import { tryAcquireExclusiveSqliteCoordinator } from "../infra/sqlite-coordinator.js";
+import * as ancestry from "../infra/restart-stale-pids.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
-import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
 import * as updateGitRuntime from "../infra/update-git-runtime.js";
 import * as updateRunDriver from "../infra/update-run-driver.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
@@ -40,8 +40,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
+import { mockDoctorServicePlatform } from "./doctor-maintenance.state-owner.test-support.js";
 import {
   stoppedSystemdBinding,
   useDoctorMaintenanceRuntimeDirectory,
@@ -50,7 +50,7 @@ import {
 const mocks = vi.hoisted(() => ({
   resolveService: vi.fn<() => GatewayService>(),
   gatewayPid: process.pid + 100_000,
-  coordinatorRuntimeDir: "",
+  nativeRuntimeDir: "",
   stops: 0,
 }));
 vi.mock("../daemon/service-process-membership.js", () => ({
@@ -79,25 +79,13 @@ vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
-
-// Windows hosts cannot enforce the mocked Linux mode bits; retain real SQLite locking.
-vi.mock("../infra/sqlite-coordinator.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../infra/sqlite-coordinator.js")>();
-  const nodeFs = await import("node:fs");
-  return {
-    ...actual,
-    ensurePrivateSqliteCoordinatorDirectory: (directoryPath: string) => {
-      nodeFs.mkdirSync(directoryPath, { recursive: true });
-    },
-  };
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 useDoctorMaintenanceRuntimeDirectory(() => {
-  mocks.coordinatorRuntimeDir = tempDirs.make("openclaw-doctor-finish-runtime-");
-  return mocks.coordinatorRuntimeDir;
+  mocks.nativeRuntimeDir = tempDirs.make("openclaw-doctor-finish-runtime-");
+  return mocks.nativeRuntimeDir;
 });
 let gatewayPort: TestPortClaim;
 beforeAll(async () => {
@@ -108,6 +96,10 @@ afterAll(async () => {
 });
 beforeEach(() => {
   mockSystemAccountHome();
+  vi.spyOn(ancestry, "inspectSelfAndAncestorPidsSync").mockReturnValue({
+    pids: new Set([1, process.ppid, process.pid]),
+    complete: true,
+  });
   mocks.stops = 0;
   vi.mocked(waitForGatewayHealthyRestart).mockClear();
   // Exercise the real owner-lease reader without depending on a host listener or dist build.
@@ -129,9 +121,12 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+  try {
+    closeOpenClawStateDatabaseForTest();
+  } finally {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  }
 });
 
 type StoppedUnitState =
@@ -142,9 +137,7 @@ type StoppedUnitState =
   | "restart-failed"
   | "slow-admission"
   | "slow-loadunit-admission"
-  | "inspection-unavailable"
   | "inspection-error"
-  | "ownership-refused"
   | "ownership-refused-wrapped"
   | "runtime-ownership-refused"
   | "launchd-owned"
@@ -167,8 +160,6 @@ type Continuation =
   | "unknown-adopter"
   | "unrecorded"
   | "unrecorded-parked"
-  | "parked"
-  | "normal-update-parked"
   | "lost-before-stop"
   | "lost-before-restart"
   | "dead-before-restart"
@@ -248,7 +239,6 @@ async function runDoctorFinishForStoppedUnit(
         }
         if (
           continuation !== "manual" &&
-          continuation !== "normal-update-parked" &&
           continuation !== "unrecorded" &&
           continuation !== "unrecorded-parked"
         ) {
@@ -273,6 +263,7 @@ async function runDoctorFinishForStoppedUnit(
       }
       let assertCatalogUnchanged = () => {};
       let assertPreStopArtifactsUnchanged = () => {};
+      let releaseServingLease = () => {};
       let activateCompetingUpdate: (() => void) | undefined;
       if (legacyCatalog) {
         const lateRun =
@@ -340,7 +331,27 @@ async function runDoctorFinishForStoppedUnit(
               : undefined,
           );
         const beforeArtifacts = readArtifacts();
-        const beforeCatalog = fs.readFileSync(pathname);
+        let beforeCatalog = fs.readFileSync(pathname);
+        if (scenario === "gateway-lifecycle-contended") {
+          releaseServingLease = () => {
+            const writer = openNodeSqliteDatabase(pathname);
+            try {
+              writer.enableDefensive?.(false);
+              writer.exec("PRAGMA writable_schema = ON");
+              expect(
+                writer
+                  .prepare(
+                    "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'test-gateway'",
+                  )
+                  .run().changes,
+              ).toBe(1);
+            } finally {
+              writer.close();
+            }
+            // Only the simulated Gateway's shutdown writes; Doctor must preserve its result.
+            beforeCatalog = fs.readFileSync(pathname);
+          };
+        }
         assertCatalogUnchanged = () =>
           expect(fs.readFileSync(pathname).equals(beforeCatalog)).toBe(true);
         assertPreStopArtifactsUnchanged = () => expect(readArtifacts()).toEqual(beforeArtifacts);
@@ -367,11 +378,8 @@ async function runDoctorFinishForStoppedUnit(
           };
         }
       }
-      mockProcessPlatform("linux");
-      let running =
-        continuation !== "parked" &&
-        continuation !== "normal-update-parked" &&
-        continuation !== "unrecorded-parked";
+      mockDoctorServicePlatform("linux");
+      let running = continuation !== "unrecorded-parked";
       let stopObserved = false;
       let commandReads = 0;
       let inspectingRuntime = false;
@@ -379,7 +387,7 @@ async function runDoctorFinishForStoppedUnit(
       const loadGuardDelays = [2602, 4770];
       let inspectionClock = 0;
       let competingUpdateStarted = false;
-      let otherOwner: ReturnType<typeof tryAcquireExclusiveSqliteCoordinator> | undefined;
+      let otherOwner: ReturnType<typeof acquireGatewayStateOwner> | undefined;
       let releaseDuringInspection: (() => Promise<void>) | undefined;
       if (scenario === "legacy-gateway-lifecycle-contended") {
         vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
@@ -401,7 +409,7 @@ async function runDoctorFinishForStoppedUnit(
         },
       };
       const restart = vi.fn(async () => {
-        expect(fs.readdirSync(mocks.coordinatorRuntimeDir)).toEqual(
+        expect(fs.readdirSync(mocks.nativeRuntimeDir)).toEqual(
           expect.arrayContaining([expect.stringMatching(/^service-lifecycle-.+\.lock$/)]),
         );
         if (scenario === "restart-failed") {
@@ -424,11 +432,9 @@ async function runDoctorFinishForStoppedUnit(
           isLoaded: async () => scenario === "retained" || boundedInspection,
           readCommand: async (env, opts) => {
             await releaseDuringInspection?.();
-            if (stopObserved && scenario.startsWith("ownership-refused")) {
+            if (stopObserved && scenario === "ownership-refused-wrapped") {
               const refusal = new ServiceOwnershipRefusalError("systemd-account-refused");
-              throw scenario.endsWith("wrapped")
-                ? new AggregateError([refusal], "Native inspection did not settle successfully")
-                : refusal;
+              throw new AggregateError([refusal], "Native inspection did not settle successfully");
             }
             if (stopObserved && scenario === "launchd-owned") {
               throw new ServiceInspectionError("launchd-system-owned");
@@ -454,11 +460,7 @@ async function runDoctorFinishForStoppedUnit(
               if (scenario === "inspection-competing") {
                 createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } });
               }
-              throw new ServiceInspectionError(
-                scenario === "inspection-unavailable"
-                  ? "systemd-user-bus-unavailable"
-                  : "systemd-inspection-deadline-exceeded",
-              );
+              throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
             }
             if (stopObserved && scenario === "slow-loadunit-admission") {
               inspectingCommand = true;
@@ -556,6 +558,7 @@ async function runDoctorFinishForStoppedUnit(
               scenario === "gateway-lifecycle-contended" ||
               scenario === "legacy-gateway-lifecycle-contended"
             ) {
+              releaseServingLease();
               otherOwner?.release();
               otherOwner = undefined;
             }
@@ -572,19 +575,24 @@ async function runDoctorFinishForStoppedUnit(
       }
       const logs: string[] = [];
       const databasePath = path.join(home, ".openclaw", "state", "openclaw.sqlite");
-      const coordinator =
+      otherOwner =
         scenario === "lifecycle-contended" ||
         scenario === "gateway-lifecycle-contended" ||
         scenario === "legacy-gateway-lifecycle-contended"
-          ? acquireGatewayLifecycleCoordinator({
+          ? acquireGatewayStateOwner({
               databasePath,
-              runtimeDirectory: mocks.coordinatorRuntimeDir,
+              ...(scenario === "lifecycle-contended"
+                ? {}
+                : {
+                    payload: {
+                      pid: process.pid,
+                      createdAt: new Date().toISOString(),
+                      configPath: path.join(home, ".openclaw", "openclaw.json"),
+                      role: "gateway",
+                    },
+                  }),
             })
           : undefined;
-      coordinator?.release();
-      otherOwner = coordinator
-        ? tryAcquireExclusiveSqliteCoordinator(coordinator.path, { busyTimeoutMs: 0 })
-        : undefined;
       const maintenance = await beginDoctorMaintenance({
         root: process.cwd(),
         ...(parentOwnsService ? { runId } : {}),
@@ -629,14 +637,16 @@ async function runDoctorFinishForStoppedUnit(
         expect(() => maintenance?.run(() => listUpdateRuns())).toThrow();
       }
       if (continuation === "lost-before-restart" && runId) {
-        createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } });
+        maintenance?.run(() =>
+          createUpdateRun({ trigger: "cli", origin: { driver: readUpdateRunDriver() } }),
+        );
       }
       if (
         continuation === "dead-before-restart" ||
         continuation === "terminal-dead-before-restart"
       ) {
         if (continuation === "terminal-dead-before-restart" && runId) {
-          finishUpdateRun(runId, { status: "failed" });
+          maintenance?.run(() => finishUpdateRun(runId, { status: "failed" }));
         }
         const inspect = updateRunDriver.inspectUpdateRunDriver;
         vi.spyOn(updateRunDriver, "inspectUpdateRunDriver").mockImplementation((driver) =>
@@ -714,83 +724,71 @@ it.each([
   expect(result.restartCalls).toBe(custody.startsWith("released") ? 0 : 1);
 });
 
-it("admits exact legacy catalog reads for an owned running service without repairing it", async () => {
-  const result = await runDoctorFinishForStoppedUnit("retained", undefined, "exact");
-  expect(result.finishError).toBeUndefined();
-  expect(mocks.stops).toBe(1);
-  expect(result.restartCalls).toBe(1);
-});
-
-it("admits the exact legacy catalog while a live supervised Gateway owns lifecycle", async () => {
-  const result = await runDoctorFinishForStoppedUnit(
-    "gateway-lifecycle-contended",
-    undefined,
-    "exact",
-  );
-  expect(result.finishError).toBeUndefined();
-  expect(mocks.stops).toBe(1);
-  expect(result.restartCalls).toBe(1);
-});
-
-it("admits a published legacy Gateway by its verified native process lock", async () => {
-  const result = await runDoctorFinishForStoppedUnit(
-    "legacy-gateway-lifecycle-contended",
-    undefined,
-    "exact",
-  );
-  expect(result.finishError).toBeUndefined();
-  expect(mocks.stops).toBe(1);
-  expect(result.restartCalls).toBe(1);
-});
-
-it("preserves the existing malformed continuation writer refusal before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "own", "exact")).rejects.toThrow(
-    "schema migration required",
-  );
-  expect(mocks.stops).toBe(0);
-});
-
-it("refuses a foreign lifecycle holder before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("lifecycle-contended")).rejects.toThrow(
-    "OpenClaw state database is busy (gateway-lifecycle)",
-  );
-  expect(mocks.stops).toBe(0);
-});
-
 it.each([
+  { scenario: "retained", catalog: "exact" },
+  { scenario: "gateway-lifecycle-contended", catalog: "exact" },
+  { scenario: "legacy-gateway-lifecycle-contended", catalog: "exact" },
+  { scenario: "unloaded", catalog: undefined },
+  { scenario: "slow-admission", catalog: undefined },
+  { scenario: "slow-loadunit-admission", catalog: undefined },
+] as const)(
+  "restores the unchanged Gateway after $scenario inspection (catalog: $catalog)",
+  async ({ scenario, catalog }) => {
+    const result = await runDoctorFinishForStoppedUnit(scenario, undefined, catalog);
+    expect(result.finishError).toBeUndefined();
+    expect(mocks.stops).toBe(1);
+    expect(result.restartCalls).toBe(1);
+    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
+  },
+);
+
+it.each<{
+  scenario?: StoppedUnitState;
+  catalog?: LegacyCatalog;
+  continuation?: Continuation;
+  message: string | RegExp;
+}>([
+  { catalog: "exact", continuation: "own", message: "schema migration required" },
+  {
+    scenario: "lifecycle-contended",
+    message: "is undergoing offline maintenance; retry when it finishes.",
+  },
   { catalog: "exact", continuation: "manual", message: "remains recorded as running" },
   {
     catalog: "conflict-on-recheck",
-    continuation: undefined,
     message: "remains recorded as running",
   },
   {
     catalog: "future-version",
-    continuation: undefined,
     message: `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
   },
   {
     catalog: "future-content",
-    continuation: undefined,
     message: `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
   },
   {
     catalog: "different-state",
-    continuation: undefined,
     message: "non-default state dir or config path",
   },
-  { catalog: "unknown", continuation: undefined, message: "schema migration required" },
-] as const)(
-  "refuses $catalog/$continuation before stopping the service",
-  async ({ catalog, continuation, message }) => {
-    await expect(runDoctorFinishForStoppedUnit("retained", continuation, catalog)).rejects.toThrow(
+  { catalog: "unknown", message: "schema migration required" },
+  { continuation: "manual", message: /remains recorded as running.*liveness: alive/ },
+  { continuation: "competing", message: /remains recorded as running.*liveness: alive/ },
+  { continuation: "foreign", message: "other-host.invalid" },
+  { continuation: "unrecorded", message: "update parent must stop the managed Gateway" },
+  { continuation: "unknown-adopter", message: "unrecorded adopter" },
+  { continuation: "own-child", message: "update parent must stop the managed Gateway" },
+  { continuation: "lost-before-stop", message: "remains recorded as running" },
+])(
+  "refuses admission before stopping the service (%j)",
+  async ({ scenario = "retained", catalog, continuation, message }) => {
+    await expect(runDoctorFinishForStoppedUnit(scenario, continuation, catalog)).rejects.toThrow(
       message,
     );
     expect(mocks.stops).toBe(0);
   },
 );
 
-it.each(["own", "parked", "normal-update-parked", "unrecorded-parked"] as const)(
+it.each(["own", "unrecorded-parked"] as const)(
   "continues owning-run Doctor maintenance with service %s",
   async (continuation) => {
     const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(
@@ -807,121 +805,60 @@ it.each(["own", "parked", "normal-update-parked", "unrecorded-parked"] as const)
   },
 );
 
-it.each([
-  { continuation: "manual", name: "manual doctor --fix without update markers" },
-  { continuation: "competing", name: "an owning continuation alongside a different live driver" },
-] as const)("refuses $name while another update owns the service", async ({ continuation }) => {
-  await expect(runDoctorFinishForStoppedUnit("retained", continuation)).rejects.toThrow(
-    /remains recorded as running.*liveness: alive/,
-  );
-  expect(mocks.stops).toBe(0);
-});
-
-it.each(["foreign", "unrecorded", "unknown-adopter"] as const)(
-  "preserves parent activation without an owning repair continuation (%s)",
-  async (continuation) => {
-    await expect(runDoctorFinishForStoppedUnit("retained", continuation)).rejects.toThrow(
-      continuation === "foreign"
-        ? "other-host.invalid"
-        : continuation === "unknown-adopter"
-          ? "unrecorded adopter"
-          : "update parent must stop the managed Gateway",
+it.each<{ scenario: StoppedUnitState; continuation?: Continuation }>([
+  { scenario: "retained", continuation: "lost-before-restart" },
+  { scenario: "inspection-competing" },
+  { scenario: "competing-during-inspection" },
+])(
+  "rechecks update admission before restoring the service (%j)",
+  async ({ scenario, continuation }) => {
+    const { finishError, restartCalls, startCalls } = await runDoctorFinishForStoppedUnit(
+      scenario,
+      continuation,
     );
+    expect(finishError).toMatchObject({
+      message: expect.stringContaining("remains recorded as running"),
+    });
+    expect(restartCalls).toBe(0);
+    expect(startCalls).toBe(0);
   },
 );
 
-it("never lets the Doctor child stop or restart its parent's running service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "own-child")).rejects.toThrow(
-    "update parent must stop the managed Gateway",
-  );
-  expect(mocks.stops).toBe(0);
-});
-
-it("rechecks continuation before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "lost-before-stop")).rejects.toThrow(
-    "remains recorded as running",
-  );
-});
-
-it("rechecks continuation before restoring the service", async () => {
-  const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(
-    "retained",
-    "lost-before-restart",
-  );
-  expect(finishError).toMatchObject({
-    message: expect.stringContaining("remains recorded as running"),
-  });
-  expect(restartCalls).toBe(0);
-});
-
-it.each(["retained", "unloaded"] as const)(
-  "restarts and verifies the unchanged gateway after systemd leaves it %s",
+it.each(["inspection-error", "inspection-timeout", "runtime-timeout"] as const)(
+  "starts and verifies the Gateway it stopped after %s",
   async (scenario) => {
-    const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(scenario);
-    expect(finishError).toBeUndefined();
-    expect(restartCalls).toBe(1);
-    expect(logs.join("\n")).toContain("Gateway restarted and verified after Doctor repair.");
+    const result = await runDoctorFinishForStoppedUnit(scenario);
+    expect(result.finishError).toBeUndefined();
+    expect(result.startCalls).toBe(1);
+    expect(result.restartCalls).toBe(0);
+    expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
+    expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
+    expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
   },
 );
 
-it.each(["slow-admission", "slow-loadunit-admission"] as const)(
-  "restores the Gateway without timing out on %s snapshots",
+it.each(["ownership-refused-wrapped", "runtime-ownership-refused", "launchd-owned"] as const)(
+  "preserves the native ownership refusal without activation: %s",
   async (scenario) => {
-    const { finishError, restartCalls, logs } = await runDoctorFinishForStoppedUnit(scenario);
-    expect(finishError).toBeUndefined();
-    expect(restartCalls).toBe(1);
-    expect(logs).toContain("Gateway restarted and verified after Doctor repair.");
+    const result = await runDoctorFinishForStoppedUnit(scenario);
+    expect(result.startCalls).toBe(0);
+    expect(result.restartCalls).toBe(0);
+    expect(result.finishError).toMatchObject({
+      failureFacts: expect.arrayContaining([
+        expect.objectContaining({
+          code:
+            scenario === "launchd-owned"
+              ? "launchd-system-owned"
+              : scenario === "runtime-ownership-refused"
+                ? "systemd-manager-changed"
+                : "systemd-account-refused",
+        }),
+      ]),
+    });
+    expect(result.logs.join("\n")).not.toContain("restoration inspection was inconclusive");
+    expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
   },
 );
-
-it.each([
-  "inspection-unavailable",
-  "inspection-error",
-  "inspection-timeout",
-  "runtime-timeout",
-] as const)("starts and verifies the Gateway it stopped after %s", async (scenario) => {
-  const result = await runDoctorFinishForStoppedUnit(scenario);
-  expect(result.finishError).toBeUndefined();
-  expect(result.startCalls).toBe(1);
-  expect(result.restartCalls).toBe(0);
-  expect(result.logs.join("\n")).toContain("restoration inspection was inconclusive");
-  expect(waitForGatewayHealthyRestart).toHaveBeenCalledOnce();
-  expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
-});
-
-it("does not treat an inconclusive inspection as admission to a competing update", async () => {
-  const result = await runDoctorFinishForStoppedUnit("inspection-competing");
-  expect(result.finishError).toMatchObject({
-    message: expect.stringContaining("remains recorded as running"),
-  });
-  expect(result.startCalls).toBe(0);
-  expect(result.restartCalls).toBe(0);
-});
-
-it.each([
-  "ownership-refused",
-  "ownership-refused-wrapped",
-  "runtime-ownership-refused",
-  "launchd-owned",
-] as const)("preserves the native ownership refusal without activation: %s", async (scenario) => {
-  const result = await runDoctorFinishForStoppedUnit(scenario);
-  expect(result.startCalls).toBe(0);
-  expect(result.restartCalls).toBe(0);
-  expect(result.finishError).toMatchObject({
-    failureFacts: expect.arrayContaining([
-      expect.objectContaining({
-        code:
-          scenario === "launchd-owned"
-            ? "launchd-system-owned"
-            : scenario === "runtime-ownership-refused"
-              ? "systemd-manager-changed"
-              : "systemd-account-refused",
-      }),
-    ]),
-  });
-  expect(result.logs.join("\n")).not.toContain("restoration inspection was inconclusive");
-  expect(waitForGatewayHealthyRestart).not.toHaveBeenCalled();
-});
 
 it("reports both inspection and start failures without claiming recovery", async () => {
   const result = await runDoctorFinishForStoppedUnit("inspection-start-failed");
@@ -931,16 +868,6 @@ it("reports both inspection and start failures without claiming recovery", async
   });
   expect(result.logs.join("\n")).toContain("inspection deadline expired");
   expect(result.logs).not.toContain("Gateway restarted and verified after Doctor repair.");
-});
-
-it("rechecks update admission after passive native inspection before restoring the Gateway", async () => {
-  const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(
-    "competing-during-inspection",
-  );
-  expect(finishError).toMatchObject({
-    message: expect.stringContaining("remains recorded as running"),
-  });
-  expect(restartCalls).toBe(0);
 });
 
 it.each([

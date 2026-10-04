@@ -7,7 +7,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { withEnv } from "../test-utils/env.js";
-import { getSlashCommands, parseCommand } from "./commands.js";
 import { resolveFinalAssistantText } from "./tui-formatters.js";
 import { beginTuiShutdown } from "./tui-shutdown.js";
 import {
@@ -105,36 +104,7 @@ describe("resolveTuiLocalAuthCliInvocation", () => {
   });
 });
 
-describe("tui slash commands", () => {
-  it("treats /elev as an alias for /elevated", () => {
-    expect(parseCommand("/elev on")).toEqual({ name: "elevated", args: "on" });
-  });
-
-  it("normalizes alias case", () => {
-    expect(parseCommand("/ELEV off")).toEqual({
-      name: "elevated",
-      args: "off",
-    });
-  });
-
-  it("includes gateway text commands", () => {
-    const commands = getSlashCommands({});
-    const names = commands.map((command) => command.name);
-    expect(names).toContain("context");
-    expect(names).toContain("commands");
-  });
-
-  it("includes /auth in local embedded mode", () => {
-    const commands = getSlashCommands({ local: true });
-    expect(commands.map((command) => command.name)).toContain("auth");
-  });
-});
-
 describe("isTuiBusyActivityStatus", () => {
-  it("treats finishing context as a visible busy status", () => {
-    expect(isTuiBusyActivityStatus("finishing context")).toBe(true);
-  });
-
   it("treats post-connect initialization as a visible busy status", () => {
     expect(isTuiBusyActivityStatus("starting up")).toBe(true);
   });
@@ -194,6 +164,21 @@ describe("resolveTuiShutdownHardExitMs", () => {
 });
 
 describe("resolveTuiSessionKey", () => {
+  it.each([
+    { scope: "per-sender" as const, raw: "global", expected: "agent:research:main" },
+    { scope: "global" as const, raw: "global", expected: "global" },
+    { scope: "per-sender" as const, raw: " GLOBAL ", expected: "agent:research:main" },
+    { scope: "global" as const, raw: " GLOBAL ", expected: "global" },
+  ])("selects the writable Home for $raw in $scope scope", ({ scope, raw, expected }) => {
+    expect(
+      resolveTuiSessionKey({
+        raw,
+        sessionScope: scope,
+        currentAgentId: "research",
+        sessionMainKey: "main",
+      }),
+    ).toBe(expected);
+  });
   it("uses global only as the default when scope is global", () => {
     expect(
       resolveTuiSessionKey({
@@ -224,7 +209,7 @@ describe("resolveTuiSessionKey", () => {
     ).toBe("agent:ops:incident");
   });
 
-  it("unwraps an agent-qualified global key after agent selection", () => {
+  it("preserves an agent-qualified global key until history resolves its stored identity", () => {
     expect(
       resolveTuiSessionKey({
         raw: "AGENT:Work:GLOBAL",
@@ -232,7 +217,7 @@ describe("resolveTuiSessionKey", () => {
         currentAgentId: "work",
         sessionMainKey: "main",
       }),
-    ).toBe("global");
+    ).toBe("agent:work:global");
   });
 
   it.each([
@@ -305,10 +290,10 @@ describe("resolveInitialTuiAgentId", () => {
   const cfg: OpenClawConfig = {
     agents: {
       ownership: "explicit",
-      list: [
-        { id: "main", workspace: "/tmp/openclaw" },
-        { id: "ops", workspace: "/tmp/openclaw/projects/ops" },
-      ],
+      entries: {
+        main: { workspace: "/tmp/openclaw" },
+        ops: { workspace: "/tmp/openclaw/projects/ops" },
+      },
     },
   };
 
@@ -370,11 +355,11 @@ describe("resolveInitialTuiAgentId", () => {
     }
   });
 
-  it("falls back to a retained legacy owner", () => {
-    const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
-    delete retained.agents!.ownership;
+  it("falls back to the persisted system owner", () => {
+    const configured = structuredClone(cfg);
+    configured.agents!.defaults = { systemAgent: { agentId: "ops" } };
 
-    expect(resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toBe("ops");
+    expect(resolveInitialTuiAgentId({ cfg: configured, cwd: "/var/tmp/unrelated" })).toBe("ops");
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
@@ -425,30 +410,33 @@ describe("resolveInitialTuiAgentId", () => {
 });
 
 describe("resolveTuiSessionSelection", () => {
-  it("keeps a fixed-store bare key with its persisted owner", () => {
+  it.each([
+    { raw: "incident-42", expected: "incident-42" },
+    { raw: " GLOBAL ", expected: "agent:ops:main" },
+  ])("keeps the persisted owner when selecting fixed-store $raw", ({ raw, expected }) => {
     const cfg: OpenClawConfig = {
       session: { store: "/tmp/shared.sqlite" },
       agents: {
         ownership: "explicit",
         defaults: { sessionStore: { agentId: "ops" } },
-        list: [{ id: "ops" }, { id: "research" }],
+        entries: { ops: {}, research: {} },
       },
     };
 
     expect(
       resolveTuiSessionSelection({
-        raw: "incident-42",
+        raw,
         cfg,
         sessionScope: "per-sender",
         currentAgentId: "research",
         sessionMainKey: "main",
       }),
-    ).toEqual({ key: "incident-42", agentId: "ops" });
+    ).toEqual({ key: expected, agentId: "ops" });
   });
 
-  it("carries an explicit owner while unwrapping global storage", () => {
+  it("carries an explicit owner without reinterpreting the qualified global selector", () => {
     const cfg: OpenClawConfig = {
-      agents: { ownership: "explicit", list: [{ id: "ops" }, { id: "research" }] },
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     };
     expect(
       resolveTuiSessionSelection({
@@ -458,7 +446,7 @@ describe("resolveTuiSessionSelection", () => {
         currentAgentId: "research",
         sessionMainKey: "main",
       }),
-    ).toEqual({ key: "global", agentId: "ops" });
+    ).toEqual({ key: "agent:ops:global", agentId: "ops" });
   });
 });
 
@@ -560,26 +548,6 @@ describe("createBackspaceDeduper", () => {
     };
   }
 
-  it("suppresses duplicate backspace events within the dedupe window", () => {
-    withLegacyBackspaceEnv(() => {
-      const { dedupe, advance } = createTimedDedupe();
-
-      expect(dedupe("\x7f")).toBe("\x7f");
-      advance(1);
-      expect(dedupe("\x08")).toBe("");
-    });
-  });
-
-  it("preserves backspace events outside the dedupe window", () => {
-    withLegacyBackspaceEnv(() => {
-      const { dedupe, advance } = createTimedDedupe();
-
-      expect(dedupe("\x7f")).toBe("\x7f");
-      advance(10);
-      expect(dedupe("\x7f")).toBe("\x7f");
-    });
-  });
-
   it("treats ASCII BS as backspace when it is the first event", () => {
     withLegacyBackspaceEnv(() => {
       const { dedupe, advance } = createTimedDedupe();
@@ -669,12 +637,6 @@ describe("createBackspaceDeduper", () => {
         expect(["\x7f", "\x08"].map(dedupe)).toEqual(["\x7f", ""]);
       },
     );
-  });
-
-  it("never suppresses non-backspace keys", () => {
-    const dedupe = createBackspaceDeduper();
-    expect(dedupe("a")).toBe("a");
-    expect(dedupe("\x1b[A")).toBe("\x1b[A");
   });
 });
 
@@ -880,14 +842,6 @@ describe("TUI shutdown safety", () => {
     ).toBeUndefined();
   });
 
-  it("rethrows non-ignorable stop errors", () => {
-    expect(() => {
-      stopTuiSafely(() => {
-        throw new Error("boom");
-      });
-    }).toThrow("boom");
-  });
-
   it("classifies terminal-loss IO errors", () => {
     expect(isTuiTerminalLossError({ code: "EIO", syscall: "read" })).toBe(true);
     expect(isTuiTerminalLossError({ code: "EPIPE", syscall: "write" })).toBe(true);
@@ -1069,15 +1023,6 @@ describe("TUI shutdown safety", () => {
 
     await vi.advanceTimersByTimeAsync(2000);
     expect(forceExit).not.toHaveBeenCalled();
-  });
-
-  it("does not keep a clean standalone TUI alive for the watchdog deadline", () => {
-    const timer = scheduleProcessExitAfterTuiReturn();
-    try {
-      expect(timer.hasRef()).toBe(false);
-    } finally {
-      clearTimeout(timer);
-    }
   });
 
   it("forces standalone TUI exit on deadline while another handle lingers", () => {

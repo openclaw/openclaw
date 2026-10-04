@@ -1,6 +1,3 @@
-/**
- * Repairs malformed tool-call arguments in embedded-agent stream results.
- */
 import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -74,10 +71,6 @@ const TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS: Record<string, string> = {
   old_string: "new_string",
   oldText: "newText",
 };
-const TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS = new Map<
-  string,
-  ReadonlyMap<string, readonly string[]>
->([["read", new Map([["path", ["offset", "limit"]]])]]);
 const TOOLCALL_REPAIR_JSON_STRING_ESCAPES: Record<string, string> = {
   '"': '"',
   "\\": "\\",
@@ -121,30 +114,20 @@ function isAllowedToolCallRepairLeadingPrefix(prefix: string): boolean {
   return /^[.:'"`-]/.test(prefix) || /^(?:functions?|tools?)[._:/-]?/i.test(prefix);
 }
 
-function isWhitespace(char: string | undefined): boolean {
-  return char !== undefined && char.trim() === "";
-}
-
 function skipWhitespace(raw: string, index: number): number {
-  for (let i = index; i < raw.length; i += 1) {
-    if (!isWhitespace(raw[i])) {
-      return i;
-    }
+  let next = index;
+  while (next < raw.length && raw[next]?.trim() === "") {
+    next += 1;
   }
-  return raw.length;
+  return next;
 }
 
 function isToolCallRepairSmartQuote(char: string | undefined): boolean {
   return char !== undefined && TOOLCALL_REPAIR_SMART_QUOTES.has(char);
 }
 
-type ToolCallRepairStringToken = {
-  value: string;
-  endIndex: number;
-};
-
-type ToolCallRepairJsonValue = {
-  value: unknown;
+type ToolCallRepairJsonValue<T = unknown> = {
+  value: T;
   endIndex: number;
 };
 
@@ -153,7 +136,10 @@ type ToolCallRepairParsedObject = {
   endIndex: number;
 };
 
-function findAsciiStringEnd(raw: string, startIndex: number): number {
+function readAsciiQuotedString(
+  raw: string,
+  startIndex: number,
+): ToolCallRepairJsonValue<string> | undefined {
   let escaped = false;
   for (let i = startIndex + 1; i < raw.length; i += 1) {
     const char = raw[i];
@@ -162,28 +148,17 @@ function findAsciiStringEnd(raw: string, startIndex: number): number {
     } else if (char === "\\") {
       escaped = true;
     } else if (char === '"') {
-      return i;
+      const parsed = safeParseJson(raw.slice(startIndex, i + 1));
+      return typeof parsed === "string" ? { value: parsed, endIndex: i + 1 } : undefined;
     }
   }
-  return -1;
-}
-
-function readAsciiQuotedString(
-  raw: string,
-  startIndex: number,
-): ToolCallRepairStringToken | undefined {
-  const endIndex = findAsciiStringEnd(raw, startIndex);
-  if (endIndex < 0) {
-    return undefined;
-  }
-  const parsed = safeParseJson(raw.slice(startIndex, endIndex + 1));
-  return typeof parsed === "string" ? { value: parsed, endIndex: endIndex + 1 } : undefined;
+  return undefined;
 }
 
 function readSmartQuotedObjectKey(
   raw: string,
   startIndex: number,
-): ToolCallRepairStringToken | undefined {
+): ToolCallRepairJsonValue<string> | undefined {
   let value = "";
   for (let i = startIndex + 1; i < raw.length; i += 1) {
     const char = raw[i];
@@ -198,7 +173,10 @@ function readSmartQuotedObjectKey(
   return undefined;
 }
 
-function readObjectKey(raw: string, startIndex: number): ToolCallRepairStringToken | undefined {
+function readObjectKey(
+  raw: string,
+  startIndex: number,
+): ToolCallRepairJsonValue<string> | undefined {
   const char = raw[startIndex];
   return char === '"'
     ? readAsciiQuotedString(raw, startIndex)
@@ -251,10 +229,7 @@ function shouldCloseSmartQuotedValueAt(
   if (!TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(valueKey)) {
     return (
       TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey) ||
-      (TOOLCALL_REPAIR_TOOL_VALUE_SUCCESSOR_KEYS.get(toolName ?? "")
-        ?.get(valueKey)
-        ?.includes(nextKey) ??
-        false)
+      (toolName === "read" && valueKey === "path" && (nextKey === "offset" || nextKey === "limit"))
     );
   }
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;
@@ -451,23 +426,22 @@ function tryExtractUsableToolCallArgumentsFromJson(
   if (leadingPrefix.length === 0 && suffix.length === 0) {
     return undefined;
   }
+  return finishToolCallArgumentRepair(safeParseJsonRecord(extracted.json), leadingPrefix, suffix);
+}
+
+function finishToolCallArgumentRepair(
+  args: Record<string, unknown> | undefined,
+  leadingPrefix: string,
+  trailingSuffix: string,
+): ToolCallArgumentRepair | undefined {
   if (
-    suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-    (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
+    !args ||
+    trailingSuffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
+    (trailingSuffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(trailingSuffix))
   ) {
     return undefined;
   }
-
-  const parsedExtracted = safeParseJsonRecord(extracted.json);
-  if (!parsedExtracted) {
-    return undefined;
-  }
-  return {
-    args: parsedExtracted,
-    kind: "repaired",
-    leadingPrefix,
-    trailingSuffix: suffix,
-  };
+  return { args, kind: "repaired", leadingPrefix, trailingSuffix };
 }
 
 function tryExtractSmartQuotedToolCallArguments(
@@ -493,19 +467,11 @@ function tryExtractSmartQuotedToolCallArguments(
   if (!parsed) {
     return undefined;
   }
-  const suffix = raw.slice(parsed.endIndex).trim();
-  if (
-    suffix.length > MAX_TOOLCALL_REPAIR_TRAILING_CHARS ||
-    (suffix.length > 0 && !TOOLCALL_REPAIR_ALLOWED_TRAILING_RE.test(suffix))
-  ) {
-    return undefined;
-  }
-  return {
-    args: parsed.args,
-    kind: "repaired",
+  return finishToolCallArgumentRepair(
+    parsed.args,
     leadingPrefix,
-    trailingSuffix: suffix,
-  };
+    raw.slice(parsed.endIndex).trim(),
+  );
 }
 
 function tryExtractUsableToolCallArguments(

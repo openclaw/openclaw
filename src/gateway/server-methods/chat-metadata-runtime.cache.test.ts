@@ -69,7 +69,7 @@ test.each(["neutral", "profile"] as const)(
 test("bounds retained commands and neutral projections instead of warming the fleet", async () => {
   const agentIds = Array.from({ length: 200 }, (_, index) => `agent-${index}`);
   const harness = createChatMetadataHarness({
-    agents: { list: agentIds.map((id, index) => ({ id, default: index === 0 })) },
+    agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) },
   });
   try {
     await harness.runtime.refresh();

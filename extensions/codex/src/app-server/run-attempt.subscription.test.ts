@@ -1,9 +1,11 @@
 import path from "node:path";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { openFileBackedSessionManagerForTest } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import {
+  claimCodexAppServerLiveThread,
   consumeCodexAppServerLiveThread,
   hasCodexAppServerLiveThread,
   isCodexAppServerLiveThreadClaimed,
@@ -27,6 +29,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
+import * as threadOwnership from "./thread-ownership.js";
 
 setupRunAttemptTestHooks();
 
@@ -34,16 +37,16 @@ describe("Codex attempt subscription recovery", () => {
   it.each<{
     nativeOwned: boolean;
     failureAt: "monitor" | "turn request";
-    revoked?: "abort" | "host" | "binding" | "closed";
+    revoked?: "abort" | "host" | "binding" | "closed" | "expired" | "successor";
   }>([
     { nativeOwned: false, failureAt: "monitor" },
-    { nativeOwned: true, failureAt: "monitor" },
-    { nativeOwned: false, failureAt: "turn request" },
     { nativeOwned: true, failureAt: "turn request" },
     { nativeOwned: true, failureAt: "monitor", revoked: "abort" },
     { nativeOwned: true, failureAt: "monitor", revoked: "host" },
     { nativeOwned: true, failureAt: "monitor", revoked: "binding" },
     { nativeOwned: true, failureAt: "monitor", revoked: "closed" },
+    { nativeOwned: true, failureAt: "monitor", revoked: "expired" },
+    { nativeOwned: true, failureAt: "monitor", revoked: "successor" },
   ])(
     "settles a warm claim after $failureAt failure (native: $nativeOwned, revoked: $revoked)",
     async ({ nativeOwned, failureAt, revoked }) => {
@@ -54,6 +57,7 @@ describe("Codex attempt subscription recovery", () => {
       const abortController = new AbortController();
       params.abortSignal = abortController.signal;
       let hostRevoked = false;
+      let expiredRetentionAttempted = false;
       const originalHost = params.hostCapabilities;
       params.hostCapabilities = {
         ...originalHost,
@@ -122,6 +126,20 @@ describe("Codex attempt subscription recovery", () => {
                     ...originalBinding!,
                     threadId: "replacement-thread",
                   });
+                } else if (revoked === "expired") {
+                  resources.state.nativeSettlementExpired = true;
+                  // No optional retention may enter a lease or durable row read.
+                  vi.spyOn(
+                    prompt.context.runtime.connection.bindingStore,
+                    "withLease",
+                  ).mockImplementationOnce(async () => {
+                    expiredRetentionAttempted = true;
+                    throw new Error("expired cleanup queued optional retention");
+                  });
+                } else if (revoked === "successor") {
+                  resources.state.thread.liveThreadOwnership?.forget();
+                  await claimCodexAppServerLiveThread(harness.client, threadId);
+                  hostRevoked = true;
                 } else if (revoked === "closed") {
                   await harness.notify({ method: "thread/closed", params: { threadId } });
                 }
@@ -143,13 +161,16 @@ describe("Codex attempt subscription recovery", () => {
       resourcesSpy.mockRestore();
       turnRequestSpy?.mockRestore();
       expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
-      expect(isCodexAppServerLiveThreadClaimed(harness.client, threadId)).toBe(false);
+      expect(isCodexAppServerLiveThreadClaimed(harness.client, threadId)).toBe(
+        revoked === "successor",
+      );
       expect(harness.client.getCloseError()).toBeUndefined();
+      expect(expiredRetentionAttempted).toBe(false);
       if (revoked) {
-        expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(false);
+        expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(revoked === "successor");
         expect(
           harness.requests.filter(({ method }) => method === "thread/unsubscribe"),
-        ).toHaveLength(revoked === "closed" ? 0 : 1);
+        ).toHaveLength(revoked === "closed" || revoked === "successor" ? 0 : 1);
         expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
           threadId: revoked === "binding" ? "replacement-thread" : threadId,
         });
@@ -177,6 +198,56 @@ describe("Codex attempt subscription recovery", () => {
       expect(isCodexAppServerLiveThreadClaimed(harness.client, threadId)).toBe(false);
     },
   );
+  it("does not replay subscription publication when reader release fails", async () => {
+    const captured =
+      createDeferred<ReturnType<typeof runAttemptResources.prepareCodexAttemptResources>>();
+    const prepare = runAttemptResources.prepareCodexAttemptResources;
+    const capture = vi
+      .spyOn(runAttemptResources, "prepareCodexAttemptResources")
+      .mockImplementationOnce((prompt) => {
+        const resources = prepare(prompt);
+        captured.resolve(resources);
+        return resources;
+      });
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "custody.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    const run = runCodexAppServerAttempt(params);
+    const resources = await Promise.race([
+      captured.promise,
+      run.then(() => {
+        throw new Error("Attempt ended before preparation");
+      }),
+    ]);
+    await harness.waitForMethod("turn/start");
+    const { connection } = resources.prompt.context.runtime;
+    const { threadId } = resources.state.thread;
+    const rowFailure = new Error("row reader release failed");
+    const withCurrent = connection.withCurrent;
+    const admission = vi
+      .spyOn(connection, "withCurrent")
+      .mockImplementationOnce(async (consume) => {
+        await withCurrent(consume);
+        throw rowFailure;
+      });
+    const publication = vi.spyOn(threadOwnership, "retainCodexAppServerBindingSubscription");
+    try {
+      await expect(resources.retainThreadSubscription()).rejects.toBe(rowFailure);
+      expect(publication).toHaveBeenCalledOnce();
+      expect(hasCodexAppServerLiveThread(harness.client, threadId)).toBe(true);
+      expect(harness.requests.some(({ method }) => method === "thread/unsubscribe")).toBe(false);
+    } finally {
+      admission.mockRestore();
+      publication.mockRestore();
+      capture.mockRestore();
+      resources.state.nativeSettlementExpired = true;
+      await harness.completeTurn({ threadId, turnId: "turn-1" });
+      await run;
+    }
+  });
+
   it.each([false, true])(
     "preserves native ownership through terminal overflow (expected native: %s)",
     async (nativeOwned) => {

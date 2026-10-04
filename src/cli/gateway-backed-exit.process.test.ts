@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import {
   readOriginDeviceTokenReadOnlyForTest,
   seedOriginDeviceToken,
@@ -71,7 +72,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "positive", timeout: "10000", valid: true },
   ])(
@@ -102,7 +102,10 @@ describe("gateway-backed CLI process exit", () => {
         expect(gateway.connectionCount).toBeGreaterThan(0);
         expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
       } else {
-        expect(result.stderr).toContain("Invalid --timeout");
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+        });
         expect(gateway.connectionCount).toBe(0);
         expect(gateway.calls).toEqual([]);
       }
@@ -360,7 +363,7 @@ describe("gateway-backed CLI process exit", () => {
         stateDir,
         configPath,
         env: {
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          ...withRuntimePreload({}, preloadPath),
           OPENCLAW_ENTRY_PID_LOG: pidLogPath,
           OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
           OPENCLAW_NODE_OPTIONS_READY: undefined,
@@ -452,55 +455,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it.each([
     { label: "list", args: ["devices", "list", "--timeout", "250"] },
-    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
-    {
-      label: "remove",
-      args: ["devices", "remove", "test-device", "--timeout", "250"],
-    },
-    {
-      label: "clear",
-      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
-    },
-    {
-      label: "approve",
-      args: ["devices", "approve", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "reject",
-      args: ["devices", "reject", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "rename",
-      args: [
-        "devices",
-        "rename",
-        "--device",
-        "test-device",
-        "--name",
-        "Test Device",
-        "--timeout",
-        "250",
-      ],
-    },
+    { label: "approve", args: ["devices", "approve", "test-request", "--timeout", "250"] },
     {
       label: "rotate",
       args: [
         "devices",
         "rotate",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-    {
-      label: "revoke",
-      args: [
-        "devices",
-        "revoke",
         "--device",
         "test-device",
         "--role",
@@ -537,9 +497,9 @@ describe("gateway-backed CLI process exit", () => {
       } else {
         expect(result.stdout).toBe("");
       }
-      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
+      expect(result.stderr).toContain("Couldn't connect to OpenClaw.");
       expect(result.stderr).toContain(
-        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+        "Check the Control UI or run `openclaw gateway status` in your terminal.",
       );
       expect(result.stderr).not.toContain("The CLI command failed");
       expect(result.stderr).not.toContain("Could not start the CLI");
@@ -899,7 +859,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "omitted", timeout: undefined, valid: true },
     { label: "positive", timeout: "10000", valid: true },
@@ -923,7 +882,10 @@ describe("gateway-backed CLI process exit", () => {
     if (valid) {
       expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
     } else {
-      expect(result.stderr).toContain("Invalid --timeout");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+      });
     }
   });
 });

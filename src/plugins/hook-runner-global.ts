@@ -10,23 +10,17 @@ import {
 import type { PluginHookHandlerMap, PluginHookName } from "./hook-types.js";
 import { createHookRunner, type HookRunner } from "./hooks.js";
 
-const getLog = () => createSubsystemLogger("plugins");
-
 /**
  * Initialize the global hook runner with a plugin registry.
  * Called on every plugin registry activation and by SDK consumers. The runner
  * instance stays stable so references captured mid-run keep seeing current hooks.
  */
 export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): void {
-  const log = getLog();
+  const log = createSubsystemLogger("plugins");
   state.registry = registry;
   if (!state.hookRunner) {
     state.hookRunner = createHookRunner(createLiveHookRegistryFacade(state), {
-      logger: {
-        debug: (msg) => log.debug(msg),
-        warn: (msg) => log.warn(msg),
-        error: (msg) => log.error(msg),
-      },
+      logger: log,
       catchErrors: true,
       failurePolicyByHook: {
         before_agent_run: "fail-closed",
@@ -58,9 +52,6 @@ export function getGlobalPluginRegistry(): GlobalHookRunnerRegistry | null {
   return state.registry;
 }
 
-/**
- * Check if any hooks are registered for a given hook name.
- */
 export function hasGlobalHooks<K extends PluginHookName>(
   hookName: K,
   ctx?: Partial<Parameters<PluginHookHandlerMap[K]>[1]>,
@@ -74,7 +65,7 @@ export async function runGlobalGatewayStopSafely(params: {
   ctx: PluginHookGatewayContext;
   onError?: (err: unknown) => void;
 }): Promise<void> {
-  const log = getLog();
+  const log = createSubsystemLogger("plugins");
   const hookRunner = params.registry
     ? createHookRunner(params.registry, { logger: log })
     : getGlobalHookRunner();

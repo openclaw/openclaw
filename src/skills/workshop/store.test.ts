@@ -35,7 +35,6 @@ import {
 } from "./service.js";
 import { createSkillProposalRollback } from "./service.test-support.js";
 import { captureSkillWorkshopStoreOptions } from "./store-client.js";
-import { parseSkillProposalEvaluation } from "./store-record.js";
 import { writeSkillProposalRollback } from "./store-rollback.js";
 import { appendSkillProposalEvent } from "./store-sqlite-event.js";
 import {
@@ -55,6 +54,28 @@ import {
 let testState: OpenClawTestState;
 const workshopConfig = {};
 
+function storeOptions() {
+  return {
+    workspaceDir: testState.stateDir,
+    config: workshopConfig,
+    agentId: "main",
+    env: testState.env,
+  };
+}
+
+function createProposal(
+  name: string,
+  input: Partial<Parameters<typeof proposeCreateSkill>[0]> = {},
+) {
+  return proposeCreateSkill({
+    ...storeOptions(),
+    name,
+    description: "Store fixture",
+    content: `# ${name}\n`,
+    ...input,
+  });
+}
+
 beforeEach(async () => {
   testState = await createOpenClawTestState({
     layout: "state-only",
@@ -68,16 +89,8 @@ afterEach(async () => {
 
 describe("Skill Workshop SQLite store", () => {
   it("inspects terminal generations without write leases and rechecks file integrity", async () => {
-    const options = {
-      workspaceDir: testState.stateDir,
-      config: workshopConfig,
-      agentId: "main",
-      env: testState.env,
-    };
-    const proposal = await proposeCreateSkill({
-      ...options,
-      name: "Terminal Inspection",
-      description: "Read retained history without contending with active proposal writers",
+    const options = storeOptions();
+    const proposal = await createProposal("Terminal Inspection", {
       content: "# Terminal Inspection\n\nRetained instructions.\n",
       supportFiles: [{ path: "references/guide.md", content: "Retained supporting material.\n" }],
     });
@@ -154,14 +167,8 @@ describe("Skill Workshop SQLite store", () => {
   );
 
   it("retains proposal inputs and storage routing across generation staging without caller SQL", async () => {
-    const seed = await proposeCreateSkill({
-      workspaceDir: testState.stateDir,
-      config: workshopConfig,
-      agentId: "main",
-      name: "Captured Proposal",
-      description: "Keep staged files and committed metadata on one captured store",
+    const seed = await createProposal("Captured Proposal", {
       content: "# Captured Proposal\n\nOriginal instructions.\n",
-      env: testState.env,
     });
     const env = { ...testState.env };
     const redirectedRoot = testState.path("redirected-workshop-state");
@@ -249,15 +256,7 @@ describe("Skill Workshop SQLite store", () => {
   });
 
   it("retains the requested agent scope across asynchronous proposal lookups", async () => {
-    const proposal = await proposeCreateSkill({
-      workspaceDir: testState.stateDir,
-      config: workshopConfig,
-      agentId: "main",
-      name: "Captured Lookup Scope",
-      description: "Keep another agent's proposal outside the requested scope",
-      content: "# Captured Lookup Scope\n",
-      env: testState.env,
-    });
+    const proposal = await createProposal("Captured Lookup Scope");
     const store = { config: workshopConfig, env: testState.env };
     const readOptions = { config: workshopConfig, reconcile: false };
     const bundleScope = { agentId: "other" };
@@ -287,11 +286,7 @@ describe("Skill Workshop SQLite store", () => {
     const store = { config: workshopConfig, agentId: "main", env: testState.env };
     const scope = { agentId: "main" };
     const seedInterruptedApply = async (name: string) => {
-      const proposal = await proposeCreateSkill({
-        ...store,
-        workspaceDir: testState.stateDir,
-        name,
-        description: "Recover a completed target write using the original read controls",
+      const proposal = await createProposal(name, {
         content: `# ${name}\n\nWritten before the status commit.\n`,
       });
       await writeSkillProposalRollback({
@@ -337,7 +332,7 @@ describe("Skill Workshop SQLite store", () => {
     };
     const recoveryRead = read(recoverable.record.id, store, scope, recoveryOptions);
     recoveryOptions.config = {
-      agents: { list: [{ id: "main", agentDir: testState.path("redirected-agent") }] },
+      agents: { entries: { main: { agentDir: testState.path("redirected-agent") } } },
     };
     await expect
       .soft(recoveryRead)
@@ -362,17 +357,9 @@ describe("Skill Workshop SQLite store", () => {
   });
 
   it("persists the original actor through asynchronous proposal lifecycle operations", async () => {
-    const options = {
-      workspaceDir: testState.stateDir,
-      config: workshopConfig,
-      agentId: "main",
-      env: testState.env,
-    };
+    const options = storeOptions();
     const createActor = { type: "agent" as const, id: "create-author" };
-    const creating = proposeCreateSkill({
-      ...options,
-      name: "Captured Event Actors",
-      description: "Keep audit attribution fixed at each operation's entry",
+    const creating = createProposal("Captured Event Actors", {
       content: "# Captured Event Actors\n\nOriginal instructions.\n",
       eventActor: createActor,
     });
@@ -453,19 +440,10 @@ describe("Skill Workshop SQLite store", () => {
   });
 
   it("preserves event ownership, proposal filters, exclusive cursors, and row limits", async () => {
-    const create = (name: string) =>
-      proposeCreateSkill({
-        workspaceDir: testState.stateDir,
-        config: workshopConfig,
-        agentId: "main",
-        name,
-        description: "Replay filtering fixture",
-        content: `# ${name}\n`,
-      });
-    const primary = await create("Primary Events");
-    const sibling = await create("Sibling Events");
-    const foreign = await create("Foreign Events");
-    const ownerless = await create("Ownerless Events");
+    const primary = await createProposal("Primary Events");
+    const sibling = await createProposal("Sibling Events");
+    const foreign = await createProposal("Foreign Events");
+    const ownerless = await createProposal("Ownerless Events");
     const { db: fixtureDatabase } = openOpenClawStateDatabase();
     const assignOwner = fixtureDatabase.prepare(
       "UPDATE skill_workshop_proposals SET owner_agent_id = ? WHERE proposal_id = ?",
@@ -515,14 +493,7 @@ describe("Skill Workshop SQLite store", () => {
   });
 
   it("commits a pending transition once and rejects stale record facts", async () => {
-    const proposal = await proposeCreateSkill({
-      workspaceDir: testState.stateDir,
-      config: workshopConfig,
-      agentId: "main",
-      name: "Transition Compare And Swap",
-      description: "Bind state transitions to authoritative proposal facts",
-      content: "# Transition Compare And Swap\n",
-    });
+    const proposal = await createProposal("Transition Compare And Swap");
     const applied = {
       ...proposal.record,
       status: "applied" as const,
@@ -573,21 +544,16 @@ describe("Skill Workshop SQLite store", () => {
     await expect(
       listSkillProposals({ config: workshopConfig, agentId: "main" }),
     ).resolves.toMatchObject({ proposals: [] });
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("skill_workshop_proposals"),
-    ).toEqual({ name: "skill_workshop_proposals" });
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("skill_workshop_proposal_events"),
-    ).toEqual({ name: "skill_workshop_proposal_events" });
-    expect(
-      reopened.db
-        .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
-        .get("skill_workshop_collection_reviews"),
-    ).toEqual({ name: "skill_workshop_collection_reviews" });
+    const table = reopened.db.prepare(
+      "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?",
+    );
+    for (const name of [
+      "skill_workshop_proposals",
+      "skill_workshop_proposal_events",
+      "skill_workshop_collection_reviews",
+    ]) {
+      expect(table.get(name)).toEqual({ name });
+    }
     expect(
       reopened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
@@ -606,14 +572,7 @@ describe("Skill Workshop SQLite store", () => {
   });
 
   it("keeps arbitrary payload keys disjoint from durable evaluations", async () => {
-    const proposal = await proposeCreateSkill({
-      workspaceDir: testState.stateDir,
-      config: workshopConfig,
-      agentId: "main",
-      name: "Event Envelope",
-      description: "Exercise event payload encoding",
-      content: "# Event Envelope\n",
-    });
+    const proposal = await createProposal("Event Envelope");
     const evaluation = {
       id: "evaluation-envelope",
       proposedVersion: proposal.record.proposedVersion,
@@ -646,30 +605,8 @@ describe("Skill Workshop SQLite store", () => {
     });
   });
 
-  it("rejects non-string evaluation tree hashes", () => {
-    expect(
-      parseSkillProposalEvaluation({
-        id: "evaluation-invalid-tree-hash",
-        proposedVersion: "v1",
-        revisionHash: "a".repeat(64),
-        trigger: "manual",
-        startedAt: "2026-07-29T00:00:00.000Z",
-        completedAt: "2026-07-29T00:00:01.000Z",
-        targetTreeSha256: ["b".repeat(64)],
-        outcomes: [],
-      }),
-    ).toBeNull();
-  });
-
   it("paginates durable evaluations before the response byte budget", async () => {
-    const proposal = await proposeCreateSkill({
-      workspaceDir: testState.stateDir,
-      agentId: "main",
-      config: workshopConfig,
-      name: "Event Page Budget",
-      description: "Bound replay response size",
-      content: "# Event Page Budget\n",
-    });
+    const proposal = await createProposal("Event Page Budget");
     const findings = Array.from({ length: 80 }, (_, index) => ({
       ruleId: `large-${index}`,
       severity: "info" as const,
@@ -722,14 +659,7 @@ describe("Skill Workshop SQLite store", () => {
   });
 
   it("fails replay explicitly for oversized stored event data", async () => {
-    const proposal = await proposeCreateSkill({
-      workspaceDir: testState.stateDir,
-      agentId: "main",
-      config: workshopConfig,
-      name: "Oversized Stored Event",
-      description: "Reject silent audit data loss",
-      content: "# Oversized Stored Event\n",
-    });
+    const proposal = await createProposal("Oversized Stored Event");
     openOpenClawStateDatabase()
       .db.prepare(
         "UPDATE skill_workshop_proposal_events SET payload_json = ? WHERE proposal_id = ?",

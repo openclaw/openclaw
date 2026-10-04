@@ -44,7 +44,7 @@ type MediaProbeBatchOptions = {
   maxProbes: number;
 };
 
-type FfprobeSource = { kind: "fileDescriptor"; fd: number } | { kind: "buffer"; buffer: Buffer };
+type FfprobeSource = { stdinFileDescriptor: number } | { input: Buffer };
 
 function parseDurationMs(value: unknown): number | undefined {
   if (typeof value !== "number" && typeof value !== "string") {
@@ -55,10 +55,6 @@ function parseDurationMs(value: unknown): number | undefined {
     return undefined;
   }
   return parsePositiveInteger(Math.round(seconds * 1000));
-}
-
-function parseStreamIndex(value: unknown): number | undefined {
-  return asSafeIntegerInRange(value, { min: 0 });
 }
 
 function selectPlaybackStream(
@@ -121,8 +117,8 @@ function parseFfprobeMediaMetadata(
   const videoCodec = normalizeOptionalLowercaseString(videoStream?.codec_name);
   const videoPixelFormat = normalizeOptionalLowercaseString(videoStream?.pix_fmt);
   const videoProfile = normalizeOptionalLowercaseString(videoStream?.profile);
-  const audioStreamIndex = parseStreamIndex(audioStream?.index);
-  const videoStreamIndex = parseStreamIndex(videoStream?.index);
+  const audioStreamIndex = asSafeIntegerInRange(audioStream?.index, { min: 0 });
+  const videoStreamIndex = asSafeIntegerInRange(videoStream?.index, { min: 0 });
   return {
     ...(durationMs ? { durationMs } : {}),
     ...(kind === "video" && width && height ? { width, height } : {}),
@@ -135,22 +131,6 @@ function parseFfprobeMediaMetadata(
     ...(videoProfile ? { videoProfile } : {}),
     ...(videoStreamIndex !== undefined ? { videoStreamIndex } : {}),
   };
-}
-
-function buildFfprobeMetadataArgs(protocol: "fd" | "pipe"): string[] {
-  const isFileDescriptor = protocol === "fd";
-  return [
-    "-v",
-    "error",
-    "-protocol_whitelist",
-    protocol,
-    "-show_entries",
-    "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
-    "-of",
-    "json",
-    ...(isFileDescriptor ? ["-fd", "0"] : []),
-    isFileDescriptor ? "fd:" : "pipe:0",
-  ];
 }
 
 function isMissingFdProtocolError(error: unknown): boolean {
@@ -168,18 +148,28 @@ async function probeMediaSource(
   kind: MediaProbeKind,
   options: MediaProbeOptions = {},
 ): Promise<PlaybackMediaProbeResult | null> {
+  const isFileDescriptor = "stdinFileDescriptor" in source;
   const runProbe = async (protocol: "fd" | "pipe") =>
     await runFfprobe(
-      buildFfprobeMetadataArgs(protocol),
-      source.kind === "buffer"
-        ? { input: source.buffer, ...options }
-        : { stdinFileDescriptor: source.fd, ...options },
+      [
+        "-v",
+        "error",
+        "-protocol_whitelist",
+        protocol,
+        "-show_entries",
+        "format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,duration,width,height,sample_aspect_ratio:stream_disposition=default,attached_pic:stream_side_data=rotation",
+        "-of",
+        "json",
+        ...(protocol === "fd" ? ["-fd", "0"] : []),
+        protocol === "fd" ? "fd:" : "pipe:0",
+      ],
+      { ...source, ...options },
     );
   try {
-    const stdout = await runProbe(source.kind === "fileDescriptor" ? "fd" : "pipe");
+    const stdout = await runProbe(isFileDescriptor ? "fd" : "pipe");
     return parseFfprobeMediaMetadata(stdout, kind);
   } catch (error) {
-    if (source.kind === "fileDescriptor" && isMissingFdProtocolError(error)) {
+    if (isFileDescriptor && isMissingFdProtocolError(error)) {
       try {
         return parseFfprobeMediaMetadata(await runProbe("pipe"), kind);
       } catch {
@@ -222,7 +212,7 @@ async function probeMediaFile(
     const handle = await fs.open(filePath, "r");
     try {
       return toMediaProbeResult(
-        await probeMediaSource({ kind: "fileDescriptor", fd: handle.fd }, kind, options),
+        await probeMediaSource({ stdinFileDescriptor: handle.fd }, kind, options),
       );
     } finally {
       await handle.close().catch(() => {});
@@ -263,10 +253,9 @@ export async function probePlaybackMediaFileDescriptor(
   kind: MediaProbeKind,
   options: MediaProbeOptions = {},
 ): Promise<PlaybackMediaProbeResult | null> {
-  return await probeMediaSource({ kind: "fileDescriptor", fd }, kind, options);
+  return await probeMediaSource({ stdinFileDescriptor: fd }, kind, options);
 }
 
-/** Positive display dimensions of the selected video stream. */
 type VideoDimensions = {
   width: number;
   height: number;
@@ -274,8 +263,6 @@ type VideoDimensions = {
 
 /** Probes a video buffer while preserving the existing public media-runtime API. */
 export async function probeVideoDimensions(buffer: Buffer): Promise<VideoDimensions | undefined> {
-  const { width, height } = toMediaProbeResult(
-    await probeMediaSource({ kind: "buffer", buffer }, "video"),
-  );
+  const { width, height } = toMediaProbeResult(await probeMediaSource({ input: buffer }, "video"));
   return width && height ? { width, height } : undefined;
 }

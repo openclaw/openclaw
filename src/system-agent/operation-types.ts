@@ -15,6 +15,7 @@ export type SystemAgentOperation =
   | { kind: "config-validate" }
   | { kind: "config-get"; path: string }
   | { kind: "config-schema"; path?: string }
+  | { kind: "config-unset"; path: string }
   | { kind: "config-set"; path: string; value: string }
   | {
       kind: "config-set-ref";

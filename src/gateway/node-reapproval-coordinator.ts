@@ -1,4 +1,5 @@
 // Coordinates paired-node reapproval requests before they enter pairing storage.
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { GatewayAuthRateLimitConfig } from "../config/types.gateway.js";
 import {
   finalizeNodePairingCleanupClaim,
@@ -9,6 +10,7 @@ import {
   type NodePairingSupersededRequest,
   type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import {
@@ -45,14 +47,6 @@ export type NodeReapprovalCoordinator = {
   dispose: () => void;
 };
 
-function normalizeFingerprintList(value: string[] | undefined): string[] | undefined {
-  return value
-    ? [
-        ...new Set(value.map((entry) => entry.trim()).filter((entry) => entry.length > 0)),
-      ].toSorted()
-    : undefined;
-}
-
 function buildRequestFingerprint(input: NodePairingRequestInput): string {
   const permissions = input.permissions
     ? Object.fromEntries(
@@ -70,8 +64,8 @@ function buildRequestFingerprint(input: NodePairingRequestInput): string {
     uiVersion: input.uiVersion,
     deviceFamily: input.deviceFamily,
     modelIdentifier: input.modelIdentifier,
-    caps: normalizeFingerprintList(input.caps),
-    commands: normalizeFingerprintList(input.commands),
+    caps: input.caps && normalizeSortedUniqueTrimmedStringList(input.caps),
+    commands: input.commands && normalizeSortedUniqueTrimmedStringList(input.commands),
     permissions,
     remoteIp: input.remoteIp,
     silent: Boolean(input.silent),
@@ -80,14 +74,15 @@ function buildRequestFingerprint(input: NodePairingRequestInput): string {
 
 /** Creates the gateway-lifetime owner for paired-node reapproval write limits. */
 export function createNodeReapprovalCoordinator(
-  config?: RateLimitConfig,
+  config: RateLimitConfig | undefined,
+  { scheduler }: { scheduler: GatewayScheduler },
 ): NodeReapprovalCoordinator & {
   updateConfig: (config?: GatewayAuthRateLimitConfig) => void;
 } {
-  const limiter = createGatewayAuthRateLimiter({
-    ...config,
-    exemptLoopback: false,
-  });
+  const limiter = createGatewayAuthRateLimiter(
+    { ...config, exemptLoopback: false },
+    { scheduler, id: "auth/node-reapproval" },
+  );
   const requestStates = new Map<string, NodeRequestState>();
   let disposed = false;
 

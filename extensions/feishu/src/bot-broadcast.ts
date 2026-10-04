@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
@@ -34,14 +35,11 @@ export function createFeishuBroadcastIngressSettlement(params: {
   let finalizing = false;
   let deferred = false;
   let replayReleased = false;
-  let resolveSettlement: () => void;
-  const settlement = new Promise<void>((resolve) => {
-    resolveSettlement = resolve;
-  });
-  params.trackTask?.(settlement);
+  const settlement = createDeferred<void>();
+  params.trackTask?.(settlement.promise);
   const finishSettlement = () => {
     if (![...lanes].some((lane) => lane.adopting)) {
-      resolveSettlement();
+      settlement.resolve();
     }
   };
 
@@ -166,9 +164,6 @@ export function createFeishuBroadcastIngressSettlement(params: {
     createLane: (replayClaim) => {
       const lane: LaneState = { replayClaim, status: "pending" };
       lanes.add(lane);
-      const releaseLane = (error: unknown) => {
-        lane.replayClaim?.release({ error });
-      };
       return {
         lifecycle: {
           abortSignal: params.lifecycle?.abortSignal ?? fallbackAbort.signal,
@@ -219,31 +214,28 @@ export function createFeishuBroadcastIngressSettlement(params: {
               return;
             }
             lane.status = "abandoned";
-            releaseLane(new Error("feishu-broadcast-turn-abandoned"));
+            lane.replayClaim?.release({ error: new Error("feishu-broadcast-turn-abandoned") });
             await maybeSettle();
           },
         },
         onDispatchComplete: async (dispatched) => {
-          if (!dispatched && lane.status === "pending") {
-            const error = new Error("feishu broadcast lane was not dispatched");
-            lane.status = "failed";
-            failures.push(error);
-            releaseLane(error);
-            return;
-          }
           if (lane.status !== "pending") {
             return;
           }
-          const error = new Error("feishu broadcast dispatch returned before turn adoption");
+          const error = new Error(
+            dispatched
+              ? "feishu broadcast dispatch returned before turn adoption"
+              : "feishu broadcast lane was not dispatched",
+          );
           lane.status = "failed";
           failures.push(error);
-          releaseLane(error);
+          lane.replayClaim?.release({ error });
         },
         onDispatchFailed: async (error) => {
           failures.push(error);
           if (lane.status !== "completed") {
             lane.status = "failed";
-            releaseLane(error);
+            lane.replayClaim?.release({ error });
           }
           await maybeSettle();
         },

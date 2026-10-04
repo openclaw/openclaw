@@ -1,4 +1,3 @@
-// Reply-prefix context helpers shared by channel reply dispatchers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentIdentity, resolveEffectiveMessagesConfig } from "../agents/identity.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
@@ -64,12 +63,9 @@ export function createReplyPrefixContext(params: {
 /**
  * Creates the reply-prefix options object expected by `getReply` call sites.
  */
-export function createReplyPrefixOptions(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  channel?: string;
-  accountId?: string;
-}): ReplyPrefixOptions {
+export function createReplyPrefixOptions(
+  params: Parameters<typeof createReplyPrefixContext>[0],
+): ReplyPrefixOptions {
   const { responsePrefix, responsePrefixContextProvider, onModelSelected } =
     createReplyPrefixContext(params);
   return {

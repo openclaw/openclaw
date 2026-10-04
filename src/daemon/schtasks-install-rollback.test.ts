@@ -113,6 +113,21 @@ async function fixture(enabled = false) {
   return { args, scriptPath, launcherPath, original, registration, assertRestored, assertBackups };
 }
 
+function installWithCustody(
+  args: Parameters<typeof installScheduledTask>[0],
+  revoked: () => boolean,
+) {
+  return withGatewayServiceUpdateAuthority(
+    () => {
+      if (revoked()) {
+        throw new Error("Doctor custody revoked");
+      }
+    },
+    () => installScheduledTask(args),
+    { updateOwned: false, assertRecoveryCurrent: () => {} },
+  );
+}
+
 it("leaves both original launchers intact when staging cannot capture the hidden launcher", async () => {
   const { args, scriptPath, launcherPath, original } = await fixture();
   await fs.unlink(launcherPath);
@@ -209,17 +224,7 @@ it.each([
     revoked = true;
     return "scheduled-task";
   });
-  await expect(
-    withGatewayServiceUpdateAuthority(
-      () => {
-        if (revoked) {
-          throw new Error("Doctor custody revoked");
-        }
-      },
-      () => installScheduledTask(args),
-      { updateOwned: false, assertRecoveryCurrent: () => {} },
-    ),
-  ).rejects.toMatchObject({
+  await expect(installWithCustody(args, () => revoked)).rejects.toMatchObject({
     code: "service-authority-revoked",
     outcome: phase === "before-publication" || phase === "backup-read" ? "unchanged" : "restored",
   });
@@ -255,6 +260,8 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
     const { args, scriptPath, launcherPath, original, assertRestored, assertBackups } =
       await fixture();
     await fs.chmod(scriptPath, 0o640);
+    // Windows chmod exposes writability, not distinct owner/group permission bits.
+    const originalMode = (await fs.stat(scriptPath)).mode & 0o7777;
     let revoked = false;
     let renamed = false;
     let faulted = false;
@@ -301,17 +308,7 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
       return handle;
     });
 
-    await expect(
-      withGatewayServiceUpdateAuthority(
-        () => {
-          if (revoked) {
-            throw new Error("Doctor custody revoked");
-          }
-        },
-        () => installScheduledTask(args),
-        { updateOwned: false, assertRecoveryCurrent: () => {} },
-      ),
-    ).rejects.toMatchObject({
+    await expect(installWithCustody(args, () => revoked)).rejects.toMatchObject({
       code: "service-authority-revoked",
       outcome:
         phase === "before-rename"
@@ -327,7 +324,7 @@ it.each(["before-rename", "after-rename", "foreign-after-rename"])(
       expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
     } else {
       await assertRestored();
-      expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(0o640);
+      expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(originalMode);
     }
     await assertBackups();
     expect(native.run).not.toHaveBeenCalled();
@@ -389,17 +386,10 @@ it.each([
   if (failure === "unknown-process") {
     native.runtime.mockResolvedValue({ status: "unknown" });
   }
-  await expect(
-    withGatewayServiceUpdateAuthority(
-      () => {
-        if (revoked) {
-          throw new Error("Doctor custody revoked");
-        }
-      },
-      () => installScheduledTask(args),
-      { updateOwned: false, assertRecoveryCurrent: () => {} },
-    ),
-  ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: "recovery-pending" });
+  await expect(installWithCustody(args, () => revoked)).rejects.toMatchObject({
+    code: "service-authority-revoked",
+    outcome: "recovery-pending",
+  });
   await assertBackups();
   expect(await fs.readFile(scriptPath)).not.toEqual(original);
   expect(args.warn).toHaveBeenCalledWith(expect.stringContaining("queued task may still start"));
@@ -439,15 +429,7 @@ it.each(["publication", "activation"])(
       return "scheduled-task";
     });
     await expect(
-      withGatewayServiceUpdateAuthority(
-        () => {
-          if (revoked) {
-            throw new Error("Doctor custody revoked");
-          }
-        },
-        () => installScheduledTask({ ...args, definitionTransaction }),
-        { updateOwned: false, assertRecoveryCurrent: () => {} },
-      ),
+      installWithCustody({ ...args, definitionTransaction }, () => revoked),
     ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });
     expect(await fs.readFile(scriptPath)).not.toEqual(original);
     expect(written).toEqual(phase === "publication" ? [scriptPath] : [scriptPath, launcherPath]);
@@ -514,17 +496,7 @@ it.each([
   });
   native.running.mockImplementation(async () => taskRunning);
   const pending = scenario.includes("revival-");
-  await expect(
-    withGatewayServiceUpdateAuthority(
-      () => {
-        if (revoked) {
-          throw new Error("Doctor custody revoked");
-        }
-      },
-      () => installScheduledTask(args),
-      { updateOwned: false, assertRecoveryCurrent: () => {} },
-    ),
-  ).rejects.toMatchObject({
+  await expect(installWithCustody(args, () => revoked)).rejects.toMatchObject({
     code: "service-authority-revoked",
     outcome: pending ? "recovery-pending" : "restored",
   });

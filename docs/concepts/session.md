@@ -28,12 +28,18 @@ DM channels, with group activity and background work flowing into it — see
 | Cron jobs       | Fresh session per run         |
 | Webhooks        | Isolated per hook             |
 
+Native catalog source IDs, Matrix room and thread IDs, and Signal group IDs are
+case-sensitive: IDs that differ only by case identify different conversations.
+
 With `session.scope: "global"`, the selected agent still owns its session.
 The shared key `global` does not merge different agents' conversations:
 commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
+the selected conversation. Another agent's active turn and queued messages are
+preserved even when the agents use the same session key.
 
 ## DM isolation
 
@@ -124,7 +130,7 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
-Agent RPC runs and delegated tasks keep content-free task records for lifecycle, cancellation, and completion tracking. Their prompts, labels, progress summaries, results, and free-form errors are not saved in those records. Live task activity and completion delivery remain available.
+Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
 
@@ -229,6 +235,10 @@ to start a replacement session.
 - **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
+Archive discovery uses the selected store, recorded transcript paths, and agent
+directories. The pre-agent `~/.openclaw/sessions/` directory is no longer an
+implicit fallback; explicitly configured paths still work.
+
 The session rows in the per-agent SQLite database keep separate lifecycle
 timestamps:
 
@@ -301,7 +311,7 @@ therefore remain above the cap when protected rows alone exceed it.
 Root sessions and sessions auto-parented to the agent's Home root can be pinned;
 genuine child sessions and subagent runs reject pin requests. Persistent child
 sessions retain their sidebar nesting; subagent runs appear in transcript activity
-and Tasks views. Existing child pins disappear and no longer protect the session
+and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
@@ -350,8 +360,8 @@ and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
 Cleanup first tries to truncate the WAL without waiting for readers. If readers
-prevent truncation, a complete PASSIVE checkpoint is sufficient: every observed
-frame must have reached the main database, even if the WAL file remains allocated.
+prevent truncation, a complete PASSIVE checkpoint is sufficient: frames relevant
+to cleanup must have reached the main database, even if the WAL file remains allocated.
 Retained WAL bytes still count toward the physical budget. Successful cleanup
 logs one outcome with the before/after bytes and removal counts.
 
@@ -359,10 +369,13 @@ An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
 archives and history instead of deleting more data behind the blocked checkpoint.
 The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
 after, and the checkpoint outcome. Automatic and manual budget passes remain
-deferred until the checkpoint owner observes a completed checkpoint; elapsed time
-or a budget change alone does not retry pruning. Normal periodic checkpointing
-continues, and subsequent activity can resume cleanup after recovery, including
-after a system clock correction.
+deferred until the checkpoint owner records completion after the pending cleanup
+work. Newer frames from concurrent writes do not erase that completion. Each SQLite cleanup
+deletion or vacuum commit requires a new completion before further pruning, so a
+reader pinning those changes still defers cleanup. Ordering uses monotonic time;
+elapsed time, a budget change, or a system clock correction cannot release the gate.
+Normal periodic checkpointing continues, and subsequent activity can resume cleanup
+after recovery.
 
 Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
 in the Gateway log. Its checkpoint fields include bounded operation names for
@@ -403,5 +416,4 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 - [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent sandbox and tool restrictions, including session visibility
 - [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run
 - [Command queue](/concepts/queue)
-- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
 - [Channel routing](/channels/channel-routing) - how inbound messages are routed to sessions

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   GatewayDrainingError,
   isGatewaySubordinateWorkAdmissionClosed,
@@ -254,10 +255,7 @@ describe("channel ingress monitor", () => {
   });
   it("drains a newly admitted unrelated lane while another delivery is active", async () => {
     await withQueue(async (queue) => {
-      let releaseFirst: (() => void) | undefined;
-      const firstDone = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstDone, resolve: releaseFirst } = createDeferred();
       const delivered: string[] = [];
       const monitor = createMonitor(queue, async (raw, lifecycle) => {
         delivered.push(raw.id);
@@ -281,10 +279,7 @@ describe("channel ingress monitor", () => {
 
   it("can await claim startup without waiting for active delivery", async () => {
     await withQueue(async (queue) => {
-      let releaseDelivery = () => {};
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      const { promise: deliveryGate, resolve: releaseDelivery } = createDeferred();
       const deliver = vi.fn(async () => {
         await deliveryGate;
       });
@@ -303,10 +298,7 @@ describe("channel ingress monitor", () => {
 
   it("drains the next same-lane event after adoption while delivery remains active", async () => {
     await withQueue(async (queue) => {
-      let releaseFirst: (() => void) | undefined;
-      const firstDone = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
+      const { promise: firstDone, resolve: releaseFirst } = createDeferred();
       const delivered: string[] = [];
       const monitor = createMonitor(queue, async (raw, lifecycle) => {
         delivered.push(raw.id);
@@ -330,14 +322,8 @@ describe("channel ingress monitor", () => {
 
   it("re-arms a coalesced idle wake for a later retryable delivery", async () => {
     await withQueue(async (queue) => {
-      let releaseFirst = () => {};
-      const firstGate = new Promise<void>((resolve) => {
-        releaseFirst = resolve;
-      });
-      let releaseRetry = () => {};
-      const retryGate = new Promise<void>((resolve) => {
-        releaseRetry = resolve;
-      });
+      const { promise: firstGate, resolve: releaseFirst } = createDeferred();
+      const { promise: retryGate, resolve: releaseRetry } = createDeferred();
       const delivered: string[] = [];
       let retryAttempts = 0;
       const monitor = createMonitor(
@@ -473,23 +459,17 @@ describe("channel ingress monitor", () => {
       try {
         await oldMonitor.waitForIdle();
 
-        let markPendingScanStarted = () => {};
-        const pendingScanStarted = new Promise<void>((resolve) => {
-          markPendingScanStarted = resolve;
-        });
-        let releasePendingScan = () => {};
-        const pendingScanGate = new Promise<void>((resolve) => {
-          releasePendingScan = resolve;
-        });
-        const listPending = queue.listPending.bind(queue);
+        const { promise: pendingScanStarted, resolve: markPendingScanStarted } = createDeferred();
+        const { promise: pendingScanGate, resolve: releasePendingScan } = createDeferred();
+        const listUnsettled = queue.listUnsettled!.bind(queue);
         let gateNextPendingScan = true;
-        queue.listPending = async (...args) => {
+        queue.listUnsettled = async (...args) => {
           if (gateNextPendingScan) {
             gateNextPendingScan = false;
             markPendingScanStarted();
             await pendingScanGate;
           }
-          return await listPending(...args);
+          return await listUnsettled(...args);
         };
 
         oldMonitor.requestDrain();
@@ -548,10 +528,7 @@ describe("channel ingress monitor", () => {
 
   it("reports active delivery work until the channel callback settles", async () => {
     await withQueue(async (queue) => {
-      let releaseDelivery: (() => void) | undefined;
-      const deliveryDone = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
+      const { promise: deliveryDone, resolve: releaseDelivery } = createDeferred();
       const activity: boolean[] = [];
       const monitor = createMonitor(
         queue,
@@ -624,20 +601,14 @@ describe("channel ingress monitor", () => {
 
   it("keeps a started delivery admissible after its detached pump root releases", async () => {
     await withQueue(async (queue) => {
-      let releaseDeliver = () => {};
-      const deliverGate = new Promise<void>((resolve) => {
-        releaseDeliver = resolve;
-      });
+      const { promise: deliverGate, resolve: releaseDeliver } = createDeferred();
       let admissionClosedDuringDelivery: boolean | undefined;
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
         await deliverGate;
         admissionClosedDuringDelivery = isGatewaySubordinateWorkAdmissionClosed();
         await lifecycle.onAdopted();
       });
-      let markPumpTaskSettled = () => {};
-      const pumpTaskSettled = new Promise<void>((resolve) => {
-        markPumpTaskSettled = resolve;
-      });
+      const { promise: pumpTaskSettled, resolve: markPumpTaskSettled } = createDeferred();
       // Mirror the production webhook-spool combination: the pump runs on its
       // own detached root and does not wait for deliveries before returning.
       const monitor = createMonitor(queue, deliver, {
@@ -672,10 +643,7 @@ describe("channel ingress monitor", () => {
 
   it("dispatches outside an already-released inherited root instead of refusing", async () => {
     await withQueue(async (queue) => {
-      let releaseDeliver = () => {};
-      const deliverGate = new Promise<void>((resolve) => {
-        releaseDeliver = resolve;
-      });
+      const { promise: deliverGate, resolve: releaseDeliver } = createDeferred();
       let admissionClosedDuringDelivery: boolean | undefined;
       const deliver = vi.fn(async (_raw: RawEvent, lifecycle: ChannelIngressMonitorLifecycle) => {
         await deliverGate;
@@ -685,23 +653,17 @@ describe("channel ingress monitor", () => {
       // No runPumpTask: the pump chain inherits the admitting caller's context,
       // the way a transport request that enqueues an event does.
       const monitor = createMonitor(queue, deliver, {}, undefined, undefined, 60_000);
-      let markPendingScanStarted = () => {};
-      const pendingScanStarted = new Promise<void>((resolve) => {
-        markPendingScanStarted = resolve;
-      });
-      let releasePendingScan = () => {};
-      const pendingScanGate = new Promise<void>((resolve) => {
-        releasePendingScan = resolve;
-      });
-      const listPending = queue.listPending.bind(queue);
+      const { promise: pendingScanStarted, resolve: markPendingScanStarted } = createDeferred();
+      const { promise: pendingScanGate, resolve: releasePendingScan } = createDeferred();
+      const listUnsettled = queue.listUnsettled!.bind(queue);
       let gateNextPendingScan = true;
-      queue.listPending = async (...args) => {
+      queue.listUnsettled = async (...args) => {
         if (gateNextPendingScan) {
           gateNextPendingScan = false;
           markPendingScanStarted();
           await pendingScanGate;
         }
-        return await listPending(...args);
+        return await listUnsettled(...args);
       };
       monitor.start();
       try {
@@ -791,14 +753,8 @@ describe("channel ingress monitor", () => {
 
   it("clears a queued drain request when abort wins an active pump", async () => {
     await withQueue(async (queue) => {
-      let markPruneStarted = () => {};
-      const pruneStarted = new Promise<void>((resolve) => {
-        markPruneStarted = resolve;
-      });
-      let releasePrune = () => {};
-      const pruneGate = new Promise<void>((resolve) => {
-        releasePrune = resolve;
-      });
+      const { promise: pruneStarted, resolve: markPruneStarted } = createDeferred();
+      const { promise: pruneGate, resolve: releasePrune } = createDeferred();
       const prune = queue.prune.bind(queue);
       queue.prune = async (...args) => {
         markPruneStarted();
@@ -1028,10 +984,7 @@ describe("channel ingress monitor", () => {
   it("can defer delivery-idle waiting to a channel-owned shutdown grace", async () => {
     await withQueue(async (queue) => {
       let releaseDelivery!: () => void;
-      let markDeliveryStarted!: () => void;
-      const deliveryStarted = new Promise<void>((resolve) => {
-        markDeliveryStarted = resolve;
-      });
+      const { promise: deliveryStarted, resolve: markDeliveryStarted } = createDeferred();
       const monitor = createMonitor(
         queue,
         async () => {

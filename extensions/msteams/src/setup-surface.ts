@@ -241,13 +241,7 @@ const msteamsSetupWizardBase = createMSTeamsSetupWizardBase();
 
 export const msteamsSetupWizard: ChannelSetupWizard = {
   ...msteamsSetupWizardBase,
-  // Override finalize to layer on the optional delegated-auth bootstrap after
-  // the base wizard collects app credentials. This preserves main's shared
-  // setup-core flow while keeping the delegated OAuth step from this PR.
   finalize: async (params) => {
-    // setup-core always provides a finalize; the type is optional only because
-    // ChannelSetupWizard.finalize is generally optional. Fall back to the
-    // incoming cfg if the base ever returns void for forward-compat.
     const baseFinalize = msteamsSetupWizardBase.finalize;
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
     let next = baseResult?.cfg ?? params.cfg;

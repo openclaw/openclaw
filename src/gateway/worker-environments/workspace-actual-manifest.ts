@@ -192,9 +192,8 @@ export async function readActualWorkspaceManifestImpl(params: {
     params.signal?.throwIfAborted();
     throw error;
   }
-  const rawEntries: Array<
-    WorkerWorkspaceManifestEntry | { path: string; type: "directory"; mode: number }
-  > = [];
+  const entries: WorkerWorkspaceManifestEntry[] = [];
+  const directories: string[] = [];
   let totalBytes = 0;
   let manifestPathBytes = 0;
   let traversedEntries = 0;
@@ -205,14 +204,21 @@ export async function readActualWorkspaceManifestImpl(params: {
       throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
     }
   };
-  const addEntry = (entry: (typeof rawEntries)[number], bytes = 0): void => {
+  const addEntry = (
+    entry: WorkerWorkspaceManifestEntry | { path: string; type: "directory" },
+    bytes = 0,
+  ): void => {
     addBytes(bytes);
     manifestPathBytes += Buffer.byteLength(entry.path);
     if (manifestPathBytes > MAX_WORKSPACE_INVENTORY_PATH_BYTES) {
       throw new Error("Gateway workspace manifest paths exceed their byte limit");
     }
-    rawEntries.push(entry);
-    if (rawEntries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
+    if (entry.type === "directory") {
+      directories.push(entry.path);
+    } else {
+      entries.push(entry);
+    }
+    if (entries.length + directories.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
       throw new Error("Gateway workspace manifest has too many entries");
     }
   };
@@ -276,13 +282,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       scanSignal,
     );
     if (snapshot.type === "file") {
-      addEntry({
-        path: relative,
-        type: "file",
-        mode: snapshot.mode,
-        size: snapshot.size,
-        sha256: snapshot.sha256,
-      });
+      addEntry({ path: relative, ...snapshot });
       return;
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
@@ -308,7 +308,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
       if (params.preserveDirectories?.has(relative)) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       let hasDerivedEntry = false;
@@ -326,7 +326,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         }
       }
       if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+        addEntry({ path: relative, type: "directory" });
         return "included";
       }
       return "derived-only";
@@ -370,7 +370,7 @@ export async function readActualWorkspaceManifestImpl(params: {
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {
-          addEntry({ path: relative, type: "directory", mode: stats.mode & 0o777 });
+          addEntry({ path: relative, type: "directory" });
           hasNonDerivedEntry = true;
         } else {
           hasDerivedEntry ||= child.hasDerivedEntry;
@@ -445,16 +445,11 @@ export async function readActualWorkspaceManifestImpl(params: {
   // and join all opened handles before any manifest can be returned.
   await runScans(0, filePaths.length, (index) => addFile(filePaths[index]!));
   scanSignal.throwIfAborted();
-  const directories = rawEntries
-    .filter((entry) => entry.type === "directory")
-    .toSorted((left, right) => left.path.localeCompare(right.path));
   const manifest: WorkerWorkspaceManifest = {
     version: 1,
     baseCommit: params.baseCommit,
-    entries: rawEntries
-      .filter((entry): entry is WorkerWorkspaceManifestEntry => entry.type !== "directory")
-      .toSorted((left, right) => left.path.localeCompare(right.path)),
-    directories: directories.map((entry) => entry.path),
+    entries: entries.toSorted((left, right) => left.path.localeCompare(right.path)),
+    directories: directories.toSorted((left, right) => left.localeCompare(right)),
   };
   const raw = serializeWorkerWorkspaceManifest(manifest);
   const manifestRef = `sha256:${createHash("sha256").update(raw).digest("hex")}`;

@@ -1,11 +1,8 @@
-/** Reset overlap must preserve the successor task through the real maintenance decision. */
-import { afterEach, describe, expect, it } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
+/** Reset overlap must preserve the native successor until its provider stream settles. */
+import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { isAcpTurnActive } from "./active-turns.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
   AcpSessionManager,
@@ -15,26 +12,14 @@ import {
   installAcpSessionManagerTestLifecycle,
   mockParentedAcpSessionEntries,
 } from "./manager.test-helpers.js";
-import { resolveAcpSessionTarget } from "./manager.utils.js";
 
-afterEach(async () => {
-  const maintenance = await import("../../tasks/task-registry.maintenance.js");
-  await maintenance.stopTaskRegistryMaintenance();
-  const { resetTaskRegistryMaintenanceMocks } =
-    await import("../../tasks/task-registry.maintenance.test-support.js");
-  resetTaskRegistryMaintenanceMocks();
-});
-
-describe("ACP reset successor task liveness", () => {
+describe("ACP reset successor liveness", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it("retains a silent successor through maintenance after the retired predecessor settles", async () => {
-    await withAcpManagerTaskStateDir(async () => {
-      const { runTaskRegistryMaintenance } =
-        await import("../../tasks/task-registry.maintenance.js");
-      const { createTaskRegistryMaintenanceHarness } =
-        await import("../../tasks/task-registry.maintenance.test-support.js");
+  it("retains a silent successor after the retired predecessor settles", async () => {
+    await withStateDirEnv("openclaw-acp-manager-", async () => {
       const sessionKey = "agent:codex:acp:reset-liveness";
+      const ownerSessionKey = "agent:quant:telegram:quant:direct:822430204";
       const runtimeState = createRuntime();
       const oldEntered = createDeferred();
       const freshEntered = createDeferred();
@@ -62,7 +47,7 @@ describe("ACP reset successor task liveness", () => {
       });
       mockParentedAcpSessionEntries({
         childSessionKey: sessionKey,
-        parentSessionKey: "agent:quant:telegram:quant:direct:822430204",
+        parentSessionKey: ownerSessionKey,
       });
       const manager = new AcpSessionManager();
       const input = {
@@ -94,24 +79,14 @@ describe("ACP reset successor task liveness", () => {
           }),
         ]);
         expect(ensureCount).toBe(2);
-        const successor = requireTaskByRunId("successor-turn");
-        expect(successor.status).toBe("running");
-        const staleAt = Date.now() - 10 * 60_000;
-        const isTurnActive = isAcpTurnActive;
-        const { currentTasks } = createTaskRegistryMaintenanceHarness({
-          tasks: [{ ...successor, createdAt: staleAt, startedAt: staleAt, lastEventAt: staleAt }],
-          hasActiveAcpTurn: (key, agentId) =>
-            isTurnActive(resolveAcpSessionTarget({ cfg: baseCfg, sessionKey: key, agentId })),
-        });
         releaseOld.resolve();
         await oldSettled;
-        const maintenance = await runTaskRegistryMaintenance();
-        expect(currentTasks.get(successor.taskId)?.status).toBe("running");
-        expect(maintenance.reconciled).toBe(0);
-        expect(isAcpTurnActive({ sessionKey, agentId: "codex" })).toBe(true);
+        expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([sessionKey]);
+        expect(getActiveAcpTurnCount()).toBe(1);
         releaseFresh.resolve();
         await fresh;
-        expect(isAcpTurnActive({ sessionKey, agentId: "codex" })).toBe(false);
+        expect(listActiveAcpSessionsForOwner(ownerSessionKey)).toEqual([]);
+        expect(getActiveAcpTurnCount()).toBe(0);
       } finally {
         releaseOld.resolve();
         releaseFresh.resolve();

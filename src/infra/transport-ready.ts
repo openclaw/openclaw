@@ -3,7 +3,7 @@ import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sleepWithAbort } from "./backoff.js";
 
-export type TransportReadyResult = {
+type TransportReadyResult = {
   ok: boolean;
   error?: string | null;
 };

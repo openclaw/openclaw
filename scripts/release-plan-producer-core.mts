@@ -643,13 +643,6 @@ function collectVerifiedInventory(
   if (!parsed || parsed.version !== candidate.version) {
     throw new Error(`unsupported release version: ${candidate.version}`);
   }
-  if (
-    source.verifiedTooling.route === "prevalidated-branch" &&
-    source.verifiedTooling.ref.startsWith("tideclaw/alpha/") &&
-    parsed.channel !== "alpha"
-  ) {
-    throw new Error("Tideclaw inventory requires an alpha candidate");
-  }
   const inventory = {
     packages: candidate.packages,
     platforms: collectPlatformInventory(

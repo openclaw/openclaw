@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import { tempWorkspace, type TempWorkspace } from "@openclaw/fs-safe/temp";
 import { clean as cleanSemver } from "semver";
 import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
@@ -15,6 +14,7 @@ import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
+import { resolveNpmCommand } from "../infra/npm-command.js";
 import {
   listMissingRequiredPlatformPackages,
   readManagedNpmRootInstalledDependency,
@@ -28,6 +28,7 @@ import {
   createSafeNpmInstallArgs,
   createSafeNpmInstallEnv,
 } from "../infra/safe-package-install.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { installPluginFromInstalledPackageDir } from "./install-installed-package.js";
@@ -240,11 +241,10 @@ export async function installPluginFromManagedNpmRoot(
     });
     const initialPeerSync = await syncManagedPeerDependenciesForInstall();
     if (!initialPeerSync.ok) {
-      return { ok: false, error: initialPeerSync.error };
+      return initialPeerSync;
     }
-    const npmInstallArgs = [
-      "npm",
-      ...createSafeNpmInstallArgs({
+    const npmInstallArgs = resolveNpmCommand(
+      createSafeNpmInstallArgs({
         omitDev: true,
         omitPeer: true,
         loglevel: "error",
@@ -252,7 +252,7 @@ export async function installPluginFromManagedNpmRoot(
         noAudit: true,
         noFund: true,
       }),
-    ];
+    );
     const npmInstallOptions = {
       cwd: npmRoot,
       timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
@@ -280,10 +280,7 @@ export async function installPluginFromManagedNpmRoot(
       });
       const aliasRetryPeerSync = await syncManagedPeerDependenciesForInstall();
       if (!aliasRetryPeerSync.ok) {
-        return {
-          ok: false,
-          error: aliasRetryPeerSync.error,
-        };
+        return aliasRetryPeerSync;
       }
       install = await runCommandWithTimeout(npmInstallArgs, npmInstallOptions);
     }
@@ -311,10 +308,9 @@ export async function installPluginFromManagedNpmRoot(
     for (let peerSyncPass = 0; peerSyncPass < 10; peerSyncPass += 1) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return { ok: false, error: peerSync.error };
+        return peerSync;
       }
-      const syncedPeerDependencies = peerSync.changed;
-      if (!syncedPeerDependencies) {
+      if (!peerSync.changed) {
         settledManagedPeerDependencies = true;
         break;
       }
@@ -329,7 +325,7 @@ export async function installPluginFromManagedNpmRoot(
     if (!settledManagedPeerDependencies) {
       const peerSync = await syncManagedPeerDependenciesForInstall();
       if (!peerSync.ok) {
-        return { ok: false, error: peerSync.error };
+        return peerSync;
       }
       settledManagedPeerDependencies = !peerSync.changed;
     }
@@ -353,10 +349,7 @@ export async function installPluginFromManagedNpmRoot(
         : undefined,
     );
     if (!requiredPlatformPackageNames.ok) {
-      return {
-        ok: false,
-        error: requiredPlatformPackageNames.error,
-      };
+      return requiredPlatformPackageNames;
     }
     let incompletePlatformPackages: Awaited<ReturnType<typeof listMissingRequiredPlatformPackages>>;
     try {
@@ -382,7 +375,10 @@ export async function installPluginFromManagedNpmRoot(
             fs.rm(packagePath, { recursive: true, force: true }),
           ),
         );
-        freshCache = await tempWorkspace({ rootDir: os.tmpdir(), prefix: "openclaw-npm-cache-" });
+        freshCache = await tempWorkspace({
+          rootDir: resolvePreferredOpenClawTmpDir(),
+          prefix: "openclaw-npm-cache-",
+        });
         install = await runCommandWithTimeout(npmInstallArgs, {
           ...npmInstallOptions,
           env: {
@@ -603,7 +599,7 @@ export async function installPluginFromManagedNpmRoot(
         copyErrorPrefix: "Failed to publish managed npm project",
         beforePersistentApply: () => {
           params.signal?.throwIfAborted();
-          params.beforePersistentApply?.();
+          return params.beforePersistentApply?.();
         },
         hasDeps: false,
         sourceHardlinks: "package-manager",

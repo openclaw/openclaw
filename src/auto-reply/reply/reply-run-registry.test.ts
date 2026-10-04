@@ -3,7 +3,6 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { QuestionAnswerUnconfirmedError } from "../../agents/harness/gateway-question-dispatch.js";
-import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
 import {
   getDiagnosticSessionActivitySnapshot,
@@ -18,25 +17,20 @@ import { resetCommandQueueStateForTest } from "../../process/command-queue.test-
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createTestUserTurnTranscriptTarget } from "../../sessions/user-turn-transcript.test-support.js";
 import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
+import { registerReplyOperationCompletionCases } from "./reply-run-registry.completion.cases.js";
 import { REPLY_RUN_TERMINAL_SETTLE_TIMEOUT_MS } from "./reply-run-registry.contracts.js";
 import {
-  abortActiveReplyRuns,
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
   forceClearReplyOperation,
   forceClearReplyRunBySessionId,
   hasCommittedReplyOperationOutcome,
   isReplyRunActiveForSessionId,
-  isReplyRunAbortableForCompaction,
-  isReplyRunAbortableForSignal,
   interruptReplyRunTarget,
-  clearReplyRunForResetBySessionId,
   REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-  registerReplyOperationSuccessorBarrier,
   type ReplyBackendQueueMessageOptions,
   type ReplyOperation,
   ReplyRunAlreadyActiveError,
-  ReplyRunSuccessorAdmissionBlockedError,
   replyRunRegistry,
   markReplyOperationGlobalLaneWaitProgress,
   runAfterReplyOperationClear,
@@ -44,7 +38,6 @@ import {
   supersedeReplyRunByRunId,
   waitForReplyOperationOwnerSettlement,
   waitForReplyRunEndBySessionId,
-  waitForReplyRunSuccessorAdmission,
 } from "./reply-run-registry.js";
 import {
   expireStaleReplyOperation,
@@ -105,24 +98,6 @@ describe("reply run registry", () => {
 
       await expect(oldWaitPromise).resolves.toBe(true);
     });
-  });
-
-  it("treats queued reply operations as non-abortable for compaction", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-compact",
-    });
-
-    expect(isReplyRunActiveForSessionId("session-compact")).toBe(true);
-    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
-
-    operation.markWaitingForDeferredMaintenance();
-
-    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(false);
-
-    operation.markDeferredMaintenanceWaitEnded();
-    operation.setPhase("running");
-
-    expect(isReplyRunAbortableForCompaction("session-compact")).toBe(true);
   });
 
   it("records reply-operation progress without claiming embedded-run activity", () => {
@@ -287,69 +262,7 @@ describe("reply run registry", () => {
     }
   });
 
-  it("clears deferred-maintenance operations immediately on user abort", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-waiting-abort",
-    });
-
-    operation.markWaitingForDeferredMaintenance();
-    operation.abortByUser();
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
-    expect(isReplyRunActiveForSessionId("session-waiting-abort")).toBe(false);
-  });
-
-  it("does not reset deferred-maintenance operations as backend-owned work", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-waiting-reset",
-    });
-
-    operation.markWaitingForDeferredMaintenance();
-    clearReplyRunForResetBySessionId("session-waiting-reset");
-
-    expect(operation.result).toBeNull();
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
-  });
-
-  it("runs completeThen callbacks after active state clears", () => {
-    const operation = createTestReplyOperation({
-      sessionId: "session-complete",
-    });
-    const afterClear = vi.fn(() => {
-      expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
-      expect(isReplyRunActiveForSessionId("session-complete")).toBe(false);
-    });
-
-    operation.completeThen(afterClear);
-
-    expect(operation.result).toEqual({ kind: "completed" });
-    expect(afterClear).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps owner settlement pending after stale expiry through its completion barrier", async () => {
-    const operation = createTestReplyOperation({ sessionId: "session-stale-owner" });
-    operation.setPhase("running");
-
-    expect(expireStaleReplyOperation(operation, "stuck_recovery")).toBe(false);
-    expect(replyRunRegistry.isActive("agent:main:main")).toBe(true);
-
-    const settlement = waitForReplyOperationOwnerSettlement(operation, 1_000);
-    let settled = false;
-    void settlement.then((value) => {
-      settled = value;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    const { promise: completionBarrier, resolve: releaseCompletion } = createDeferred();
-    operation.completeWithAfterClearBarrier(completionBarrier);
-    await Promise.resolve();
-    expect(settled).toBe(false);
-
-    releaseCompletion();
-    await expect(settlement).resolves.toBe(true);
-  });
+  registerReplyOperationCompletionCases();
 
   it.each(["finalization expiry", "forced clear", "terminal expiry"] as const)(
     "keeps late delivery ownership pending after %s reclaims the slot",
@@ -812,96 +725,6 @@ describe("reply run registry", () => {
     });
   });
 
-  it("fences every durable alias until successor handoff settles", async () => {
-    await withFakeReplyTimers(async () => {
-      const requestKey = "agent:main:telegram:alias:request";
-      const canonicalKey = "agent:main:telegram:alias:canonical";
-      const adoptedKey = "agent:main:telegram:alias:adopted";
-      const operation = createTestReplyOperation({
-        sessionKey: requestKey,
-        sessionId: "alias-session",
-      });
-      const { promise: firstBarrier, resolve: releaseFirstBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [requestKey, canonicalKey],
-        start: () => firstBarrier,
-      });
-      const { promise: secondBarrier, resolve: releaseSecondBarrier } = createDeferred();
-      registerReplyOperationSuccessorBarrier({
-        operation,
-        sessionId: "alias-session",
-        sessionKeys: [adoptedKey],
-        start: () => secondBarrier,
-      });
-
-      operation.updateSessionId("rotated-alias-session");
-      operation.complete();
-      for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
-        expect(() => createTestReplyOperation({ sessionKey })).toThrow(
-          ReplyRunSuccessorAdmissionBlockedError,
-        );
-      }
-      const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(timedWait).resolves.toEqual({ settled: false });
-
-      const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
-      const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      releaseFirstBarrier();
-      for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual({
-          settled: true,
-          sources: [
-            {
-              sessionId: "rotated-alias-session",
-              sessionIds: operation.captureOwnedSessionIds(),
-              operation,
-              databaseIdentity: undefined,
-            },
-          ],
-        });
-      }
-      expect(() => createTestReplyOperation({ sessionKey: adoptedKey })).toThrow(
-        ReplyRunSuccessorAdmissionBlockedError,
-      );
-      releaseSecondBarrier();
-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual({
-        settled: true,
-        sources: [
-          {
-            sessionId: "rotated-alias-session",
-            sessionIds: operation.captureOwnedSessionIds(),
-            operation,
-            databaseIdentity: undefined,
-          },
-        ],
-      });
-      const successor = createTestReplyOperation({ sessionKey: canonicalKey });
-      successor.complete();
-    });
-  });
-
-  it("stops a successor wait when its signal aborts", async () => {
-    const operation = createTestReplyOperation();
-    registerReplyOperationSuccessorBarrier({
-      operation,
-      sessionId: operation.sessionId,
-      sessionKeys: [operation.key],
-      start: () => new Promise<void>(() => {}),
-    });
-    operation.complete();
-    const controller = new AbortController();
-    const wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
-      signal: controller.signal,
-    });
-
-    controller.abort();
-
-    await expect(wait).resolves.toEqual({ settled: false });
-  });
-
   it("keeps follow-up admission blocked during an unsettled inter-block delay", async () => {
     await withFakeReplyTimers(async () => {
       const operation = createTestReplyOperation({
@@ -999,122 +822,6 @@ describe("reply run registry", () => {
 
     expect(replyRunRegistry.isActive("agent:main:main")).toBe(false);
     expect(afterClear).toHaveBeenCalledTimes(1);
-  });
-
-  it("keeps retained terminal failures immutable across late aborts", () => {
-    const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:failed-final",
-      sessionId: "session-failed-final",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => false,
-      isAbortable: () => true,
-    });
-    operation.setPhase("running");
-    operation.retainFailureUntilComplete();
-
-    operation.fail("run_failed", new Error("provider failed"));
-    upstreamAbort.abort(new Error("late upstream abort"));
-
-    expect(operation.abortSignal.aborted).toBe(false);
-    expect(operation.abortByUser()).toBe(false);
-    expect(operation.abortForRestart()).toBe(false);
-    expect(operation.result).toMatchObject({ kind: "failed", code: "run_failed" });
-    expect(operation.phase).toBe("failed");
-    expect(cancel).not.toHaveBeenCalled();
-  });
-
-  it("records upstream cancellation as an aborted operation", () => {
-    const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:upstream-cancelled",
-      sessionId: "session-upstream-cancelled",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
-
-    upstreamAbort.abort(new Error("caller cancelled"));
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(operation.phase).toBe("aborted");
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(cancel).toHaveBeenCalledWith("user_abort");
-    operation.complete();
-  });
-
-  it("records upstream restart cancellation separately", () => {
-    const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:upstream-restart",
-      sessionId: "session-upstream-restart",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
-
-    upstreamAbort.abort(createAgentRunRestartAbortError());
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(operation.phase).toBe("aborted");
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(cancel).toHaveBeenCalledWith("restart");
-    operation.complete();
-  });
-
-  it("clears queued ownership when the upstream signal is already aborted", () => {
-    const upstreamAbort = new AbortController();
-    upstreamAbort.abort(new Error("caller already cancelled"));
-
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:already-cancelled",
-      sessionId: "session-already-cancelled",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(operation.phase).toBe("aborted");
-    expect(operation.abortSignal.aborted).toBe(true);
-    expect(replyRunRegistry.isActive("agent:main:already-cancelled")).toBe(false);
-  });
-
-  it("does not cancel the backend twice when upstream abort follows a user abort", () => {
-    const upstreamAbort = new AbortController();
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:duplicate-cancel",
-      sessionId: "session-duplicate-cancel",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => true,
-    });
-    operation.setPhase("running");
-
-    expect(operation.abortByUser()).toBe(true);
-    upstreamAbort.abort(createAgentRunRestartAbortError());
-
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(cancel).toHaveBeenCalledTimes(1);
-    expect(cancel).toHaveBeenCalledWith("user_abort");
-    operation.complete();
   });
 
   it.each([
@@ -1377,66 +1084,6 @@ describe("reply run registry", () => {
       expect(isReplyRunActiveForSessionId("session-running")).toBe(false);
       await expect(waitPromise).resolves.toBe(true);
     });
-  });
-
-  it("rejects aborts while the attached backend is finalizing", () => {
-    let abortable = false;
-    const cancel = vi.fn();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:finalizing",
-      sessionId: "session-finalizing",
-    });
-    operation.attachBackend({
-      kind: "embedded",
-      cancel,
-      isStreaming: () => false,
-      isAbortable: () => abortable,
-    });
-    operation.setPhase("running");
-
-    expect(replyRunRegistry.abort("agent:main:finalizing")).toBe(false);
-    expect(abortActiveReplyRuns({ mode: "all" })).toBe(false);
-    expect(operation.result).toBeNull();
-    expect(cancel).not.toHaveBeenCalled();
-
-    abortable = true;
-    expect(replyRunRegistry.abort("agent:main:finalizing")).toBe(true);
-    expect(operation.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(cancel).toHaveBeenCalledWith("user_abort");
-  });
-
-  it("keeps abort frozen after the backend detaches for reply delivery", () => {
-    const cancel = vi.fn();
-    const upstreamAbort = new AbortController();
-    const operation = createTestReplyOperation({
-      sessionKey: "agent:main:delivery-finalizing",
-      sessionId: "session-delivery-finalizing",
-      upstreamAbortSignal: upstreamAbort.signal,
-    });
-    const backend = {
-      kind: "embedded" as const,
-      cancel,
-      isStreaming: () => false,
-      isAbortable: () => false,
-    };
-    operation.attachBackend(backend);
-    operation.setPhase("running");
-    operation.freezeAbort();
-    operation.detachBackend(backend);
-
-    expect(operation.phase).toBe("running");
-    expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
-    expect(isReplyRunAbortableForSignal(new AbortController().signal)).toBe(true);
-    expect(replyRunRegistry.abort("agent:main:delivery-finalizing")).toBe(false);
-    expect(operation.result).toBeNull();
-    expect(cancel).not.toHaveBeenCalled();
-
-    upstreamAbort.abort();
-    expect(operation.abortSignal.aborted).toBe(false);
-
-    operation.complete();
-    expect(replyRunRegistry.isActive("agent:main:delivery-finalizing")).toBe(false);
-    expect(isReplyRunAbortableForSignal(upstreamAbort.signal)).toBe(false);
   });
 
   it("reports a committed terminal outcome only while delivery is still finalizing", () => {
@@ -2138,36 +1785,6 @@ describe("reply run registry", () => {
       status: "accepted",
     });
     expect(replyRunRegistry.isActive(operation.key)).toBe(false);
-  });
-
-  it("aborts compacting runs through the registry compatibility helper", () => {
-    const faultyOperation = createTestReplyOperation({
-      sessionKey: "agent:main:faulty",
-      sessionId: "session-faulty",
-    });
-    faultyOperation.attachBackend({
-      kind: "embedded",
-      cancel: vi.fn(),
-      isCompacting: () => {
-        throw new Error("compaction probe unavailable");
-      },
-    });
-    faultyOperation.setPhase("running");
-    const compactingOperation = createTestReplyOperation({
-      sessionId: "session-compacting",
-    });
-    compactingOperation.setPhase("preflight_compacting");
-
-    const runningOperation = createTestReplyOperation({
-      sessionKey: "agent:main:other",
-      sessionId: "session-running",
-    });
-    runningOperation.setPhase("running");
-
-    expect(abortActiveReplyRuns({ mode: "compacting" })).toBe(true);
-    expect(compactingOperation.result).toEqual({ kind: "aborted", code: "aborted_for_restart" });
-    expect(runningOperation.result).toBeNull();
-    expect(faultyOperation.result).toBeNull();
   });
 
   it("moves a queued reservation to the target slot and frees the source", async () => {

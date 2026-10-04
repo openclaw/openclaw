@@ -74,8 +74,7 @@ const SCALAR_UNION_TYPES = new Set(["string", "number", "integer", "boolean"]);
 const RENDERABLE_UNION_TYPES = new Set([...SCALAR_UNION_TYPES, "object", "array"]);
 
 function isAnySchema(schema: JsonSchema): boolean {
-  const keys = Object.keys(schema ?? {}).filter((key) => !META_KEYS.has(key));
-  return keys.length === 0;
+  return Object.keys(schema ?? {}).every((key) => META_KEYS.has(key));
 }
 
 function normalizeEnum(values: unknown[]): { enumValues: unknown[]; nullable: boolean } {
@@ -106,10 +105,8 @@ function inferredSchemaTypes(schema: JsonSchema, seen = new Set<JsonSchema>()): 
       types.add(type);
     }
   }
-  if (types.size === 0) {
-    if (schema.properties || schema.additionalProperties) {
-      types.add("object");
-    }
+  if (types.size === 0 && (schema.properties || schema.additionalProperties)) {
+    types.add("object");
   }
   for (const entry of schema.allOf ?? []) {
     for (const type of inferredSchemaTypes(entry, seen)) {
@@ -147,10 +144,6 @@ function shouldNormalizeAllOfBranch(schema: JsonSchema): boolean {
     schema.oneOf ||
     schema.allOf,
   );
-}
-
-function hasOnlySupportedConstraintKeywords(schema: JsonSchema): boolean {
-  return hasOnlySupportedKeywords(schema, SUPPORTED_CONSTRAINT_ONLY_KEYS);
 }
 
 function hasOnlySupportedFormKeywords(schema: JsonSchema): boolean {
@@ -324,7 +317,7 @@ function normalizeSchemaNode(
       }
       if (!shouldNormalizeAllOfBranch(entry)) {
         normalizedAllOf.push(entry);
-        if (!hasOnlySupportedConstraintKeywords(entry)) {
+        if (!hasOnlySupportedKeywords(entry, SUPPORTED_CONSTRAINT_ONLY_KEYS)) {
           unsupported.add(pathLabel);
         }
         continue;
@@ -362,7 +355,7 @@ function normalizeSchemaNode(
     constraintPath?: string,
   ): JsonSchema | null => {
     if (compositionBranch && constraintPath !== undefined && !shouldNormalizeAllOfBranch(child)) {
-      if (!hasOnlySupportedConstraintKeywords(child)) {
+      if (!hasOnlySupportedKeywords(child, SUPPORTED_CONSTRAINT_ONLY_KEYS)) {
         unsupported.add(constraintPath);
       }
       return child;
@@ -495,24 +488,18 @@ function isSecretRefVariant(entry: JsonSchema): boolean {
 
 function isSecretRefUnion(entry: JsonSchema): boolean {
   const variants = entry.oneOf ?? entry.anyOf;
-  if (!variants || variants.length === 0) {
-    return false;
-  }
-  return variants.every((variant) => isSecretRefVariant(variant));
+  return Boolean(variants?.length && variants.every(isSecretRefVariant));
 }
 
 function secretInputStringVariant(remaining: JsonSchema[]): JsonSchema | undefined {
+  if (remaining.length !== 2) {
+    return undefined;
+  }
   const stringIndex = remaining.findIndex((entry) => schemaType(entry) === "string");
   if (stringIndex < 0) {
     return undefined;
   }
-  const nonString = remaining.filter((_, index) => index !== stringIndex);
-  const secretRefSchema = nonString[0];
-  const stringSchema = remaining[stringIndex];
-  if (nonString.length !== 1 || !secretRefSchema || !stringSchema) {
-    return undefined;
-  }
-  return isSecretRefUnion(secretRefSchema) ? stringSchema : undefined;
+  return isSecretRefUnion(remaining[1 - stringIndex]!) ? remaining[stringIndex] : undefined;
 }
 
 function normalizeUnion(
@@ -540,9 +527,7 @@ function normalizeUnion(
     if (Array.isArray(entry.enum)) {
       const { enumValues, nullable: enumNullable } = normalizeEnum(entry.enum);
       literals.push(...enumValues);
-      if (enumNullable) {
-        nullable = true;
-      }
+      nullable ||= enumNullable;
       continue;
     }
     if ("const" in entry) {

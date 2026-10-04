@@ -34,7 +34,7 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
     exports: {
       "./cli-entry": "./dist/cli-entry.js",
       "./plugin-sdk/agent-runtime": "./dist/plugin-sdk/agent-runtime.js",
-      "./plugin-sdk/channel-message": "./dist/plugin-sdk/channel-message.js",
+      "./plugin-sdk/channel-inbound": "./dist/plugin-sdk/channel-inbound.js",
       "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",
       "./plugin-sdk/source-only": "./dist/plugin-sdk/source-only.js",
     },
@@ -49,7 +49,7 @@ function writeFakeOpenClawPackage(root: string): { distRoot: string; loaderModul
     "utf8",
   );
   fs.writeFileSync(
-    path.join(pluginSdkDir, "channel-message.js"),
+    path.join(pluginSdkDir, "channel-inbound.js"),
     ['export * from "./channel-outbound.js";', ""].join("\n"),
     "utf8",
   );
@@ -378,11 +378,11 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     );
 
     installOpenClawPluginSdkNativeResolver(broadOptions);
-    expect(fs.realpathSync(fromNarrow.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
-      expected(narrowHost, "channel-message"),
+    expect(fs.realpathSync(fromNarrow.resolve("openclaw/plugin-sdk/channel-inbound"))).toBe(
+      expected(narrowHost, "channel-inbound"),
     );
-    expect(fs.realpathSync(fromBroad.resolve("openclaw/plugin-sdk/channel-message"))).toBe(
-      expected(broadHost, "channel-message"),
+    expect(fs.realpathSync(fromBroad.resolve("openclaw/plugin-sdk/channel-inbound"))).toBe(
+      expected(broadHost, "channel-inbound"),
     );
   });
 
@@ -433,7 +433,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       };
 
       expect(sdk.defineChannelMessageAdapter?.()).toBe("adapter");
-      expect(() => requireFromPlugin.resolve("openclaw/not-plugin-sdk/channel-message")).toThrow();
+      expect(() => requireFromPlugin.resolve("openclaw/not-plugin-sdk/channel-outbound")).toThrow();
     } finally {
       if (process.platform !== "win32") {
         fs.chmodSync(distRoot, distMode);
@@ -467,6 +467,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "  exports: {",
         '    "./plugin-sdk/channel-outbound": "./dist/plugin-sdk/channel-outbound.js",',
         '    "./plugin-sdk/late-entry": "./dist/plugin-sdk/late-entry.js",',
+        '    "./plugin-sdk/process-runtime": "./dist/plugin-sdk/process-runtime.js",',
         "  },",
         "});",
         'fs.writeFileSync(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\\n", "utf8");',
@@ -491,6 +492,15 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         'const coreEntryPath = path.join(root, "src", "schema-probe.mjs");',
         "fs.mkdirSync(path.dirname(coreEntryPath), { recursive: true });",
         'fs.writeFileSync(coreEntryPath, \'export { schemaSource } from "@openclaw/ai/internal/tool-schema";\\n\', "utf8");',
+        'writeJson(path.join(root, "packages", "worker-runtime", "package.json"), { name: "@openclaw/worker-runtime", type: "module", exports: { ".": { import: "./dist/index.mjs" }, "./worker": { import: "./dist/worker.mjs" }, "./lifecycle": { import: "./dist/lifecycle.mjs" } } });',
+        'for (const entry of ["index", "worker", "lifecycle"]) {',
+        '  const target = path.join(root, "packages", "worker-runtime", "src", `${entry}.ts`);',
+        "  fs.mkdirSync(path.dirname(target), { recursive: true });",
+        '  fs.writeFileSync(target, "export const source = import.meta.url;\\n", "utf8");',
+        "}",
+        'const processRuntimePath = path.join(root, "src", "plugin-sdk", "process-runtime.ts");',
+        "fs.mkdirSync(path.dirname(processRuntimePath), { recursive: true });",
+        'fs.writeFileSync(processRuntimePath, \'export { source as poolSource } from "@openclaw/worker-runtime"; export { source as workerSource } from "@openclaw/worker-runtime/worker"; export { source as lifecycleSource } from "@openclaw/worker-runtime/lifecycle";\\n\', "utf8");',
         'const pluginRoot = path.join(root, "external-plugin");',
         'writeJson(path.join(pluginRoot, "package.json"), { name: "external-plugin", type: "module" });',
         'const entryPath = path.join(pluginRoot, "dist", "runtime-api.js");',
@@ -498,7 +508,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "fs.mkdirSync(path.dirname(entryPath), { recursive: true });",
         "fs.writeFileSync(",
         "  entryPath,",
-        '  "import { defineChannelMessageAdapter } from \\"openclaw/plugin-sdk/channel-outbound\\"; export const eager = defineChannelMessageAdapter(); export const loadLazy = () => import(\\"./lazy.js\\");\\n",',
+        '  "import { defineChannelMessageAdapter } from \\"openclaw/plugin-sdk/channel-outbound\\"; export * as workerRuntime from \\"openclaw/plugin-sdk/process-runtime\\"; export const eager = defineChannelMessageAdapter(); export const loadLazy = () => import(\\"./lazy.js\\");\\n",',
         '  "utf8",',
         ");",
         "fs.writeFileSync(",
@@ -514,6 +524,12 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
         "const module = await import(pathToFileURL(entryPath).href);",
         "const lazy = await module.loadLazy();",
         "const core = await import(pathToFileURL(coreEntryPath).href);",
+        "const workerRuntime = module.workerRuntime;",
+        'for (const [key, entry] of [["poolSource", "index"], ["workerSource", "worker"], ["lifecycleSource", "lifecycle"]]) {',
+        '  if (workerRuntime[key] !== pathToFileURL(fs.realpathSync(path.join(root, "packages", "worker-runtime", "src", `${entry}.ts`))).href) {',
+        '    throw new Error("Worker runtime alias did not resolve to host source");',
+        "  }",
+        "}",
         "if (core.schemaSource !== pathToFileURL(fs.realpathSync(aiToolSchemaPath)).href) {",
         '  throw new Error("Internal AI tool-schema alias did not resolve to host source");',
         "}",
@@ -523,7 +539,9 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "utf8",
     );
 
-    const result = spawnSync(process.execPath, ["--import", "tsx", probePath], {
+    // Under Bun, tsx's Node hooks redirect SDK aliases before the native plugin can resolve them.
+    const probeArgs = process.versions.bun ? [probePath] : ["--import", "tsx", probePath];
+    const result = spawnSync(process.execPath, probeArgs, {
       cwd: process.cwd(),
       encoding: "utf8",
     });

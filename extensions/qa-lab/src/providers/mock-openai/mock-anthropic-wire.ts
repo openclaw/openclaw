@@ -12,9 +12,6 @@ import {
   parseJsonObjectBody,
 } from "./mock-openai-contracts.js";
 
-// Anthropic Messages conversion preserves role and tool ordering while reusing
-// the shared Responses scenario dispatcher for provider parity.
-
 export function normalizeAnthropicSystemToString(
   system: AnthropicMessagesRequest["system"],
 ): string | undefined {
@@ -36,19 +33,11 @@ function stringifyToolResultContent(
   return "";
 }
 
-export function convertAnthropicMessagesToResponsesInput(params: {
-  system?: AnthropicMessagesRequest["system"];
-  messages: AnthropicMessage[];
-}): ResponsesInputItem[] {
+export function convertAnthropicMessagesToResponsesInput(
+  messages: AnthropicMessage[],
+): ResponsesInputItem[] {
   const items: ResponsesInputItem[] = [];
-  const systemText = normalizeAnthropicSystemToString(params.system);
-  if (systemText) {
-    items.push({
-      role: "system",
-      content: [{ type: "input_text", text: systemText }],
-    });
-  }
-  for (const message of params.messages) {
+  for (const message of messages) {
     const content = message.content;
     if (typeof content === "string") {
       items.push({
@@ -64,15 +53,8 @@ export function convertAnthropicMessagesToResponsesInput(params: {
     if (!Array.isArray(content)) {
       continue;
     }
-    // Buffer each block type so we can push in OpenAI-Responses order instead
-    // of the order they appear in the Anthropic content array. The parent
-    // role message must precede any function_call_output items from the same
-    // turn, otherwise extractToolOutput() (which scans for
-    // function_call_output AFTER the last user-role index) will not see the
-    // output and the downstream scenario dispatcher will behave as if no
-    // tool output was returned. Similarly, assistant tool_use blocks become
-    // function_call items that must follow the assistant text message they
-    // narrate.
+    // Role messages must precede tool calls and results, or the current-turn
+    // extractor will fence out the result as belonging to an older turn.
     const textPieces: Array<{ type: "input_text" | "output_text"; text: string }> = [];
     const imagePieces: Array<{ type: "input_image"; image_url: string }> = [];
     const toolResultItems: ResponsesInputItem[] = [];
@@ -103,36 +85,19 @@ export function convertAnthropicMessagesToResponsesInput(params: {
         continue;
       }
       if (block.type === "tool_use") {
-        // Mirror OpenAI's function_call output_item shape so downstream
-        // prompt extraction still sees "the assistant just emitted a tool
-        // call". The scenario dispatcher looks for tool_output on the next
-        // user turn, not the assistant's prior tool_use, so a minimal
-        // placeholder is enough.
         toolUseItems.push({
           type: "function_call",
           name: block.name,
           arguments: JSON.stringify(block.input ?? {}),
           call_id: block.id,
         });
-        continue;
       }
     }
     if (textPieces.length > 0 || imagePieces.length > 0) {
-      const combinedContent: Array<Record<string, unknown>> = [...textPieces, ...imagePieces];
-      items.push({ role: message.role, content: combinedContent });
+      items.push({ role: message.role, content: [...textPieces, ...imagePieces] });
     }
-    // Emit tool_use (assistant prior calls) and tool_result (user-side
-    // returns) AFTER the parent role message so extractLastUserText and
-    // extractToolOutput walk the array in the order they expect. For a
-    // tool_result-only user turn with no text/image blocks, the parent
-    // message is intentionally omitted — the function_call_output itself
-    // represents the user's "return the tool output" turn.
-    for (const toolUse of toolUseItems) {
-      items.push(toolUse);
-    }
-    for (const toolResult of toolResultItems) {
-      items.push(toolResult);
-    }
+    // A tool-result-only turn has no user message: it continues the active turn.
+    items.push(...toolUseItems, ...toolResultItems);
   }
   return items;
 }
@@ -145,24 +110,11 @@ type ExtractedAssistantOutput = {
 const NATIVE_ANTHROPIC_TOOL_USE_ID_RE = /^toolu_[A-Za-z0-9_]+$/;
 const ANTHROPIC_TOOL_USE_ID_MAX_LENGTH = 64;
 
-function isNativeAnthropicToolUseId(id: string): boolean {
-  return id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id);
-}
-
 export function adaptAnthropicToolCallIds(events: StreamEvent[]): StreamEvent[] {
-  const adaptedIds = new Map<string, string>();
-  const adaptId = (id: string) => {
-    if (isNativeAnthropicToolUseId(id)) {
-      return id;
-    }
-    const existing = adaptedIds.get(id);
-    if (existing) {
-      return existing;
-    }
-    const adapted = `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
-    adaptedIds.set(id, adapted);
-    return adapted;
-  };
+  const adaptId = (id: string) =>
+    id.length <= ANTHROPIC_TOOL_USE_ID_MAX_LENGTH && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)
+      ? id
+      : `toolu${createHash("sha256").update(id).digest("hex").slice(0, 35)}`;
   const adaptItem = (item: Record<string, unknown>) => {
     if (
       (item.type === "function_call" || item.type === "custom_tool_call") &&
@@ -266,6 +218,18 @@ export function buildAnthropicMessageResponse(params: {
   };
 }
 
+function buildAnthropicMessageStart(message: ReturnType<typeof buildAnthropicMessageResponse>) {
+  return {
+    type: "message_start",
+    message: {
+      ...message,
+      content: [],
+      stop_reason: null,
+      usage: { input_tokens: message.usage.input_tokens, output_tokens: 0 },
+    },
+  };
+}
+
 export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
   return {
     type: "error",
@@ -298,24 +262,13 @@ export function buildAnthropicThinkingErrorResponse(params: {
 export function buildAnthropicThinkingErrorStreamEvents(params: {
   model: string;
 }): AnthropicStreamEvent[] {
-  const messageId = `msg_mock_${Math.floor(Math.random() * 1_000_000).toString(16)}`;
   return [
-    {
-      type: "message_start",
-      message: {
-        id: messageId,
-        type: "message",
-        role: "assistant",
-        model: params.model || "claude-opus-4-8",
-        content: [],
-        stop_reason: null,
-        stop_sequence: null,
-        usage: {
-          input_tokens: 64,
-          output_tokens: 0,
-        },
-      },
-    },
+    buildAnthropicMessageStart(
+      buildAnthropicMessageResponse({
+        model: params.model,
+        extracted: { text: "", toolCalls: [] },
+      }),
+    ),
     {
       type: "content_block_start",
       index: 0,
@@ -367,20 +320,7 @@ export function buildAnthropicMessageStreamEvents(
   message: ReturnType<typeof buildAnthropicMessageResponse>,
   failure?: QaMockProviderFailure,
 ): AnthropicStreamEvent[] {
-  const events: AnthropicStreamEvent[] = [
-    {
-      type: "message_start",
-      message: {
-        ...message,
-        content: [],
-        stop_reason: null,
-        usage: {
-          input_tokens: message.usage.input_tokens,
-          output_tokens: 0,
-        },
-      },
-    },
-  ];
+  const events: AnthropicStreamEvent[] = [buildAnthropicMessageStart(message)];
   for (const [index, block] of message.content.entries()) {
     events.push({
       type: "content_block_start",

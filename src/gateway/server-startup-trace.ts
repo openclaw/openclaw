@@ -6,12 +6,25 @@ import {
   isDiagnosticsTimelineEnabled,
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import {
+  isUpdateCanaryStartupMilestone,
+  supportsUpdateCanaryProgress,
+  UPDATE_CANARY_PROGRESS_PREFIX,
+} from "../infra/update-candidate-canary-progress.js";
 import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
 
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
+const STARTUP_PROGRESS_PHASES = new Set([
+  "process.bootstrap",
+  "state.schema-preflight",
+  "config.auth",
+  "startup.maintenance",
+  "http.bound",
+  "ready",
+]);
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -28,7 +41,12 @@ export async function measureStartup<T>(
   return startupTrace ? startupTrace.measure(name, run) : await run();
 }
 
-export function createGatewayStartupTrace(log: GatewayLogger, startedAt = performance.now()) {
+export function createGatewayStartupTrace(
+  log: GatewayLogger,
+  startedAt = performance.now(),
+  updateCanary = false,
+) {
+  const progressEnabled = updateCanary && supportsUpdateCanaryProgress(process.argv);
   const logEnabled = isTruthyEnvValue(process.env.OPENCLAW_GATEWAY_STARTUP_TRACE);
   let timelineConfig: OpenClawConfig | undefined;
   let eventLoopDelay: ReturnType<typeof monitorEventLoopDelay> | undefined;
@@ -57,6 +75,11 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
   let last = started;
   let spanSequence = 0;
   let bootstrapSummary = "";
+  const reportProgress = (name: string) => {
+    if (progressEnabled && !closed && isUpdateCanaryStartupMilestone(name)) {
+      process.stderr.write(`${UPDATE_CANARY_PROGRESS_PREFIX}${name}\n`);
+    }
+  };
   const formatMetric = (key: string, value: number | string) =>
     `${key}=${typeof value === "number" ? value.toFixed(1) : value}`;
   const mapTimelineName = (name: string) => {
@@ -126,6 +149,8 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
       log.info(
         `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
+    } else if (STARTUP_PROGRESS_PHASES.has(name)) {
+      log.info(`startup phase: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms`);
     }
   };
   return {
@@ -135,6 +160,7 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
       ensureEventLoopDelay();
     },
     mark(name: string) {
+      reportProgress(name);
       const now = performance.now();
       const eventLoopSample = takeEventLoopSample();
       if (name === "process.bootstrap") {
@@ -199,28 +225,26 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
       options: { omitErrorMessage?: boolean } = {},
     ): Promise<T> {
       const before = performance.now();
-      const spanId = `gateway-startup-${++spanSequence}`;
-      emitDiagnosticsTimelineEvent(
-        {
-          type: "span.start",
-          name: mapTimelineName(name),
-          phase: "startup",
-          spanId,
-          attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
-        },
-        timelineOptions(),
-      );
+      if (STARTUP_PROGRESS_PHASES.has(name)) {
+        log.info(`startup phase: ${name} starting total=${(before - started).toFixed(1)}ms`);
+      }
+      const mappedName = mapTimelineName(name);
+      const span = {
+        name: mappedName,
+        phase: "startup" as const,
+        spanId: `gateway-startup-${++spanSequence}`,
+        attributes: name === mappedName ? undefined : { traceName: name },
+      };
+      emitDiagnosticsTimelineEvent({ ...span, type: "span.start" }, timelineOptions());
       try {
-        const result = await withDiagnosticPhase(mapTimelineName(name), run, { traceName: name });
+        const result = await withDiagnosticPhase(mappedName, run, { traceName: name });
+        reportProgress(name);
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
+            ...span,
             type: "span.end",
-            name: mapTimelineName(name),
-            phase: "startup",
-            spanId,
             durationMs: now - before,
-            attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
           },
           timelineOptions(),
         );
@@ -229,12 +253,9 @@ export function createGatewayStartupTrace(log: GatewayLogger, startedAt = perfor
         const now = performance.now();
         emitDiagnosticsTimelineEvent(
           {
+            ...span,
             type: "span.error",
-            name: mapTimelineName(name),
-            phase: "startup",
-            spanId,
             durationMs: now - before,
-            attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
             errorName: error instanceof Error ? error.name : typeof error,
             ...(options.omitErrorMessage
               ? {}

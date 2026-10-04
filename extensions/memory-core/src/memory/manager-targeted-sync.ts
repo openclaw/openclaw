@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import type { MemorySyncProgressState } from "./manager-sync-base.js";
 
 export function markMemoryTargetArchiveFilesDirty(params: {
@@ -16,7 +17,6 @@ export function markMemoryTargetArchiveFilesDirty(params: {
 export async function runMemoryTargetedSessionSync(params: {
   hasSessionSource: boolean;
   targetArchiveFiles: Set<string> | null;
-  reason?: string;
   progress?: MemorySyncProgressState;
   sessionsFullRetryDirty?: boolean;
   sessionsReconcileDirty?: boolean;
@@ -26,7 +26,6 @@ export async function runMemoryTargetedSessionSync(params: {
     targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
   }) => Promise<void>;
-  shouldFallbackOnError: (err: unknown) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
 }): Promise<
   | { handled: false; sessionsDirty: boolean }
@@ -60,7 +59,7 @@ export async function runMemoryTargetedSessionSync(params: {
   } catch (err) {
     const reason = formatErrorMessage(err);
     const activated =
-      params.shouldFallbackOnError(err) && (await params.activateFallbackProvider(reason));
+      isMemoryEmbeddingOperationError(err) && (await params.activateFallbackProvider(reason));
     if (!activated) {
       throw err;
     }

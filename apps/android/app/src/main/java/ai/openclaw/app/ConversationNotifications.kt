@@ -12,7 +12,6 @@ import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -20,7 +19,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
-import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.core.content.LocusIdCompat
 import androidx.core.content.pm.ShortcutInfoCompat
@@ -293,11 +291,6 @@ class ConversationNotificationLaunchActivity : Activity() {
     finish()
   }
 }
-
-internal fun canPostConversationNotifications(
-  sdkInt: Int,
-  permissionGranted: () -> Boolean,
-): Boolean = sdkInt < Build.VERSION_CODES.TIRAMISU || permissionGranted()
 
 internal suspend fun routeConversationNotificationTarget(
   target: ConversationNotificationTarget,
@@ -580,11 +573,7 @@ internal class ConversationReplyNotifier(
 
   private fun canPostNotifications(): Boolean {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
-
-    return canPostConversationNotifications(Build.VERSION.SDK_INT) {
-      ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
-        PackageManager.PERMISSION_GRANTED
-    }
+    return context.hasPermission(Manifest.permission.POST_NOTIFICATIONS)
   }
 
   private fun ensureChannel() {
@@ -653,7 +642,7 @@ class ConversationReplyReceiver : BroadcastReceiver() {
               }
             },
             wasAdmitted = {
-              runtime?.wasChatOutboxCommandAdmitted(idempotencyKey)
+              runtime?.chat?.wasOutboxCommandAdmitted(idempotencyKey)
             },
           )
         val notifier = ConversationReplyNotifier(context.applicationContext)

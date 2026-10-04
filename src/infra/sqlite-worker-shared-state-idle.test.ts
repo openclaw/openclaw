@@ -3,8 +3,7 @@ import { once } from "node:events";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { deserialize } from "node:v8";
-import { MessagePort, Worker, type Transferable } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Worker, type Transferable } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -21,6 +20,7 @@ import {
   openOpenClawStateWorkerCleanupStore,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import type { SqliteWorkerRequest } from "./sqlite-worker-contract.js";
 import * as sqliteWorkers from "./sqlite-worker-store.js";
@@ -124,6 +124,7 @@ it("retains pressure retirement across path close and releases its subscription 
       context.admission.databasePath,
       context,
       context.admission.assertCurrent,
+      context.admission.identity,
     ),
   ).resolves.toBeUndefined();
   expect(pressure.hasSubscribers).toBe(false);
@@ -286,22 +287,22 @@ it("ignores an inspection result and old expiry when real work resumes", async (
 
 it("replaces a failed idle actor after an enclosing callback settles", async () => {
   const f = await fixture("unsettled-inspection");
-  const nativePost = vi.spyOn(MessagePort.prototype, "postMessage");
-  nativePost.mockRestore();
+  const nativePost = f.worker.postMessage.bind(f.worker);
   let resume: (() => void) | undefined;
-  const send = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    message,
-    transfers,
-  ) {
-    if (isRecord(message) && message.type === "accepted" && Object.hasOwn(message, "admission")) {
-      // Hold the acquired-custody grant, after live authority has accepted this inspection.
-      send.mockRestore();
-      resume = () => nativePost.call(this, message, transfers);
-      return;
-    }
-    return nativePost.call(this, message, transfers);
-  });
+  const send = vi
+    .spyOn(f.worker, "postMessage")
+    .mockImplementation((request: SqliteWorkerRequest, transfers?: readonly Transferable[]) => {
+      if (
+        request.type === "execute" &&
+        deserialize(request.input).type === "database.inspectIdle"
+      ) {
+        // Hold the admitted dispatch before the native inspection executes.
+        send.mockRestore();
+        resume = () => nativePost(request, transfers);
+        return;
+      }
+      return nativePost(request, transfers);
+    });
   f.advance(minute);
   f.scheduled(minute)();
   const entered = createDeferredCore();
@@ -320,6 +321,14 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
           entered.resolve();
           await finish.promise;
           await expect(f.read()).rejects.toMatchObject({ code: "unavailable" });
+          await expect(
+            openOpenClawStateWorkerCleanupStore(
+              f.context.admission.databasePath,
+              f.context,
+              f.context.admission.assertCurrent,
+              f.context.admission.identity,
+            ).then((store) => store?.close()),
+          ).rejects.toMatchObject({ code: "unavailable" });
           return "completed without dispatch";
         })(),
         escape.promise,
@@ -354,7 +363,8 @@ it("replaces a failed idle actor after an enclosing callback settles", async () 
   }
 });
 
-const nodeIt = process.versions.bun ? it.skip : it;
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 const read = {
   type: "deviceIdentity.read",
   input: { identityKey: "idle-fixture:idle-custody" },
@@ -374,7 +384,7 @@ async function openClient(context: OpenClawStateWorkerContext) {
   }
 }
 
-nodeIt("joins expiring idle-client maintenance without retiring a healthy co-user", async () => {
+poolIt("joins expiring idle-client maintenance without retiring a healthy co-user", async () => {
   const f = await fixture();
   const context = f.context;
   const env = context.environment;
@@ -436,7 +446,7 @@ nodeIt("joins expiring idle-client maintenance without retiring a healthy co-use
   }
 });
 
-nodeIt.each([undefined, "agent-resources", "shared-handles"] as const)(
+poolIt.each([undefined, "agent-resources", "shared-handles"] as const)(
   "joins a tracked maintenance callback before retiring its failed actor and idle co-user (during resource cleanup: %s)",
   async (duringCleanup) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-maintenance-drain-") };
@@ -509,9 +519,9 @@ nodeIt.each([undefined, "agent-resources", "shared-handles"] as const)(
   },
 );
 
-nodeIt(
-  "reopens an idle failed actor without waiting for its other maintenance client to close",
-  async () => {
+poolIt.each(["ordinary", "cleanup"] as const)(
+  "reopens an idle failed actor through %s without waiting for its other maintenance client to close",
+  async (entrypoint) => {
     const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-idle-reopen-") };
     const firstScope = createOpenClawDatabaseMaintenanceScope();
     const peerScope = createOpenClawDatabaseMaintenanceScope();
@@ -519,6 +529,7 @@ nodeIt(
     const peerContext = peerScope.run(() => captureOpenClawStateWorkerContext({ env }));
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     let stopped: Promise<number> | undefined;
+    let cleanupStore: Awaited<ReturnType<typeof openOpenClawStateWorkerCleanupStore>>;
     try {
       const first = await openClient(firstContext);
       const peer = await openClient(peerContext);
@@ -532,20 +543,38 @@ nodeIt(
       await stopped;
       await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "unavailable" });
 
-      const reopened = await openClient(firstContext);
-      expect(reopened.actor === first.actor).toBe(false);
+      const reopened =
+        entrypoint === "ordinary"
+          ? (await openClient(firstContext)).store
+          : (cleanupStore = await openOpenClawStateWorkerCleanupStore(
+              firstContext.admission.databasePath,
+              firstContext,
+              firstContext.admission.assertCurrent,
+              firstContext.admission.identity,
+            ));
+      if (!reopened) {
+        throw new Error("Expected cleanup to retain the existing shared database");
+      }
+      expect(getSqliteWorkerActorIdentity(reopened) === first.actor).toBe(false);
       await expect(peer.store.execute(read)).rejects.toMatchObject({ code: "closed" });
+      await cleanupStore?.close();
+      cleanupStore = undefined;
       await expect(
         runOpenClawStateWorkerOperation(firstContext, (scope) => scope.execute(read)),
       ).resolves.toBeNull();
     } finally {
       messages.mockRestore();
-      await Promise.allSettled([stopped, firstScope.close(), peerScope.close()]);
+      await Promise.allSettled([
+        stopped,
+        cleanupStore?.close(),
+        firstScope.close(),
+        peerScope.close(),
+      ]);
     }
   },
 );
 
-nodeIt("joins adopted actor custody instead of its earlier per-client failure", async () => {
+poolIt("joins adopted actor custody instead of its earlier per-client failure", async () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("openclaw-worker-adopted-retirement-") };
   const firstScope = createOpenClawDatabaseMaintenanceScope();
   const peerScope = createOpenClawDatabaseMaintenanceScope();

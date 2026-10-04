@@ -144,7 +144,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
         chatAbortControllers: context.chatAbortControllers,
         restartRecoveryCandidates: new Map(),
-        terminalSessions: { closeTaskSessions: vi.fn() },
         refreshConnectedUserProfiles: vi.fn(),
       });
       active = await admit(runId);
@@ -206,7 +205,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         sessionId,
         sessionKey: target.sessionKey,
         agentId: "main",
-        begin: () => ({ ...placement, state: "draining" }) as never,
+        begin: async () => ({ ...placement, state: "draining" }) as never,
         reclaim: async () => {
           reclaimEffectStarted = true;
           expect(loadSessionEntry(target)).toMatchObject({
@@ -286,7 +285,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       subscriptions?.heartbeatUnsub();
       subscriptions?.transcriptUnsub();
       subscriptions?.lifecycleUnsub();
-      await subscriptions?.taskUnsub();
       await closeSessionSqliteDatabasesForTest();
       persistenceSpy?.mockRestore();
       routing.load.mockReset();

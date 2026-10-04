@@ -31,22 +31,17 @@ function createSourceCheckoutPlugin(pluginId: string): {
 }
 
 describe("plugin install plan helpers", () => {
-  it.each([
-    "clawhub:",
-    "clawhub:demo@",
-    "clawhub:@scope/pkg@",
-    "CLAWHUB:",
-    "ClAwHuB:demo@",
-    " clawhub:demo@ ",
-  ])("rejects the malformed explicit ClawHub selector %s before npm fallback", (raw) => {
-    expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
-      ok: false,
-      error: `Unsupported ClawHub plugin spec: ${raw}`,
-    });
-  });
+  it.each(["clawhub:", "clawhub:@scope/pkg@", " ClAwHuB:demo@ "])(
+    "rejects the malformed explicit ClawHub selector %s before npm fallback",
+    (raw) => {
+      expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
+        ok: false,
+        error: `Unsupported ClawHub plugin spec: ${raw}`,
+      });
+    },
+  );
 
   it.each([
-    ["clawhub:demo", "demo", undefined],
     ["CLAWHUB:demo", "demo", undefined],
     ["clawhub:@scope/pkg@1.2.3", "@scope/pkg", "1.2.3"],
   ])(

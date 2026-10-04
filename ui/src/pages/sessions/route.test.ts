@@ -47,7 +47,7 @@ async function loadSessionsRoute(options: {
       includeUnknown: false,
       limit: 50,
     }),
-  ).toEqual(options.expectedQuery);
+  ).toEqual({ source: "sessions-page", rowMode: "compact", ...options.expectedQuery });
 }
 
 describe("sessions route", () => {

@@ -4,8 +4,11 @@ import { isPathInside } from "../infra/path-guards.js";
 import type { createPluginGenerationReceipt } from "./plugin-generation-receipt.js";
 import type { createPluginNativeAdmission } from "./plugin-native-admission.js";
 import type { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
-import { copyPluginSourceFile, pluginSourceStatIdentity } from "./plugin-source-file.js";
-import { pluginSourceContentHash } from "./plugin-source-verification.js";
+import { copyPluginSourceFile } from "./plugin-source-file.js";
+import {
+  readPluginSourceDirectory,
+  pluginSourceInputIdentity,
+} from "./plugin-source-verification.js";
 
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
@@ -83,7 +86,7 @@ export function createPluginGenerationFileCapture({
       contentHash: string,
       sizeBytes = 0,
       native = false,
-      identity = pluginSourceStatIdentity(stat),
+      identity = pluginSourceInputIdentity(stat),
       admittedBoundary = inputBoundary,
     ) => {
       if (!captured) {
@@ -116,12 +119,10 @@ export function createPluginGenerationFileCapture({
       }
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
-      const names = fs.readdirSync(real).toSorted();
-      recordContent(pluginSourceContentHash(names));
+      const { names, contentHash } = readPluginSourceDirectory(real);
+      recordContent(contentHash);
       for (const name of names) {
         if (
-          name !== "node_modules" &&
-          name !== ".git" &&
           !(
             deferExternalLinks &&
             !nativeAdmission.isRetainedReference(path.join(source, name)) &&
@@ -137,14 +138,20 @@ export function createPluginGenerationFileCapture({
         hardlinkedSources.add(target);
       }
       fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+      // Register before copying or admission can fail: known aliases must remain
+      // rejected by the acquisition owner even when the first attempt is incomplete.
+      additions.add(target);
       const native = nativeAdmission.materialize(real, inputBoundary, target, stat, source);
+      let copiedContent: ReturnType<typeof copyPluginSourceFile>;
       if (native) {
         nativeAdmission.reconcileSourceInputs(inputs);
       } else if (captured) {
         // A second filename for a prefetched entry retains its first bytes and source identity.
         fs.copyFileSync(captured, target, fs.constants.COPYFILE_FICLONE);
       } else {
-        copyPluginSourceFile(real, inputBoundary, target);
+        copiedContent = copyPluginSourceFile(real, inputBoundary, target, {
+          hashCopiedContent: true,
+        });
         fs.chmodSync(target, 0o600 | Number(stat.mode & 0o100n));
       }
       receipt.file({
@@ -152,7 +159,7 @@ export function createPluginGenerationFileCapture({
         boundary: native?.boundary ?? directory,
         sizeBytes: Number(stat.size),
         native: native !== undefined,
-        prepared: native?.content,
+        prepared: native?.content ?? copiedContent,
         onContent: (content) => {
           native?.record(content);
           recordContent(
@@ -164,7 +171,6 @@ export function createPluginGenerationFileCapture({
           );
         },
       });
-      additions.add(target);
       if (path.basename(target) === "package.json") {
         onPackageMetadata(source, target);
       }

@@ -43,7 +43,7 @@ function fixture(
     setConfig(next: OpenClawConfig) {
       config = next;
     },
-    resolve: (toolName = "browser") =>
+    resolve: (toolName = "browser", assertNativeRuntimeCurrent?: () => void) =>
       resolveSessionResourceToolPolicy({
         config,
         client,
@@ -58,6 +58,7 @@ function fixture(
         },
         readPreparedSessionEntry: (query) => entries.get(query.key),
         toolName,
+        assertNativeRuntimeCurrent,
       }),
   };
 }
@@ -75,17 +76,31 @@ describe("session resource tool policy", () => {
       tools: { byProvider: { openai: { deny: ["browser"] } } },
       agents: { defaults: { model: "openai/test-model" } },
     },
-    { agents: { list: [{ id: "main", tools: { deny: ["browser"] } }] } },
+    { agents: { entries: { main: { tools: { deny: ["browser"] } } } } },
     {
       agents: {
         defaults: { model: "openai/test-model" },
-        list: [{ id: "main", tools: { byProvider: { openai: { deny: ["browser"] } } } }],
+        entries: { main: { tools: { byProvider: { openai: { deny: ["browser"] } } } } },
       },
     },
     { tools: { toolsBySender: { "*": { deny: ["browser"] } } } },
   ])("honors each canonical configured restriction: %j", (config) => {
     expect(() => fixture({ config }).resolve()).toThrow("current tool policy");
     expect(storageRead).not.toHaveBeenCalled();
+  });
+
+  it("requires a live native owner for locked-session MCP App policy", () => {
+    const test = fixture({ entry: { modelSelectionLocked: true } });
+    expect(() => test.resolve()).toThrow("locked model selection");
+    const assertCurrent = vi.fn();
+    expect(() => test.resolve("browser", assertCurrent)).not.toThrow();
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    assertCurrent.mockImplementation(() => {
+      throw new Error("native binding changed");
+    });
+    expect(() => test.resolve("browser", assertCurrent)).toThrow("native binding changed");
+    expect(storageRead).not.toHaveBeenCalled();
+    expect(runtimeOwnership).not.toHaveBeenCalled();
   });
 
   it("evaluates current row and policy facts without owning resource lifetime", () => {

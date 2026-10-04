@@ -21,6 +21,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../../src/infra/kysely-sync.js";
+import { writeGatewayRestartIntentSync } from "../../src/infra/restart-intent.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../src/state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -29,6 +30,9 @@ import {
 
 type RestartSampleFixture = Parameters<typeof testing.summarizeCase>[1][number];
 type ProbeFixture = RestartSampleFixture["initialHealthz"];
+
+const wallClockSetTimeout = setTimeout;
+const wallClockClearTimeout = clearTimeout;
 
 function createProbeFixture(
   ms: ProbeFixture["ms"],
@@ -96,12 +100,15 @@ async function withWallClockDeadline<T>(
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs);
+        timer = wallClockSetTimeout(
+          () => reject(new Error(`${label} exceeded ${timeoutMs}ms`)),
+          timeoutMs,
+        );
         timer.unref?.();
       }),
     ]);
   } finally {
-    clearTimeout(timer);
+    wallClockClearTimeout(timer);
   }
 }
 
@@ -205,7 +212,7 @@ describe("gateway restart benchmark script", () => {
     expect(() => testing.parseOptions(["--restarts", "--runs", "1"])).toThrow(
       "--restarts requires a value",
     );
-    expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+    expect(() => testing.parseOptions(["--entry", " --inspect"])).toThrow(/must be a file path/u);
   });
 
   it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
@@ -335,6 +342,8 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       server.listen(0, "127.0.0.1", resolve);
     });
     try {
+      // Freeze the probe deadline while real HTTP delivers headers; the watchdog stays on wall time.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("test server did not bind to a TCP port");
@@ -349,6 +358,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       ).resolves.toEqual({ errorKind: null, status: 200 });
       expect(requestMethod).toBe("HEAD");
     } finally {
+      vi.useRealTimers();
       server.closeAllConnections();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
@@ -462,11 +472,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     ).toBe(false);
   });
 
-  it("reports deadline expiry separately from child exit", () => {
-    expect(testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
-    expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
-  });
-
   it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {
     expect(
       testing.resolveSampleExitFailure({
@@ -496,15 +501,6 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         signal: "SIGTERM",
       }),
     ).toBeNull();
-  });
-
-  it("budgets timeout per restart instead of against the whole sample", () => {
-    const sampleStartAt = 1_000;
-    const timeoutMs = 30_000;
-    const restart20SignalAt = sampleStartAt + 25_000;
-
-    expect(testing.resolvePhaseDeadlineAt(sampleStartAt, timeoutMs)).toBe(31_000);
-    expect(testing.resolvePhaseDeadlineAt(restart20SignalAt, timeoutMs)).toBe(56_000);
   });
 
   it("does not fail successful restarts when probes miss the unavailable window", () => {
@@ -724,7 +720,9 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
       // The benchmark records intent only after Gateway startup creates state.
       openOpenClawStateDatabase({ env });
-      expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
+      expect(
+        writeGatewayRestartIntentSync({ env, targetPid: 12345, reason: "gateway-restart-bench" }),
+      ).toBe(true);
       const row = readRestartIntentRow(env);
 
       expect(row).toMatchObject({

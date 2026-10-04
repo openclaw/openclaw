@@ -29,7 +29,7 @@ export function areAgentRunModelsEqual(
 }
 
 /** Admission waits cannot hide an independently running or queued producer. */
-export function mergeProjectedAgentRunStates(
+function mergeProjectedAgentRunStates(
   previous: ProjectedAgentRunState | undefined,
   next: ProjectedAgentRunState | undefined,
 ): ProjectedAgentRunState | undefined {
@@ -38,6 +38,60 @@ export function mergeProjectedAgentRunStates(
     (previous === "queued" && next !== "running")
     ? previous
     : next;
+}
+
+export function resolveAgentRunProjectionProgressState(
+  params: {
+    sessionKeys: readonly string[];
+    sessionId?: string;
+    agentId?: string;
+    defaultAgentId?: string;
+  },
+  index: ProjectedAgentRunIndex,
+): ProjectedAgentRunState | undefined {
+  let agentId = params.agentId;
+  if (agentId === undefined) {
+    for (const key of params.sessionKeys) {
+      agentId = parseAgentSessionKey(key)?.agentId;
+      if (agentId !== undefined) {
+        break;
+      }
+    }
+    agentId ??= params.defaultAgentId;
+  }
+  if (!agentId) {
+    return undefined;
+  }
+  const agentPrefix = projectedRunIdentity(agentId, "");
+  const mayAdoptOwnerless =
+    params.defaultAgentId !== undefined &&
+    agentPrefix === projectedRunIdentity(params.defaultAgentId, "");
+  let status: ProjectedAgentRunState | undefined;
+  for (const sessionKey of params.sessionKeys) {
+    status = mergeProjectedAgentRunStates(status, index.sessionKeys.get(agentPrefix + sessionKey));
+    if (status === "running") {
+      return status;
+    }
+    if (mayAdoptOwnerless) {
+      status = mergeProjectedAgentRunStates(status, index.ownerlessSessionKeys.get(sessionKey));
+      if (status === "running") {
+        return status;
+      }
+    }
+  }
+  if (params.sessionId !== undefined) {
+    status = mergeProjectedAgentRunStates(
+      status,
+      index.sessionIds.get(agentPrefix + params.sessionId),
+    );
+    if (mayAdoptOwnerless) {
+      status = mergeProjectedAgentRunStates(
+        status,
+        index.ownerlessSessionIds.get(params.sessionId),
+      );
+    }
+  }
+  return status;
 }
 
 /** Canonicalizes every run-context field consumed by the session projection. */

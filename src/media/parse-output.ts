@@ -1,4 +1,3 @@
-// Media parse helpers normalize media references from user and channel input.
 import {
   extractEmbeddedIpv4FromIpv6,
   isBlockedSpecialUseIpv4Address,
@@ -14,9 +13,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { MarkdownImageSpan as MarkdownImageMatch } from "../../packages/markdown-core/src/image-spans.js";
 import { findCodeRegions } from "../shared/text/code-regions.js";
 import { parseInlineDirectives } from "../utils/directive-tags.js";
+import { parseInboundMediaUri } from "./inbound-media-uri.js";
 
-/** Captures legacy MEDIA: attachment directives from model/tool output. */
-const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
+// A MEDIA directive consumes its entire line. Keep the optional leading backtick:
+// removing it before parsing preserves the existing whitespace-split backtick syntax.
+const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/i;
 
 const RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE =
   /^(?:https?:\/\/|data:(?:image|audio|video)\/|file:|~|\/|[a-z]:[\\/])/iu;
@@ -26,7 +27,6 @@ export function isRelativeAssistantMediaReference(url: string): boolean {
   return Boolean(trimmed) && !RENDERABLE_ASSISTANT_MEDIA_PREFIX_RE.test(trimmed);
 }
 
-/** Ordered output segment emitted after visible text and extracted media are separated. */
 type ParsedMediaOutputSegment =
   | {
       type: "text";
@@ -72,43 +72,20 @@ const HAS_FILE_EXT = /\.\w{1,10}$/;
 // Matches ".." as a standalone path segment (start, middle, or end).
 const TRAVERSAL_SEGMENT_RE = /(?:^|[/\\])\.\.(?:[/\\]|$)/;
 
-function isSupportedHomeRelativePath(candidate: string): boolean {
-  return candidate.startsWith("~/") || candidate.startsWith("~\\");
-}
-
 function hasTraversalOrUnsupportedHomeDirPrefix(candidate: string): boolean {
   return (
-    candidate.startsWith("../") ||
-    candidate === ".." ||
-    (candidate.startsWith("~") && !isSupportedHomeRelativePath(candidate)) ||
+    (candidate.startsWith("~") && !/^~[/\\]/.test(candidate)) ||
     TRAVERSAL_SEGMENT_RE.test(candidate)
   );
 }
 
-// Broad structural check: does this look like a local file path? Used only for
-// stripping MEDIA: lines from output text — never for media approval.
+// Structural spelling only; media approval additionally rejects traversal and unsupported homes.
 function looksLikeLocalFilePath(candidate: string): boolean {
   return (
     candidate.startsWith("/") ||
     candidate.startsWith("./") ||
     candidate.startsWith("../") ||
     candidate.startsWith("~") ||
-    WINDOWS_DRIVE_RE.test(candidate) ||
-    candidate.startsWith("\\\\") ||
-    (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
-  );
-}
-
-// Recognize safe local file path patterns for media approval, rejecting
-// traversal and unsupported home-dir paths so they never reach downstream load/send logic.
-function isLikelyLocalPath(candidate: string): boolean {
-  if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-    return false;
-  }
-  return (
-    candidate.startsWith("/") ||
-    candidate.startsWith("./") ||
-    isSupportedHomeRelativePath(candidate) ||
     WINDOWS_DRIVE_RE.test(candidate) ||
     candidate.startsWith("\\\\") ||
     (!SCHEME_RE.test(candidate) && (candidate.includes("/") || candidate.includes("\\")))
@@ -136,9 +113,7 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
     return true;
   }
   if (
-    normalized === "localhost" ||
     normalized === "localhost.localdomain" ||
-    normalized === "metadata.google.internal" ||
     normalized.endsWith(".localhost") ||
     normalized.endsWith(".local") ||
     normalized.endsWith(".internal")
@@ -196,8 +171,12 @@ function isValidMedia(
     return isAllowedRemoteMediaUrl(candidate);
   }
 
-  if (isLikelyLocalPath(candidate)) {
-    return true;
+  if (/^media:\/\//i.test(candidate)) {
+    try {
+      return parseInboundMediaUri(candidate) !== null;
+    } catch {
+      return false;
+    }
   }
 
   // Hard reject traversal/unsupported home-dir patterns before the bare-filename fallback
@@ -205,14 +184,15 @@ function isValidMedia(
   if (hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
     return false;
   }
-
-  // Accept bare filenames (e.g. "image.png") only when the caller opts in.
-  // This avoids treating space-split path fragments as separate media items.
-  if (opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate)) {
+  if (looksLikeLocalFilePath(candidate)) {
     return true;
   }
 
-  return false;
+  // Accept bare filenames (e.g. "image.png") only when the caller opts in.
+  // This avoids treating space-split path fragments as separate media items.
+  return Boolean(
+    opts?.allowBareFilename && !SCHEME_RE.test(candidate) && HAS_FILE_EXT.test(candidate),
+  );
 }
 
 function beginsIndependentMediaSource(raw: string): boolean {
@@ -220,7 +200,79 @@ function beginsIndependentMediaSource(raw: string): boolean {
   return MEDIA_SOURCE_ROOT_RE.test(candidate) || SCHEME_RE.test(candidate);
 }
 
-function splitUnquotedMediaDirectiveParts(payload: string): string[] {
+// Scan quote boundaries once; retrying a regex at every stray quote is quadratic.
+const QUOTE_CHARS = new Set(['"', "'", "`"]);
+const MEDIA_DIRECTIVE_SPACE_RE = /\s/;
+
+// A comma closes a quoted reference only when another quoted reference follows it.
+// Apostrophes in filenames and prose after commas remain part of the current value.
+function isQuotedMediaReferenceBoundary(payload: string, afterQuote: number): boolean {
+  if (afterQuote >= payload.length) {
+    return true;
+  }
+  const char = payload.charAt(afterQuote);
+  if (MEDIA_DIRECTIVE_SPACE_RE.test(char)) {
+    return true;
+  }
+  if (char !== ",") {
+    return false;
+  }
+  let index = afterQuote + 1;
+  while (index < payload.length && MEDIA_DIRECTIVE_SPACE_RE.test(payload.charAt(index))) {
+    index += 1;
+  }
+  return index < payload.length && QUOTE_CHARS.has(payload.charAt(index));
+}
+
+function findQuotedMediaReferenceEnd(payload: string, start: number, quote: string): number {
+  for (let index = start + 1; index < payload.length; index += 1) {
+    if (payload.charAt(index) === quote && isQuotedMediaReferenceBoundary(payload, index + 1)) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+// Only a complete array wrapper participates in quoted-list parsing.
+function stripSerializedJsonArrayWrapper(payload: string): string {
+  const trimmed = payload.trim();
+  if (
+    trimmed.length < 2 ||
+    trimmed.charAt(0) !== "[" ||
+    trimmed.charAt(trimmed.length - 1) !== "]"
+  ) {
+    return payload;
+  }
+  return trimmed.slice(1, -1);
+}
+
+// Require at least two fully quoted tokens. A single value or an unquoted tail
+// keeps whole-payload parsing, including apostrophes and filename whitespace.
+function readQuotedMediaReferenceList(rawPayload: string): string[] | null {
+  const payload = stripSerializedJsonArrayWrapper(rawPayload);
+  const tokens: string[] = [];
+  let index = 0;
+  while (index < payload.length) {
+    const char = payload.charAt(index);
+    if (MEDIA_DIRECTIVE_SPACE_RE.test(char) || char === ",") {
+      index += 1;
+      continue;
+    }
+    if (QUOTE_CHARS.has(char)) {
+      const end = findQuotedMediaReferenceEnd(payload, index, char);
+      if (end !== -1) {
+        tokens.push(payload.slice(index, end + 1));
+        index = end + 1;
+        continue;
+      }
+    }
+    return null;
+  }
+  return tokens.length >= 2 ? tokens : null;
+}
+
+// Outside an explicit list, quotes inside a filename must not prevent joining its fragments.
+function splitMediaDirectiveParts(payload: string): string[] {
   const parts: string[] = [];
   let previousEnd = 0;
   for (const match of payload.matchAll(/\S+/g)) {
@@ -247,19 +299,11 @@ function unwrapQuoted(value: string): string | undefined {
   if (trimmed.length < 2) {
     return undefined;
   }
-  const first = trimmed[0];
-  const last = trimmed[trimmed.length - 1];
-  if (first !== last) {
-    return undefined;
-  }
-  if (first !== `"` && first !== "'" && first !== "`") {
+  const first = trimmed.charAt(0);
+  if (first !== trimmed.at(-1) || !QUOTE_CHARS.has(first)) {
     return undefined;
   }
   return trimmed.slice(1, -1).trim();
-}
-
-function normalizeMarkdownImageDestination(destination: string): string {
-  return normalizeMediaSource(destination.trim());
 }
 
 function cleanLineText(text: string): string {
@@ -268,10 +312,6 @@ function cleanLineText(text: string): string {
 
 const MAX_MARKDOWN_IMAGE_LINE_LENGTH = 20_000;
 const MAX_MARKDOWN_IMAGE_MATCHES_PER_LINE = 50;
-
-function isRemoteMarkdownImageMedia(candidate: string): boolean {
-  return hasHttpUrlPrefix(candidate) && isValidMedia(candidate);
-}
 
 function removeMarkdownImageSpans(line: string, matches: MarkdownImageMatch[]): string {
   const pieces: string[] = [];
@@ -352,9 +392,9 @@ function collectMarkdownImageSegments(params: {
     segmentPieces.push(before);
     visiblePieces.push(before);
 
-    const target = normalizeMarkdownImageDestination(match.destination);
+    const target = normalizeMediaSource(match.destination.trim());
     const selectedTarget = params.allowlist?.get(target);
-    if (selectedTarget || (!params.allowlist && isRemoteMarkdownImageMedia(target))) {
+    if (selectedTarget || (!params.allowlist && hasHttpUrlPrefix(target) && isValidMedia(target))) {
       extractedImages.push(match);
       const beforeText = params.preserveTrailingWhitespace
         ? segmentPieces.join("")
@@ -405,6 +445,7 @@ export function splitMediaOutput(
 ): {
   text: string;
   mediaUrls?: string[];
+  rejectedMediaCount?: number;
   audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
   segments?: ParsedMediaOutputSegment[];
 } {
@@ -418,10 +459,7 @@ export function splitMediaOutput(
     imageExtraction?.allowlist === undefined
       ? undefined
       : new Map(
-          imageExtraction.allowlist.map((source) => [
-            normalizeMarkdownImageDestination(source),
-            source,
-          ]),
+          imageExtraction.allowlist.map((source) => [normalizeMediaSource(source.trim()), source]),
         );
   const extractMarkdownImages = imageExtraction !== undefined;
   const extractMediaDirectives = options.extractMediaDirectives !== false;
@@ -433,29 +471,38 @@ export function splitMediaOutput(
   }
 
   const media: string[] = [];
+  let rejectedMediaCount = 0;
   let foundMediaToken = false;
   const segments: ParsedMediaOutputSegment[] = [];
   let lastTextSegment: Extract<ParsedMediaOutputSegment, { type: "text" }> | undefined;
+  let lineSeparator = "";
+  let lastTextSeparator = "";
 
   const pushTextSegment = (text: string) => {
     const last = segments[segments.length - 1];
     if (last?.type === "text") {
-      last.text = `${last.text}\n${text.trim() ? text : ""}`;
+      last.text = `${last.text}${lastTextSeparator}${text.trim() ? text : ""}`;
+      lastTextSeparator = lineSeparator;
     } else if (!text.trim()) {
-      if (last?.type === "media" && lastTextSegment && !lastTextSegment.text.endsWith("\n")) {
-        lastTextSegment.text += "\n";
+      if (last?.type === "media" && lastTextSegment && !/[\r\n]$/.test(lastTextSegment.text)) {
+        lastTextSegment.text += lastTextSeparator;
       }
     } else {
       lastTextSegment = { type: "text", text };
+      lastTextSeparator = lineSeparator;
       segments.push(lastTextSegment);
     }
   };
 
   const codeBlocks = findCodeRegions(trimmedRaw).filter((region) => region.block);
 
-  // Line-wise parsing preserves visible text while letting MEDIA-only lines disappear cleanly.
-  const lines = trimmedRaw.split("\n");
+  const lines = trimmedRaw.split(/(\r\n|\r|\n)/);
   const keptLines: string[] = [];
+  let keptSeparator = "";
+  const keepLine = (text: string) => {
+    keptLines.push(keptSeparator, text);
+    keptSeparator = lineSeparator;
+  };
   const markdownImages =
     mayContainMarkdownImage &&
     lines.some((line) => line.length <= MAX_MARKDOWN_IMAGE_LINE_LENGTH && line.includes("!["))
@@ -466,7 +513,9 @@ export function splitMediaOutput(
   let lineOffset = 0; // Track character offset for code-block checking
   // Line offsets and scanner spans advance in source order.
   let codeBlockIndex = 0;
-  for (const line of lines) {
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 2) {
+    const line = expectDefined(lines[lineIndex], "media output line");
+    lineSeparator = lines[lineIndex + 1] ?? "";
     const lineEnd = lineOffset + line.length;
     const lineImages: MarkdownImageMatch[] = [];
     for (; markdownImageIndex < markdownImages.length; markdownImageIndex += 1) {
@@ -494,9 +543,9 @@ export function splitMediaOutput(
       codeBlock = codeBlocks[codeBlockIndex];
     }
     if (codeBlock && lineEnd > codeBlock.start) {
-      keptLines.push(line);
+      keepLine(line);
       pushTextSegment(line);
-      lineOffset += line.length + 1; // +1 for newline
+      lineOffset += line.length + lineSeparator.length;
       continue;
     }
 
@@ -512,12 +561,12 @@ export function splitMediaOutput(
           })
         : { lineSegments: [], foundMedia: false };
       if (!markdownImageResult.foundMedia) {
-        keptLines.push(line);
+        keepLine(line);
         pushTextSegment(line);
       } else {
         foundMediaToken = true;
         if (markdownImageResult.cleanedLine !== undefined) {
-          keptLines.push(markdownImageResult.cleanedLine);
+          keepLine(markdownImageResult.cleanedLine);
         }
         for (const segment of markdownImageResult.lineSegments) {
           if (segment.type === "text") {
@@ -527,123 +576,92 @@ export function splitMediaOutput(
           segments.push(segment);
         }
       }
-      lineOffset += line.length + 1; // +1 for newline
+      lineOffset += line.length + lineSeparator.length;
       continue;
     }
 
-    const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
-    if (matches.length === 0) {
-      keptLines.push(line);
+    const match = MEDIA_TOKEN_RE.exec(line);
+    if (!match) {
+      keepLine(line);
       pushTextSegment(line);
-      lineOffset += line.length + 1; // +1 for newline
+      lineOffset += line.length + lineSeparator.length;
       continue;
     }
 
-    const pieces: string[] = [];
-    const lineSegments: ParsedMediaOutputSegment[] = [];
-    let cursor = 0;
-
-    for (const match of matches) {
-      const start = match.index ?? 0;
-      pieces.push(line.slice(cursor, start));
-
-      const payload = expectDefined(match[1], "parse regex capture 1");
-      const unwrapped = unwrapQuoted(payload);
-      const payloadValue = unwrapped ?? payload;
-      const parts = unwrapped ? [unwrapped] : splitUnquotedMediaDirectiveParts(payload);
-      const mediaStartIndex = media.length;
-      let validCount = 0;
-      const invalidParts: string[] = [];
-      let hasValidMedia = false;
-      for (const part of parts) {
-        // Matched quotes delimit the reference; punctuation inside them belongs to its value.
-        const candidate = unwrapped === undefined ? cleanCandidate(part) : part;
-        const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
-        if (isValidMedia(candidate, { allowSpaces })) {
-          media.push(candidate);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          validCount += 1;
-        } else if (!/\s/.test(part) || !hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
-          invalidParts.push(part);
-        }
-      }
-
-      const trimmedPayload = payloadValue.trim();
-      const looksLikeLocalPath =
-        looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
-      if (
-        !unwrapped &&
-        validCount === 1 &&
-        invalidParts.length > 0 &&
-        !parts.slice(1).some(beginsIndependentMediaSource) &&
-        /\s/.test(payloadValue) &&
-        looksLikeLocalPath
-      ) {
-        // A single valid split plus invalid leftovers can be one local path containing spaces.
-        const fallback = cleanCandidate(payloadValue);
-        if (isValidMedia(fallback, { allowSpaces: true })) {
-          media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
-
-      if (!hasValidMedia) {
-        const fallback = unwrapped ?? cleanCandidate(payloadValue);
-        if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
-          media.push(fallback);
-          hasValidMedia = true;
-          foundMediaToken = true;
-          invalidParts.length = 0;
-        }
-      }
-
-      if (hasValidMedia) {
-        const beforeText = cleanLineText(pieces.join(""));
-        if (beforeText) {
-          lineSegments.push({ type: "text", text: beforeText });
-        }
-        pieces.length = 0;
-        for (const url of media.slice(mediaStartIndex)) {
-          lineSegments.push({ type: "media", url });
-        }
-        if (invalidParts.length > 0) {
-          pieces.push(invalidParts.join(" "));
-        }
-      } else if (looksLikeLocalPath) {
-        // Strip MEDIA: lines with local paths even when invalid (e.g. absolute paths
-        // from internal tools like TTS). They should never leak as visible text.
+    const payload = expectDefined(match[1], "parse regex capture 1");
+    const quotedList = readQuotedMediaReferenceList(payload);
+    const stripped = unwrapQuoted(payload);
+    const unwrapped = quotedList ? undefined : stripped;
+    const payloadValue = unwrapped ?? payload;
+    const parts = quotedList ?? (unwrapped ? [unwrapped] : splitMediaDirectiveParts(payload));
+    const mediaStartIndex = media.length;
+    const rejectedBefore = rejectedMediaCount;
+    const invalidParts: string[] = [];
+    for (const part of parts) {
+      // Quoted references preserve punctuation, including signed URL suffixes.
+      const quotedPart = unwrapped === undefined ? unwrapQuoted(part) : undefined;
+      const candidate = unwrapped ?? quotedPart ?? cleanCandidate(part);
+      if (isValidMedia(candidate, { allowSpaces: true, allowBareFilename: quotedList !== null })) {
+        media.push(candidate);
+      } else if (beginsIndependentMediaSource(candidate) || looksLikeLocalFilePath(candidate)) {
+        rejectedMediaCount += 1;
         foundMediaToken = true;
-      } else {
-        // If no valid media was found in this match, keep the original token text.
-        pieces.push(match[0]);
+      } else if (!/\s/.test(part) || !hasTraversalOrUnsupportedHomeDirPrefix(candidate)) {
+        invalidParts.push(part);
       }
-
-      cursor = start + match[0].length;
     }
 
-    pieces.push(line.slice(cursor));
+    const trimmedPayload = (stripped ?? payload).trim();
+    const looksLikeLocalPath =
+      looksLikeLocalFilePath(trimmedPayload) || FILE_URL_PREFIX_RE.test(trimmedPayload);
+    if (
+      quotedList === null &&
+      !unwrapped &&
+      media.length - mediaStartIndex === 1 &&
+      invalidParts.length > 0 &&
+      !parts.slice(1).some(beginsIndependentMediaSource) &&
+      /\s/.test(payloadValue) &&
+      looksLikeLocalPath
+    ) {
+      // Unquoted fragments can belong to one local filename; explicit list members cannot.
+      const fallback = cleanCandidate(payloadValue);
+      if (isValidMedia(fallback, { allowSpaces: true })) {
+        media.splice(mediaStartIndex, media.length - mediaStartIndex, fallback);
+        invalidParts.length = 0;
+      }
+    }
 
-    const cleanedLine = cleanLineText(pieces.join(""));
+    // Never weld rejected list members into a synthetic whole-payload filename.
+    if (quotedList === null && media.length === mediaStartIndex) {
+      const fallback = unwrapped ?? cleanCandidate(payloadValue);
+      if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
+        media.push(fallback);
+        invalidParts.length = 0;
+      }
+    }
 
-    // If the line becomes empty, drop it.
+    let cleanedLine: string;
+    if (media.length > mediaStartIndex) {
+      foundMediaToken = true;
+      for (const url of media.slice(mediaStartIndex)) {
+        segments.push({ type: "media", url });
+      }
+      cleanedLine = cleanLineText(invalidParts.join(" "));
+    } else if (looksLikeLocalPath || rejectedMediaCount > rejectedBefore) {
+      // Rejected references can contain private paths or credentials; delivery owns their notice.
+      foundMediaToken = true;
+      cleanedLine = "";
+    } else {
+      cleanedLine = cleanLineText(line);
+    }
     if (cleanedLine) {
-      keptLines.push(cleanedLine);
-      lineSegments.push({ type: "text", text: cleanedLine });
+      keepLine(cleanedLine);
+      pushTextSegment(cleanedLine);
     }
-    for (const segment of lineSegments) {
-      if (segment.type === "text") {
-        pushTextSegment(segment.text);
-        continue;
-      }
-      segments.push(segment);
-    }
-    lineOffset += line.length + 1; // +1 for newline
+    lineOffset += line.length + lineSeparator.length;
   }
 
-  const visibleText = keptLines.join("\n").replace(/^(?:[ \t]*\n)+/, "");
+  const visibleText = keptLines.join("").replace(/^(?:[ \t]*(?:\r\n|\r|\n))+/, "");
   const audioTagResult =
     options.extractAudioDirectives === false
       ? { text: visibleText, audioAsVoice: false }
@@ -662,6 +680,7 @@ export function splitMediaOutput(
     const result: ReturnType<typeof splitMediaOutput> = {
       text: parsedText,
       segments: parsedText ? [{ type: "text", text: parsedText }] : [],
+      ...(rejectedMediaCount > 0 ? { rejectedMediaCount } : {}),
     };
     if (hasAudioAsVoice) {
       result.audioAsVoice = true;
@@ -672,6 +691,7 @@ export function splitMediaOutput(
   return {
     text: cleanedText,
     mediaUrls: media,
+    ...(rejectedMediaCount > 0 ? { rejectedMediaCount } : {}),
     segments: segments.length > 0 ? segments : [{ type: "text", text: cleanedText }],
     ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
   };

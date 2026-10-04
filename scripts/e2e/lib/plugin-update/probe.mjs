@@ -3,6 +3,7 @@ import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { writeJson } from "../fixtures/common.mjs";
 import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
@@ -34,11 +35,6 @@ const pluginRecordSnapshot = () => {
 
 function openclawPath(...parts) {
   return path.join(home, ".openclaw", ...parts);
-}
-
-function writeJson(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function seedInstallState() {
@@ -303,7 +299,10 @@ function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
 
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
-  consent: () => runConsentScenario(arg, arg2),
+  consent: () =>
+    runConsentScenario(arg, arg2, {
+      coreUpdateConsent: process.env.OPENCLAW_E2E_CORE_UPDATE_CONSENT !== "0",
+    }),
   seed: seedInstallState,
   "wait-registry": waitRegistry,
   snapshot: () => process.stdout.write(JSON.stringify(pluginRecordSnapshot(), null, 2)),

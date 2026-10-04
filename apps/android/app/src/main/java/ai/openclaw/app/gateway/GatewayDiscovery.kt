@@ -13,7 +13,6 @@ import android.util.Log
 import androidx.annotation.RequiresApi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -83,7 +82,6 @@ class GatewayDiscovery(
   /** Current discovered gateway list, merged from local DNS-SD and optional wide-area DNS-SD. */
   val gateways: StateFlow<List<GatewayEndpoint>> = _gateways.asStateFlow()
 
-  private var unicastJob: Job? = null
   private val dnsExecutor: Executor = Executors.newCachedThreadPool()
   private val serviceInfoExecutor = context.mainExecutor
   private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
@@ -162,17 +160,16 @@ class GatewayDiscovery(
   }
 
   private fun startUnicastDiscovery(domain: String) {
-    unicastJob =
-      scope.launch(Dispatchers.IO) {
-        while (true) {
-          try {
-            refreshUnicast(domain)
-          } catch (_: Throwable) {
-            // ignore (best-effort)
-          }
-          delay(5000)
+    scope.launch(Dispatchers.IO) {
+      while (true) {
+        try {
+          refreshUnicast(domain)
+        } catch (_: Throwable) {
+          // ignore (best-effort)
         }
+        delay(5000)
       }
+    }
   }
 
   private fun resolve(serviceInfo: NsdServiceInfo) {
@@ -339,11 +336,7 @@ class GatewayDiscovery(
     key: String,
   ): String? {
     val bytes = info.attributes[key] ?: return null
-    return try {
-      String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
-    } catch (_: Throwable) {
-      null
-    }
+    return String(bytes, Charsets.UTF_8).trim().ifEmpty { null }
   }
 
   private fun parseTxtBool(value: String?): Boolean {
@@ -378,8 +371,7 @@ class GatewayDiscovery(
 
       // Wide-area DNS-SD may put TXT in additional records; fall back to a direct TXT query.
       val txtFromPtr =
-        recordsByName(ptrMsg, Section.ADDITIONAL)[keyName(instanceFqdn)]
-          .orEmpty()
+        recordsForName(ptrMsg, Section.ADDITIONAL, instanceFqdn)
           .mapNotNull { it as? TXTRecord }
       val txt =
         if (txtFromPtr.isNotEmpty()) {
@@ -473,39 +465,28 @@ class GatewayDiscovery(
 
   private fun keyName(raw: String): String = raw.trim().lowercase()
 
-  private fun recordsByName(
-    msg: Message,
+  private fun recordsForName(
+    msg: Message?,
     section: Int,
-  ): Map<String, List<Record>> {
-    val next = LinkedHashMap<String, MutableList<Record>>()
-    for (r in records(msg, section)) {
-      val name = r.name?.toString() ?: continue
-      next.getOrPut(keyName(name)) { mutableListOf() }.add(r)
-    }
-    return next
+    fqdn: String,
+  ): List<Record> {
+    val key = keyName(fqdn)
+    return records(msg, section).filter { it.name?.toString()?.let(::keyName) == key }
   }
 
   private fun recordByName(
     msg: Message,
     fqdn: String,
     type: Int,
-  ): Record? {
-    val key = keyName(fqdn)
-    val byNameAnswer = recordsByName(msg, Section.ANSWER)
-    val fromAnswer = byNameAnswer[key].orEmpty().firstOrNull { it.type == type }
-    if (fromAnswer != null) return fromAnswer
-
-    val byNameAdditional = recordsByName(msg, Section.ADDITIONAL)
-    return byNameAdditional[key].orEmpty().firstOrNull { it.type == type }
-  }
+  ): Record? =
+    recordsForName(msg, Section.ANSWER, fqdn).firstOrNull { it.type == type }
+      ?: recordsForName(msg, Section.ADDITIONAL, fqdn).firstOrNull { it.type == type }
 
   private fun resolveHostFromMessage(
     msg: Message?,
     hostname: String,
   ): String? {
-    val m = msg ?: return null
-    val key = keyName(hostname)
-    val additional = recordsByName(m, Section.ADDITIONAL)[key].orEmpty()
+    val additional = recordsForName(msg, Section.ADDITIONAL, hostname)
     val a = additional.mapNotNull { it as? ARecord }.mapNotNull { it.address?.hostAddress }
     val aaaa = additional.mapNotNull { it as? AAAARecord }.mapNotNull { it.address?.hostAddress }
     return a.firstOrNull() ?: aaaa.firstOrNull()
@@ -513,16 +494,14 @@ class GatewayDiscovery(
 
   private fun preferredDnsNetwork(): android.net.Network? {
     val cm = connectivity ?: return null
-
     // Prefer VPN (Tailscale) when present; otherwise use the active network.
-    trackedNetworks(cm)
-      .firstOrNull { n ->
-        val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-        caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-      }?.let { return it }
-
-    return cm.activeNetwork
+    return preferredVpnNetwork(cm) ?: cm.activeNetwork
   }
+
+  private fun preferredVpnNetwork(cm: ConnectivityManager): Network? =
+    trackedNetworks(cm).firstOrNull { network ->
+      cm.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
+    }
 
   private fun trackedNetworks(cm: ConnectivityManager): List<Network> =
     buildList {
@@ -536,11 +515,7 @@ class GatewayDiscovery(
     val candidateNetworks =
       buildList {
         // Put VPN DNS first so Tailscale split-horizon names win over public DNS.
-        trackedNetworks(cm)
-          .firstOrNull { n ->
-            val caps = cm.getNetworkCapabilities(n) ?: return@firstOrNull false
-            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-          }?.let(::add)
+        preferredVpnNetwork(cm)?.let(::add)
         cm.activeNetwork?.let(::add)
       }.distinct()
 

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { prepareMemorySystemPromptAddition } from "../../context-engine/delegate.js";
-import { buildBootstrapContextForFiles, resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { resolveBootstrapFilesForRun } from "../bootstrap-files.js";
+import { buildBootstrapContextForFiles } from "../embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 import {
   PERSONAL_USER_CONTEXT_INSTRUCTIONS,
@@ -35,6 +36,8 @@ export type AgentWorkspaceContext = {
   instructionSnapshot: ReturnType<typeof buildAgentWorkspaceInstructionSnapshot>;
   personaFiles: EmbeddedContextFile[];
   personaInstructions?: string;
+  /** Safe for carriers inherited by delegated agents; excludes selected personal profiles. */
+  sharedPersonaInstructions?: string;
   promptContextFiles: EmbeddedContextFile[];
   memoryReferenceFiles: EmbeddedContextFile[];
   memoryToolRoutedBootstrapFiles: BootstrapFile[];
@@ -138,6 +141,9 @@ export async function prepareAgentWorkspaceContext(
     instructionSnapshot,
     personaFiles,
     personaInstructions: renderPersonaInstructions(personaFiles),
+    sharedPersonaInstructions: renderPersonaInstructions(
+      personaFiles.filter((file) => file.personalUser !== true),
+    ),
     promptContextFiles,
     memoryReferenceFiles,
     memoryToolRoutedBootstrapFiles,

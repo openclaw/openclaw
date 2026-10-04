@@ -3,7 +3,6 @@ import path from "node:path";
 import { describe, expect, vi } from "vitest";
 import { TSDOWN_NON_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import { resolveTsdownDeclarationGeneratorInputs } from "../../scripts/lib/tsdown-declaration-generator-inputs.mts";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture as createFixture,
   createDeclarationTest,
@@ -133,7 +132,7 @@ describe("write-unified-entry-dts", () => {
     }
   });
 
-  it.concurrent("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
+  it("reuses unaffected canonical groups while rebuilding runtime after input edits", ({
     command,
     onTestFailed,
   }) =>
@@ -173,7 +172,6 @@ describe("write-unified-entry-dts", () => {
       const { root, write, production, declarations } = await measurePhase("fixture", () =>
         createFixture(command, TSDOWN_NON_SDK_DTS_CONFIG_GROUPS),
       );
-      await measurePhase("native-compiler-fixture", () => materializeNativeCompiler(root));
       expect(Object.values(declarations).every((entries) => entries.length > 0)).toBe(true);
       expect(production).toHaveLength(Object.values(declarations).flat().length);
       write("extensions/fixture-a/runtime-only.js", 'export const runtimeOnly = "runtime";');
@@ -188,7 +186,13 @@ describe("write-unified-entry-dts", () => {
           '\nexport const pluginRevision = "fixture_zeta";',
           'export function literalOrder(flag: boolean) { return flag ? "fixture_alpha" as const : "fixture_zeta" as const; }',
           'export { typedRuntime } from "./typed-runtime.js";',
-          'export type { Schema as ArrowSchema } from "apache-arrow";',
+        ].join("\n"),
+      );
+      // Keep external type compatibility in a cached group during the isolated edit.
+      fs.appendFileSync(
+        path.join(root, "extensions/fixture-b/index.ts"),
+        [
+          '\nexport type { Schema as ArrowSchema } from "apache-arrow";',
           'export type { Message as ArrowMessage } from "apache-arrow/ipc/metadata/message";',
         ].join("\n"),
       );
@@ -207,7 +211,7 @@ describe("write-unified-entry-dts", () => {
         [
           'import type { Schema } from "apache-arrow";',
           'import type { Message } from "apache-arrow/ipc/metadata/message";',
-          'import type { ArrowSchema, ArrowMessage } from "./dist/extensions/fixture-a/index.js";',
+          'import type { ArrowSchema, ArrowMessage } from "./dist/extensions/fixture-b/index.js";',
           "declare const schema: Schema; const projectedSchema: ArrowSchema = schema;",
           "const originalSchema: Schema = projectedSchema; void originalSchema;",
           "declare const message: Message; const projectedMessage: ArrowMessage = message;",

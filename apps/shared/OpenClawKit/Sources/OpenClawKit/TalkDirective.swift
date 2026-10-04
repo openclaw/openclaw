@@ -72,8 +72,7 @@ public enum TalkVoiceAliases {
     }
 
     public static func resolve(_ value: String?, aliases: [String: String]) -> String? {
-        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = value?.trimmedNonEmpty else { return nil }
         if let mapped = aliases[trimmed.lowercased()] {
             return mapped
         }
@@ -161,10 +160,7 @@ public enum TalkDirectiveParser {
 
     private static func stringValue(_ dict: [String: Any], keys: [String]) -> String? {
         for key in keys {
-            if let value = dict[key] as? String {
-                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { return trimmed }
-            }
+            if let value = (dict[key] as? String)?.trimmedNonEmpty { return value }
         }
         return nil
     }
@@ -181,7 +177,7 @@ public enum TalkDirectiveParser {
     private static func intValue(_ dict: [String: Any], keys: [String]) -> Int? {
         for key in keys {
             if let value = dict[key] as? Int { return value }
-            if let value = dict[key] as? Double { return Int(value) }
+            if let value = dict[key] as? Double { return Int(exactly: value.rounded(.towardZero)) }
             if let value = dict[key] as? String, let parsed = Int(value) { return parsed }
         }
         return nil

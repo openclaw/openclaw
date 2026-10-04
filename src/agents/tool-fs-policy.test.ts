@@ -23,14 +23,13 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
     const cfg: OpenClawConfig = {
       tools: { fs: { workspaceOnly: true } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               fs: { workspaceOnly: false },
             },
           },
-        ],
+        },
       },
     };
     expect(resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId: "main" })).toBe(false);
@@ -40,14 +39,13 @@ describe("resolveEffectiveToolFsWorkspaceOnly", () => {
     const cfg: OpenClawConfig = {
       tools: { fs: { workspaceOnly: false } },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             tools: {
               fs: { workspaceOnly: true },
             },
           },
-        ],
+        },
       },
     };
     expect(resolveEffectiveToolFsWorkspaceOnly({ cfg, agentId: "main" })).toBe(true);
@@ -113,10 +111,10 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
     const cfg: OpenClawConfig = {
       tools: { profile: "messaging" },
       agents: {
-        list: [
-          { id: "coder", tools: { profile: "coding" } },
-          { id: "messenger", tools: { profile: "messaging" } },
-        ],
+        entries: {
+          coder: { tools: { profile: "coding" } },
+          messenger: { tools: { profile: "messaging" } },
+        },
       },
     };
 
@@ -125,7 +123,7 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
     const invertedCfg: OpenClawConfig = {
       tools: { profile: "coding" },
       agents: {
-        list: [{ id: "messenger", tools: { profile: "messaging" } }],
+        entries: { messenger: { tools: { profile: "messaging" } } },
       },
     };
 
@@ -141,14 +139,13 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
         alsoAllow: ["read"],
       },
       agents: {
-        list: [
-          {
-            id: "messenger",
+        entries: {
+          messenger: {
             tools: {
               alsoAllow: ["message"],
             },
           },
-        ],
+        },
       },
     };
 
@@ -162,14 +159,13 @@ describe("resolveEffectiveToolFsRootExpansionAllowed", () => {
         fs: { workspaceOnly: false },
       },
       agents: {
-        list: [
-          {
-            id: "messenger",
+        entries: {
+          messenger: {
             tools: {
               fs: { workspaceOnly: true },
             },
           },
-        ],
+        },
       },
     };
 

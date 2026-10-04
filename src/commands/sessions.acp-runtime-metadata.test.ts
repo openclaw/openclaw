@@ -19,10 +19,10 @@ const NON_ACP_SESSION_KEY = "agent:main:main";
 function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "copilot" }, { id: "main", default: true }],
+      entries: { copilot: {}, main: {} },
       defaults: {},
     },
-  } as OpenClawConfig;
+  };
 }
 
 function computeSessionAgentRuntime(params: {

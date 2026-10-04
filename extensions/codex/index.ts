@@ -70,7 +70,7 @@ import {
   createCodexSessionCatalogControl,
   createCodexSessionCatalogNodeHostCommands,
   createCodexSessionCatalogNodeInvokePolicies,
-  codexSessionCatalogRuntime,
+  registerCodexSessionCatalog,
 } from "./src/session-catalog.js";
 import {
   CODEX_SUPERVISION_COMPAT_TOOL_NAMES,
@@ -161,9 +161,12 @@ export default definePluginEntry({
       deleteIf: (key, predicate) => openBindingStateStore().deleteIf!(key, predicate),
       entries: () => openBindingStateStore().entries(),
       lookup: (key) => openBindingStateStore().lookup(key),
-      get lookupMany() {
-        const store = openBindingStateStore();
-        return store.lookupMany?.bind(store);
+      asyncReads: {
+        lookup: (key) => openBindingMutationStore().lookup(key),
+        get lookupMany() {
+          const store = openBindingMutationStore();
+          return store.lookupMany?.bind(store);
+        },
       },
       registerIfAbsent: (key, value, options) =>
         openBindingStateStore().registerIfAbsent(key, value, options),
@@ -183,12 +186,10 @@ export default definePluginEntry({
         // rediscovered from provenance; very old markerless sessions may reappear after eviction.
         overflowPolicy: "evict-oldest",
       }));
-    const lazyManagedThreadStateStore: Pick<
-      PluginStateKeyedStore<StoredCodexManagedThread>,
-      "entries" | "lookup" | "registerIfAbsent"
+    const lazyManagedThreadStateStore: NonNullable<
+      Parameters<typeof createLazyCodexAppServerBindingStore>[1]
     > = {
       entries: () => openManagedThreadStateStore().entries(),
-      lookup: (key) => openManagedThreadStateStore().lookup(key),
       registerIfAbsent: (key, value) => openManagedThreadStateStore().registerIfAbsent(key, value),
     };
     const bindingStore = createLazyCodexAppServerBindingStore(
@@ -220,7 +221,7 @@ export default definePluginEntry({
       stop: () => sessionCatalogControlFactory.stop(),
     });
     if (sessionCatalogEnabled) {
-      codexSessionCatalogRuntime.register({
+      registerCodexSessionCatalog({
         api,
         resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
         bindingStore,
@@ -345,36 +346,18 @@ export default definePluginEntry({
             resolveCodexCliSessionForBindingOnNode({ runtime: api.runtime, ...params }),
           codexPluginsManagementIo: {
             readConfig: () => {
-              const current = (api.runtime.config?.current?.() ?? {}) as OpenClawConfig;
-              const plugins = (current as Record<string, unknown>).plugins;
-              if (!plugins || typeof plugins !== "object") {
-                return Promise.resolve({});
-              }
-              const entries = (plugins as Record<string, unknown>).entries;
-              if (!entries || typeof entries !== "object") {
-                return Promise.resolve({});
-              }
-              const codexEntry = (entries as Record<string, unknown>).codex;
-              if (!codexEntry || typeof codexEntry !== "object") {
-                return Promise.resolve({});
-              }
-              const config = (codexEntry as Record<string, unknown>).config;
-              if (!config || typeof config !== "object") {
-                return Promise.resolve({});
-              }
-              const codexPlugins = (config as Record<string, unknown>).codexPlugins;
+              const codexPlugins =
+                resolveCurrentConfig()?.plugins?.entries?.codex?.config?.codexPlugins;
               if (!codexPlugins || typeof codexPlugins !== "object") {
                 return Promise.resolve({});
               }
-              const declared = (codexPlugins as Record<string, unknown>).plugins;
-              if (!declared || typeof declared !== "object") {
-                return Promise.resolve({
-                  enabled: (codexPlugins as Record<string, unknown>).enabled === true,
-                });
-              }
+              const enabled = "enabled" in codexPlugins && codexPlugins.enabled === true;
+              const declared = "plugins" in codexPlugins ? codexPlugins.plugins : undefined;
               return Promise.resolve({
-                enabled: (codexPlugins as Record<string, unknown>).enabled === true,
-                plugins: declared as Record<string, never>,
+                enabled,
+                ...(declared && typeof declared === "object"
+                  ? { plugins: declared as CodexPluginsConfigBlock["plugins"] }
+                  : {}),
               });
             },
             mutate: async (update, assertCurrent) => {
@@ -382,21 +365,13 @@ export default definePluginEntry({
               await mutateConfigFile({
                 writeOptions: { assertCurrent },
                 mutate: (draft) => {
-                  // Create the nested plugin config path on demand so codex
-                  // plugin commands can enable/update Codex-managed plugins.
-                  const root = draft as Record<string, unknown>;
-                  root.plugins = (root.plugins ?? {}) as Record<string, unknown>;
-                  const pluginsBlock = root.plugins as Record<string, unknown>;
-                  pluginsBlock.entries = (pluginsBlock.entries ?? {}) as Record<string, unknown>;
-                  const entries = pluginsBlock.entries as Record<string, unknown>;
-                  entries.codex = (entries.codex ?? {}) as Record<string, unknown>;
-                  const codexEntry = entries.codex as Record<string, unknown>;
-                  codexEntry.config = (codexEntry.config ?? {}) as Record<string, unknown>;
-                  const config = codexEntry.config as Record<string, unknown>;
-                  config.codexPlugins = (config.codexPlugins ?? {}) as Record<string, unknown>;
-                  const codexPlugins = config.codexPlugins as Record<string, unknown>;
-                  codexPlugins.plugins = (codexPlugins.plugins ?? {}) as Record<string, unknown>;
-                  update(codexPlugins as CodexPluginsConfigBlock);
+                  draft.plugins ??= {};
+                  draft.plugins.entries ??= {};
+                  const entry = (draft.plugins.entries.codex ??= {});
+                  const config = (entry.config ??= {});
+                  const codexPlugins = (config.codexPlugins ??= {}) as CodexPluginsConfigBlock;
+                  codexPlugins.plugins ??= {};
+                  update(codexPlugins);
                 },
               });
             },

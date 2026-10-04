@@ -47,14 +47,14 @@ describe("worker placement startup cleanup ownership", () => {
         agentId: "main",
         executionMode: "worker-turn",
       });
-      const provisioning = placements.transition({
+      const provisioning = await placements.transition({
         sessionId: requested.sessionId,
         from: "requested",
         to: "provisioning",
         expectedGeneration: requested.generation,
         patch: { environmentId: `worker-debris-${index}` },
       });
-      placements.fail({
+      await placements.fail({
         sessionId: requested.sessionId,
         expectedGeneration: provisioning.generation,
         recoveryError: "worker admission deadline exceeded",
@@ -163,7 +163,7 @@ describe("worker placement startup cleanup ownership", () => {
           ...identity,
           executionMode: "remote-exec",
         });
-        failed = placements.fail({
+        failed = await placements.fail({
           sessionId: requested.sessionId,
           expectedGeneration: requested.generation,
           recoveryError: "startup worker placement failed before its local claim was released",
@@ -176,7 +176,7 @@ describe("worker placement startup cleanup ownership", () => {
         failed = placements.get(failed.sessionId);
       } else {
         const starting = await seedStartingPlacement(placements, environmentId, "remote-exec");
-        failed = placements.fail({
+        failed = await placements.fail({
           sessionId: starting.sessionId,
           expectedGeneration: starting.generation,
           recoveryError: "startup worker placement failed before its owner epoch was released",
@@ -286,14 +286,14 @@ describe("worker placement startup cleanup ownership", () => {
       agentId: "main",
       executionMode: "remote-exec",
     });
-    const provisioning = placements.transition({
+    const provisioning = await placements.transition({
       sessionId: requested.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: requested.generation,
       patch: { environmentId },
     });
-    const failed = placements.fail({
+    const failed = await placements.fail({
       sessionId: provisioning.sessionId,
       expectedGeneration: provisioning.generation,
       recoveryError: "startup worker placement failed",

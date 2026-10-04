@@ -236,7 +236,6 @@ describe("resolveNpmChannelTag", () => {
           runCommand,
         }),
       ).resolves.toEqual({
-        target: "latest",
         version: "1.0.4",
         nodeEngine: ">=22.19.0",
       });
@@ -281,7 +280,6 @@ describe("resolveNpmChannelTag", () => {
         runCommand: npm12RunCommand,
       }),
     ).resolves.toEqual({
-      target: "latest",
       version: "2026.7.1",
       nodeEngine: ">=22.22.3",
       schemaVersions: { state: 3, agent: 11 },
@@ -348,7 +346,6 @@ describe("resolveNpmChannelTag", () => {
             },
           }),
         ).resolves.toEqual({
-          target: "latest",
           version: "2026.6.6",
           nodeEngine: ">=22.19.0",
           schemaVersions: { state: 1, agent: 1 },
@@ -381,7 +378,6 @@ describe("resolveNpmChannelTag", () => {
     await expect(
       fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
     ).resolves.toEqual({
-      target: "latest",
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
       schemaVersions: { state: 1, agent: 1 },
@@ -418,7 +414,6 @@ describe("resolveNpmChannelTag", () => {
       await vi.advanceTimersByTimeAsync(2000);
 
       await expect(resultPromise).resolves.toMatchObject({
-        target: "latest",
         version: null,
         nodeEngine: null,
         error: "TimeoutError: request timed out",
@@ -443,7 +438,6 @@ describe("resolveNpmChannelTag", () => {
     await expect(
       fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 1000 }),
     ).resolves.toEqual({
-      target: "latest",
       version: null,
       nodeEngine: null,
       error: "HTTP 503",
@@ -505,7 +499,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1-1" });
+    expect(resolved).toMatchObject({
+      tag: "latest",
+      version: "1.0.1-1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("keeps beta when beta is not older", async () => {
@@ -514,7 +512,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "beta", version: "1.0.2-beta.1" });
+    expect(resolved).toMatchObject({
+      tag: "beta",
+      version: "1.0.2-beta.1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("falls back to latest when beta has same base as stable", async () => {
@@ -523,7 +525,11 @@ describe("resolveNpmChannelTag", () => {
 
     const resolved = await resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
 
-    expect(resolved).toEqual({ tag: "latest", version: "1.0.1" });
+    expect(resolved).toMatchObject({
+      tag: "latest",
+      version: "1.0.1",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
   });
 
   it("keeps non-beta channels unchanged", async () => {
@@ -531,9 +537,10 @@ describe("resolveNpmChannelTag", () => {
 
     await expect(
       resolveNpmChannelTag({ channel: "stable", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       tag: "latest",
       version: "1.0.3",
+      metadata: { nodeEngine: ">=22.19.0" },
     });
   });
 
@@ -558,7 +565,9 @@ describe("resolveNpmChannelTag", () => {
 
       await vi.advanceTimersByTimeAsync(200);
 
-      expect(completed).toHaveBeenCalledWith({ tag: "beta", version: "2026.9.1-beta.1" });
+      expect(completed).toHaveBeenCalledWith(
+        expect.objectContaining({ tag: "beta", version: "2026.9.1-beta.1" }),
+      );
       await pending;
     } finally {
       await vi.runAllTimersAsync();
@@ -570,10 +579,14 @@ describe("resolveNpmChannelTag", () => {
     versionByTag.latest = "1.0.4";
     await expect(
       fetchNpmTagVersion({ tag: "latest", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({ tag: "latest", version: "1.0.4" });
+    ).resolves.toMatchObject({
+      tag: "latest",
+      version: "1.0.4",
+      metadata: { nodeEngine: ">=22.19.0" },
+    });
     await expect(
       fetchNpmTagVersion({ tag: "missing", timeoutMs: 1000, runCommand }),
-    ).resolves.toEqual({
+    ).resolves.toMatchObject({
       tag: "missing",
       version: null,
       error: "npm view failed: npm ERR! 404 Not Found",

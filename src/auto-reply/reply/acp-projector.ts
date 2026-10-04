@@ -1,4 +1,3 @@
-// Projects ACP runtime events into OpenClaw-visible session update records.
 import type { AcpRuntimeEvent, AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 import {
   normalizeOptionalLowercaseString,
@@ -159,9 +158,6 @@ export function createAcpReplyProjector(params: {
   };
 
   const drainChunker = (force: boolean) => {
-    if (settings.deliveryMode === "final_only" && !force) {
-      return;
-    }
     chunker.drain({
       force,
       emit: (chunk) => {
@@ -170,29 +166,26 @@ export function createAcpReplyProjector(params: {
     });
   };
 
-  const flushLiveBuffer = (opts?: { force?: boolean; idle?: boolean }) => {
+  const flushLiveBuffer = (idle = false) => {
     if (settings.deliveryMode !== "live" || !liveBufferText) {
       return;
     }
-    if (opts?.idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
+    if (idle && !shouldFlushLiveBufferOnIdle(liveBufferText)) {
       return;
     }
     const text = liveBufferText;
     liveBufferText = "";
     chunker.append(text);
-    drainChunker(opts?.force === true);
+    drainChunker(true);
   };
 
   const scheduleLiveIdleFlush = () => {
-    if (settings.deliveryMode !== "live") {
-      return;
-    }
-    if (!liveBufferText) {
+    if (settings.deliveryMode !== "live" || !liveBufferText) {
       return;
     }
     clearLiveIdleTimer();
     liveIdleTimer = setTimeout(() => {
-      flushLiveBuffer({ force: true, idle: true });
+      flushLiveBuffer(true);
       if (liveBufferText) {
         scheduleLiveIdleFlush();
       }
@@ -215,7 +208,7 @@ export function createAcpReplyProjector(params: {
   const flush = async (force = false): Promise<void> => {
     if (settings.deliveryMode === "live") {
       clearLiveIdleTimer();
-      flushLiveBuffer({ force: true });
+      flushLiveBuffer();
     }
     await flushBufferedToolDeliveries(force);
     if (settings.deliveryMode === "final_only") {
@@ -259,8 +252,7 @@ export function createAcpReplyProjector(params: {
     if (!event.tag || !HIDDEN_BOUNDARY_TAGS.has(event.tag)) {
       return;
     }
-    const status = normalizeOptionalLowercaseString(event.status);
-    const isTerminal = resolveAcpToolTerminalOutcome(status) !== undefined;
+    const isTerminal = resolveAcpToolTerminalOutcome(event.status) !== undefined;
     pendingHiddenBoundary = pendingHiddenBoundary || event.tag === "tool_call" || isTerminal;
   };
 
@@ -283,21 +275,15 @@ export function createAcpReplyProjector(params: {
           started: false,
           terminal: false,
         };
-        if (isTerminal && state.terminal) {
+        if (
+          (isTerminal && state.terminal) ||
+          (isStart && state.started) ||
+          state.lastRenderedHash === hash
+        ) {
           return;
         }
-        if (isStart && state.started) {
-          return;
-        }
-        if (state.lastRenderedHash === hash) {
-          return;
-        }
-        if (isStart) {
-          state.started = true;
-        }
-        if (isTerminal) {
-          state.terminal = true;
-        }
+        state.started ||= isStart;
+        state.terminal ||= isTerminal;
         state.lastRenderedHash = hash;
         toolLifecycleById.set(toolCallId, state);
       } else if (lastToolHash === hash) {
@@ -369,7 +355,7 @@ export function createAcpReplyProjector(params: {
           liveBufferText += safeText;
           if (shouldFlushLiveBufferOnBoundary(liveBufferText)) {
             clearLiveIdleTimer();
-            flushLiveBuffer({ force: true });
+            flushLiveBuffer();
           } else {
             scheduleLiveIdleFlush();
           }

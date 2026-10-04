@@ -59,10 +59,7 @@ import {
   BROWSER_REF_MARKER_ATTRIBUTE,
   readDocumentIdentitiesForPage,
 } from "./pw-session.page-cdp.js";
-import {
-  assertBrowserDashboardTabCanClose,
-  readBrowserDashboardTabs,
-} from "./session-tab-store.js";
+import { dispatchBrowserTabClose, readBrowserDashboardTabs } from "./session-tab-store.js";
 
 export async function getObservedBrowserStateViaPlaywright(opts: {
   cdpUrl: string;
@@ -149,14 +146,10 @@ export async function closePlaywrightBrowserConnection(opts?: { cdpUrl?: string 
 }
 
 function cdpSocketNeedsAttach(wsUrl: string): boolean {
-  try {
-    const pathname = new URL(wsUrl).pathname;
-    return (
-      pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
-    );
-  } catch {
-    return false;
-  }
+  const pathname = URL.parse(wsUrl)?.pathname ?? "";
+  return (
+    pathname === "/cdp" || pathname.endsWith("/cdp") || pathname.includes("/devtools/browser/")
+  );
 }
 
 async function tryTerminateExecutionViaCdp(opts: {
@@ -292,7 +285,7 @@ async function readPagesViaPlaywright(
     requireCompleteTargetList?: boolean;
   },
   signal: AbortSignal,
-): Promise<PlaywrightPageEnumeration> {
+): Promise<Array<{ targetId: string; title: string; url: string; type: "page" }>> {
   return await withPlaywrightSafeReadReconnect(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, signal, engine: opts.engine },
     async (browser) => {
@@ -443,10 +436,10 @@ async function readPagesViaPlaywright(
             (opts.requireCompleteTargetList || resolvedPages.length === 0) &&
             pageResults.some((result) => result.status === "unresolved")
           ) {
-            return { status: "unavailable", reason: "target-identity-unresolved" };
+            throw new Error("Playwright page target identities are temporarily unavailable.");
           }
           if (!remainingTargetIds?.size) {
-            return { status: "available", pages: resolvedPages };
+            return resolvedPages;
           }
           await publication.promise;
         }
@@ -463,13 +456,6 @@ async function readPagesViaPlaywright(
     },
   );
 }
-
-type PlaywrightPageEnumeration =
-  | {
-      status: "available";
-      pages: Array<{ targetId: string; title: string; url: string; type: "page" }>;
-    }
-  | { status: "unavailable"; reason: "target-identity-unresolved" };
 
 /** List pages through the persistent Playwright connection. */
 export async function listPagesViaPlaywright(opts: {
@@ -508,14 +494,7 @@ export async function listPagesViaPlaywright(opts: {
     timer.unref?.();
   }
   try {
-    const enumeration = await Promise.race([
-      readPagesViaPlaywright(opts, controller.signal),
-      cancelled.promise,
-    ]);
-    if (enumeration.status === "unavailable") {
-      throw new Error("Playwright page target identities are temporarily unavailable.");
-    }
-    return enumeration.pages;
+    return await Promise.race([readPagesViaPlaywright(opts, controller.signal), cancelled.promise]);
   } finally {
     if (timer) {
       clearTimeout(timer);
@@ -669,31 +648,33 @@ export async function closeResolvedPageViaPlaywright(
   page: Page,
   opts: {
     cdpUrl: string;
+    targetId?: string;
     signal?: AbortSignal;
     assertCurrent?: () => void | Promise<void>;
   },
 ): Promise<void> {
   opts.signal?.throwIfAborted();
-  if (readBrowserDashboardTabs().length > 0) {
-    const targetId = (await pageTargetInfo(page))?.targetId;
+  let targetId = opts.targetId;
+  if (!targetId && (await readBrowserDashboardTabs()).length > 0) {
+    targetId = (await pageTargetInfo(page))?.targetId;
     opts.signal?.throwIfAborted();
-    if (!targetId) {
-      throw new Error("Cannot verify that this page is not retained by a dashboard");
-    }
-    assertBrowserDashboardTabCanClose(targetId);
   }
-  const assertion = opts.assertCurrent?.();
-  if (assertion) {
-    await assertion;
-  }
-  if (isConnectionScopedPage(page)) {
-    const browser = page.context().browser();
-    if (browser) {
-      await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
-    }
-  } else {
-    await page.close();
-  }
+  await dispatchBrowserTabClose(
+    targetId,
+    undefined,
+    async () => {
+      opts.signal?.throwIfAborted();
+      if (isConnectionScopedPage(page)) {
+        const browser = page.context().browser();
+        if (browser) {
+          await closeConnectionScopedPageBrowser(opts.cdpUrl, browser);
+        }
+      } else {
+        await page.close();
+      }
+    },
+    { assertCurrent: opts.assertCurrent },
+  );
 }
 
 /**

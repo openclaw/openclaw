@@ -208,6 +208,14 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     });
   };
   let generation: Awaited<ReturnType<typeof prepareOutboundDeliveryGeneration>> | undefined;
+  const assertPlatformSendAuthorized = (): void => {
+    throwIfAborted(params.abortSignal);
+    assertSessionWriterDeliveryAuthorized(
+      params.deliveryCompletion?.kind === "pending-final"
+        ? params.deliveryCompletion.sessionWriterDeliveryAuthority
+        : undefined,
+    );
+  };
   const wrappedParams: InternalDeliverOutboundPayloadsParams = {
     ...params,
     // A provider marker can represent the whole durable intent only when one payload owns it.
@@ -260,12 +268,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       platformSendStarted = true;
     },
     onDirectAdapterHandoff: async () => {
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
       generation?.assertCurrent();
@@ -273,12 +276,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     assertDirectAdapterHandoff: () => {
       generation?.assertCurrent();
       params.assertDirectAdapterHandoff?.();
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
     },
     onPlatformSendDispatch: async () => {
       throwIfAborted(params.abortSignal);
@@ -306,12 +304,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           );
         }
       }
-      throwIfAborted(params.abortSignal);
-      assertSessionWriterDeliveryAuthorized(
-        params.deliveryCompletion?.kind === "pending-final"
-          ? params.deliveryCompletion.sessionWriterDeliveryAuthority
-          : undefined,
-      );
+      assertPlatformSendAuthorized();
       await params.onPlatformSendDispatch?.();
       throwIfAborted(params.abortSignal);
       generation?.assertCurrent();

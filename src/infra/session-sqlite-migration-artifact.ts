@@ -135,9 +135,10 @@ export function readMigrationArtifactIdentity(
 export function sameMigrationArtifact(
   left: MigrationArtifactIdentity,
   right: MigrationArtifactIdentity,
+  options: { ignoreDevice?: boolean } = {},
 ): boolean {
   return (
-    left.dev === right.dev &&
+    (options.ignoreDevice || left.dev === right.dev) &&
     left.ino === right.ino &&
     left.mtimeNs === right.mtimeNs &&
     left.size === right.size &&

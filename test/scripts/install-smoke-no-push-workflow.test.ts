@@ -29,6 +29,8 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, unknown>;
   permissions?: Record<string, unknown>;
+  "continue-on-error"?: boolean;
+  "runs-on"?: string;
   strategy?: {
     "fail-fast"?: boolean;
     matrix?: {
@@ -96,6 +98,8 @@ describe("install smoke no-push root image transport", () => {
         "${{ github.event_name == 'schedule' || inputs.run_bun_global_install_smoke }}",
       update_baseline_version: "${{ inputs.update_baseline_version || 'latest' }}",
     });
+    // The Bun-only lane is Full Release Validation only: never nightly or manual Install Smoke.
+    expect(delegated.with).not.toHaveProperty("run_bun_only_runtime_smoke");
     expect(readFileSync(INSTALL_SMOKE, "utf8")).not.toContain("packages: write");
   });
 
@@ -227,6 +231,7 @@ describe("install smoke no-push root image transport", () => {
     expect(trustedJobs.toSorted()).toEqual(
       [
         "bun_global_install_smoke",
+        "bun_only_runtime_smoke",
         "install-smoke-fast",
         "installer_smoke_candidate_payload",
         "installer_smoke_nonroot",
@@ -455,9 +460,13 @@ describe("install smoke no-push root image transport", () => {
     expect(text).not.toContain("gh api");
   });
 
-  it.each(["selected", "tooling", "missing"])(
-    "checks selected network source provenance before Docker: %s",
-    (source) => {
+  it.each(
+    ["selected", "tooling", "missing"].flatMap((source) =>
+      ["0", "1"].map((allowOmissions) => ({ source, allowOmissions })),
+    ),
+  )(
+    "checks selected network source provenance before Docker: $source, omissions=$allowOmissions",
+    ({ source, allowOmissions }) => {
       const workspace = tempDirs.make("install-smoke-source-binding-");
       const selected = path.join(workspace, ".release-source");
       const tooling = process.cwd();
@@ -543,7 +552,7 @@ describe("install smoke no-push root image transport", () => {
           ...process.env,
           PATH: `${bin}${path.delimiter}${process.env.PATH}`,
           DOCKER_CALLS: dockerCalls,
-          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1",
+          OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: allowOmissions,
           OPENCLAW_SELECTED_SHA: selectedSha,
           OPENCLAW_TOOLING_SHA: toolingSha,
           OPENCLAW_GATEWAY_NETWORK_E2E_SKIP_BUILD: "1",
@@ -769,6 +778,80 @@ describe("install smoke no-push root image transport", () => {
     expect(JSON.stringify(bunConsumer)).not.toContain(
       "./.release-harness/.github/actions/setup-node-env",
     );
+
+    expect(workflow.on?.workflow_call?.inputs?.run_bun_only_runtime_smoke).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const bunOnlyConsumer = job(workflow, "bun_only_runtime_smoke");
+    expect(bunOnlyConsumer.needs).toEqual(["preflight", "installer_smoke_candidate_payload"]);
+    expect(bunOnlyConsumer.if).toBe(
+      "needs.preflight.outputs.run_full_install_smoke == 'true' && inputs.run_bun_only_runtime_smoke && !inputs.allow_frozen_target_scenario_omissions",
+    );
+    expect(bunOnlyConsumer["continue-on-error"]).toBe(true);
+    expect(bunOnlyConsumer["runs-on"]).toBe(bunConsumer["runs-on"]);
+    expect(bunOnlyConsumer["runs-on"]).toContain("inputs.runner_group");
+    expect(bunOnlyConsumer["runs-on"]).toContain("ubuntu-24.04");
+    expect(bunOnlyConsumer["timeout-minutes"]).toBe(20);
+    const bunOnlyNode = step(bunOnlyConsumer, "Setup Node for payload verification");
+    expect(bunOnlyNode).toMatchObject({
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: { "node-version": "${{ env.NODE_VERSION }}", "package-manager-cache": false },
+    });
+    expect(step(bunOnlyConsumer, "Validate candidate payload artifact binding")).toBe(bunBinding);
+    const bunOnlyDownload = step(bunOnlyConsumer, "Download candidate payload artifact");
+    expect(bunOnlyDownload).toBe(step(bunConsumer, "Download candidate payload artifact"));
+    expect(bunOnlyDownload.with).toMatchObject({
+      path: "${{ runner.temp }}/install-smoke-candidate-payload",
+      "github-token": "${{ github.token }}",
+    });
+    expect(step(bunOnlyConsumer, "Verify candidate payload contents")).toBe(bunVerify);
+    const bunOnlySetup = step(bunOnlyConsumer, "Setup pinned Bun runtime");
+    expect(bunOnlySetup.uses).toBe("./.release-harness/.github/actions/setup-test-bun");
+    const bunOnlyRun = step(bunOnlyConsumer, "Run Bun-only runtime smoke");
+    expect(bunOnlyRun).toMatchObject({
+      "working-directory": ".release-harness",
+      env: {
+        OPENCLAW_BUN_ONLY_SMOKE_PACKAGE_TGZ:
+          "${{ runner.temp }}/install-smoke-candidate-payload/candidate.tgz",
+        OPENCLAW_BUN_ONLY_SMOKE_ARTIFACT_DIR: "${{ runner.temp }}/bun-only-runtime-smoke",
+        OPENCLAW_BUN_ONLY_SMOKE_HIDE_SYSTEM_NODE: "1",
+      },
+      run: "bash scripts/e2e/bun-only-runtime-smoke.sh",
+    });
+    const bunOnlyUpload = step(bunOnlyConsumer, "Upload Bun-only runtime smoke artifacts");
+    expect(bunOnlyUpload).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "bun-only-runtime-smoke-${{ github.run_attempt }}",
+        path: ["md", "json", "jsonl", "log"]
+          .map((extension) => `\${{ runner.temp }}/bun-only-runtime-smoke/*.${extension}\n`)
+          .join(""),
+        "retention-days": 14,
+        "if-no-files-found": "ignore",
+      },
+    });
+    expect(bunOnlyConsumer.steps).toEqual([
+      step(bunOnlyConsumer, "Checkout trusted release harness"),
+      bunOnlyNode,
+      step(bunOnlyConsumer, "Restore exact trusted workflow revision"),
+      bunBinding,
+      bunOnlyDownload,
+      bunVerify,
+      bunOnlySetup,
+      bunOnlyRun,
+      bunOnlyUpload,
+    ]);
+    for (const forbidden of [
+      "setup-node-env",
+      "setup-release-harness",
+      "blacksmith",
+      "npm install -g bun",
+      "pnpm install",
+    ]) {
+      expect(JSON.stringify(bunOnlyConsumer)).not.toContain(forbidden);
+    }
   });
 
   it("packages candidate code only in an isolated image and verifies the sealed payload", () => {
@@ -905,6 +988,7 @@ describe("install smoke no-push root image transport", () => {
         "${{ needs.resolve_target.outputs.allow_unreleased_changelog == 'true' }}",
       ref: "${{ needs.resolve_target.outputs.revision }}",
       run_bun_global_install_smoke: true,
+      run_bun_only_runtime_smoke: true,
     });
   });
 

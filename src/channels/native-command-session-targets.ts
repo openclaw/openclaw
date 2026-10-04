@@ -1,14 +1,6 @@
-/**
- * Native command session target resolver.
- *
- * Chooses storage and command target session keys for channel-native command events.
- */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMessagingAdapter } from "./plugins/types.core.js";
 
-/**
- * Inputs for resolving where a native channel command should attach session state.
- */
 export type ResolveNativeCommandSessionTargetsParams = {
   agentId: string;
   sessionPrefix: string;
@@ -18,9 +10,6 @@ export type ResolveNativeCommandSessionTargetsParams = {
   sessionKeyCase?: NonNullable<ChannelMessagingAdapter["targetIdComparison"]>;
 };
 
-/**
- * Resolves the storage session key and command target key for native command events.
- */
 export function resolveNativeCommandSessionTargets(
   params: ResolveNativeCommandSessionTargetsParams,
 ) {

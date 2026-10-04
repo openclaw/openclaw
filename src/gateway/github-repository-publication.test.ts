@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { deletePersonalGitHubSessionReceipts } from "../state/github-personal-publication-lifecycle.js";
+import { preparePersonalGitHubSessionReceiptDeletion } from "../state/github-personal-publication-lifecycle.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
@@ -154,7 +154,7 @@ describe("repository checkpoint GitHub publication", () => {
     "records unavailable %s publication without losing its accepted recovery checkpoint",
     async (source) => {
       const f = await repositoryFixture();
-      const retained = getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId);
+      const retained = await getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId);
       checkpoint.mockImplementation(async (_request, use) => await use({}));
       const personal = source === "personal" ? await createPersonalPublicationFixture() : undefined;
       if (personal) {
@@ -193,7 +193,9 @@ describe("repository checkpoint GitHub publication", () => {
         last_effect: null,
         owner_profile_id: personal?.owner ?? null,
       });
-      expect(getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId)).toEqual(retained);
+      expect(await getSessionRepositoryWorkspaceStore().get(f.workspace.workspaceId)).toEqual(
+        retained,
+      );
       expect(await request()).toEqual(result);
       await coordinator.resumeSessionRequests();
       expect(checkpoint).toHaveBeenCalledOnce();
@@ -545,12 +547,10 @@ describe("repository checkpoint GitHub publication", () => {
       expect(f.runtime.effects).toEqual(["push"]);
       if (boundary === "move") {
         if (person) {
+          const requestId = listRepositoryGitHubPublications()[0]!.request_id;
+          const prepared = await person.coordinator.preparePersonalStatus(requestId);
           expect(
-            person.coordinator.personalStatus(
-              person.action,
-              person.action,
-              listRepositoryGitHubPublications()[0]!.request_id,
-            ),
+            person.coordinator.personalStatus(person.action, person.action, requestId, prepared),
           ).toMatchObject({
             result: { status: "failed", code: "session_changed" },
             confirmation: null,
@@ -653,10 +653,10 @@ describe("repository checkpoint GitHub publication", () => {
             runId: "pending-result-run",
             owner: { kind: "local", environmentId: "pending-publication-worker", ownerEpoch: 7 },
           });
-          blocked.placements.markWorkspaceResultPending(pendingClaim);
+          await blocked.placements.markWorkspaceResultPending(pendingClaim);
           expect(blocked.placements.clearLocalTurnClaimsAfterRestart()).toBe(1);
           expect(blocked.placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-          expect(blocked.placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await blocked.placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         } else if (blocker === "reservation") {
           const entered = createDeferredCore();
           held = blocked.placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
@@ -742,9 +742,9 @@ describe("repository checkpoint GitHub publication", () => {
       if (publication === "unavailable") {
         checkpoint.mockImplementation(async (_request, use) => await use({}));
       }
-      f.placements.markWorkspaceResultPending(claim);
+      await f.placements.markWorkspaceResultPending(claim);
       await f.coordinator.prepareClaimWorkspace(claim);
-      f.placements.acceptWorkspaceResult(claim);
+      await f.placements.acceptWorkspaceResult(claim);
       if (publication === "unavailable") {
         expect(await f.coordinator.processClaim(claim)).toEqual([]);
         expect(readRepositoryGitHubPublication(requested.requestId)).toMatchObject({
@@ -877,49 +877,20 @@ describe("repository checkpoint GitHub publication", () => {
   it.each(["placement_generation", "environment_id", "owner_epoch"] as const)(
     "does not bind, process, or defer a request whose %s belongs to a different claim",
     async (column) => {
-      const f = await repositoryFixture();
-      seedAttachedPlacementEnvironment(openOpenClawStateDatabase(), {
-        environmentId: "publication-worker",
-        sessionId: SESSION_ID,
-        ownerEpoch: 7,
-      });
-      let placement = await f.placements.startDispatch({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
-        executionMode: "worker-turn",
-      });
-      for (const step of [
-        { to: "provisioning", patch: { environmentId: "publication-worker" } },
-        { to: "syncing", patch: { workerBundleHash: "b".repeat(64) } },
-        {
-          to: "starting",
-          patch: {
-            workspaceBaseManifestRef: "sha256:" + "1".repeat(64),
-            remoteWorkspaceDir: "/worker/workspace",
-          },
-        },
-        { to: "active", patch: { activeOwnerEpoch: 7 } },
-      ] as const) {
-        placement = f.placements.transition({
-          sessionId: SESSION_ID,
-          from: placement.state,
-          expectedGeneration: placement.generation,
-          ...step,
-        });
-      }
+      const f = await repositoryFixture(undefined, REQUEST);
+      await seedPublicationWorker(f.placements, "publication-worker");
       const claim = await f.placements.claimTurn({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+        sessionId: REQUEST.sessionId,
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
         claimId: "publication-claim",
         runId: "publication-run",
         owner: { kind: "worker", environmentId: "publication-worker", ownerEpoch: 7 },
       });
       const accepted = await f.coordinator.requestForClaim({
         claim,
-        sessionKey: SESSION_KEY,
-        agentId: "main",
+        sessionKey: REQUEST.sessionKey,
+        agentId: REQUEST.agentId,
         idempotencyKey: "different-claim",
       });
       const db = openOpenClawStateDatabase().db;
@@ -931,7 +902,7 @@ describe("repository checkpoint GitHub publication", () => {
       expect(await f.coordinator.processClaim(claim)).toEqual([]);
       f.coordinator.deferClaimPreparation(claim);
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBe(claim.claimId);
-      f.coordinator.deferOrphanedRequests();
+      expect(f.coordinator.deferOrphanedRequests()).toBeUndefined();
       expect(readRepositoryGitHubPublication(accepted.requestId)?.claim_id).toBeNull();
       expect(f.runtime.effects).toEqual([]);
     },
@@ -991,7 +962,17 @@ describe("repository checkpoint GitHub publication", () => {
         assertCustody: () => {},
         assertCurrent: () => {},
       });
-      deletePersonalGitHubSessionReceipts({ agentId: "main", sessionKeys: [SESSION_KEY] });
+      const deleteReceipts = await preparePersonalGitHubSessionReceiptDeletion({
+        agentId: "main",
+        generations: [
+          {
+            sessionKey: SESSION_KEY,
+            sessionId: row.session_id,
+            lifecycleRevision: row.session_lifecycle_revision,
+          },
+        ],
+      });
+      await deleteReceipts();
       expect(execution.ownsExecution()).toBe(false);
       expect(() => execution.recordEffect("push")).toThrow();
       expect(() => execution.recordEffect("push", { headCommit: "e".repeat(40) })).toThrow();

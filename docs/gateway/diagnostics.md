@@ -137,6 +137,20 @@ and does not change admission, ordering, or warning thresholds.
 The Gateway records a bounded, payload-free stability stream by default when
 diagnostics are enabled. It captures operational facts, not content.
 
+Gateway RPC diagnostics retain exact core and registered plugin method names,
+including `node.invoke.result` and `workboard.cards.list`; unregistered request
+names fold into `other` (dedicated worker ingress uses `unknown`). The method
+label set is bounded by the registered catalog plus these fallback labels, not
+by caller-supplied names. The Prometheus exporter retains its shared 2,048-sample
+cap across counters, gauges, and histograms; a fully observed method uses up to
+five samples. Watch `openclaw_prometheus_series_dropped_total` for incomplete
+coverage. See [Prometheus metrics](/gateway/prometheus) for timing semantics.
+
+The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
+pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
+(or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
+the scheduler does not replay missed ticks.
+
 The same heartbeat also samples liveness when the event loop or CPU looks
 saturated, emitting `diagnostic.liveness.warning` events with event-loop delay,
 event-loop utilization, CPU-core ratio, active/waiting/queued session counts,
@@ -164,6 +178,14 @@ available and contain fixed phase names and numbers, not patch values or session
 keys. Repeated stage visits contribute to the counts and totals. Parallel and
 nested stages can overlap, so their totals are neither an exclusive breakdown
 of request time nor CPU measurements.
+
+Session collaboration reads emit queued `diagnostic.phase.completed` events to
+interested diagnostic listeners. `session.members.list` and
+`session.members.listEvidence` separate `profiles`, `evidence`, and `projection`
+waits; `session.discussion.info` and `session.discussion.open` report `provider`
+time, including remote provider requests. Phase names use the method as their
+prefix and contain no session keys or response data. Membership evidence uses
+the existing projection worker lane so full transcript reads do not block it.
 
 With diagnostics and warning logs enabled, `sessions.create` calls lasting at
 least one second emit `slow session create`. Its `elapsedMs` and
@@ -264,7 +286,8 @@ samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
 Starting a CPU profile synchronously scans V8's heap to build its code map. On a
-large Gateway this can block the main event loop for seconds on every capture,
+large Gateway this can block the main event loop for seconds on every capture
+(about 3.5 seconds has been observed with a 3 GB heap),
 before regular sampling begins. Keeping the inspector domain enabled or sending
 the request from a Worker does not avoid that main-isolate work.
 `startBlockedMs` measures the synchronous start call with a monotonic clock,
@@ -282,6 +305,82 @@ do not run it alongside another debugger, profiler, tracer, or coverage owner. A
 response names the reason and whether cleanup failed. If cleanup remains uncertain,
 further captures are refused; the RPC never restarts the Gateway automatically.
 
+## Full heap snapshot
+
+An operator with `operator.admin` can explicitly capture the Gateway's main V8
+isolate, including objects allocated before the request:
+
+```bash
+openclaw gateway call diagnostics.heapSnapshot --params '{"reason":"retention baseline"}' --timeout 180000 --json
+```
+
+This Node-only RPC accepts only an optional `reason` (at most 256 characters),
+recorded in the warning before capture. No configuration switch is needed. It
+writes `<state>/diagnostics/heap-<timestamp>.heapsnapshot` with owner-only file
+permissions and returns `path`, `sizeBytes`, `heapUsedBefore`, `heapUsedAfter`
+(bytes), and `elapsedMs` (native capture wall time). Snapshot contents never travel
+over the WebSocket or enter the diagnostics export. Worker isolates are excluded.
+
+**Take snapshots in a quiet window.** A 3 GB heap snapshot can block the main
+thread for tens of seconds. V8 may need roughly twice the heap's memory while
+capturing; sufficient memory and disk headroom remain the operator's responsibility.
+The RPC refuses heaps above 6 GiB, overlapping captures, and another capture within
+60 seconds of a native attempt finishing. These admission guards do not impose a
+hard duration, output-size, or memory limit: synchronous `writeHeapSnapshot()`
+cannot be interrupted by a timeout, disconnection, or shutdown once started.
+A client timeout does not mean capture stopped; inspect the host directory before
+retrying. Failed captures remove partial files when possible; `cleanupFailed`
+reports whether removal failed.
+
+Snapshots are **unredacted** and can contain credentials, prompts, and private
+messages. Keep them on the host, review any transfer separately, and delete them
+manually after analysis. Successful snapshots are retained until removed; there
+is no automatic snapshot collection or retention job.
+
+Capture two points in the same process, then compare them from a source checkout:
+
+```bash
+node scripts/heap-snapshot-diff.mjs before.heapsnapshot after.heapsnapshot
+```
+
+The tool reports retained bytes by constructor/class and the largest changes by
+dominator (the object through which all strong root paths pass). It streams input
+and analyzes snapshots sequentially, but still needs memory proportional to the
+object graph; run large diffs on a separate analysis host with enough memory.
+Weak and shortcut edges are excluded. Class totals count nested instances of the
+same class once; totals across different classes can overlap. Object IDs match
+only within the same isolate/process. Use Chrome DevTools for interactive retaining
+paths and V8-specific weak/ephemeron semantics; the script is a strong-edge graph
+summary. `--json` produces machine-readable output. Treat diff output as sensitive
+too: it contains unredacted heap names.
+
+Add `--top 40 --max-depth 60` to include named strong retaining paths and
+dominator chains for the largest growers. `--node <id>` selects a particular
+object in the later snapshot. A shortest root path shows reachability;
+the separate dominator chain identifies exclusive retention in that graph.
+
+From a built source checkout, an isolated synthetic workload can collect a
+comparable pair without connecting to an existing Gateway:
+
+```bash
+node scripts/gateway-heap-rig.mjs --root .rig/node26 --minutes 90
+```
+
+Run this on a dedicated host with enough memory for snapshots. It starts the
+dist Gateway and local mock model servers on loopback ports 19548–19550,
+seeds 2,000 sessions across two agents, and drives ten reconnecting Control UI
+WebSocket clients plus mock model, Code Mode, and subagent turns. A synthetic
+catalog plugin exercises Gateway projection and publication ownership; it does
+not emulate a native provider's caches or remote-node transport.
+The root must be new. All state, logs, minute samples, and snapshots stay there.
+The rig stops its children on completion or interruption and retains evidence.
+Successful RPC counts and any retried refusals are recorded separately. If
+`projects.list` refuses a read because access facts changed, the rig retries it
+once; a second refusal or another error stops the run.
+Use the same script and settings with another Node binary for a runtime control;
+choose another root and three-port block for each run. Raw minute samples include
+allocation churn; compare the snapshot `heapUsedAfter` anchors for post-GC growth.
+
 ## Sampling heap profile
 
 An operator with `operator.admin` can sample allocations in the Gateway's main
@@ -290,22 +389,66 @@ JavaScript isolate without taking a whole-heap snapshot:
 ```bash
 openclaw gateway call diagnostics.heapProfile --params '{}' --timeout 30000 --json
 openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"samplingIntervalBytes":32768}' --timeout 45000 --json
+openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
 ```
 
 The Node-only RPC defaults to five seconds and an average sampling interval of
-32 KiB. Parameters must be positive integers. Durations above 30 seconds are
-clamped to 30 seconds; intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
+32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. With
+both collection flags false, durations are capped at 15 minutes (900,000 ms).
+Enabling either collection flag keeps the duration cap at 30 seconds;
+intervals below 4 KiB are clamped to 4 KiB. Smaller intervals
 collect more samples at greater CPU and memory cost. Choose a CLI timeout longer
 than the requested capture. The critical-memory warning points to this RPC;
 pressure never starts a capture automatically.
 
+The optional booleans `includeObjectsCollectedByMajorGC` and
+`includeObjectsCollectedByMinorGC` both default to `false`. Enable both to retain
+samples of objects collected during the window and attribute transient allocation
+churn. Retaining collected samples can increase profiler memory use.
+
+For retention attribution, keep both collection flags false (the default) and
+use a longer window with a coarser sampling interval:
+
+```bash
+openclaw gateway call diagnostics.heapProfile --json --timeout 930000 --params '{"durationMs":900000,"samplingIntervalBytes":262144}'
+```
+
+Read each node's `selfSize` in `profile.head` as estimated bytes **allocated
+during the window and still alive at stop**. These are allocation sites, not
+retaining paths or objects allocated before capture. The 930,000 ms CLI timeout
+allows 30 seconds beyond the requested window for setup and cleanup; event-loop
+stalls can require more time. Disconnection, authority revocation, or Gateway
+shutdown cancels sampling and discards the partial profile after cleanup.
+
 The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
+`includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,
 `heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
 bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,
 and `truncated`. When present, `profile` contains the sanitized V8 sampling tree
 and samples. Each node's `selfSize` is the estimated allocation bytes at that call
 site; sum its descendants for inclusive
 bytes. Samples link to nodes by `nodeId`.
+
+`heapSpacesBefore` and `heapSpacesAfter` contain the main isolate's V8 heap-space
+statistics at the same boundaries as the memory readings: `space_name`,
+`space_used_size`, `space_size`, `space_available_size`, and `physical_space_size`
+(sizes in bytes). Compare entries by name to locate growth in old, large-object,
+code, or other spaces. On Node, the [Prometheus exporter](/gateway/prometheus)
+also exposes `openclaw_heap_space_bytes{space="<space_name>",stat="used|size|available|physical"}`
+from the existing 30-second diagnostic memory heartbeat, with the same idle
+sample suppression, never per scrape. Names come from V8's finite space set,
+including spaces added by future V8 versions; each space contributes four gauges
+under the exporter's existing series cap.
+
+Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
+`node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
+versions, filenames, and absolute paths stay hidden. URLs with query or fragment
+markers remain redacted. Frames with script ID `0`,
+an empty URL, and a negative line number use `[native]`, except for known V8
+engine labels such as `(root)`. This bucket identifies missing JavaScript source
+attribution, not a specific native allocator or external Buffer bytes. Other
+unrecognized frames remain `[redacted]`; `redactedNodeCount` excludes dependency
+and native labels (CPU nodes with hidden deoptimization reasons still count).
 
 V8 can sample allocations made while constructing its own profile, after a call
 site has been translated into the returned tree. Samples without a matching tree
@@ -323,8 +466,9 @@ overlap across callers, so do not add them together. Start with large `selfBytes
 and inspect the stack to identify the allocating code.
 
 Sampling is cheaper than a whole-heap snapshot but is still approximate. V8's
-default sampling mode excludes objects collected before capture ends; this is not
-an inventory of every transient allocation or objects allocated before capture.
+default sampling mode excludes objects collected before capture ends; enable both
+collection flags to include those samples. Neither mode is an exact inventory of
+every allocation or includes objects allocated before capture.
 Native allocations, external buffers, other isolates, and other process threads
 are not attributed, so sampled bytes need not explain the full RSS change.
 
@@ -375,8 +519,10 @@ Memory pressure events record RSS, heap, threshold, and growth facts
 (`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
 file-system scan or writing a pre-OOM snapshot.
 
-On Node, persistent database workers collect garbage after a completed operation
-when their used heap has grown by 32 MiB since the last idle collection. SQLite,
+Persistent database workers collect garbage after a completed operation when their
+used heap has grown by 32 MiB since the last idle collection. This uses the runtime's
+local inspector collection support; runtimes that report the method as unavailable
+skip idle collection. On Node, SQLite,
 history, transcript, and reclamation workers request a 512 MiB V8 old-generation
 limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
@@ -410,6 +556,44 @@ Worker for five minutes, reusing it only when its runtime entry and heap limit
 match. Warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.
+
+## RPC response size and heap changes
+
+The [Prometheus exporter](/gateway/prometheus) records
+`openclaw_gateway_rpc_response_bytes` for each encoded JSON response frame accepted
+by the WebSocket sender (UTF-8 bytes, excluding transport framing/compression),
+with power-of-two buckets from 1 KiB to 64 MiB. Slow-response journal lines include
+`bytes=` for the same frame; it always means encoded response bytes, never heap
+allocation or an exclusive-window sample.
+
+For `sessions.list`, response journal lines and `slow session list` records also
+include `source`, `rowMode` (`compact` or `full`), `limit`, `offset`, and
+`filterKind`. The caller source is a bounded Control UI tag or `unspecified`;
+filter kinds contain parameter names, never search text, identities, or paths.
+The optimized WebSocket journal also records fast `sessions.list` responses of
+at least 200 KiB. Metric labels remain unchanged.
+
+`openclaw_gateway_rpc_handler_heap_delta_bytes` samples main-thread
+`process.memoryUsage().heapUsed` immediately around handler execution. A sample
+is emitted only if that handler was the sole active RPC handler for its entire
+lifetime, including awaits. Any overlap discards the whole sample, even if the
+other handler finishes first. Normal, dedicated worker-connection, and in-process
+RPC handlers share this boundary. Admission, queueing, rejected requests, and
+worker-thread heaps are excluded.
+
+`openclaw_gateway_rpc_handler_heap_delta_exclusive_total{method}` counts sampled
+handlers. Compare its increase with `openclaw_gateway_rpc_handler_seconds_count`
+for the same method to see coverage. Overlapping handlers contribute no heap
+sample, not a zero; sustained concurrency can leave a method with no samples.
+The sampled subset favors short handlers and quiet periods.
+
+These are signed heap changes, not per-handler allocation totals. Background
+work, response encoding, and GC still affect exclusive windows. GC notifications
+are asynchronous, so samples are not GC-filtered and can be negative. Use bucket
+counts or quantiles; the signed `_sum` can decrease, so `rate()` on that sum is not
+valid. Do not sum across methods to estimate allocation throughput. Both
+histograms use registered method labels and the existing exporter cap, without
+new configuration; disabled or uninterested diagnostics skip heap sampling.
 
 ## Related
 

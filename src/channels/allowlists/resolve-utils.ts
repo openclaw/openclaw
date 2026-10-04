@@ -7,7 +7,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import type { RuntimeEnv } from "../../runtime.js";
 import { dedupeByKey } from "../../shared/dedupe-by-key.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
@@ -29,7 +28,7 @@ export function mergeAllowlist(params: {
   existing?: Array<string | number>;
   additions: string[];
 }): string[] {
-  return dedupeAllowlistEntries([...mapAllowFromEntries(params.existing), ...params.additions]);
+  return dedupeAllowlistEntries([...(params.existing ?? []).map(String), ...params.additions]);
 }
 
 /** Splits lookup results into resolved mappings, unresolved display text, and id additions. */

@@ -56,8 +56,9 @@ data class GatewayCredentials(
     )
 }
 
-internal val defaultSidebarPageOrder = listOf("settings", "work", "home", "skills", "threads")
-internal val defaultSidebarVisiblePages = defaultSidebarPageOrder
+internal val defaultSidebarVisiblePages = listOf("home", "threads", "skills", "work")
+internal val defaultSidebarPageOrder =
+  defaultSidebarVisiblePages + listOf("agents", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop")
 
 internal fun sanitizeSidebarPageOrder(pageIds: List<String>): List<String> {
   val knownIds = defaultSidebarPageOrder.toSet()
@@ -159,7 +160,7 @@ class SecurePrefs(
   // gateway-state read, which is the earliest the registry can be observed.
   val gatewayRegistry: GatewayRegistryStore by lazy {
     GatewayStoreMigration(this).run()
-    GatewayRegistryStore(this, ::handleActiveGatewayChanged)
+    GatewayRegistryStore(this)
   }
 
   private val _displayName =
@@ -250,11 +251,6 @@ class SecurePrefs(
     MutableStateFlow(plainPrefs.getInt(notificationsForwardingMaxEventsPerMinuteKey, 20).coerceAtLeast(1))
   val notificationForwardingMaxEventsPerMinute: StateFlow<Int> = _notificationForwardingMaxEventsPerMinute
 
-  private val _notificationForwardingSessionKey by lazy {
-    MutableStateFlow(loadNotificationForwardingSessionKey(gatewayRegistry.activeStableId.value))
-  }
-  val notificationForwardingSessionKey: StateFlow<String?> get() = _notificationForwardingSessionKey
-
   private val _voiceMicEnabled = MutableStateFlow(plainPrefs.getBoolean(voiceMicEnabledKey, false))
   val voiceMicEnabled: StateFlow<Boolean> = _voiceMicEnabled
 
@@ -314,63 +310,33 @@ class SecurePrefs(
   private val _sidebarVisiblePages = MutableStateFlow(loadSidebarVisiblePages())
   val sidebarVisiblePages: StateFlow<List<String>> = _sidebarVisiblePages
 
-  fun setLastDiscoveredStableId(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
-    _lastDiscoveredStableId.value = trimmed
-  }
+  fun setLastDiscoveredStableId(value: String) = _lastDiscoveredStableId.persistString("gateway.lastDiscoveredStableID", value.trim())
 
-  fun setDisplayName(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString(displayNameKey, trimmed) }
-    _displayName.value = trimmed
-  }
+  fun setDisplayName(value: String) = _displayName.persistString(displayNameKey, value.trim())
 
-  fun setCameraEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(cameraEnabledKey, value) }
-    _cameraEnabled.value = value
-  }
+  fun setCameraEnabled(value: Boolean) = _cameraEnabled.persistBoolean(cameraEnabledKey, value)
 
   fun setLocationMode(mode: LocationMode) {
     plainPrefs.edit { putString(locationModeKey, mode.rawValue) }
     _locationMode.value = mode
   }
 
-  fun setLocationPreciseEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("location.preciseEnabled", value) }
-    _locationPreciseEnabled.value = value
-  }
+  fun setLocationPreciseEnabled(value: Boolean) = _locationPreciseEnabled.persistBoolean("location.preciseEnabled", value)
 
-  fun setPreventSleep(value: Boolean) {
-    plainPrefs.edit { putBoolean("screen.preventSleep", value) }
-    _preventSleep.value = value
-  }
+  fun setPreventSleep(value: Boolean) = _preventSleep.persistBoolean("screen.preventSleep", value)
 
-  fun setManualEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("gateway.manual.enabled", value) }
-    _manualEnabled.value = value
-  }
+  fun setManualEnabled(value: Boolean) = _manualEnabled.persistBoolean("gateway.manual.enabled", value)
 
-  fun setManualHost(value: String) {
-    val trimmed = value.trim()
-    plainPrefs.edit { putString("gateway.manual.host", trimmed) }
-    _manualHost.value = trimmed
-  }
+  fun setManualHost(value: String) = _manualHost.persistString("gateway.manual.host", value.trim())
 
   fun setManualPort(value: Int) {
     plainPrefs.edit { putInt("gateway.manual.port", value) }
     _manualPort.value = value
   }
 
-  fun setManualTls(value: Boolean) {
-    plainPrefs.edit { putBoolean("gateway.manual.tls", value) }
-    _manualTls.value = value
-  }
+  fun setManualTls(value: Boolean) = _manualTls.persistBoolean("gateway.manual.tls", value)
 
-  fun setOnboardingCompleted(value: Boolean) {
-    plainPrefs.edit { putBoolean("onboarding.completed", value) }
-    _onboardingCompleted.value = value
-  }
+  fun setOnboardingCompleted(value: Boolean) = _onboardingCompleted.persistBoolean("onboarding.completed", value)
 
   fun grantInstalledAppsDisclosureConsent() {
     plainPrefs.edit {
@@ -388,10 +354,7 @@ class SecurePrefs(
     _installedAppsSharingEnabled.value = false
   }
 
-  fun setAccessibilityControlEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(accessibilityControlEnabledKey, value) }
-    _accessibilityControlEnabled.value = value
-  }
+  fun setAccessibilityControlEnabled(value: Boolean) = _accessibilityControlEnabled.persistBoolean(accessibilityControlEnabledKey, value)
 
   private fun loadInstalledAppsSharingEnabled(): Boolean {
     val enabled = plainPrefs.getBoolean(installedAppsSharingEnabledKey, false)
@@ -451,10 +414,7 @@ class SecurePrefs(
     )
   }
 
-  internal fun setNotificationForwardingEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(notificationsForwardingEnabledKey, value) }
-    _notificationForwardingEnabled.value = value
-  }
+  internal fun setNotificationForwardingEnabled(value: Boolean) = _notificationForwardingEnabled.persistBoolean(notificationsForwardingEnabledKey, value)
 
   internal fun setNotificationForwardingMode(mode: NotificationPackageFilterMode) {
     plainPrefs.edit { putString(notificationsForwardingModeKey, mode.rawValue) }
@@ -470,9 +430,7 @@ class SecurePrefs(
         .distinct()
         .sorted()
         .toList()
-    // Persist deterministic JSON so settings diffs and state restoration are stable.
-    val encoded = JsonArray(sanitized.map { JsonPrimitive(it) }).toString()
-    plainPrefs.edit { putString(notificationsForwardingPackagesKey, encoded) }
+    persistStringList(notificationsForwardingPackagesKey, sanitized)
     _notificationForwardingPackages.value = sanitized.toSet()
   }
 
@@ -499,21 +457,12 @@ class SecurePrefs(
     return true
   }
 
-  internal fun setNotificationForwardingMaxEventsPerMinute(value: Int) {
-    val normalized = value.coerceAtLeast(1)
-    plainPrefs.edit {
-      putInt(notificationsForwardingMaxEventsPerMinuteKey, normalized)
-    }
-    _notificationForwardingMaxEventsPerMinute.value = normalized
-  }
-
   internal fun setNotificationForwardingSessionKey(value: String?) {
     val stableId = gatewayRegistry.activeStableId.value ?: return
     val normalized = value?.trim()?.takeIf { it.isNotEmpty() }
     plainPrefs.edit {
       putString(notificationForwardingSessionKeyKey(stableId), normalized.orEmpty())
     }
-    _notificationForwardingSessionKey.value = normalized
   }
 
   fun loadGatewayCredentials(stableId: String): GatewayCredentials {
@@ -630,9 +579,6 @@ class SecurePrefs(
 
   fun clearNotificationForwardingSessionKey(stableId: String) {
     plainPrefs.edit { remove(notificationForwardingSessionKeyKey(stableId)) }
-    if (gatewayRegistry.activeStableId.value == stableId) {
-      _notificationForwardingSessionKey.value = null
-    }
   }
 
   fun getString(key: String): String? = securePrefs.getString(key, null)
@@ -728,10 +674,6 @@ class SecurePrefs(
       ?.trim()
       ?.takeIf { it.isNotEmpty() }
 
-  private fun handleActiveGatewayChanged(stableId: String?) {
-    _notificationForwardingSessionKey.value = loadNotificationForwardingSessionKey(stableId)
-  }
-
   private fun loadOrCreateInstanceId(): String {
     val existing = plainPrefs.getString("node.instanceId", null)?.trim()
     if (!existing.isNullOrBlank()) return existing
@@ -752,32 +694,15 @@ class SecurePrefs(
     return resolved
   }
 
-  fun setVoiceMicEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(voiceMicEnabledKey, value) }
-    _voiceMicEnabled.value = value
-  }
+  fun setVoiceMicEnabled(value: Boolean) = _voiceMicEnabled.persistBoolean(voiceMicEnabledKey, value)
 
-  fun setVoiceWakeEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean(voiceWakeEnabledKey, value) }
-    _voiceWakeEnabled.value = value
-  }
+  fun setVoiceWakeEnabled(value: Boolean) = _voiceWakeEnabled.persistBoolean(voiceWakeEnabledKey, value)
 
-  fun setVoiceWakeWords(words: List<String>) {
-    val sanitized = VoiceWakePreferences.sanitizeTriggerWords(words)
-    plainPrefs.edit { putString(voiceWakeWordsKey, JsonArray(sanitized.map(::JsonPrimitive)).toString()) }
-    _voiceWakeWords.value = sanitized
-  }
+  fun setVoiceWakeWords(words: List<String>) = _voiceWakeWords.persistStringList(voiceWakeWordsKey, VoiceWakePreferences.sanitizeTriggerWords(words))
 
-  fun setSpeakerEnabled(value: Boolean) {
-    plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
-    _speakerEnabled.value = value
-  }
+  fun setSpeakerEnabled(value: Boolean) = _speakerEnabled.persistBoolean("voice.speakerEnabled", value)
 
-  fun setPreferredCameraFacing(value: String) {
-    val facing = value.takeIf { it == "back" } ?: "front"
-    plainPrefs.edit { putString(preferredCameraFacingKey, facing) }
-    _preferredCameraFacing.value = facing
-  }
+  fun setPreferredCameraFacing(value: String) = _preferredCameraFacing.persistString(preferredCameraFacingKey, value.takeIf { it == "back" } ?: "front")
 
   fun setPreferredAudioInputDevice(value: String?) {
     val key = value?.takeIf(String::isNotBlank)
@@ -798,21 +723,17 @@ class SecurePrefs(
   }
 
   private fun loadPendingAppearancePreferences(): List<PendingAppearancePreference> {
-    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null)
+    val stored = plainPrefs.getString(appearancePendingPreferencesKey, null) ?: return emptyList()
     val decoded =
-      stored?.let {
-        runCatching { json.decodeFromString<List<PendingAppearancePreference>>(it) }.getOrNull()
-      }
-    if (decoded != null) {
-      return deduplicatePendingAppearancePreferences(
-        decoded.filter { preference ->
-          preference.key in appearanceSyncKeys &&
-            !preference.gatewayStableId.isNullOrBlank() &&
-            !preference.profileId.isNullOrBlank()
-        },
-      )
-    }
-    return emptyList()
+      runCatching { json.decodeFromString<List<PendingAppearancePreference>>(stored) }.getOrNull()
+        ?: return emptyList()
+    return deduplicatePendingAppearancePreferences(
+      decoded.filter { preference ->
+        preference.key in appearanceSyncKeys &&
+          !preference.gatewayStableId.isNullOrBlank() &&
+          !preference.profileId.isNullOrBlank()
+      },
+    )
   }
 
   @Synchronized
@@ -897,8 +818,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.themeMode", expectedRevision)) return false
-    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
-    _appearanceThemeMode.value = mode
+    setAppearanceThemeMode(mode)
     return true
   }
 
@@ -908,8 +828,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.theme", expectedRevision)) return false
-    plainPrefs.edit { putString(appearanceThemeFamilyKey, family.rawValue) }
-    _appearanceThemeFamily.value = family
+    setAppearanceThemeFamily(family)
     return true
   }
 
@@ -919,14 +838,7 @@ class SecurePrefs(
     expectedRevision: Long,
   ): Boolean {
     if (!gatewayAppearancePreferenceMayApply("ui.accent", expectedRevision)) return false
-    plainPrefs.edit {
-      if (argb == null) {
-        remove(appearanceAccentArgbKey)
-      } else {
-        putLong(appearanceAccentArgbKey, argb)
-      }
-    }
-    _appearanceAccentArgb.value = argb
+    setAppearanceAccentArgb(argb)
     return true
   }
 
@@ -1127,34 +1039,43 @@ class SecurePrefs(
       } else {
         _modelFavorites.value + trimmed
       }
-    persistStringList(chatModelFavoritesKey, next)
-    _modelFavorites.value = next
+    _modelFavorites.persistStringList(chatModelFavoritesKey, next)
   }
 
   fun recordModelRecent(ref: String) {
     val trimmed = ref.trim()
     if (trimmed.isEmpty()) return
-    val next = (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents)
-    persistStringList(chatModelRecentsKey, next)
-    _modelRecents.value = next
+    _modelRecents.persistStringList(chatModelRecentsKey, (listOf(trimmed) + _modelRecents.value.filterNot { it == trimmed }).take(maxChatModelRecents))
   }
 
-  fun setSessionCustomGroups(groups: List<String>) {
-    val sanitized = groups.map(String::trim).filter { it.isNotEmpty() }.distinct()
-    persistStringList(sessionCustomGroupsKey, sanitized)
-    _sessionCustomGroups.value = sanitized
+  fun setSessionCustomGroups(groups: List<String>) = _sessionCustomGroups.persistStringList(sessionCustomGroupsKey, groups.map(String::trim).filter { it.isNotEmpty() }.distinct())
+
+  fun setSidebarPageOrder(pageIds: List<String>) = _sidebarPageOrder.persistStringList(sidebarPageOrderKey, sanitizeSidebarPageOrder(pageIds))
+
+  fun setSidebarVisiblePages(pageIds: List<String>) = _sidebarVisiblePages.persistStringList(sidebarVisiblePagesKey, sanitizeSidebarVisiblePages(pageIds))
+
+  private fun MutableStateFlow<Boolean>.persistBoolean(
+    key: String,
+    next: Boolean,
+  ) {
+    plainPrefs.edit { putBoolean(key, next) }
+    value = next
   }
 
-  fun setSidebarPageOrder(pageIds: List<String>) {
-    val sanitized = sanitizeSidebarPageOrder(pageIds)
-    persistStringList(sidebarPageOrderKey, sanitized)
-    _sidebarPageOrder.value = sanitized
+  private fun MutableStateFlow<String>.persistString(
+    key: String,
+    next: String,
+  ) {
+    plainPrefs.edit { putString(key, next) }
+    value = next
   }
 
-  fun setSidebarVisiblePages(pageIds: List<String>) {
-    val sanitized = sanitizeSidebarVisiblePages(pageIds)
-    persistStringList(sidebarVisiblePagesKey, sanitized)
-    _sidebarVisiblePages.value = sanitized
+  private fun MutableStateFlow<List<String>>.persistStringList(
+    key: String,
+    next: List<String>,
+  ) {
+    this@SecurePrefs.persistStringList(key, next)
+    value = next
   }
 
   private fun persistStringList(

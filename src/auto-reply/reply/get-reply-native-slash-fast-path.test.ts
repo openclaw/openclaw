@@ -328,8 +328,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           statusChannel: "telegram",
           resolvedHarness: "openclaw",
           pluginHealthLineOverride: "Plugins: test",
-          taskLineOverride: "",
-          skipDefaultTaskLookup: true,
           modelAuthOverride: "api-key",
           activeModelAuthOverride: "api-key",
           includeTranscriptUsage: false,
@@ -600,9 +598,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
                     },
                     ...("agentAllowed" in testCase
                       ? {
-                          list: [
-                            {
-                              id: targetAgentId,
+                          entries: {
+                            [targetAgentId]: {
                               modelPolicy: { allow: testCase.agentAllowed },
                               ...("agentCap" in testCase
                                 ? { contextTokens: testCase.agentCap }
@@ -617,7 +614,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
                                   }
                                 : {}),
                             },
-                          ],
+                          },
                         }
                       : {}),
                   },

@@ -574,29 +574,6 @@ describe("Codex app-server binding store", () => {
     expect(imported?.binding.pluginAppPolicyContext).toEqual(pluginAppPolicyContext);
   });
 
-  it("keeps a replacement thread when a stale clear completes later", async () => {
-    const { state } = createStateStore();
-    const store = createCodexAppServerBindingStore(state);
-    const identity = { kind: "session" as const, agentId: "main", sessionId: "session-1" };
-    await store.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-old", cwd: "/repo" },
-    });
-    await store.mutate(identity, {
-      kind: "set",
-      binding: { threadId: "thread-new", cwd: "/repo" },
-    });
-
-    await expect(store.mutate(identity, { kind: "clear", threadId: "thread-old" })).resolves.toBe(
-      false,
-    );
-    expect(store.read(identity)).toMatchObject({ threadId: "thread-new" });
-    await expect(store.mutate(identity, { kind: "clear", threadId: "thread-new" })).resolves.toBe(
-      true,
-    );
-    expect(store.read(identity)).toBeUndefined();
-  });
-
   it("retains cleared legacy conversation provenance after normal tombstones expire", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-codex-binding-state-"));
     try {

@@ -1,4 +1,4 @@
-import { normalize, resolve, sep } from "node:path";
+import { resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
 import { toStringifiedError as toCopilotRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { loadCopilotSdk } from "./sdk-loader.js";
@@ -261,15 +261,10 @@ export function createCopilotClientPool(options: CopilotClientPoolOptions = {}):
       return;
     }
 
-    if (entry.state.kind === "ready") {
-      scheduleIdleStop(entry, entry.state.client);
-      return;
-    }
-
     if (entry.state.kind === "idle") {
       clearTimeout(entry.state.idleTimer);
-      scheduleIdleStop(entry, entry.state.client);
     }
+    scheduleIdleStop(entry, entry.state.client);
   };
 
   const dispose = async (): Promise<Error[]> => {
@@ -345,7 +340,6 @@ function normalizeClientCreateOptions(
 
 function normalizeCopilotHome(copilotHome: string): string {
   let normalizedHome = resolve(copilotHome);
-  normalizedHome = normalize(normalizedHome);
   if (normalizedHome.endsWith(sep) && normalizedHome.length > 1) {
     normalizedHome = normalizedHome.slice(0, -1);
   }

@@ -447,7 +447,7 @@ export function createManagerIndexFixture(deps: {
       },
       agents: {
         defaults: { workspace },
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
       },
       models: params.providerAliases ? { providers: params.providerAliases } : undefined,
     } as OpenClawConfig);

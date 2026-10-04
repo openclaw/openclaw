@@ -8,7 +8,7 @@ import {
   normalizeDeviceAuthScopes,
 } from "../../../../src/shared/device-auth.js";
 import { getSafeLocalStorage } from "../../local-storage.ts";
-import { bytesToBase64 } from "../bytes-base64.ts";
+import { base64ToBytes, bytesToBase64 } from "../bytes-base64.ts";
 
 export type {
   DevicePairingList,
@@ -219,12 +219,7 @@ function base64UrlEncode(bytes: Uint8Array): string {
 function base64UrlDecode(input: string): Uint8Array {
   const normalized = input.replaceAll("-", "+").replaceAll("_", "/");
   const padded = normalized + "=".repeat((4 - (normalized.length % 4)) % 4);
-  const binary = atob(padded);
-  const out = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) {
-    out[i] = binary.charCodeAt(i);
-  }
-  return out;
+  return base64ToBytes(padded);
 }
 
 async function fingerprintPublicKey(publicKey: Uint8Array): Promise<string> {

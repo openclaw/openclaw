@@ -75,19 +75,23 @@ const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
   mapApprover: (approver) => ({ to: approver }),
 });
 
-function describeTelegramExecApprovalSetup({ accountId }: { accountId?: string | null }) {
+function describeTelegramApprovalSetup(
+  { accountId }: { accountId?: string | null },
+  approvalKind: "exec" | "plugin",
+) {
   const prefix =
     accountId && accountId !== "default"
       ? `channels.telegram.accounts.${accountId}`
       : "channels.telegram";
-  return `Approve it from the Web UI or terminal UI for now. Telegram supports native exec approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
+  const surface = approvalKind === "plugin" ? "Web UI or terminal UI" : "Web UI";
+  return `Approve it from the ${surface} for now. Telegram supports native ${approvalKind} approvals for this account. Configure \`${prefix}.execApprovals.approvers\` or \`commands.ownerAllowFrom\`; leave \`${prefix}.execApprovals.enabled\` unset/\`auto\` or set it to \`true\`.`;
 }
 
 const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalCapability({
   channel: "telegram",
   channelLabel: "Telegram",
-  describeExecApprovalSetup: describeTelegramExecApprovalSetup,
-  describePluginApprovalSetup: describeTelegramExecApprovalSetup,
+  describeExecApprovalSetup: (params) => describeTelegramApprovalSetup(params, "exec"),
+  describePluginApprovalSetup: (params) => describeTelegramApprovalSetup(params, "plugin"),
   listAccountIds: listTelegramAccountIds,
   hasApprovers: ({ cfg, accountId }) =>
     getTelegramExecApprovalApprovers({ cfg, accountId }).length > 0,
@@ -114,19 +118,11 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
 const resolveTelegramApproveCommandBehavior: NonNullable<
   ChannelApprovalCapability["resolveApproveCommandBehavior"]
 > = (params) => {
-  const { cfg, accountId, senderId, approvalKind } = params;
-  if (approvalKind !== "exec") {
-    return undefined;
-  }
-  if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-    return undefined;
-  }
-  if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
-    return undefined;
-  }
   if (
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
-    !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
+    params.approvalKind !== "exec" ||
+    isTelegramExecApprovalClientEnabled(params) ||
+    isTelegramExecApprovalTargetRecipient(params) ||
+    (isTelegramExecApprovalAuthorizedSender(params) && !isTelegramExecApprovalApprover(params))
   ) {
     return undefined;
   }

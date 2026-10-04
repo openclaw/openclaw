@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExecApprovalDecision, ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
@@ -15,14 +15,14 @@ import {
   type OperatorApprovalLifecycleEvent,
 } from "./exec-approval-manager.js";
 import {
-  createTestApprovalManager,
+  createTestApprovalManager as createApprovalManager,
+  createApprovalScheduler,
+  type ApprovalClockWake,
   installTestApprovalClock,
 } from "./exec-approval-manager.test-support.js";
 import type { ExecApprovalManagerOptions } from "./exec-approval-manager.types.js";
 import { InvalidApprovalIdError } from "./exec-approval-registration.js";
 import { getOperatorApprovalDetailed, resolveOperatorApproval } from "./operator-approval-store.js";
-
-type TimeoutCallback = Parameters<typeof setTimeout>[0];
 
 async function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetailed>[0]) {
   const result = await getOperatorApprovalDetailed({ nowMs: Date.now(), ...params });
@@ -31,8 +31,20 @@ async function getOperatorApproval(params: Parameters<typeof getOperatorApproval
 
 describe("ExecApprovalManager", () => {
   const tempDirs: string[] = [];
+  let scheduled: ReturnType<typeof createApprovalScheduler>;
+  beforeEach(() => {
+    vi.spyOn(Date, "now").mockReturnValue(1_000);
+    scheduled = createApprovalScheduler();
+  });
+  function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>(
+    test: Parameters<typeof createApprovalManager>[0],
+    options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence" | "scheduler"> = {},
+  ) {
+    return createApprovalManager<TPayload>(test, { ...options, scheduler: scheduled.scheduler });
+  }
 
   afterEach(async () => {
+    await scheduled.scheduler.stop();
     vi.restoreAllMocks();
     for (const dir of tempDirs.splice(0)) {
       await closeOpenClawStateDatabaseByPathAsync(path.join(dir, "state.sqlite"));
@@ -55,6 +67,7 @@ describe("ExecApprovalManager", () => {
       dir,
       databaseOptions,
       manager: new ExecApprovalManager({
+        scheduler: scheduled.scheduler,
         approvalKind: "exec",
         persistence: { runtimeEpoch: options.runtimeEpoch ?? "runtime-a", databaseOptions },
         resolveAllowedDecisions: () => ["allow-once", "deny"],
@@ -65,40 +78,28 @@ describe("ExecApprovalManager", () => {
     };
   }
 
-  function installTimerMocks() {
-    const timers: Array<{
-      callback: TimeoutCallback;
-      delay: number | undefined;
-      handle: { unref: ReturnType<typeof vi.fn> };
-    }> = [];
-
-    vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay) => {
-      const handle = { unref: vi.fn(), refresh: vi.fn().mockReturnThis() };
-      timers.push({ callback, delay, handle });
-      return handle as unknown as ReturnType<typeof setTimeout>;
-    });
-    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
-
-    return timers;
-  }
-
-  function deadlineTimers(timers: ReturnType<typeof installTimerMocks>, delays: number[]) {
-    // Pending deadlines keep their waiter alive; cleanup and maintenance do not.
-    const deadlines = timers.filter(({ handle }) => handle.unref.mock.calls.length === 0);
-    expect(deadlines.map(({ delay }) => delay)).toEqual(delays);
+  function deadlineTimers(timers: ApprovalClockWake[], delays: number[]) {
+    const deadlines = timers.filter(({ delayMs }) => delayMs !== 15_000);
+    expect(deadlines.map(({ delayMs }) => delayMs)).toEqual(delays);
     return deadlines;
   }
 
-  function runTimer(timer: { callback: TimeoutCallback } | undefined): void {
-    if (!timer || typeof timer.callback !== "function") {
-      throw new Error("expected timer callback");
+  async function runTimer(
+    timer: ApprovalClockWake | undefined,
+    preserveNow = false,
+  ): Promise<void> {
+    if (!timer) {
+      throw new Error("expected scheduled wake");
     }
-    timer.callback();
+    if (!preserveNow) {
+      vi.spyOn(Date, "now").mockReturnValue(Math.max(Date.now(), timer.atMs));
+    }
+    await timer.run();
   }
 
-  it("does not keep resolved approval cleanup timers ref'd", async (testContext) => {
+  it("expires resolved approval grace after elapsed time despite a wall-clock rollback", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-resolve");
     const decisionPromise = (await manager.register(record, 60_000)).decision;
 
@@ -106,13 +107,16 @@ describe("ExecApprovalManager", () => {
     await expect(decisionPromise).resolves.toBe("allow-once");
     expect((await manager.getSnapshot("approval-resolve"))?.resolutionSource).toBe("operator");
 
-    const cleanupTimer = timers.find((timer) => timer.delay === 15_000);
-    expect(cleanupTimer?.handle.unref).toHaveBeenCalledTimes(1);
+    const cleanupTimer = timers.find((timer) => timer.delayMs === 15_000);
+    expect(cleanupTimer).toBeDefined();
+    vi.mocked(Date.now).mockReturnValue(500);
+    await runTimer(cleanupTimer, true);
+    expect(manager.getLocalSnapshot(record.id)).toBeNull();
+    expect(await manager.consumeAllowOnce(record.id)).toBe(false);
   });
 
   it("records trusted auto-review as a closed one-shot resolution source", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    installTimerMocks();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-auto-review");
     const decisionPromise = (await manager.register(record, 60_000)).decision;
 
@@ -125,22 +129,23 @@ describe("ExecApprovalManager", () => {
     });
   });
 
-  it("does not keep expired approval cleanup timers ref'd", async (testContext) => {
+  it("retains expired approvals until the grace period ends", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-expire");
     const decisionPromise = (await manager.register(record, 60_000)).decision;
 
     expect(await manager.expire("approval-expire")).toBe(true);
     await expect(decisionPromise).resolves.toBeNull();
 
-    const cleanupTimer = timers.find((timer) => timer.delay === 15_000);
-    expect(cleanupTimer?.handle.unref).toHaveBeenCalledTimes(1);
+    const cleanupTimer = timers.find((timer) => timer.delayMs === 15_000);
+    expect(cleanupTimer).toBeDefined();
+    await runTimer(cleanupTimer);
+    expect(manager.getLocalSnapshot(record.id)).toBeNull();
   });
 
   it("consumes an expired approval as ask-fallback only once", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    installTimerMocks();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-fallback");
     const decisionPromise = (await manager.register(record, 60_000)).decision;
 
@@ -154,7 +159,6 @@ describe("ExecApprovalManager", () => {
 
   it("rejects ask-fallback replay of an allow-once approval", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    installTimerMocks();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-allow-once");
     const decisionPromise = (await manager.register(record, 60_000)).decision;
 
@@ -167,7 +171,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it("retains a resolved live binding across a slow handoff and cleans up after release", async () => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-handoff");
@@ -181,43 +185,43 @@ describe("ExecApprovalManager", () => {
 
     expect(manager.getLiveSnapshot(record.id)).toMatchObject({ decision: "allow-once" });
     expect(await manager.consumeAllowOnce(record.id)).toBe(true);
-    expect(timers.filter((timer) => timer.delay === 15_000)).toHaveLength(0);
+    expect(timers.filter((timer) => timer.delayMs === 15_000)).toHaveLength(0);
 
     releaseFirst?.();
-    expect(timers.filter((timer) => timer.delay === 15_000)).toHaveLength(0);
+    expect(timers.filter((timer) => timer.delayMs === 15_000)).toHaveLength(0);
     releaseSecond?.();
-    const cleanupTimers = timers.filter((timer) => timer.delay === 15_000);
+    const cleanupTimers = timers.filter((timer) => timer.delayMs === 15_000);
     expect(cleanupTimers).toHaveLength(1);
     releaseSecond?.();
-    expect(timers.filter((timer) => timer.delay === 15_000)).toHaveLength(1);
+    expect(timers.filter((timer) => timer.delayMs === 15_000)).toHaveLength(1);
 
-    runTimer(cleanupTimers[0]);
+    await runTimer(cleanupTimers[0]);
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
   });
 
   it("ignores a stale cleanup callback after handoff restarts the grace period", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-handoff-race");
     await manager.register(record, 60_000);
     expect(await manager.resolve(record.id, "allow-once")).toBe(true);
-    const staleCleanup = timers.find((timer) => timer.delay === 15_000);
+    const staleCleanup = timers.find((timer) => timer.delayMs === 15_000);
 
     const release = manager.retainForHandoff(record.id);
     now.mockReturnValue(2_000);
     release?.();
-    const cleanupTimers = timers.filter((timer) => timer.delay === 15_000);
+    const cleanupTimers = timers.filter((timer) => timer.delayMs === 15_000);
     expect(cleanupTimers).toHaveLength(2);
 
-    runTimer(staleCleanup);
+    await runTimer(staleCleanup);
     expect(manager.getLiveSnapshot(record.id)).toMatchObject({ decision: "allow-once" });
-    runTimer(cleanupTimers[1]);
+    await runTimer(cleanupTimers[1]);
     expect(manager.getLiveSnapshot(record.id)).toBeNull();
   });
 
   it("never projects an allowed decision without its live local record", async (testContext) => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const manager = createTestApprovalManager(testContext, {
       validateAgentRuntimeDelegatedAuthority: () => true,
     });
@@ -232,7 +236,7 @@ describe("ExecApprovalManager", () => {
     expect(await manager.resolve(record.id, "allow-always")).toBe(true);
     expect(manager.projectDecisionIfActive(record.id, "allow-always")).toBe("allow-always");
 
-    runTimer(timers.find((timer) => timer.delay === 15_000));
+    await runTimer(timers.find((timer) => timer.delayMs === 15_000));
     expect(manager.projectDecisionIfActive(record.id, "allow-always")).toBeNull();
     expect(
       createTestApprovalManager(testContext).projectDecisionIfActive(record.id, "allow-always"),
@@ -246,7 +250,7 @@ describe("ExecApprovalManager", () => {
 
   it("clamps oversized approval timers instead of letting Node fire them immediately", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const record = manager.create(
       { command: "echo ok" },
@@ -262,7 +266,7 @@ describe("ExecApprovalManager", () => {
 
   it("schedules registration from the record's remaining lifetime", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValue(1_250);
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-delayed");
 
@@ -273,21 +277,21 @@ describe("ExecApprovalManager", () => {
   });
 
   it("reschedules a deadline timer when the wall clock rolls backward", async () => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-clock-rollback");
     const decisionPromise = (await manager.register(record, 60_000)).decision;
     vi.mocked(Date.now).mockReturnValue(500);
 
-    runTimer(deadlineTimers(timers, [60_000])[0]);
+    await runTimer(deadlineTimers(timers, [60_000])[0], true);
 
     expect(await getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
       status: "pending",
     });
     const rescheduled = deadlineTimers(timers, [60_000, 60_500]);
     vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
-    runTimer(rescheduled[1]);
+    await runTimer(rescheduled[1]);
     await expect(decisionPromise).resolves.toBeNull();
     expect(await getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({
       status: "expired",
@@ -385,6 +389,7 @@ describe("ExecApprovalManager", () => {
       sessionKey === "global" && agentId ? `agent:${agentId}:global` : sessionKey,
     ]);
     const manager = new ExecApprovalManager({
+      scheduler: scheduled.scheduler,
       approvalKind: "exec",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions },
       resolveAllowedDecisions: () => ["allow-once", "deny"],
@@ -439,7 +444,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it("emits a terminal event when the durable timeout wins", async () => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const lifecycleEvents: OperatorApprovalLifecycleEvent[] = [];
     const { manager } = createPersistentManager({
@@ -453,7 +458,7 @@ describe("ExecApprovalManager", () => {
     const decisionPromise = (await manager.register(record, 60_000)).decision;
     vi.mocked(Date.now).mockReturnValue(record.expiresAtMs);
 
-    runTimer(deadlineTimers(timers, [60_000])[0]);
+    await runTimer(deadlineTimers(timers, [60_000])[0]);
 
     await expect(decisionPromise).resolves.toBeNull();
     expect(lifecycleEvents.map((event) => event.phase)).toEqual(["pending", "terminal"]);
@@ -522,7 +527,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("does not re-emit pending for an idempotent persisted registration", async () => {
-    installTimerMocks();
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create(
       { command: "echo replay", sessionKey: "agent:main:child" },
@@ -532,6 +536,7 @@ describe("ExecApprovalManager", () => {
     const originalPromise = (await manager.register(record, 60_000)).decision;
     const onLifecycle = vi.fn();
     const replayManager = new ExecApprovalManager({
+      scheduler: scheduled.scheduler,
       approvalKind: "exec",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions },
       resolveAllowedDecisions: () => ["allow-once", "deny"],
@@ -638,6 +643,7 @@ describe("ExecApprovalManager", () => {
     tempDirs.push(dir);
     const databaseOptions = { path: path.join(dir, "state.sqlite") };
     const manager = new ExecApprovalManager<PluginApprovalRequestPayload>({
+      scheduler: scheduled.scheduler,
       approvalKind: "plugin",
       persistence: { runtimeEpoch: "runtime-plugin", databaseOptions },
     });
@@ -717,7 +723,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("reconciles local reads with the durable expiry boundary", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-read-expiry");
@@ -730,7 +735,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("reconciles awaitDecision with the durable expiry boundary", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-await-expiry");
@@ -745,7 +749,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("reconciles force-deny with an approval that already reached expiry", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-force-expiry");
@@ -767,7 +770,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it("reports persistence failures from the timeout callback without throwing", async () => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const onError = vi.fn();
     const { manager, databaseOptions, dir } = createPersistentManager({ onError });
@@ -778,7 +781,7 @@ describe("ExecApprovalManager", () => {
     databaseOptions.path = path.join(blocker, "state.sqlite");
 
     const deadline = deadlineTimers(timers, [60_000])[0];
-    expect(() => runTimer(deadline)).not.toThrow();
+    await expect(runTimer(deadline)).resolves.toBeUndefined();
     await expect(decisionPromise).resolves.toBe("deny");
     expect(onError).toHaveBeenCalledWith(
       expect.any(Error),
@@ -791,7 +794,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("keeps a storage-failure deny authoritative after persistence recovers", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager, databaseOptions, dir } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-storage-recover");
@@ -831,7 +833,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("publishes durable expiry when storage recovery crosses the deadline", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const lifecycleEvents: OperatorApprovalLifecycleEvent[] = [];
     const { manager, databaseOptions, dir } = createPersistentManager({
@@ -877,6 +878,7 @@ describe("ExecApprovalManager", () => {
     const decisionPromise = (await manager.register(record, 60_000)).decision;
     const resolved = await resolveOperatorApproval({
       id: record.id,
+      nowMs: Date.now(),
       decision: "allow-once",
       resolver: { kind: "device", id: "control-ui" },
       expectedKind: "exec",
@@ -914,7 +916,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("repairs a recovered pending row before stable read returns it", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager, databaseOptions, dir } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-read-recover");
@@ -966,7 +967,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("refuses allow-once redemption after the live grace window", async () => {
-    installTimerMocks();
     vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-grace");
@@ -983,7 +983,6 @@ describe("ExecApprovalManager", () => {
   });
 
   it("uses fresh store time when redemption crosses the exact grace boundary", async () => {
-    installTimerMocks();
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-store-grace");
@@ -999,7 +998,7 @@ describe("ExecApprovalManager", () => {
   });
 
   it("never rehydrates executable ownership from the durable record", async () => {
-    const timers = installTimerMocks();
+    const timers = scheduled.wakes;
     const { manager, databaseOptions } = createPersistentManager();
     const record = manager.create({ command: "echo ok" }, 60_000, "approval-epoch");
     record.requestedByDeviceId = "device-owner";
@@ -1007,6 +1006,7 @@ describe("ExecApprovalManager", () => {
     await manager.resolveDetailed(record.id, "allow-once", { kind: "device", id: "control-ui" });
 
     const sameEpochManager = new ExecApprovalManager<{ command: string }>({
+      scheduler: scheduled.scheduler,
       approvalKind: "exec",
       persistence: { runtimeEpoch: "runtime-a", databaseOptions },
     });
@@ -1025,7 +1025,7 @@ describe("ExecApprovalManager", () => {
     expect(sameEpochManager.getLiveSnapshot(record.id)).toBeNull();
     expect(await sameEpochManager.consumeAllowOnce(record.id)).toBe(false);
 
-    runTimer(timers.find((timer) => timer.delay === 15_000));
+    await runTimer(timers.find((timer) => timer.delayMs === 15_000));
     expect(await manager.getSnapshot(record.id)).toBeNull();
     expect(await manager.consumeAllowOnce(record.id)).toBe(false);
     expect(await getOperatorApproval({ id: record.id, databaseOptions })).toMatchObject({

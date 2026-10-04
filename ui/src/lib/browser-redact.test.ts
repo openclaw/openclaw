@@ -86,12 +86,6 @@ describe("browser tool detail redaction", () => {
     expect(redactToolDetail(`{"awsSecretAccessKey":"${secret}"}`)).not.toContain(secret);
   });
 
-  it("exposes the tool payload redaction name used by shared display modules", () => {
-    expect(redactToolPayloadText("OPENAI_API_KEY=sk-1234567890abcdef")).toBe(
-      "OPENAI_API_KEY=sk-123...cdef",
-    );
-  });
-
   it.each([
     ["leading split", "abcde😀xxxxxxxxwxyz", "abcde...wxyz"],
     ["trailing split", "abcdefghijklm😀xyz", "abcdef...xyz"],

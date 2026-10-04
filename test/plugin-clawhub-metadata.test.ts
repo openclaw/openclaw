@@ -2,10 +2,8 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  resolvePluginNpmCommand,
-  withAugmentedPluginNpmManifestForPackage,
-} from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { withAugmentedPluginNpmManifestForPackage } from "../scripts/lib/plugin-npm-package-manifest.mts";
+import { resolveNpmRunner } from "../scripts/npm-runner.mts";
 import { inspectPackageTarballBytes } from "../scripts/plugin-publication-artifact.mjs";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
 import { writeJsonFile } from "./helpers/temp-repo.js";
@@ -48,13 +46,9 @@ function fixture({
 }
 
 function pack(packageDir: string, destination: string) {
-  const invocation = resolvePluginNpmCommand([
-    "pack",
-    "--json",
-    "--ignore-scripts",
-    "--pack-destination",
-    destination,
-  ]);
+  const invocation = resolveNpmRunner({
+    npmArgs: ["pack", "--json", "--ignore-scripts", "--pack-destination", destination],
+  });
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",

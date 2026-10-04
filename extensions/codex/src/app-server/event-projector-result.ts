@@ -18,6 +18,7 @@ import { CodexProjectionSettlement } from "./event-projector-settlement.js";
 import { buildCodexMessagesSnapshot } from "./event-projector-snapshot.js";
 import { CodexTerminalFailureProjection } from "./event-projector-terminal-failure.js";
 import { CodexToolProgressProjection } from "./event-projector-tool-progress.js";
+import { CodexToolSearchEvidenceProjection } from "./event-projector-tool-search-evidence.js";
 import { CodexToolTranscriptProjection } from "./event-projector-tool-transcript.js";
 import { CodexUsageProjection } from "./event-projector-usage.js";
 import type { CodexTurn } from "./protocol.js";
@@ -56,6 +57,7 @@ export abstract class CodexTurnProjection {
   protected readonly eventProjection: CodexEventProjection;
   protected readonly nativeToolLifecycleProjector: CodexNativeToolLifecycleProjector;
   protected readonly toolProgressProjection: CodexToolProgressProjection;
+  protected readonly toolSearchEvidenceProjection: CodexToolSearchEvidenceProjection | undefined;
   protected readonly toolTranscriptProjection: CodexToolTranscriptProjection;
   protected completedTurn: CodexTurn | undefined;
   protected readonly projectionController = new AbortController();
@@ -117,6 +119,10 @@ export abstract class CodexTurnProjection {
         checkpointMessage: this.transcriptCheckpoint.enqueue,
       },
     );
+    this.toolSearchEvidenceProjection =
+      options.trajectoryRecorder && process.env.OPENCLAW_BUILD_PRIVATE_QA === "1"
+        ? new CodexToolSearchEvidenceProjection(options.trajectoryRecorder, threadId, turnId)
+        : undefined;
     this.eventProjection = new CodexEventProjection(
       params.provider,
       threadId,

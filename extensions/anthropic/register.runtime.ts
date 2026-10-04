@@ -14,7 +14,6 @@ import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-ent
 import {
   buildProviderReplayFamilyHooks,
   cloneFirstTemplateModel,
-  type ModelCompatConfig,
   modelCostsEqual,
   type ProviderPlugin,
   requiresClaudeMandatoryAdaptiveThinking,
@@ -22,12 +21,14 @@ import {
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "openclaw/plugin-sdk/provider-model-shared";
+import { isAnthropicOAuthApiKey } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
@@ -55,7 +56,6 @@ import {
 } from "./session-catalog-registration.js";
 import {
   createAnthropicClaudeCodeIdentityWrapper,
-  isAnthropicOAuthApiKey,
   wrapAnthropicProviderStream,
 } from "./stream-wrappers.js";
 import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
@@ -212,27 +212,6 @@ function resolveAnthropicSnapshotModel(
   return template ? { ...template, id: modelId, name: modelId } : undefined;
 }
 
-/** Newest Claude generation whose request contract this plugin encodes. */
-const ANTHROPIC_NEWEST_KNOWN_GENERATION = { major: 5, minor: 0 } as const;
-
-/**
- * Read the generation from either Claude id order: `claude-<family>-<major>[-<minor>]`
- * (4.6 onward) and `claude-<major>[-<minor>]-<family>` (through 3.7). The minor
- * capture is bounded to two digits so a trailing snapshot date such as
- * `claude-opus-4-20250514` does not parse as a minor version.
- */
-function resolveAnthropicModelGeneration(
-  modelId: string,
-): { major: number; minor: number } | undefined {
-  const match =
-    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
-    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
-  if (!match) {
-    return undefined;
-  }
-  return { major: Number(match[1]), minor: match[2] === undefined ? 0 : Number(match[2]) };
-}
-
 /**
  * Claude ids from a generation newer than anything this plugin encodes. Request
  * shaping is selected by version predicates in `@openclaw/llm-core`, so such an
@@ -243,15 +222,16 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
   if (matchesAnthropicModernModel(modelId)) {
     return false;
   }
-  const generation = resolveAnthropicModelGeneration(modelId);
-  if (!generation) {
+  // Accept either Claude id order; two-digit minors exclude trailing snapshot dates.
+  const match =
+    /claude-[a-z]+-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId) ??
+    /claude-(\d{1,2})(?:-(\d{1,2}))?(?![0-9])/.exec(modelId);
+  if (!match) {
     return false;
   }
-  return (
-    generation.major > ANTHROPIC_NEWEST_KNOWN_GENERATION.major ||
-    (generation.major === ANTHROPIC_NEWEST_KNOWN_GENERATION.major &&
-      generation.minor > ANTHROPIC_NEWEST_KNOWN_GENERATION.minor)
-  );
+  const major = Number(match[1]);
+  // Claude 5.0 is the newest generation whose request contract this plugin encodes.
+  return major > 5 || (major === 5 && Number(match[2] ?? 0) > 0);
 }
 
 /**
@@ -261,7 +241,7 @@ function isAnthropicUnreleasedGenerationModel(modelId: string): boolean {
  * shaping follows without teaching the shared contracts about unknown ids.
  */
 function resolveAnthropicUnreleasedCanonicalModelId(modelId: string): string {
-  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5" : "claude-opus-5-5";
+  return /(?:^|-)claude-sonnet-/.test(modelId) ? "claude-sonnet-5-5" : "claude-opus-5-5";
 }
 
 // Dynamic rows use the manifest as the provider-owned offline contract when a lifecycle registry
@@ -291,15 +271,6 @@ function resolveAnthropicManifestModel(modelId: string): ProviderRuntimeModel | 
   return anthropicManifestModelIndex.get(modelId);
 }
 
-function resolveAnthropicManifestCompat(
-  provider: string,
-  modelId: string,
-): ModelCompatConfig | undefined {
-  return normalizeLowercaseStringOrEmpty(provider) === PROVIDER_ID
-    ? resolveAnthropicManifestModel(modelId)?.compat
-    : undefined;
-}
-
 function buildAnthropicForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
 ): ProviderRuntimeModel | undefined {
@@ -324,7 +295,9 @@ function buildAnthropicForwardCompatModel(
     | Pick<ProviderRuntimeModel, "compat">
     | null
     | undefined;
-  const compat = catalogModel?.compat ?? resolveAnthropicManifestCompat(provider, trimmedModelId);
+  const compat =
+    catalogModel?.compat ??
+    (provider === PROVIDER_ID ? resolveAnthropicManifestModel(trimmedModelId)?.compat : undefined);
   return {
     id: trimmedModelId,
     name: trimmedModelId,
@@ -411,31 +384,19 @@ function hasConfiguredModelOverride(
   }
   const normalizedProvider = normalizeLowercaseStringOrEmpty(provider);
   const normalizedModelId = normalizeLowercaseStringOrEmpty(modelId);
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
-    if (normalizeLowercaseStringOrEmpty(providerId) !== normalizedProvider) {
-      continue;
-    }
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const model of providerConfig.models) {
-      if (
-        normalizeLowercaseStringOrEmpty(typeof model?.id === "string" ? model.id : "") !==
-        normalizedModelId
-      ) {
-        continue;
-      }
-      if (
-        override === "cost"
-          ? model?.cost !== undefined
-          : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
-            (typeof model?.contextWindow === "number" && model.contextWindow > 0)
-      ) {
-        return true;
-      }
-    }
-  }
-  return false;
+  return Object.entries(providers).some(
+    ([providerId, providerConfig]) =>
+      normalizeLowercaseStringOrEmpty(providerId) === normalizedProvider &&
+      Array.isArray(providerConfig?.models) &&
+      providerConfig.models.some(
+        (model) =>
+          normalizeLowercaseStringOrEmpty(model?.id) === normalizedModelId &&
+          (override === "cost"
+            ? model?.cost !== undefined
+            : (typeof model?.contextTokens === "number" && model.contextTokens > 0) ||
+              (typeof model?.contextWindow === "number" && model.contextWindow > 0)),
+      ),
+  );
 }
 
 function matchesAnthropicModernModel(modelId: string): boolean {
@@ -464,17 +425,14 @@ function normalizeAnthropicResolvedModel(
       patch.input = ["text", "image"];
     }
     const sidePx = imageRefs.some((id) => supportsClaudeNativeXhighEffort({ id })) ? 2576 : 1568;
-    const mediaInput = {
+    patch.mediaInput = {
+      ...model.mediaInput,
       image: {
         maxSidePx: sidePx,
         preferredSidePx: sidePx,
         tokenMode: "provider" as const,
+        ...model.mediaInput?.image,
       },
-    };
-    patch.mediaInput = {
-      ...mediaInput,
-      ...model.mediaInput,
-      image: { ...mediaInput.image, ...model.mediaInput?.image },
     };
   }
   // Catalog defaults must not raise an operator-configured output cap.
@@ -489,15 +447,18 @@ function normalizeAnthropicResolvedModel(
     const current = model.thinkingLevelMap;
     const preview = isAnthropicMythosPreviewModel(contractModelId);
     const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
+    const remapsMinimal =
+      mandatory || resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined;
     if (
       current?.max === undefined ||
-      (!preview && (current?.xhigh === undefined || (mandatory && current?.minimal === undefined)))
+      (!preview &&
+        (current?.xhigh === undefined || (remapsMinimal && current?.minimal === undefined)))
     ) {
       patch.thinkingLevelMap = {
         ...(preview
           ? { max: "max" as const }
           : {
-              ...(mandatory ? { minimal: "low" as const } : {}),
+              ...(remapsMinimal ? { minimal: "low" as const } : {}),
               xhigh:
                 mandatory || supportsClaudeNativeXhighEffort({ id: contractModelId })
                   ? ("xhigh" as const)

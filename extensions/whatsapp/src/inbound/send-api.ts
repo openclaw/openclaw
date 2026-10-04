@@ -1,14 +1,9 @@
-// Whatsapp API module exposes the plugin public contract.
-import type {
-  AnyMessageContent,
-  MiscMessageGenerationOptions,
-  WAMessage,
-  WAPresence,
-} from "baileys";
+import type { AnyMessageContent, WAMessage } from "baileys";
 import { resolveWhatsAppDocumentFileName } from "../document-filename.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
 import { isWhatsAppNewsletterJid } from "../normalize-target.js";
 import { buildQuotedMessageOptions } from "../quoted-message.js";
+import type { WhatsAppSocketOperationAdapter } from "../socket-timing.js";
 import { toWhatsappJid, toWhatsappJidWithLid } from "../targets-runtime.js";
 import {
   addWhatsAppOutboundMentionsToContent,
@@ -41,14 +36,7 @@ type StructuredStickerSendOptions = {
 };
 
 export function createWebSendApi(params: {
-  sock: {
-    sendMessage: (
-      jid: string,
-      content: AnyMessageContent,
-      options?: MiscMessageGenerationOptions,
-    ) => Promise<WAMessage | undefined>;
-    sendPresenceUpdate: (presence: WAPresence, jid?: string) => Promise<unknown>;
-  };
+  sock: WhatsAppSocketOperationAdapter;
   defaultAccountId: string;
   resolveOutboundMentions?: (params: {
     jid: string;
@@ -184,8 +172,8 @@ export function createWebSendApi(params: {
     sendPoll: async (
       to: string,
       poll: { question: string; options: string[]; maxSelections?: number },
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+    ) =>
+      await sendStructuredMessage(
         to,
         {
           poll: {
@@ -193,15 +181,11 @@ export function createWebSendApi(params: {
             values: poll.options,
             selectableCount: poll.maxSelections ?? 1,
           },
-        } as AnyMessageContent,
+        },
         "poll",
-      );
-    },
-    sendContact: async (
-      to: string,
-      contact: StructuredContactSend,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+      ),
+    sendContact: async (to: string, contact: StructuredContactSend) =>
+      await sendStructuredMessage(
         to,
         {
           contacts: {
@@ -213,15 +197,11 @@ export function createWebSendApi(params: {
               },
             ],
           },
-        } as AnyMessageContent,
+        },
         "contact",
-      );
-    },
-    sendLocation: async (
-      to: string,
-      location: StructuredLocationSend,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+      ),
+    sendLocation: async (to: string, location: StructuredLocationSend) =>
+      await sendStructuredMessage(
         to,
         {
           location: {
@@ -230,24 +210,22 @@ export function createWebSendApi(params: {
             name: location.name,
             address: location.address,
           },
-        } as AnyMessageContent,
+        },
         "location",
-      );
-    },
+      ),
     sendSticker: async (
       to: string,
       stickerBuffer: Buffer,
       options?: StructuredStickerSendOptions,
-    ): Promise<WhatsAppSendResult> => {
-      return await sendStructuredMessage(
+    ) =>
+      await sendStructuredMessage(
         to,
         {
           sticker: stickerBuffer,
           mimetype: options?.mimetype ?? "image/webp",
-        } as AnyMessageContent,
+        },
         "sticker",
-      );
-    },
+      ),
     sendReaction: async (
       chatJid: string,
       messageId: string,
@@ -268,7 +246,7 @@ export function createWebSendApi(params: {
             participant: participant ? toWhatsappJid(participant) : undefined,
           },
         },
-      } as AnyMessageContent);
+      });
       return normalizeWhatsAppSendResult(result, "reaction");
     },
     sendComposingTo: async (to: string): Promise<void> => {

@@ -24,6 +24,7 @@ import { isRecord } from "../packages/normalization-core/src/record-coerce.ts";
 import { sliceUtf16Safe } from "../packages/normalization-core/src/utf16-slice.ts";
 import type { createAgentTurnService } from "../src/gateway/agent-turn/agent-turn-service.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
+import { createDeferredCore } from "../src/shared/deferred.ts";
 import { applyMockOpenAiModelConfig } from "./e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   summarizeMockInferenceRequest,
@@ -65,14 +66,12 @@ import {
   buildGatewayBenchChildArgs,
   CliArgumentError,
   createGatewayBenchEnv,
-  hasFlag,
   hasHelpFlag,
-  parseFlagValue,
   parseNonNegativeInt,
   parsePositiveInt,
   resolveEntry,
   resolveOutputPath,
-  validateCliArgs,
+  parseCliArgs,
   waitForInitialProbe,
   writeGatewayBenchConfig,
   writePluginFixtures,
@@ -381,193 +380,65 @@ const VALUE_FLAGS = new Set([
   "--warmup",
 ]);
 
-function parseBoundedPositiveInt(
-  raw: string | undefined,
-  fallback: number,
-  label: string,
-  max: number,
-): number {
-  const value = parsePositiveInt(raw, fallback, label);
-  if (value > max) {
-    throw new CliArgumentError(`${label} must be at most ${max}`);
-  }
-  return value;
-}
-
-function parseBoundedNonNegativeInt(
-  raw: string | undefined,
-  fallback: number,
-  label: string,
-  max: number,
-): number {
-  const value = parseNonNegativeInt(raw, fallback, label);
-  if (value > max) {
-    throw new CliArgumentError(`${label} must be at most ${max}`);
-  }
-  return value;
-}
-
 function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
-  validateCliArgs(argv, { booleanFlags: BOOLEAN_FLAGS, valueFlags: VALUE_FLAGS });
-  const provider = parseFlagValue(argv, "--provider") ?? "mock";
+  const flags = parseCliArgs(argv, { booleanFlags: BOOLEAN_FLAGS, valueFlags: VALUE_FLAGS });
+  const provider = flags.get("--provider")?.[0] ?? "mock";
   if (provider !== "mock" && provider !== "openai") {
     throw new CliArgumentError("--provider must be mock or openai");
   }
+  const boundedInt = (flag: string, fallback: number, max: number, allowZero = false) => {
+    const parse = allowZero ? parseNonNegativeInt : parsePositiveInt;
+    const value = parse(flags.get(flag)?.[0], fallback, flag);
+    if (value > max) {
+      throw new CliArgumentError(`${flag} must be at most ${max}`);
+    }
+    return value;
+  };
   const options: CliOptions = {
     provider,
-    agentCount: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--agent-count"),
-      1,
-      "--agent-count",
-      MAX_AGENT_COUNT,
-    ),
-    browserHistoryMessages: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--browser-history-messages"),
-      80,
-      "--browser-history-messages",
-      500,
-    ),
-    browserSessionClicks: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--browser-session-clicks"),
-      0,
-      "--browser-session-clicks",
-      20,
-    ),
-    cadenceMs: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--cadence-ms"),
-      DEFAULT_CADENCE_MS,
-      "--cadence-ms",
-      5_000,
-    ),
-    concurrency: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--concurrency"),
-      DEFAULT_CONCURRENCY,
-      "--concurrency",
-      MAX_CONCURRENCY,
-    ),
-    controlPlane: hasFlag(argv, "--control-plane"),
-    cpuProfDir: resolveOutputPath(parseFlagValue(argv, "--cpu-prof-dir")),
-    loadCpuProfDir: resolveOutputPath(parseFlagValue(argv, "--load-cpu-prof-dir")),
-    heapProfDir: resolveOutputPath(parseFlagValue(argv, "--heap-prof-dir")),
-    diagnosticsTimeline: !hasFlag(argv, "--no-diagnostics-timeline"),
-    activitySummaryDiagnostics: hasFlag(argv, "--activity-summary-diagnostics"),
-    entry: resolveEntry(parseFlagValue(argv, "--entry"), DEFAULT_ENTRY),
-    historyBurst: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--history-burst"),
-      5,
-      "--history-burst",
-      32,
-    ),
-    historyClients: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--history-clients"),
-      0,
-      "--history-clients",
-      MAX_CONCURRENCY,
-    ),
-    historyMessages: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--history-messages"),
-      0,
-      "--history-messages",
-      500,
-    ),
-    historyMessageChars: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--history-message-chars"),
-      1_024,
-      "--history-message-chars",
-      65_536,
-    ),
-    json: hasFlag(argv, "--json"),
-    maxControlMs: parseFlagValue(argv, "--max-control-ms")
-      ? parseBoundedPositiveInt(
-          parseFlagValue(argv, "--max-control-ms"),
-          2_000,
-          "--max-control-ms",
-          30_000,
-        )
+    agentCount: boundedInt("--agent-count", 1, MAX_AGENT_COUNT),
+    browserHistoryMessages: boundedInt("--browser-history-messages", 80, 500),
+    browserSessionClicks: boundedInt("--browser-session-clicks", 0, 20, true),
+    cadenceMs: boundedInt("--cadence-ms", DEFAULT_CADENCE_MS, 5_000),
+    concurrency: boundedInt("--concurrency", DEFAULT_CONCURRENCY, MAX_CONCURRENCY),
+    controlPlane: flags.has("--control-plane"),
+    cpuProfDir: resolveOutputPath(flags.get("--cpu-prof-dir")?.[0]),
+    loadCpuProfDir: resolveOutputPath(flags.get("--load-cpu-prof-dir")?.[0]),
+    heapProfDir: resolveOutputPath(flags.get("--heap-prof-dir")?.[0]),
+    diagnosticsTimeline: !flags.has("--no-diagnostics-timeline"),
+    activitySummaryDiagnostics: flags.has("--activity-summary-diagnostics"),
+    entry: resolveEntry(flags.get("--entry")?.[0], DEFAULT_ENTRY),
+    historyBurst: boundedInt("--history-burst", 5, 32),
+    historyClients: boundedInt("--history-clients", 0, MAX_CONCURRENCY, true),
+    historyMessages: boundedInt("--history-messages", 0, 500, true),
+    historyMessageChars: boundedInt("--history-message-chars", 1_024, 65_536),
+    json: flags.has("--json"),
+    maxControlMs: flags.get("--max-control-ms")?.[0]
+      ? boundedInt("--max-control-ms", 2_000, 30_000)
       : undefined,
-    maxHandshakeMs: parseFlagValue(argv, "--max-handshake-ms")
-      ? parseBoundedPositiveInt(
-          parseFlagValue(argv, "--max-handshake-ms"),
-          2_000,
-          "--max-handshake-ms",
-          30_000,
-        )
+    maxHandshakeMs: flags.get("--max-handshake-ms")?.[0]
+      ? boundedInt("--max-handshake-ms", 2_000, 30_000)
       : undefined,
-    output: resolveOutputPath(parseFlagValue(argv, "--output")),
-    pluginCount: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--plugin-count"),
-      0,
-      "--plugin-count",
-      MAX_PLUGIN_COUNT,
-    ),
+    output: resolveOutputPath(flags.get("--output")?.[0]),
+    pluginCount: boundedInt("--plugin-count", 0, MAX_PLUGIN_COUNT, true),
     probeRounds:
-      parseFlagValue(argv, "--probe-rounds") === undefined
+      flags.get("--probe-rounds")?.[0] === undefined
         ? undefined
-        : parseBoundedPositiveInt(
-            parseFlagValue(argv, "--probe-rounds"),
-            1,
-            "--probe-rounds",
-            MAX_SAMPLES_PER_RUN,
-          ),
-    runs: parseBoundedPositiveInt(parseFlagValue(argv, "--runs"), DEFAULT_RUNS, "--runs", MAX_RUNS),
-    sessionCount: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--session-count"),
-      0,
-      "--session-count",
-      MAX_SESSION_COUNT,
-    ),
-    sessionUpdateClients: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--session-update-clients"),
-      4,
-      "--session-update-clients",
-      MAX_CONCURRENCY,
-    ),
-    sessionUpdates: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--session-updates"),
-      0,
-      "--session-updates",
-      MAX_SESSION_UPDATES,
-    ),
-    streamChunkDelayMs: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--stream-chunk-delay-ms"),
-      MOCK_RESPONSE_CHUNK_DELAY_MS,
-      "--stream-chunk-delay-ms",
-      30_000,
-    ),
-    subscribers: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--subscribers"),
-      0,
-      "--subscribers",
-      MAX_CONCURRENCY,
-    ),
-    timeoutMs: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--timeout-ms"),
-      DEFAULT_TIMEOUT_MS,
-      "--timeout-ms",
-      10 * 60_000,
-    ),
-    gatewayCpus: parseFlagValue(argv, "--gateway-cpus"),
-    agentWarmupTurns: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--agent-warmup-turns"),
-      0,
-      "--agent-warmup-turns",
-      MAX_WARMUP,
-    ),
-    toolEvents: hasFlag(argv, "--tool-events"),
-    turnsPerSession: parseBoundedPositiveInt(
-      parseFlagValue(argv, "--turns-per-session"),
-      1,
-      "--turns-per-session",
-      MAX_TURNS_PER_SESSION,
-    ),
-    visibleObserver: hasFlag(argv, "--visible-observer"),
-    warmup: parseBoundedNonNegativeInt(
-      parseFlagValue(argv, "--warmup"),
-      DEFAULT_WARMUP,
-      "--warmup",
-      MAX_WARMUP,
-    ),
-    workspaceFanout: hasFlag(argv, "--workspace-fanout"),
+        : boundedInt("--probe-rounds", 1, MAX_SAMPLES_PER_RUN),
+    runs: boundedInt("--runs", DEFAULT_RUNS, MAX_RUNS),
+    sessionCount: boundedInt("--session-count", 0, MAX_SESSION_COUNT, true),
+    sessionUpdateClients: boundedInt("--session-update-clients", 4, MAX_CONCURRENCY),
+    sessionUpdates: boundedInt("--session-updates", 0, MAX_SESSION_UPDATES, true),
+    streamChunkDelayMs: boundedInt("--stream-chunk-delay-ms", MOCK_RESPONSE_CHUNK_DELAY_MS, 30_000),
+    subscribers: boundedInt("--subscribers", 0, MAX_CONCURRENCY, true),
+    timeoutMs: boundedInt("--timeout-ms", DEFAULT_TIMEOUT_MS, 10 * 60_000),
+    gatewayCpus: flags.get("--gateway-cpus")?.[0],
+    agentWarmupTurns: boundedInt("--agent-warmup-turns", 0, MAX_WARMUP, true),
+    toolEvents: flags.has("--tool-events"),
+    turnsPerSession: boundedInt("--turns-per-session", 1, MAX_TURNS_PER_SESSION),
+    visibleObserver: flags.has("--visible-observer"),
+    warmup: boundedInt("--warmup", DEFAULT_WARMUP, MAX_WARMUP, true),
+    workspaceFanout: flags.has("--workspace-fanout"),
   };
   if (options.activitySummaryDiagnostics && provider !== "mock") {
     throw new CliArgumentError("--activity-summary-diagnostics requires the mock provider");
@@ -589,7 +460,7 @@ function parseOptions(argv: string[] = process.argv.slice(2)): CliOptions {
       options.workspaceFanout ||
       options.browserSessionClicks !== 0 ||
       options.heapProfDir ||
-      parseFlagValue(argv, "--stream-chunk-delay-ms") !== undefined)
+      flags.get("--stream-chunk-delay-ms")?.[0] !== undefined)
   ) {
     throw new CliArgumentError(
       "OpenAI requires one run, no warmups, one active session per agent (at most 32), at most three turns, and no mock tools, observer, plugins, browser, heap sampling, workspace fanout, or stream pacing",
@@ -639,7 +510,7 @@ Options:
   --gateway-cpus <list> Linux Gateway-only CPU affinity (comma-separated CPU numbers)
   --agent-warmup-turns <n> Verified turns per active session in the same Gateway before load (default: 0, max: ${MAX_WARMUP})
   --turns-per-session <n> Serial turns per session (default: 1, max: ${MAX_TURNS_PER_SESSION})
-  --control-plane   Also probe tasks.list, cron.list, and cron.status during load
+  --control-plane   Also probe cron.list and cron.status during load
   --history-messages <n> Inject up to 500 synthetic messages per seeded session
   --history-message-chars <n> Synthetic message size (default: 1024, max: 65536)
   --cpu-prof-dir <p> Write Gateway V8 CPU profiles to this directory
@@ -1202,10 +1073,10 @@ function buildConfig(
     pluginCount > 0 ? writePluginFixtures(root, { count: pluginCount }) : undefined;
   const agentList =
     agentIds.length > 1 || provider === "openai"
-      ? agentIds.map((id, index) => {
+      ? agentIds.map((id) => {
           const workspace = path.join(root, `workspace-${id}`);
           mkdirSync(workspace, { recursive: true });
-          return { id, default: index === 0, workspace };
+          return { id, workspace };
         })
       : undefined;
   return writeGatewayBenchConfig(root, config, { agentList, pluginFixtures });
@@ -1618,7 +1489,6 @@ async function sampleGateway(params: {
   port: number;
   rpc: GatewayRpc;
   runStartedAt: number;
-  serial?: boolean;
   activitySummaryDiagnostics?: ReturnType<typeof createActivitySummaryDiagnostics>;
 }): Promise<GatewaySample> {
   const atMs = performance.now() - params.runStartedAt;
@@ -1645,8 +1515,6 @@ async function sampleGateway(params: {
       };
     }
   };
-  const probeReadyz = () => safeHttpProbe("/readyz", "application/json");
-  const probeControlUi = () => safeHttpProbe("/", "text/html");
   const probeSessions = async () => {
     const startedAt = performance.now();
     try {
@@ -1667,9 +1535,11 @@ async function sampleGateway(params: {
       };
     }
   };
-  const [readyz, controlUi, sessions] = params.serial
-    ? [await probeReadyz(), await probeControlUi(), await probeSessions()]
-    : await Promise.all([probeReadyz(), probeControlUi(), probeSessions()]);
+  const [readyz, controlUi, sessions] = await Promise.all([
+    safeHttpProbe("/readyz", "application/json"),
+    safeHttpProbe("/", "text/html"),
+    probeSessions(),
+  ]);
   const readyBody = (() => {
     if (readyz.status !== 200) {
       return {};
@@ -1809,41 +1679,11 @@ function observeBenchmarkChild(child: ChildProcess) {
   });
 }
 
-async function runGatewaySample(options: {
-  provider: CliOptions["provider"];
-  output?: string;
-  agentCount: number;
-  agentWarmupTurns: number;
-  gatewayCpus?: string;
-  browserHistoryMessages: number;
-  browserSessionClicks: number;
-  cadenceMs: number;
-  concurrency: number;
-  controlPlane: boolean;
-  deadlineAt: number;
-  diagnosticsTimeline: boolean;
-  activitySummaryDiagnostics: boolean;
-  entry: string;
-  cpuProfDir?: string;
-  loadCpuProfDir?: string;
-  heapProfDir?: string;
-  historyBurst: number;
-  historyClients: number;
-  historyMessages: number;
-  historyMessageChars: number;
-  pluginCount: number;
-  probeRounds?: number;
-  sessionCount: number;
-  sessionUpdateClients: number;
-  sessionUpdates: number;
-  streamChunkDelayMs: number;
-  subscribers: number;
-  timeoutMs: number;
-  toolEvents: boolean;
-  turnsPerSession: number;
-  visibleObserver: boolean;
-  workspaceFanout: boolean;
-}): Promise<BenchmarkAttempt> {
+async function runGatewaySample(
+  options: Omit<CliOptions, "json" | "maxControlMs" | "maxHandshakeMs" | "runs" | "warmup"> & {
+    deadlineAt: number;
+  },
+): Promise<BenchmarkAttempt> {
   let runStartedAt = performance.now();
   const partialRun: BenchmarkPartialRun = {
     controlPlane: [],
@@ -2319,34 +2159,21 @@ async function runGatewaySample(options: {
         }
       }
       const historyClients = await concurrently(
-        Array.from({ length: options.historyClients }, async () => {
-          const historyClient = await connectGateway(port, setupDeadlineAt, protocolVersion, false);
-          ownClient(historyClient);
-          return historyClient;
-        }),
+        Array.from({ length: options.historyClients }, async () =>
+          ownClient(await connectGateway(port, setupDeadlineAt, protocolVersion, false)),
+        ),
       );
       const sessionUpdateClients = await concurrently(
         Array.from(
           { length: options.sessionUpdates > 0 ? options.sessionUpdateClients : 0 },
-          async () => {
-            const updateClient = await connectGateway(
-              port,
-              setupDeadlineAt,
-              protocolVersion,
-              false,
-            );
-            ownClient(updateClient);
-            return updateClient;
-          },
+          async () =>
+            ownClient(await connectGateway(port, setupDeadlineAt, protocolVersion, false)),
         ),
       );
       const subscriptionProbeClient =
         options.subscribers > 0
-          ? await connectGateway(port, setupDeadlineAt, protocolVersion, false)
+          ? ownClient(await connectGateway(port, setupDeadlineAt, protocolVersion, false))
           : undefined;
-      if (subscriptionProbeClient) {
-        ownClient(subscriptionProbeClient);
-      }
       if (!live) {
         mockCheckpoints.push(await readMockRequests(mockPort, setupDeadlineAt));
       }
@@ -2430,10 +2257,7 @@ async function runGatewaySample(options: {
       let browserDone = !browserProbe;
       const workloadDone = () => probesStopped || (turnsDone && updatesDone && browserDone);
       let startedTurnCount = 0;
-      let resolveAllTurnsStarted!: () => void;
-      const allTurnsStarted = new Promise<void>((resolve) => {
-        resolveAllTurnsStarted = resolve;
-      });
+      const { promise: allTurnsStarted, resolve: resolveAllTurnsStarted } = createDeferredCore();
       if (!live) {
         providerBeforeLoad = readProviderRequestLog(requestLogPath).length;
       }
@@ -2559,7 +2383,7 @@ async function runGatewaySample(options: {
               : Promise.resolve(undefined),
             options.controlPlane
               ? Promise.all(
-                  ["tasks.list", "cron.list", "cron.status"].map(async (method) =>
+                  ["cron.list", "cron.status"].map(async (method) =>
                     Object.assign(
                       await timeRpcProbe(
                         rpc,
@@ -3003,7 +2827,7 @@ function liveRunPassed(run: BenchmarkRun, options: CliOptions): boolean {
     probesMatch(run.messageSubscriptions, options.subscribers) &&
     probesMatch(run.messageSubscriptionsDuringLoad, options.subscribers === 0 ? 0 : rounds) &&
     (options.controlPlane
-      ? ["tasks.list", "cron.list", "cron.status"].every((method) =>
+      ? ["cron.list", "cron.status"].every((method) =>
           probesMatch(
             run.controlPlane.filter((sample) => sample.method === method),
             rounds,
@@ -3028,7 +2852,7 @@ function summarizeRuns(
   const sessionUpdates = runs.flatMap((run) => run.sessionUpdates);
   const mockRequests = runs.flatMap((run) => (run.mockRequests ? [run.mockRequests] : []));
   // Setup subscriptions and warmup probes are not load-phase measurements.
-  const controlMethods = ["tasks.list", "cron.list", "cron.status"];
+  const controlMethods = ["cron.list", "cron.status"];
   const controlMethodProbes = controlMethods.map((method) => ({
     method,
     samples: controlPlane.filter((sample) => sample.method === method),
@@ -3389,7 +3213,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .catch((error: unknown) => {
       console.error(
         redactLiveBenchmarkText(
-          hasFlag(process.argv.slice(2), "--activity-summary-diagnostics")
+          process.argv.slice(2).includes("--activity-summary-diagnostics")
             ? "Activity-summary diagnostic benchmark failed; inspect retained observations"
             : error instanceof CliArgumentError
               ? error.message

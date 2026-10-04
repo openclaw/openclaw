@@ -1,7 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -12,7 +11,6 @@ import {
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
-  type ExecHost,
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -56,6 +54,7 @@ import { emitExecProcessCompleted } from "./bash-tools.exec-diagnostics.js";
 import { prepareHostExecSpawn } from "./bash-tools.exec-host-spawn.js";
 import {
   appendExecTimeoutRetryGuidance,
+  compactNotifyOutput,
   renderExecExitLabel,
   renderExecOutputText,
   renderExecUpdateText,
@@ -120,7 +119,6 @@ export const DEFAULT_PATH =
   process.env.PATH ?? "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 /** Tail length used in background completion notifications. */
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
-const DEFAULT_NOTIFY_SNIPPET_CHARS = 180;
 /** Default time an approval can remain pending. */
 export const DEFAULT_APPROVAL_TIMEOUT_MS = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
 /** Gateway request timeout for approval registration/wait calls. */
@@ -139,14 +137,9 @@ export type ExecProcessHandle = {
   disableUpdates: () => void;
 };
 
-/** Renders a host label for user-facing exec policy messages. */
-function renderExecHostLabel(host: ExecHost) {
-  return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
-}
-
 /** Renders an exec target label, preserving `auto`. */
 export function renderExecTargetLabel(target: ExecTarget) {
-  return target === "auto" ? "auto" : renderExecHostLabel(target);
+  return target;
 }
 
 /** Returns true when a per-call target override is allowed by configured policy. */
@@ -243,23 +236,6 @@ export function resolveExecTarget(params: {
   };
 }
 
-/** Normalizes notification snippets to a compact single-line form. */
-export function normalizeNotifyOutput(value: string) {
-  return value.replace(/\s+/g, " ").trim();
-}
-
-function compactNotifyOutput(value: string, maxChars = DEFAULT_NOTIFY_SNIPPET_CHARS) {
-  const normalized = normalizeNotifyOutput(value);
-  if (!normalized) {
-    return "";
-  }
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const safe = Math.max(1, maxChars - 1);
-  return `${truncateUtf16Safe(normalized, safe)}…`;
-}
-
 /** Merges shell-discovered PATH entries into an exec environment. */
 export function applyShellPath(env: Record<string, string>, shellPath?: string | null) {
   if (!shellPath) {
@@ -276,7 +252,11 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   }
 }
 
-function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "failed") {
+function maybeNotifyOnExit(
+  session: ProcessSession,
+  status: "completed" | "failed",
+  subagentSession: boolean,
+) {
   if (
     !session.backgrounded ||
     !session.notifyOnExit ||
@@ -327,7 +307,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   }
   // Subagent sessions receive exec results via process poll and announce flow;
   // the heartbeat would fall back to the main session and cause spurious wakes.
-  if (!isSubagentSessionKey(sessionKey)) {
+  if (!subagentSession && !isSubagentSessionKey(sessionKey)) {
     const wakeOptions = scopedHeartbeatWakeOptionsForPolicy(
       sessionKey,
       {
@@ -544,7 +524,6 @@ export async function runExecProcess({
   beforeSpawn: initialBeforeSpawn,
   assertCurrent: initialAssertCurrent,
   onSettledBeforeNotify: initialOnSettledBeforeNotify,
-  onActivity: initialOnActivity,
   ...opts
 }: {
   command: string;
@@ -565,6 +544,8 @@ export async function runExecProcess({
   pendingMaxOutput: number;
   cleanupMs?: number;
   notifyOnExit: boolean;
+  /** Start-time subagent identity resolved from the persisted spawn envelope. */
+  subagentSession?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
@@ -580,8 +561,6 @@ export async function runExecProcess({
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
   /** Runs after process finalization and before the exit wake is queued. */
   onSettledBeforeNotify?: (outcome: ExecProcessOutcome) => void | Promise<void>;
-  /** Process-owned invalidation survives foreground delivery and ends at settlement. */
-  onActivity?: (at: number) => void;
   /** Revalidates authorization after async preparation, immediately before each spawn attempt. */
   beforeSpawn?: () => Promise<AgentToolResult<ExecToolDetails> | undefined>;
   /** Rechecks host policy at the supervisor's final synchronous spawn boundary. */
@@ -638,7 +617,6 @@ export async function runExecProcess({
   let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent = initialAssertCurrent;
   let onSettledBeforeNotify = initialOnSettledBeforeNotify;
-  let onActivity = initialOnActivity;
 
   const emitUpdate = () => {
     if (!onUpdate || session.backgrounded || session.exited) {
@@ -672,7 +650,6 @@ export async function runExecProcess({
 
   const handleOutput =
     (stream: "stdout" | "stderr", sanitize: (data: string) => string) => (data: string) => {
-      onActivity?.(session.processActivity?.lastOutputAtMs ?? Date.now());
       for (const chunk of chunkString(sanitize(data))) {
         appendOutput(session, stream, chunk);
         emitUpdate();
@@ -721,7 +698,6 @@ export async function runExecProcess({
     secretEgressGrant?.revoke();
     let finalOutcome = outcome;
     session.finalizing = true;
-    onActivity?.(Date.now());
     try {
       if (!opts.sandbox && managedRun?.waitForExtinction) {
         // Root completion does not release descendants that retained the group's lineage fd.
@@ -770,7 +746,8 @@ export async function runExecProcess({
         session,
         outcome: finalOutcome,
         onSettledBeforeNotify,
-        notifyOnExit: maybeNotifyOnExit,
+        notifyOnExit: (settledSession, status) =>
+          maybeNotifyOnExit(settledSession, status, opts.subagentSession === true),
         failureOutcome: (error) =>
           buildExecRuntimeErrorOutcome({
             error,
@@ -917,7 +894,6 @@ export async function runExecProcess({
       }),
     ).finally(() => {
       onSettledBeforeNotify = undefined;
-      onActivity = undefined;
       operatorSignal?.removeEventListener("abort", onOperatorRevoked);
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;
@@ -976,7 +952,6 @@ export async function runExecProcess({
       return finalOutcome;
     } finally {
       onSettledBeforeNotify = undefined;
-      onActivity = undefined;
       operatorSignal?.removeEventListener("abort", onOperatorRevoked);
       releaseOperatorAuthority?.();
       releaseOperatorAuthority = undefined;

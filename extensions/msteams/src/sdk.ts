@@ -1,8 +1,8 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
+import type { MSTeamsCloudName } from "../runtime-api.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
-import type { MSTeamsCloudName } from "./cloud.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { msteamsConnectorHandoffInterceptor } from "./send-handoff.js";
@@ -12,16 +12,9 @@ import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 type MSTeamsHttpServerAdapter =
   import("@microsoft/teams.apps/dist/http/adapter.js").IHttpServerAdapter;
 
-/**
- * Borrow the SDK's `IRoutes` map so `app.on("<route-name>", (ctx) => …)`
- * gets route-name validation and ctx inference. We define our own `on`
- * signature instead of borrowing the SDK's free function (which is bound to
- * `this: App<TPlugin>`), because our `MSTeamsApp` is a structural alias —
- * not a real `App` instance.
- */
+// Borrow route inference without the SDK method's nominal `this: App<TPlugin>` binding.
 type MSTeamsRoutes = import("@microsoft/teams.apps/dist/routes/index.js").IRoutes;
 
-/** Adaptive-card action response shape, re-exported for typed `card.action` handlers. */
 export type MSTeamsCardActionResponse =
   import("@microsoft/teams.api/dist/models/adaptive-card/adaptive-card-action-response.js").AdaptiveCardActionResponse;
 
@@ -35,12 +28,7 @@ type MSTeamsAppOn = <Name extends keyof MSTeamsRoutes>(
 /** Teams SDK surface consumed by the plugin, with SDK-owned route and token contracts. */
 export type MSTeamsApp = {
   send(conversationId: string, activity: unknown): Promise<{ id?: string }>;
-  /**
-   * Threaded variant of `send` for channel/groupchat replies. The SDK builds
-   * the threaded conversation id internally (`${conversationId};messageid=${messageId}`)
-   * via its `toThreadedConversationId` helper, so we don't have to reproduce
-   * Teams' URL format on our side.
-   */
+  /** The SDK owns the threaded conversation ID and reply quoting. */
   reply(conversationId: string, messageId: string, activity: unknown): Promise<{ id?: string }>;
   on: MSTeamsAppOn;
   event(name: "signin", cb: (ctx: SigninEventCtx) => void | Promise<void>): MSTeamsApp;
@@ -99,12 +87,7 @@ const loadSdkModules = createLazyRuntimeModule(() =>
   ),
 );
 
-/**
- * Lazily construct an ExpressAdapter that the Teams SDK App can register its
- * routes on. The dynamic import keeps the SDK bundle off the hot startup path
- * when msteams is disabled; the structural return type matches what
- * `loadMSTeamsSdkWithAuth` accepts as its `httpServerAdapter` option.
- */
+/** Keep the SDK off disabled-channel startup paths. */
 export async function createMSTeamsExpressAdapter(
   serverOrApp: ConstructorParameters<
     typeof import("@microsoft/teams.apps/dist/http/express-adapter.js").ExpressAdapter
@@ -114,29 +97,12 @@ export async function createMSTeamsExpressAdapter(
   return new ExpressAdapter(serverOrApp);
 }
 
-/**
- * Options for creating a Teams SDK App instance.
- */
 type CreateMSTeamsAppOptions = {
-  /**
-   * HTTP server adapter to use. When an Express app is available (monitor
-   * mode), pass an ExpressAdapter so the SDK registers routes and handles
-   * JWT validation. When omitted, the SDK creates a default ExpressAdapter
-   * (no server starts until app.start() is called).
-   *
-   * Use {@link createMSTeamsExpressAdapter} to construct a properly-typed
-   * adapter from an Express application.
-   */
+  /** The SDK registers routes and JWT validation on this adapter without starting a listener. */
   httpServerAdapter?: MSTeamsHttpServerAdapter;
-  /**
-   * Custom messaging endpoint path.
-   * @default '/api/messages'
-   */
+  /** Defaults to /api/messages. */
   messagingEndpoint?: `/${string}`;
-  /**
-   * OAuth connection name used by the SDK's built-in sign-in handlers.
-   * @default 'graph'
-   */
+  /** Defaults to graph. */
   oauthDefaultConnectionName?: string;
   /** Teams SDK cloud environment. Defaults to Public. */
   cloud?: MSTeamsCloudName;
@@ -146,25 +112,13 @@ type CreateMSTeamsAppOptions = {
   httpClient?: unknown;
 };
 
-/**
- * Create a Teams SDK App instance from credentials. The App manages token
- * acquisition, JWT validation, and the HTTP server lifecycle.
- *
- * Auth modes:
- * - Secret: clientId + clientSecret → MSAL client credential flow (SDK built-in)
- * - Managed identity: clientId + managedIdentityClientId → SDK built-in MI support
- * - Certificate: clientId + custom token provider via @azure/identity
- */
 async function createMSTeamsApp(
   creds: MSTeamsCredentials,
   options?: CreateMSTeamsAppOptions,
 ): Promise<MSTeamsApp> {
   const { App, cloudFromName } = await loadSdkModules();
   const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
-  // Tag outbound SDK HTTP calls with a User-Agent fragment so the Teams
-  // backend can identify OpenClaw traffic for usage telemetry. Teams SDK
-  // 2.0.11+ preserves both its own `teams.ts[apps]/<sdk-version>` identifier
-  // and caller-provided User-Agent fragments when plain client headers are used.
+  // SDK 2.0.11+ merges plain client headers with its own User-Agent identity.
   const cloud = options?.cloud ?? "Public";
   const serviceUrl = options?.serviceUrl
     ? normalizeBotFrameworkServiceUrl(options.serviceUrl)
@@ -246,20 +200,13 @@ function createCertificateApp(
 ): MSTeamsApp {
   let credentialPromise: Promise<AzureTokenCredential> | null = null;
 
-  const getCredential = async () => {
-    if (!credentialPromise) {
-      credentialPromise = loadAzureIdentity().then(
-        (az) =>
-          new az.ClientCertificateCredential(creds.tenantId, creds.appId, {
-            certificate: privateKey,
-          }),
-      );
-    }
-    return credentialPromise;
-  };
-
   const tokenProvider = async (scope: string | string[]): Promise<string> => {
-    const credential = await getCredential();
+    const credential = await (credentialPromise ??= loadAzureIdentity().then(
+      (az) =>
+        new az.ClientCertificateCredential(creds.tenantId, creds.appId, {
+          certificate: privateKey,
+        }),
+    ));
     const token = await credential.getToken(scope);
 
     if (!token?.token) {
@@ -277,10 +224,6 @@ function createCertificateApp(
   } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp;
 }
 
-/**
- * Build a token provider that uses the Teams SDK App's public token provider
- * for token acquisition.
- */
 export function createMSTeamsTokenProvider(
   app: Pick<MSTeamsApp, "tokenProvider" | "credentials" | "cloud">,
 ): MSTeamsAccessTokenProvider {

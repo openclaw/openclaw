@@ -1,4 +1,3 @@
-// Defines the top-level OpenClaw configuration type.
 import type { z } from "zod";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { ConfigIncludeOwnership } from "./includes.js";
@@ -23,6 +22,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { StorageConfig } from "./types.storage.js";
 import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -38,19 +38,13 @@ export type SecurityAuditSuppression = NonNullable<
 
 export type SurfaceConfigEntry = NonNullable<z.input<typeof OpenClawSchemaShape.surfaces>>[string];
 
-type RootMetaConfig = NonNullable<z.input<typeof OpenClawSchemaShape.meta>>;
-type RootWizardConfig = NonNullable<z.input<typeof OpenClawSchemaShape.wizard>>;
-type RootUpdateConfig = NonNullable<z.input<typeof OpenClawSchemaShape.update>>;
-type RootUiConfig = NonNullable<z.input<typeof OpenClawSchemaShape.ui>>;
-type RootAttachmentsConfig = NonNullable<z.input<typeof OpenClawSchemaShape.attachments>>;
-
 /** Top-level OpenClaw config as read from user/project config files. */
 export type OpenClawConfig = {
   /** @deprecated Doctor-only legacy input. */
   audit?: AuditConfig;
   /** JSON schema URL used by editors and generated config files. */
   $schema?: string;
-  meta?: RootMetaConfig;
+  meta?: NonNullable<z.input<typeof OpenClawSchemaShape.meta>>;
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
   /** Named access groups used by channel/provider policy allowlists. */
@@ -73,19 +67,19 @@ export type OpenClawConfig = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
-  wizard?: RootWizardConfig;
+  wizard?: NonNullable<z.input<typeof OpenClawSchemaShape.wizard>>;
   /** Diagnostics, tracing, and stability debugging settings. */
   diagnostics?: DiagnosticsConfig;
   /** Log sink, level, rotation, and redaction settings. */
   logging?: LoggingConfig;
   /** Security audit suppressions and security policy settings. */
   security?: SecurityConfig;
-  update?: RootUpdateConfig;
+  update?: NonNullable<z.input<typeof OpenClawSchemaShape.update>>;
   /** Explicit operator consent for anonymous feature statistics in the daily update check. */
   telemetry?: TelemetryConfig;
   /** Browser automation and browser plugin integration settings. */
   browser?: BrowserConfig;
-  ui?: RootUiConfig;
+  ui?: NonNullable<z.input<typeof OpenClawSchemaShape.ui>>;
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
   /** Skill loading and bundled skill configuration. */
@@ -104,13 +98,15 @@ export type OpenClawConfig = {
   worktreeRoot?: string;
   /** Use filesystem acceleration for new worktrees when supported (default: true). */
   worktreeAcceleration?: boolean;
+  /** Global live managed-worktree cap; oldest idle checkouts may lose unsaved data (default: 4096). */
+  worktreeMaxCount?: number;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
   bindings?: AgentBinding[];
   /** Broadcast command and delivery settings. */
   broadcast?: BroadcastConfig;
-  attachments?: RootAttachmentsConfig;
+  attachments?: NonNullable<z.input<typeof OpenClawSchemaShape.attachments>>;
   /** Message formatting, delivery, and action settings. */
   messages?: MessagesConfig;
   /** Shared text-to-speech defaults. Agent and channel overrides layer over this config. */
@@ -137,6 +133,8 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   /** Opt-in cloud-worker provider profiles. */
   cloudWorkers?: CloudWorkersConfig;
+  /** Named storage destinations and their encryption settings. */
+  storage?: StorageConfig;
   /** Experimental desktop sources owned by the gateway host. */
   desktop?: DesktopConfig;
   /** Memory indexing/search configuration. */
@@ -158,8 +156,6 @@ type BrandedConfigState<TState extends string> = OpenClawConfig & {
   readonly [openClawConfigStateBrand]?: TState;
 };
 
-/** Authored config before include/env resolution and runtime defaults. */
-export type SourceConfig = BrandedConfigState<"source">;
 /** Source config after includes/env substitution, before runtime defaults. */
 export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
 /** Runtime-materialized config with defaults/normalization applied. */
@@ -182,12 +178,8 @@ export type ConfigValidationIssue = {
   allowedValuesHiddenCount?: number;
 };
 
-export type LegacyConfigIssue = {
-  /** Dot-path to the legacy config value. */
-  path: string;
-  /** Human-readable migration or rejection message. */
-  message: string;
-};
+/** Dot-path and migration or rejection message for a legacy config value. */
+export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 export type ConfigFileSnapshot = {
   /** Config file path that was read. */

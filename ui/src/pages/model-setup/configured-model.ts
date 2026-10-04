@@ -82,37 +82,25 @@ export function renderConfiguredUtilityModel(props: {
   </section>`;
 }
 
-function failureLabel(status: string): string {
-  const labels: Record<string, string> = {
-    auth: t("modelSetup.failure.auth"),
-    rate_limit: t("modelSetup.failure.rateLimit"),
-    billing: t("modelSetup.failure.billing"),
-    timeout: t("modelSetup.failure.timeout"),
-    format: t("modelSetup.failure.format"),
-    unavailable: t("modelSetup.failure.unavailable"),
-    unknown: t("modelSetup.failure.unknown"),
-  };
-  return labels[status] ?? labels.unknown!;
-}
-
-function failureGuidance(status: string): string | typeof nothing {
-  const guidance: Record<string, string | typeof nothing> = {
-    auth: t("modelSetup.failureGuidance.auth"),
-    rate_limit: t("modelSetup.failureGuidance.rateLimit"),
-    billing: t("modelSetup.failureGuidance.billing"),
-    timeout: t("modelSetup.failureGuidance.timeout"),
-    format: t("modelSetup.failureGuidance.format"),
-    unavailable: nothing,
-    unknown: t("modelSetup.failureGuidance.unknown"),
-  };
-  return guidance[status] ?? guidance.unknown!;
-}
+const FAILURE_KEYS: Record<string, string> = {
+  auth: "auth",
+  rate_limit: "rateLimit",
+  billing: "billing",
+  timeout: "timeout",
+  format: "format",
+  unavailable: "unavailable",
+  unknown: "unknown",
+};
 
 function renderModelSetupFailure(status: string, error: string): TemplateResult {
+  const key = FAILURE_KEYS[status] ?? "unknown";
   return html`
     <div class="model-setup__failure" role="alert">
       <span class="model-setup__failure-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span><strong>${failureLabel(status)}.</strong> ${error} ${failureGuidance(status)}</span>
+      <span
+        ><strong>${t(`modelSetup.failure.${key}`)}.</strong> ${error}
+        ${key === "unavailable" ? nothing : t(`modelSetup.failureGuidance.${key}`)}</span
+      >
     </div>
   `;
 }
@@ -120,15 +108,6 @@ function renderModelSetupFailure(status: string, error: string): TemplateResult 
 function modelName(modelRef: string): string {
   const separator = modelRef.indexOf("/");
   return separator < 0 ? modelRef : modelRef.slice(separator + 1);
-}
-
-function findConfiguredCandidate(
-  result: SystemAgentSetupDetectResult,
-  modelRef: string,
-): Candidate | undefined {
-  return result.candidates.find(
-    (candidate) => candidate.modelRef === modelRef && !candidate.kind.startsWith("saved-auth:"),
-  );
 }
 
 function configuredModelDetail(candidate: Candidate | undefined, modelRef: string): string {
@@ -167,7 +146,12 @@ export function renderConfiguredModel(props: {
   const displayRef = props.verify.phase === "ok" ? props.verify.modelRef : configuredRef;
   const providerId = providerIdFromModelRef(displayRef);
   const configuredCandidate =
-    displayRef === configuredRef ? findConfiguredCandidate(props.result, configuredRef) : undefined;
+    displayRef === configuredRef
+      ? props.result.candidates.find(
+          (candidate) =>
+            candidate.modelRef === configuredRef && !candidate.kind.startsWith("saved-auth:"),
+        )
+      : undefined;
   const providerLabel = providerId ? providerDisplayLabel(providerId) : displayRef;
   const detail = configuredModelDetail(configuredCandidate, displayRef);
 

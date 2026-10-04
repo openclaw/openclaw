@@ -26,6 +26,7 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
+import { createPresenceActivityController } from "../lit/presence-activity-controller.ts";
 import {
   identityAvatarClass,
   renderIdentityAvatarImage,
@@ -56,6 +57,14 @@ class PersonReference extends OpenClawLightDomContentsElement {
   private stopRoute: (() => void) | undefined;
   private person: PresenceViewer | null | undefined;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
+  private readonly activityExpiry = createPresenceActivityController(
+    this,
+    () =>
+      projectPresencePayload(this.activity?.data?.presencePayload).users.filter((user) =>
+        presenceMatchesProfile(user, this.person?.identity),
+      ),
+    () => this.renderCard(),
+  );
 
   override createRenderRoot() {
     // The sanitized HTML carries a readable fallback until this element upgrades.
@@ -96,6 +105,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
     }
     this.activity?.dispose();
     this.activity = undefined;
+    this.activityExpiry.sync();
     this.stopRoute?.();
     this.stopRoute = undefined;
     document.removeEventListener("pointerdown", this.outside, true);
@@ -206,6 +216,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
   }
 
   private renderCard() {
+    this.activityExpiry.sync();
     const card = this.portal.card;
     const context = this.context.value;
     if (!card) {

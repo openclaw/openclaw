@@ -10,14 +10,9 @@ export type FeishuReplyDeliverySource = {
   receipt?: MessageReceipt;
 };
 
-export type FeishuReplyDeliveryResult = {
-  messageIds?: string[];
-  receipt?: MessageReceipt;
-  threadId?: string;
-  replyToId?: string;
-  visibleReplySent?: boolean;
-  content?: string;
-};
+export type FeishuReplyDeliveryResult = NonNullable<
+  Parameters<typeof createAcceptedChannelDeliveryResult>[0]["deliveryResults"]
+>[number];
 
 export type FeishuReplyDeliveryResultWithFinalization = FeishuReplyDeliveryResult & {
   finalization: Promise<FeishuReplyDeliveryResult>;

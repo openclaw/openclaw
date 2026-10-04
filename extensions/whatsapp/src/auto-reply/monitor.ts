@@ -5,7 +5,6 @@ import { shouldDebounceTextInbound } from "openclaw/plugin-sdk/channel-inbound";
 import { registerChannelRuntimeContext } from "openclaw/plugin-sdk/channel-runtime-context";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolvePromptHistoryLimit } from "openclaw/plugin-sdk/number-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import {
@@ -43,7 +42,6 @@ import { formatError, getWebAuthAgeMs, readWebSelfId } from "../session.js";
 import { resolveWhatsAppSocketTiming } from "../socket-timing.js";
 import { getRuntimeConfig } from "./config.runtime.js";
 import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
-import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
@@ -61,10 +59,6 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
 type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
-
-const loadReplyResolverRuntime = createLazyRuntimeModule(
-  () => import("./reply-resolver.runtime.js"),
-);
 
 function resolveWebMonitorConfigSnapshot(params: {
   cfg: WhatsAppRuntimeConfig;
@@ -131,7 +125,7 @@ export async function monitorWebChannel(
   tuning: WebMonitorTuning = {},
 ) {
   const activeReplyResolver =
-    replyResolver ?? (await loadReplyResolverRuntime()).getReplyFromConfig;
+    replyResolver ?? (await import("./reply-resolver.runtime.js")).getReplyFromConfig;
   const runId = newConnectionId();
   const replyLogger = getChildLogger({ module: "web-auto-reply", runId });
   const heartbeatLogger = getChildLogger({ module: "web-heartbeat", runId });
@@ -148,10 +142,9 @@ export async function monitorWebChannel(
     }).cfg;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
-  const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
-  const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
+  const heartbeatSeconds = resolveHeartbeatSeconds(tuning.heartbeatSeconds);
+  const reconnectPolicy = resolveReconnectPolicy(tuning.reconnect);
   const socketTiming = resolveWhatsAppSocketTiming(tuning.socketTiming);
-  const baseMentionConfig = buildMentionConfig(cfg);
   const groupHistoryLimit = resolvePromptHistoryLimit(
     account.historyLimit ??
       cfg.channels?.whatsapp?.historyLimit ??
@@ -250,8 +243,6 @@ export async function monitorWebChannel(
               backgroundTasks: connectionLocal.backgroundTasks,
               replyResolver: activeReplyResolver,
               replyLogger,
-              baseMentionConfig,
-              account,
               buildContext: pluginChannelRuntime?.inbound.buildContext,
               // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
               dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,

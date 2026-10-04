@@ -1,5 +1,4 @@
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { initSubagentRegistry } from "../agents/subagents/registry/subagent-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
@@ -36,16 +35,13 @@ import { resolveGatewayStartupPluginActivationConfig } from "./plugin-activation
 import { listGatewayMethods } from "./server-methods-list.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
+import type { GatewayStartupTrace } from "./server-startup-trace.js";
 
 type GatewayPluginBootstrapLog = {
   info: (message: string) => void;
   warn: (message: string) => void;
   error: (message: string) => void;
   debug: (message: string) => void;
-};
-
-type GatewayStartupTrace = {
-  detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
 };
 
 /** Returns the config snapshot used by channel/plugin startup maintenance. */
@@ -139,7 +135,6 @@ export async function prepareGatewayPluginBootstrap(params: {
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }) {
   const activationSourceConfig = params.activationSourceConfig ?? params.cfgAtStart;
-  initSubagentRegistry();
 
   // Activation uses the pre-runtime source so auto-enable policy cannot be skewed by
   // defaults injected while loading runtime config; runtime-only plugin config still merges in.
@@ -327,7 +322,7 @@ export async function loadGatewayStartupPluginRuntime(params: {
   hostServices?: PluginRegistryParams["hostServices"];
   startupPluginIds: string[];
   pluginLookUpTable?: ReturnType<typeof loadPluginLookUpTable>;
-  startupTrace?: GatewayStartupTrace;
+  startupTrace?: Pick<GatewayStartupTrace, "detail">;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   resolveGatewayContext?: GatewayContextResolver;
   pluginRuntimeClaim?: GatewayPluginRuntimeClaim;

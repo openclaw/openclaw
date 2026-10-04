@@ -1,7 +1,124 @@
-import { clearDeliveryState, ensureCompletionState } from "./subagent-delivery-state.js";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { matchesSubagentChildSessionOwner } from "./subagent-child-owner-match.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  resetRequesterSettleWakeRetry,
+} from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import { mutateSubagentRuns, SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSameSubagentRunOwner, latestSubagentRun } from "./subagent-run-generation.js";
+
+export type SubagentYieldClaim =
+  | "nothing-pending"
+  | "pending-work"
+  | { messageWaitRegistered: boolean };
+
+/** Claim a live native task, recording announcing waits before the yielded terminal. */
+export async function claimSubagentYieldInRuns(params: {
+  runId: string;
+  sessionKey: string;
+  agentId: string;
+  waitForMessage: boolean;
+  acknowledgment?: string;
+  hasPendingWork: () => boolean;
+  runs: Map<string, SubagentRunRecord>;
+  context: OpenClawStateWorkerContext;
+  assertCurrent: () => void;
+}): Promise<SubagentYieldClaim> {
+  const expected = params.runs.get(params.runId);
+  const isEligible = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
+    Boolean(
+      entry &&
+      isSameSubagentRunOwner(entry, expected) &&
+      matchesSubagentChildSessionOwner(entry, params.sessionKey, params.agentId) &&
+      !entry.collect &&
+      entry.execution.status === "running" &&
+      !entry.killIntent &&
+      !entry.killReconciliation &&
+      !entry.suppressCompletionDelivery &&
+      // A separate admitted follow-up shares the session, not this logical task.
+      isSameSubagentRunOwner(
+        entry,
+        latestSubagentRun(
+          params.runs.values(),
+          (candidate) =>
+            matchesSubagentChildSessionOwner(candidate, params.sessionKey, params.agentId) &&
+            (candidate.taskRunId ?? candidate.runId) === (entry.taskRunId ?? entry.runId),
+        ),
+      ),
+    );
+  params.assertCurrent();
+  if (!isEligible(expected)) {
+    return "nothing-pending";
+  }
+  if (params.hasPendingWork()) {
+    return "pending-work";
+  }
+  if (!params.waitForMessage) {
+    return "nothing-pending";
+  }
+  const assertCurrent = () => {
+    params.assertCurrent();
+    if (!isEligible(params.runs.get(params.runId))) {
+      throw new Error("Subagent yield lost its current native task");
+    }
+    if (params.hasPendingWork()) {
+      throw new Error("Subagent yield has uncollected background work");
+    }
+  };
+  let published = false;
+  const claim = await mutateSubagentRuns(
+    [params.runId],
+    (rows) => {
+      const entry = rows.get(params.runId);
+      if (!entry) {
+        throw new Error("Subagent yield lost its current native task");
+      }
+      // Quiet native tasks may pause, but do not acquire a requester notice.
+      if (entry.expectsCompletionMessage !== true) {
+        return { value: { messageWaitRegistered: false } };
+      }
+      if (entry.requesterSettleWake?.pauseNotice) {
+        return { value: { messageWaitRegistered: true } };
+      }
+      const next = structuredClone(entry);
+      next.requesterSettleWake = {
+        ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
+        batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
+        pauseNotice: {
+          acknowledgment: truncateUtf16Safe(
+            params.acknowledgment?.trim() || "Paused awaiting continuation.",
+            12_000,
+          ),
+        },
+      };
+      return { value: { messageWaitRegistered: true }, postimages: new Map([[entry.runId, next]]) };
+    },
+    {
+      runs: params.runs,
+      context: params.context,
+      assertCurrent,
+      onPublished: () => {
+        published = true;
+      },
+    },
+  );
+  try {
+    // Publication retains the runtime owner across immutable metadata copies.
+    assertCurrent();
+  } catch (error) {
+    throw new SubagentRegistryWriteError(
+      published ? "committed" : "not-committed",
+      error,
+      published ? "published" : undefined,
+    );
+  }
+  return claim;
+}
 
 export function markSubagentRunPausedAfterYield(params: {
   entry: SubagentRunRecord;

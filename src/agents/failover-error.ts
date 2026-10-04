@@ -4,6 +4,7 @@ import {
   readStringField,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
@@ -25,6 +26,7 @@ import {
   readDirectErrorMessage,
   type CliTimeoutContext,
 } from "./failover/error.js";
+import { resolveExecutionApprovalFailureMessage } from "./failover/message-patterns.js";
 import type { FailoverClassification, FailoverReason, FailoverSignal } from "./failover/signal.js";
 import {
   AgentHarnessSessionSupersededError,
@@ -51,11 +53,14 @@ const MAX_FAILOVER_CAUSE_DEPTH = 25;
 const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
 const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 const RUNTIME_COORDINATION_ERROR_NAMES = new Set([
+  "CodexNodeExecServerDisconnectedError",
   "GatewayDrainingError",
+  "NodeRunnerUpdateRequiredError",
   "WorkerRunnerUnavailableError",
   "WorkerRunnerCapacityError",
   "WorkerWorkspaceReconciliationError",
   "ActiveTurnClaimError",
+  "SqliteWorkerError",
 ]);
 
 export { recordModelFallbackStop } from "./model-fallback-stop.js";
@@ -315,8 +320,10 @@ function hasStaleAgentRunLifecycleFailure(err: unknown): boolean {
 }
 
 function hasRuntimeCoordinationFailure(err: unknown): boolean {
-  return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
-    RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)),
+  return collectErrorGraphCandidates(err, resolveNestedErrors).some(
+    (candidate) =>
+      RUNTIME_COORDINATION_ERROR_NAMES.has(readErrorName(candidate)) ||
+      resolveExecutionApprovalFailureMessage(readDirectErrorMessage(candidate)) !== undefined,
   );
 }
 
@@ -417,6 +424,13 @@ function resolveFailoverClassificationFromErrorInternal(
     seen.add(err);
   }
   if (isFailoverError(err)) {
+    const classification = classifyFailoverSignal({
+      ...normalizeErrorSignal(err, providerHint),
+      message: err.rawError ?? err.message,
+    });
+    if (classification?.kind === "reason" && classification.sameModelRetry === false) {
+      return { kind: "reason", reason: err.reason, sameModelRetry: false };
+    }
     return {
       kind: "reason",
       reason: err.reason,
@@ -470,13 +484,17 @@ function resolveFailoverClassificationFromErrorInternal(
   return null;
 }
 
-function resolveFailoverClassificationFromError(
+export function resolveFailoverClassificationFromError(
   err: unknown,
   providerHint?: string,
 ): FailoverClassification | null {
   // A direct preflight owns the refusal; its cause is diagnostic, not a failed
   // provider attempt that may rotate credentials or replay the turn.
   if (isAgentHarnessPreflightError(err)) {
+    return null;
+  }
+  // Local coordination codes such as SQLite "overloaded" are not provider signals.
+  if (!isFailoverError(err) && hasRuntimeCoordinationFailure(err)) {
     return null;
   }
   return resolveFailoverClassificationFromErrorInternal(err, new Set<object>(), 0, providerHint);
@@ -521,23 +539,13 @@ export function buildProviderReauthCommand(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
 ): string | undefined {
   const trimmed = provider.trim();
-  if (!trimmed || hasControlCharacter(trimmed)) {
+  if (!trimmed || containsAsciiControlCharacter(trimmed)) {
     return undefined;
   }
   return formatCliCommand(
     `openclaw models auth login --provider ${quotePosixShellArg(trimmed)} --force`,
     env,
   );
-}
-
-function hasControlCharacter(value: string): boolean {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code < 0x20 || code === 0x7f) {
-      return true;
-    }
-  }
-  return false;
 }
 
 /** Convert a failover or raw error into structured fields for logs/UI. */

@@ -13,10 +13,16 @@ import { extractWikiLinks } from "./markdown-links.js";
 
 export { WIKI_RELATED_END_MARKER, WIKI_RELATED_START_MARKER } from "./markdown-links.js";
 
-const WIKI_PAGE_KINDS = ["entity", "concept", "source", "synthesis", "report"] as const;
+export const WIKI_PAGE_GROUPS = [
+  { kind: "source", dir: "sources", heading: "Sources" },
+  { kind: "entity", dir: "entities", heading: "Entities" },
+  { kind: "concept", dir: "concepts", heading: "Concepts" },
+  { kind: "synthesis", dir: "syntheses", heading: "Syntheses" },
+  { kind: "report", dir: "reports", heading: "Reports" },
+] as const;
 export const WIKI_RAW_SOURCE_MARKER = "<!-- openclaw:wiki:raw-source -->";
 
-export type WikiPageKind = (typeof WIKI_PAGE_KINDS)[number];
+export type WikiPageKind = (typeof WIKI_PAGE_GROUPS)[number]["kind"];
 type GeneratedSourceBody = "bridge" | "unsafe-local" | "local-file" | "chatgpt-export";
 
 type ParsedWikiMarkdown = {
@@ -181,10 +187,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
+  const frontmatter = match[1]!;
   const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
   if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
@@ -293,18 +296,9 @@ function normalizeWikiPersonCard(value: unknown): WikiPersonCard | undefined {
     ...(confidence !== undefined ? { confidence } : {}),
     ...normalizeOptionalStringFields(record, ["privacyTier", "lastRefreshedAt"]),
   };
-  const hasAnyValue =
-    Boolean(
-      card.canonicalId || card.timezone || card.lane || card.privacyTier || card.lastRefreshedAt,
-    ) ||
-    typeof card.confidence === "number" ||
-    card.handles.length > 0 ||
-    card.socials.length > 0 ||
-    card.emails.length > 0 ||
-    card.askFor.length > 0 ||
-    card.avoidAskingFor.length > 0 ||
-    card.bestUsedFor.length > 0 ||
-    card.notEnoughFor.length > 0;
+  const hasAnyValue = Object.values(card).some((field) =>
+    Array.isArray(field) ? field.length > 0 : field !== undefined,
+  );
   return hasAnyValue ? card : undefined;
 }
 
@@ -513,32 +507,17 @@ export function formatWikiLink(params: {
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
-  const fenceSize = Math.max(
-    3,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length + 1),
-  );
+  let fenceSize = 3;
+  for (const match of content.matchAll(/`+/g)) {
+    fenceSize = Math.max(fenceSize, match[0].length + 1);
+  }
   const fence = "`".repeat(fenceSize);
   return `${fence}${infoString}\n${content}\n${fence}`;
 }
 
 function inferWikiPageKind(relativePath: string): WikiPageKind | null {
   const normalized = relativePath.split(path.sep).join("/");
-  if (normalized.startsWith("entities/")) {
-    return "entity";
-  }
-  if (normalized.startsWith("concepts/")) {
-    return "concept";
-  }
-  if (normalized.startsWith("sources/")) {
-    return "source";
-  }
-  if (normalized.startsWith("syntheses/")) {
-    return "synthesis";
-  }
-  if (normalized.startsWith("reports/")) {
-    return "report";
-  }
-  return null;
+  return WIKI_PAGE_GROUPS.find((group) => normalized.startsWith(`${group.dir}/`))?.kind ?? null;
 }
 
 export function scanWikiPageSummary(params: {

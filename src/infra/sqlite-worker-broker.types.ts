@@ -5,7 +5,7 @@ import type {
   SqliteWorkerRequest,
   SqliteWorkerReply,
   SqliteWorkerCloseReceipt,
-  SqliteWorkerStateLifecycle,
+  SqliteWorkerEphemeralTarget,
 } from "./sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionFactory,
@@ -17,13 +17,6 @@ import type {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
 } from "./sqlite-worker-transfer.js";
-import type {
-  tryCreateGatewaySchemaFenceDelegate,
-  tryCreateStateLifecycleDelegate,
-} from "./state-database-coordinator.js";
-
-type StateLifecycleDelegate = NonNullable<ReturnType<typeof tryCreateStateLifecycleDelegate>>;
-
 export type RequestBody = SqliteWorkerRequest extends infer Request
   ? Request extends SqliteWorkerRequest
     ? Omit<Request, "id">
@@ -31,20 +24,13 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
   : never;
 type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
 export type Job = {
-  requireStateLifecycle?: SqliteWorkerStateLifecycle;
+  signal?: AbortSignal;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
-  maintenanceSchemaFence?: { actor: Actor; delegate: StateLifecycleDelegate };
-  gatewaySchemaFence?: { actor: Actor; delegate: StateLifecycleDelegate };
   createAdmission?: SqliteWorkerAdmissionFactory;
   operationAdmission?: { admission: SqliteWorkerOperationAdmission; releaseService(): void };
   settleNative?: (settlement: SqliteWorkerOperationSettlement) => void;
   nativeDispatched?: boolean;
   requestPosted?: boolean;
-  rejectPreparation?: (error: unknown) => void;
-  preparation?: Promise<void>;
-  lifecyclePreparation?: { failure: unknown; finish(): void };
-  cancelPreparation?: AbortController;
-  stateLifecycle?: { actor: Actor; delegate: StateLifecycleDelegate };
   assertCurrent?: () => void;
   inputTransfer?: {
     id: number;
@@ -63,10 +49,11 @@ export type Job = {
   detach(): void;
 };
 export type Slot = {
+  ephemeral?: true;
   runtimeGeneration?: RuntimeWorkerGeneration;
   borrowedGenerationSlot?: true;
   worker: Worker;
-  receiveReply(reply: SqliteWorkerReply, pumping?: boolean): void;
+  receiveReply(reply: SqliteWorkerReply): void;
   actors: Set<Actor>;
   queue: Job[];
   current?: Job;
@@ -77,6 +64,8 @@ export type Slot = {
   pendingOpens: number;
 };
 export type Actor = {
+  target?: SqliteWorkerEphemeralTarget;
+  nativeLostObservers?: Set<(reason: Error) => void>;
   runtimeGeneration?: RuntimeWorkerGeneration;
   nativeStopped: Promise<void>;
   markNativeStopped(): void;
@@ -97,14 +86,13 @@ export type Actor = {
   cleanupState?: "pending" | "complete";
   closing?: Promise<void>;
   retirementRequested?: boolean;
+  settlement?: Promise<void>;
   retirement?: Promise<void>;
   onReferencesDrained?: () => void;
   stateContext?: SqliteWorkerStateContext;
-  gatewaySchemaFence?: NonNullable<ReturnType<typeof tryCreateGatewaySchemaFenceDelegate>>;
-  pendingStateLifecycles: Set<StateLifecycleDelegate>;
 };
 export type OperationScope = {
-  requireStateLifecycle?: SqliteWorkerStateLifecycle;
+  maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
   assertCurrent?: (commandType: PropertyKey) => void;
   active: boolean;
@@ -133,6 +121,7 @@ export type StoreClient = {
 };
 
 export type SqliteWorkerStoreOptions = {
+  target?: SqliteWorkerEphemeralTarget;
   runtimeGeneration?: RuntimeWorkerGeneration;
   moduleUrl: URL;
   databasePath: string;
@@ -142,6 +131,9 @@ export type SqliteWorkerStoreOptions = {
 };
 
 export type PreparedSqliteWorkerOpen = {
+  target?: SqliteWorkerEphemeralTarget;
+  onNativeLost?: (reason: Error) => void;
+  signal?: AbortSignal;
   preparation?: Buffer;
   runtimeGeneration?: RuntimeWorkerGeneration;
   carrierUrl: URL;
@@ -171,7 +163,13 @@ export type SqliteWorkerAdmissionCleanup = {
 
 export type SqliteWorkerOpenCustody = Pick<
   PreparedSqliteWorkerOpen,
-  "maintenanceScope" | "retainCleanup" | "createAdmission" | "stateDatabasePath" | "onNativeStopped"
+  | "maintenanceScope"
+  | "retainCleanup"
+  | "createAdmission"
+  | "stateDatabasePath"
+  | "onNativeStopped"
+  | "onNativeLost"
+  | "signal"
 > & { preparation?: unknown };
 export type SqliteWorkerInputRetention = "snapshot" | "stream";
 export type SqliteWorkerInputPreparation = {

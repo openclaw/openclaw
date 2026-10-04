@@ -1,7 +1,3 @@
-/**
- * Activates legacy curated Codex plugins while requiring owner-managed
- * installation for every other marketplace.
- */
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { CodexAppInventoryCache, CodexAppInventoryRequest } from "./app-inventory-cache.js";
 import {
@@ -11,7 +7,6 @@ import {
 } from "./config.js";
 import {
   findCodexMarketplacePluginSummary,
-  isOpenAiCuratedMarketplace,
   isOpenAiCuratedMarketplaceName,
   listCodexPluginMetadata,
   pluginReadParams,
@@ -22,7 +17,6 @@ import type { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexAppServerRequestResult, v2 } from "./protocol.js";
 import { CodexAppServerRpcError } from "./rpc-error.js";
 
-/** Terminal reason reported after trying to activate one Codex plugin policy. */
 type CodexPluginActivationReason =
   | "already_active"
   | "installed"
@@ -33,12 +27,10 @@ type CodexPluginActivationReason =
   | "auth_required"
   | "refresh_failed";
 
-/** Human-readable diagnostic emitted during Codex plugin activation. */
 type CodexPluginActivationDiagnostic = {
   message: string;
 };
 
-/** Result of ensuring one configured Codex plugin is installed and enabled. */
 export type CodexPluginActivationResult = {
   identity: ResolvedCodexPluginPolicy;
   ok: boolean;
@@ -49,7 +41,6 @@ export type CodexPluginActivationResult = {
   diagnostics: CodexPluginActivationDiagnostic[];
 };
 
-/** Inputs for activating one resolved Codex plugin policy. */
 type EnsureCodexPluginActivationParams = {
   identity: ResolvedCodexPluginPolicy;
   request: CodexPluginRuntimeRequest;
@@ -64,7 +55,6 @@ type EnsureCodexPluginActivationParams = {
   targetAppIds?: readonly string[];
 };
 
-/** Diagnostics from refreshing Codex runtime surfaces after plugin activation. */
 type CodexPluginRuntimeRefreshResult = {
   diagnostics: CodexPluginActivationDiagnostic[];
 };
@@ -98,7 +88,7 @@ export async function ensureCodexPluginActivation(
   );
   if (!resolved) {
     const hasCuratedMarketplace = listed.marketplaces.some((marketplace) =>
-      isOpenAiCuratedMarketplace(marketplace),
+      isOpenAiCuratedMarketplaceName(marketplace.name),
     );
     if (!hasCuratedMarketplace) {
       return activationFailure(params.identity, "marketplace_missing", {
@@ -207,7 +197,6 @@ export async function ensureCodexPluginActivation(
   };
 }
 
-/** Refreshes OpenClaw inventories after Codex installs a plugin. */
 export async function refreshCodexPluginRuntimeState(params: {
   request: CodexPluginRuntimeRequest;
   appCache?: CodexAppInventoryCache;

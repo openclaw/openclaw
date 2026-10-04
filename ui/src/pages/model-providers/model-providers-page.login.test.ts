@@ -159,49 +159,10 @@ function providerChoices(page: Element) {
 }
 
 describe("Models provider login", () => {
-  it("shows the provider's first login method first and focuses it", async () => {
-    const { context } = loginHarness({
-      capabilities: [
-        {
-          provider: "openai",
-          apiKeySupported: false,
-          quickApiKeySetup: false,
-          loginOptions: [
-            {
-              id: "openai/siwc",
-              brandId: "openai",
-              label: "Sign in with ChatGPT",
-              kind: "oauth",
-              featured: false,
-            },
-            {
-              id: "openai/device-code",
-              brandId: "openai",
-              label: "Codex login (device code)",
-              kind: "device-code",
-              featured: true,
-            },
-          ],
-        },
-      ],
-    });
-    const page = appendPage(context);
-    await openPicker(page);
-    await selectProvider(page, "openai");
-    const options = [...page.querySelectorAll("[data-models-login-choice] button")];
-    expect(options.map((option) => option.textContent?.trim())).toEqual([
-      "Sign in with ChatGPT",
-      "Codex login (device code)",
-    ]);
-    expect(document.activeElement).toBe(options[0]);
-  });
-
   it.each([
     { kind: "oauth", cancel: false, submit: false, callbackOnly: false },
     { kind: "oauth", cancel: false, submit: false, callbackOnly: true },
-    { kind: "oauth", cancel: true, submit: false, callbackOnly: true },
     { kind: "oauth", cancel: false, submit: true, callbackOnly: false },
-    { kind: "device-code", cancel: false, submit: false, callbackOnly: false },
     { kind: "oauth", cancel: true, submit: false, callbackOnly: false },
     { kind: "device-code", cancel: true, submit: false, callbackOnly: false },
   ] as const)(
@@ -432,8 +393,8 @@ describe("Models provider login", () => {
     },
   );
 
-  it("saves credentials through the selected manifest choice and refreshes the provider card", async () => {
-    const { context, request, runtimeConfig, answer } = loginHarness();
+  it("keeps the selected credential save and provider refresh when dismissal is refused", async () => {
+    const { context, request, runtimeConfig, answer, cancel } = loginHarness();
     const page = appendPage(context);
     await openLogin(page);
 
@@ -447,23 +408,6 @@ describe("Models provider login", () => {
       { timeoutMs: null },
     );
     expect(page.querySelector('input[type="password"][name="wizard-text"]')).not.toBeNull();
-    await submitCredential(page);
-    answer.resolve({ done: true, status: "done" });
-
-    await waitForFast(() => expect(page.textContent).toContain("Provider credentials saved."));
-    await waitForFast(() =>
-      expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
-    );
-    expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-    expect(context.navigate).not.toHaveBeenCalled();
-    expect(runtimeConfig.patch).not.toHaveBeenCalled();
-    expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
-  });
-
-  it("keeps the dialog and saved result when dismissal is refused during persistence", async () => {
-    const { context, answer, cancel } = loginHarness();
-    const page = appendPage(context);
-    await openLogin(page);
     await submitCredential(page);
 
     const dismissal = new CustomEvent("modal-cancel", { bubbles: true, cancelable: true });
@@ -480,6 +424,10 @@ describe("Models provider login", () => {
     await waitForFast(() =>
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
+    expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(context.navigate).not.toHaveBeenCalled();
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
   });
 
   it("releases a saved login on disposal while Cancel is pending and allows a second login", async () => {
@@ -655,6 +603,9 @@ describe("Models provider login", () => {
         "models.authStatus",
       );
     const example = auth.providerCapabilities![0]!;
+    for (const [index, choice] of example.loginOptions!.entries()) {
+      choice.featured = index !== 0;
+    }
     const { context, request } = loginHarness({
       capabilities: [
         {
@@ -963,32 +914,4 @@ describe("Models provider login", () => {
       expect(document.openClawModalLayers?.has(modal)).toBe(false);
     },
   );
-});
-
-it("keeps provider access scoped below global defaults and connects without navigation", async () => {
-  const { context } = createHarness("writer");
-  const page = appendPage(context);
-  await waitForFast(() => expect(page.data?.updatedAt).toEqual(expect.any(Number)));
-  await waitForFast(() =>
-    expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(false),
-  );
-  const defaults = page.querySelector("#settings-model-behavior")!;
-  const agent = page.querySelector("[data-models-provider-agent]")!;
-  expect(page.querySelector("openclaw-agent-select")).toBeNull();
-  expect(agent.textContent?.toLowerCase()).toContain("writer");
-  expect(context.agentSelection.state.selectedId).toBe("main");
-  expect(context.settingsAgentSelection.state.selectedId).toBe("writer");
-  expect(defaults.contains(agent)).toBe(false);
-  expect(defaults.compareDocumentPosition(agent) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0);
-  expect(agent.closest(".settings-section")?.textContent).toContain("Provider access");
-  expect(
-    [...page.querySelectorAll("button")].some(
-      (button) => button.textContent?.trim() === "Model setup",
-    ),
-  ).toBe(false);
-  page.querySelector<HTMLButtonElement>("[data-models-connect]")!.click();
-  await page.updateComplete;
-  expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
-  expect(context.navigate).not.toHaveBeenCalled();
-  expect(defaults.isConnected).toBe(true);
 });

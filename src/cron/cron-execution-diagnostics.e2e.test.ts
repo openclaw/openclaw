@@ -1,4 +1,4 @@
-import { createServer, type Server, type AddressInfo } from "node:net";
+import { createServer, type AddressInfo, type Server } from "node:net";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../agents/failover-error.js";
 import {
@@ -8,11 +8,11 @@ import {
 } from "../agents/run-termination.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  loadRunCronIsolatedAgentTurn,
   dispatchCronDeliveryMock,
+  loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resetRunCronIsolatedAgentTurnHarness,
   resolveAllowedModelRefMock,
@@ -89,10 +89,11 @@ async function runPersistedDiagnosticCase(params: {
   return await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-cron-execution-diagnostics-" },
     async (state) => {
-      resetTaskRegistryForTests();
       const events: CronEvent[] = [];
       const storePath = state.path("cron", "jobs.json");
       const cron = new CronService({
+        scheduler: createTestGatewayScheduler(),
+        nowMs: () => Date.now(),
         storePath,
         cronEnabled: true,
         cronConfig: { triggers: { enabled: true } },
@@ -143,7 +144,6 @@ async function runPersistedDiagnosticCase(params: {
         };
       } finally {
         cron.stop();
-        resetTaskRegistryForTests({ persist: false });
       }
     },
   );
@@ -329,6 +329,48 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
               message: "SYSTEM_RUN_DENIED: approval required",
             }),
           ]),
+        },
+      });
+    }
+  });
+
+  it("persists an unresolved exec warning when the scheduled agent recovers with a reply", async () => {
+    const modelRef = { provider: "openai", model: "gpt-5.4" };
+    resolveConfiguredModelRefMock.mockReturnValue(modelRef);
+    mockRunCronFallbackPassthrough();
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "RESULT: the command did not run" }],
+      meta: {
+        agentMeta: {},
+        toolSummary: {
+          calls: 1,
+          tools: ["exec"],
+          failures: 1,
+          unresolvedError: { toolName: "exec" },
+        },
+      },
+    });
+
+    const { finished, history, lastError } = await runPersistedDiagnosticCase({
+      cfg: configFor(modelRef),
+      modelRef,
+      name: "invalid exec arguments",
+    });
+
+    expect(lastError).toBeUndefined();
+    for (const outcome of [finished, history]) {
+      expect(outcome).toMatchObject({
+        status: "ok",
+        diagnostics: {
+          summary: "exec tool failed",
+          entries: [
+            expect.objectContaining({
+              source: "exec",
+              severity: "warn",
+              message: "exec tool failed",
+              toolName: "exec",
+            }),
+          ],
         },
       });
     }

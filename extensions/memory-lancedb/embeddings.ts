@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { resolve as resolveFilePath } from "node:path";
+import type OpenAI from "openai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
@@ -11,15 +12,10 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { textResult, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
 import type { MemoryConfig } from "./config.js";
 
-type OpenAiEmbeddingClient = {
-  post<T>(
-    path: string,
-    options: { body: unknown; timeout?: number; maxRetries?: number },
-  ): Promise<T>;
-};
 const loadOpenAiModule = createLazyRuntimeModule(() => import("openai"));
 const loadMemoryEmbeddingProviderModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/memory-core-host-engine-embeddings"),
@@ -91,7 +87,7 @@ function embeddingConfigFingerprint(embedding: EmbeddingConfig): string {
 }
 
 class OpenAiCompatibleEmbeddings {
-  private clientPromise: Promise<OpenAiEmbeddingClient>;
+  private clientPromise: Promise<OpenAI>;
 
   constructor(
     apiKey: string,
@@ -100,7 +96,7 @@ class OpenAiCompatibleEmbeddings {
     private dimensions?: number,
   ) {
     this.clientPromise = loadOpenAiModule().then(
-      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }) as OpenAiEmbeddingClient,
+      ({ default: OpenAI }) => new OpenAI({ apiKey, baseURL: baseUrl }),
     );
   }
 
@@ -425,21 +421,18 @@ export async function runWithTimeout<T>(params: {
   timeoutMs: number;
   task: (deadlineAtMs: number) => Promise<T>;
 }): Promise<{ status: "ok"; value: T } | { status: "timeout" }> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
   const TIMEOUT = Symbol("timeout");
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
   // Share one absolute deadline with native work so the outer race cannot
   // abandon a still-running operation after reporting a timeout.
   const deadlineAtMs = Date.now() + timeoutMs;
-  const timeoutPromise = new Promise<typeof TIMEOUT>((resolve) => {
-    timeout = setTimeout(() => resolve(TIMEOUT), timeoutMs);
-    timeout.unref?.();
-  });
-  const taskPromise = params.task(deadlineAtMs);
-  taskPromise.catch(() => undefined);
-
   try {
-    const result = await Promise.race([taskPromise, timeoutPromise]);
+    const result = await raceWithTimeout(
+      () => params.task(deadlineAtMs),
+      timeoutMs,
+      (): typeof TIMEOUT => TIMEOUT,
+      { ref: false },
+    );
     if (result === TIMEOUT || Date.now() >= deadlineAtMs) {
       return { status: "timeout" };
     }
@@ -449,10 +442,6 @@ export async function runWithTimeout<T>(params: {
       return { status: "timeout" };
     }
     throw error;
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
   }
 }
 
@@ -554,7 +543,7 @@ type EmbeddingCreateResponse = {
   }>;
 };
 
-export function normalizeEmbeddingVector(value: unknown): number[] {
+function normalizeEmbeddingVector(value: unknown): number[] {
   if (typeof value === "string") {
     const canonicalEmbedding = canonicalizeBase64(value);
     if (!canonicalEmbedding) {

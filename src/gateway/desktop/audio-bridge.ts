@@ -3,6 +3,7 @@ import type { Duplex } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { rawDataToString } from "../../../packages/gateway-client/src/websocket-data.js";
 import { WebSocket, WebSocketServer } from "../../../packages/gateway-client/src/websocket.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { createOneTimeTicketStore } from "../../shared/one-time-ticket-store.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
 import { startWebSocketKeepalive } from "../websocket-keepalive.js";
@@ -30,10 +31,7 @@ export function mintDesktopAudioObserver(params: {
   requester?: DesktopObserveRequester;
 }) {
   const lifetime = new AbortController();
-  let resolveReady!: (ready: boolean) => void;
-  const ready = new Promise<boolean>((resolve) => {
-    resolveReady = resolve;
-  });
+  const ready = createDeferredCore<boolean>();
   let closeSocket: (() => void) | undefined;
   const isCurrent = () => !lifetime.signal.aborted && params.requester?.isCurrent() !== false;
   const close = () => {
@@ -41,7 +39,7 @@ export function mintDesktopAudioObserver(params: {
       return;
     }
     lifetime.abort();
-    resolveReady(false);
+    ready.resolve(false);
     tickets.delete(minted.token);
     params.requester?.signal?.removeEventListener("abort", close);
     closeSocket?.();
@@ -50,7 +48,6 @@ export function mintDesktopAudioObserver(params: {
     close,
     isCurrent,
     attach(ws) {
-      let generation = 0;
       let captureAbort: AbortController | undefined;
       let transition: Promise<void> | undefined;
       let pending: (() => Promise<void>) | undefined;
@@ -78,7 +75,6 @@ export function mintDesktopAudioObserver(params: {
         }
       };
       const stop = () => {
-        generation += 1;
         pending = undefined;
         captureAbort?.abort();
         captureAbort = undefined;
@@ -123,17 +119,13 @@ export function mintDesktopAudioObserver(params: {
           sendState("stopped");
           return;
         }
-        const currentGeneration = generation;
         const controller = new AbortController();
         captureAbort = controller;
         const current = () =>
-          isCurrent() &&
-          currentGeneration === generation &&
-          !controller.signal.aborted &&
-          ws.readyState === WebSocket.OPEN;
+          isCurrent() && !controller.signal.aborted && ws.readyState === WebSocket.OPEN;
         // Serialize capture teardown and startup so repeated clicks never overlap recorders.
         schedule(async () => {
-          if (!(await ready) || !current()) {
+          if (!(await ready.promise) || !current()) {
             return;
           }
           const signal = AbortSignal.any([lifetime.signal, controller.signal]);
@@ -236,7 +228,7 @@ export function mintDesktopAudioObserver(params: {
     },
     activate() {
       if (isCurrent()) {
-        resolveReady(true);
+        ready.resolve(true);
       }
     },
     close,

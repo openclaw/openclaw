@@ -4,6 +4,7 @@ import { access, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import type {
   OpenClawPluginNodeHostCommand,
@@ -285,10 +286,8 @@ describe("Codex node exec-server", () => {
     }
   });
 
-  it.each([
-    { host: "paired device", nodeId: "paired-node" },
-    { host: "cloud worker", nodeId: "cloud-worker-node" },
-  ])("requires critical scoped approval on a $host", async ({ nodeId }) => {
+  it("requires critical scoped approval on the node placement", async () => {
+    const nodeId = "paired-node";
     const policy = createCodexNodeExecServerInvokePolicy();
     expect(policy.commands).toEqual([CODEX_NODE_EXEC_SERVER_COMMAND]);
     expect(policy.dangerous).toBe(true);

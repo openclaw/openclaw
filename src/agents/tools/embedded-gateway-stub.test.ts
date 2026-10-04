@@ -11,7 +11,7 @@ import {
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn((): OpenClawConfig => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   })),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
@@ -215,7 +215,7 @@ describe("embedded gateway stub", () => {
     "canonicalizes embedded session search filters with store %s",
     async (store) => {
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         ...(store ? { session: { store } } : {}),
       };
       const storePath = store ? "/stores/main.sqlite" : "/tmp/openclaw-sessions.json";
@@ -253,36 +253,34 @@ describe("embedded gateway stub", () => {
     },
   );
 
-  it.each(["main", "ops"])(
-    "resolves omitted search filters through the fixed-store owner %s",
-    async (agentId) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "main", default: true }, { id: "ops" }],
-          defaults: { sessionStore: { agentId } },
-        },
-        session: { store: "/stores/shared.sqlite" },
-      };
-      runtime.getRuntimeConfig.mockReturnValueOnce(cfg);
-      runtime.resolveSessionAgentId.mockReturnValueOnce(agentId);
-      runtime.resolveSessionStorePathCore.mockReturnValueOnce("/stores/shared.sqlite");
+  it("resolves omitted search filters through the fixed-store owner", async () => {
+    const agentId = "ops";
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { main: {}, ops: {} },
+        defaults: { sessionStore: { agentId } },
+      },
+      session: { store: "/stores/shared.sqlite" },
+    };
+    runtime.getRuntimeConfig.mockReturnValueOnce(cfg);
+    runtime.resolveSessionAgentId.mockReturnValueOnce(agentId);
+    runtime.resolveSessionStorePathCore.mockReturnValueOnce("/stores/shared.sqlite");
 
-      await createEmbeddedCallGateway()({ method: "sessions.search", params: { query: "needle" } });
+    await createEmbeddedCallGateway()({ method: "sessions.search", params: { query: "needle" } });
 
-      expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
-        sessionKey: "main",
-        config: cfg,
-      });
-      expect(runtime.listProjectedSessions).not.toHaveBeenCalled();
-      expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
-        agentId,
-        query: "needle",
-        limit: undefined,
-        sessionKeys: undefined,
-        storePath: "/stores/shared.sqlite",
-      });
-    },
-  );
+    expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
+      sessionKey: "main",
+      config: cfg,
+    });
+    expect(runtime.listProjectedSessions).not.toHaveBeenCalled();
+    expect(runtime.searchSessionTranscripts).toHaveBeenCalledWith({
+      agentId,
+      query: "needle",
+      limit: undefined,
+      sessionKeys: undefined,
+      storePath: "/stores/shared.sqlite",
+    });
+  });
 
   it("rejects empty session-key filters instead of widening the search", async () => {
     const callGateway = createEmbeddedCallGateway();
@@ -319,7 +317,7 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow('belongs to "ops", not "research"');
     expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "global",
-      config: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { entries: { main: {} } } },
       agentId: "research",
     });
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();

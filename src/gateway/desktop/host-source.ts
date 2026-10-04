@@ -1,8 +1,5 @@
 import fs from "node:fs/promises";
-import type {
-  DesktopObserveResult,
-  EnvironmentSummary,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import type { DesktopHostConfig } from "../../config/types.desktop.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RfbAttachment } from "./attachment.js";
@@ -11,7 +8,6 @@ import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
 import {
   createManagedLinuxDesktop,
-  type DesktopComputerLease,
   type ManagedLinuxDesktop,
   type ManagedLinuxDesktopStatus,
 } from "./managed-linux.js";
@@ -65,76 +61,43 @@ function managedPlatformError(platform: NodeJS.Platform): string {
   return `desktop.host.managed is available only on Linux; disable it on ${platform} or configure desktop.host.port for an existing loopback VNC server`;
 }
 
-function managedInspection(managedStatus: ManagedLinuxDesktopStatus): HostDesktopInspection {
+function managedInspection(
+  managedStatus: ManagedLinuxDesktopStatus | { state: "unknown" },
+): HostDesktopInspection {
+  const status: Extract<HostDesktopStatus, { state: "managed" }> = {
+    enabled: true,
+    state: "managed",
+    managedState: managedStatus.state,
+    port: DEFAULT_HOST_DESKTOP_PORT,
+  };
+  if (managedStatus.state !== "not-started" && managedStatus.state !== "unknown") {
+    status.port = managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT;
+    if (managedStatus.display !== undefined) {
+      status.display = managedStatus.display;
+    }
+  }
   if (managedStatus.state === "running") {
     return {
-      status: {
-        enabled: true,
-        state: "managed",
-        managedState: "running",
-        display: managedStatus.display,
-        port: managedStatus.port,
-        security: "VncAuth",
-      },
+      status: { ...status, security: "VncAuth" },
       detail: `managed (running, display :${managedStatus.display}, port ${managedStatus.port}, security: VncAuth)`,
     };
   }
   if (managedStatus.state === "failed") {
     return {
-      status: {
-        enabled: true,
-        state: "managed",
-        managedState: "failed",
-        port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-        ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
-        error: managedStatus.error,
-      },
+      status: { ...status, error: managedStatus.error },
       detail: `managed (failed: ${managedStatus.error})`,
       unavailableReason: "unsupported",
     };
   }
-  const startingCoordinates =
-    managedStatus.state === "starting"
-      ? {
-          port: managedStatus.port ?? DEFAULT_HOST_DESKTOP_PORT,
-          ...(managedStatus.display !== undefined ? { display: managedStatus.display } : {}),
-        }
-      : { port: DEFAULT_HOST_DESKTOP_PORT };
   return {
-    status: {
-      enabled: true,
-      state: "managed",
-      managedState: managedStatus.state,
-      ...startingCoordinates,
-    },
-    detail: managedStatus.state === "starting" ? "managed (starting)" : "managed (not started)",
+    status,
+    detail:
+      managedStatus.state === "unknown"
+        ? "managed (configured; runtime state is available from the running Gateway status)"
+        : managedStatus.state === "starting"
+          ? "managed (starting)"
+          : "managed (not started)",
   };
-}
-
-function configuredManagedInspection(): HostDesktopInspection {
-  return {
-    status: {
-      enabled: true,
-      state: "managed",
-      managedState: "unknown",
-      port: DEFAULT_HOST_DESKTOP_PORT,
-    },
-    detail: "managed (configured; runtime state is available from the running Gateway status)",
-  };
-}
-
-function securityLabel(probe: Extract<RfbProbeResult, { kind: "rfb" }>): string {
-  const auth = classifyRfbSecurity(probe.securityTypes);
-  if (auth === "vnc-password") {
-    return "VncAuth";
-  }
-  if (auth === "ard-account") {
-    return "ARD";
-  }
-  if (auth === "none") {
-    return "None";
-  }
-  return probe.securityTypes.includes(19) ? "VeNCrypt" : "unsupported";
 }
 
 type HostDesktopInspectionParams = {
@@ -197,9 +160,7 @@ async function inspectConfiguredHostDesktop(
           unavailableReason: "unsupported",
         };
       }
-      return params.managedDesktop
-        ? managedInspection(params.managedDesktop.status())
-        : configuredManagedInspection();
+      return managedInspection(params.managedDesktop?.status() ?? { state: "unknown" });
     }
     return {
       status: { enabled: true, state: "unavailable", port },
@@ -214,8 +175,13 @@ async function inspectConfiguredHostDesktop(
       unavailableReason: "not-rfb",
     };
   }
-  const security = securityLabel(probe);
   const auth = classifyRfbSecurity(probe.securityTypes);
+  const security =
+    auth === "unsupported"
+      ? probe.securityTypes.includes(19)
+        ? "VeNCrypt"
+        : "unsupported"
+      : { "vnc-password": "VncAuth", "ard-account": "ARD", none: "None" }[auth];
   if (auth === "vnc-password" || auth === "ard-account") {
     return {
       status: { enabled: true, state: "attached", port, security },
@@ -350,26 +316,7 @@ export function createHostDesktopSource(params: {
   };
 }
 
-export type HostDesktopService = {
-  observe(params: {
-    control: boolean;
-    requester?: DesktopObserveRequester;
-    credentials?: { username?: string; password?: string };
-  }): Promise<{
-    transport: "rfb";
-    wsPath: string;
-    expiresAtMs: number;
-    control: boolean;
-    auth: "vnc-password" | "ard-account";
-    vncPassword?: string;
-    audio?: DesktopObserveResult["audio"];
-    audioUnavailableReason?: DesktopObserveResult["audioUnavailableReason"];
-    preauthenticated?: boolean;
-  }>;
-  acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
-  status(): Promise<HostDesktopStatus>;
-  reconcileRuntimePolicy(): Promise<void>;
-};
+export type HostDesktopService = ReturnType<typeof createHostDesktopService>;
 
 /** Combines host acquisition, registry ownership, and observer-token minting. */
 export function createHostDesktopService(params: {
@@ -377,7 +324,7 @@ export function createHostDesktopService(params: {
   registry: DesktopSessionRegistry;
   platform?: NodeJS.Platform;
   managedDesktop?: ManagedLinuxDesktop;
-}): HostDesktopService {
+}) {
   const platform = params.platform ?? process.platform;
   type HostDesktopRuntime = {
     config: DesktopHostConfig;
@@ -475,7 +422,11 @@ export function createHostDesktopService(params: {
     return { acquired, runtime };
   };
   return {
-    async observe(observeParams) {
+    async observe(observeParams: {
+      control: boolean;
+      requester?: DesktopObserveRequester;
+      credentials?: { username?: string; password?: string };
+    }) {
       const { acquired, runtime } = await acquire();
       assertCurrent(runtime);
       const auth = acquired.auth;
@@ -513,7 +464,7 @@ export function createHostDesktopService(params: {
         ...(preauth ? { preauth } : {}),
       });
       return {
-        transport: "rfb",
+        transport: "rfb" as const,
         wsPath: `/desktop/observe?token=${minted.token}`,
         expiresAtMs: minted.expiresAtMs,
         control: observeParams.control,
@@ -527,7 +478,7 @@ export function createHostDesktopService(params: {
           : {}),
       };
     },
-    async acquireComputer(computerParams) {
+    async acquireComputer(computerParams: { onStop(): Promise<void> }) {
       const { runtime } = await acquire();
       assertCurrent(runtime);
       const activity = params.registry.retainActivity("host", runtime.ownerEpoch);

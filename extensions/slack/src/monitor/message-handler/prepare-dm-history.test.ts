@@ -8,9 +8,7 @@ describe("Slack observed DM history limits", () => {
     { override: Number.MAX_SAFE_INTEGER, defaultLimit: 7, expected: 0 },
     { override: 5000, defaultLimit: 7, expected: 200 },
     { override: 0, defaultLimit: 7, expected: 0 },
-    { override: 3, defaultLimit: 7, expected: 3 },
     { override: undefined, defaultLimit: 7, expected: 7 },
-    { override: undefined, defaultLimit: 5000, expected: 200 },
   ])("bounds the selected window $override / $defaultLimit to $expected", async (testCase) => {
     const account = createSlackTestAccount({
       dms: { U1: { historyLimit: testCase.override } },

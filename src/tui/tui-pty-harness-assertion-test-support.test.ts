@@ -1,5 +1,26 @@
-import { describe, expect, it } from "vitest";
+import { appendFile, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readFixtureLog } from "./tui-pty-harness-assertion-test-support.js";
 import * as oracle from "./tui-pty-terminal-evidence-test-support.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reads only complete fixture log records and rejects malformed committed records", async () => {
+  const logPath = path.join(tempDirs.make("openclaw-tui-log-"), "fixture-log.jsonl");
+  await writeFile(logPath, '{"method":"ready"}\n{"method":"sendChat","payload":{"message"');
+  expect(await readFixtureLog(logPath)).toEqual([{ method: "ready" }]);
+  await appendFile(logPath, ':"xai limit proof"}}');
+  expect(await readFixtureLog(logPath)).toEqual([{ method: "ready" }]);
+  await appendFile(logPath, "\n");
+  expect(await readFixtureLog(logPath)).toEqual([
+    { method: "ready" },
+    { method: "sendChat", payload: { message: "xai limit proof" } },
+  ]);
+  await appendFile(logPath, '{"method":}\n');
+  await expect(readFixtureLog(logPath)).rejects.toBeInstanceOf(SyntaxError);
+});
 
 const FRAME_START = "\x1b[?2026h";
 const FRAME_END = "\x1b[?2026l";

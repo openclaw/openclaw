@@ -9,7 +9,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createQuickstartNotePrompter } from "../system-agent/setup-apply.js";
 import { t } from "../wizard/i18n/index.js";
 import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
-import { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
+import {
+  resolveOnboardingDashboardTarget,
+  runBrowserHatchHandoff,
+} from "./onboard-browser-handoff.js";
 import { resolveLocalControlUiProbeLinks, waitForGatewayReachable } from "./onboard-helpers.js";
 
 type QuickstartForegroundGatewayDeps = {
@@ -48,7 +51,10 @@ export async function runQuickstartForegroundGateway(
       (deps.waitForGateway ?? waitForGatewayReachable)({
         url: links.wsUrl,
         token: authMode === "token" ? credentials.token : undefined,
-        password: authMode === "password" ? credentials.password : undefined,
+        password:
+          authMode === "password" || authMode === "trusted-proxy"
+            ? credentials.password
+            : undefined,
         ...resolveGatewayStartupTiming(),
       }),
     ]);
@@ -75,23 +81,11 @@ export async function runQuickstartForegroundGateway(
     } else {
       runtime.log(t("wizard.guided.quickstartGatewayPending"));
     }
-    const dashboardUrl = new URL(links.httpUrl);
-    const [{ resolveConfiguredSetupModelForAgent }, { resolveSystemAgentOnboardingTarget }] =
-      await Promise.all([
-        import("../agents/utility-model.js"),
-        import("./onboard-agent-target.js"),
-      ]);
-    const setupOnly =
-      resolveConfiguredSetupModelForAgent({
-        cfg: config,
-        agentId: params.agentId ?? resolveSystemAgentOnboardingTarget(config).agentId,
-      })?.modelTarget === "utility";
-    if (setupOnly) {
-      dashboardUrl.pathname = `${dashboardUrl.pathname.replace(/\/$/, "")}/custodian`;
-      dashboardUrl.searchParams.set("onboarding", "1");
-    } else if (params.agentId) {
-      dashboardUrl.searchParams.set("session", `agent:${params.agentId}:main`);
-    }
+    const { url: dashboardUrl, setupOnly } = await resolveOnboardingDashboardTarget(
+      links.httpUrl,
+      config,
+      params.agentId,
+    );
     runtime.log(t("wizard.guided.quickstartDashboard", { url: dashboardUrl.toString() }));
     runtime.log(t("wizard.guided.quickstartForeground"));
     runtime.log(t("wizard.guided.quickstartBackground"));

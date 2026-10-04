@@ -1,6 +1,7 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   setGatewayPluginMetadataSnapshot,
   withPluginMetadataSnapshotScope,
@@ -33,8 +34,9 @@ registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
 it("retains running metadata readers through the final Gateway close after package replacement", async () => {
   const readers = { ...snapshotReaderSlot };
-  const first = retainGatewayPluginMetadata();
-  const second = retainGatewayPluginMetadata();
+  const cache = getPluginCache();
+  const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
+  const second = retainGatewayPluginMetadata(createTestGatewayScheduler());
   const snapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
   const scoped = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
   const replacementReader = () => {
@@ -47,6 +49,16 @@ it("retains running metadata readers through the final Gateway close after packa
     first.publish(snapshot);
     second.publish(snapshot);
     setGatewayPluginMetadataSnapshot(snapshot);
+    setCurrentPluginMetadataSnapshotState(
+      snapshot,
+      "boot",
+      undefined,
+      undefined,
+      undefined,
+      "gateway",
+    );
+    clearMemo.mockClear();
+    clearPluginMetadataLifecycleCaches();
     // Released modules register by assigning the shared slot directly.
     Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
@@ -56,6 +68,10 @@ it("retains running metadata readers through the final Gateway close after packa
       ),
     ).toBe(scoped);
     await first.close();
+    await first.close();
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
+    expect(clearMemo).not.toHaveBeenCalled();
+    expect(getPluginCache()).toBe(cache);
     finalClose = second.close(async () => {
       closing.resolve();
       await releaseClose.promise;
@@ -65,6 +81,11 @@ it("retains running metadata readers through the final Gateway close after packa
     expect(getCurrentPluginMetadataSnapshotRequiredRuntime({})).toBe(snapshot);
     releaseClose.resolve();
     await finalClose;
+    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
+    expect(clearMemo).toHaveBeenCalledOnce();
+    expect(getPluginCache()).not.toBe(cache);
+    await second.close();
+    expect(clearMemo).toHaveBeenCalledOnce();
     Object.assign(snapshotReaderSlot, { getCurrentPluginMetadataSnapshot: replacementReader });
     expect(() => getCurrentPluginMetadataSnapshotRequiredRuntime({})).toThrow(
       "replacement installation cannot read the running scope state",
@@ -88,7 +109,7 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
     await cleanupReleased.promise;
   });
   cache.setupModules.set("metadata-cleanup", instance);
-  const owner = retainGatewayPluginMetadata();
+  const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
   let sharedStarted = false;
   const finalCleanup = vi.fn(async (retire: () => Promise<unknown>) => {
     await retire();
@@ -101,16 +122,16 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
     await cleanupEntered.promise;
     expect(sharedStarted).toBe(false);
     expect(getPluginCache()).toBe(cache);
-    expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+    expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(/retir|shut/i);
     cleanupReleased.resolve();
     await sharedEntered.promise;
     expect(getPluginCache()).toBe(cache);
-    expect(() => retainGatewayPluginMetadata()).toThrow(/retir|shut/i);
+    expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(/retir|shut/i);
     sharedReleased.resolve();
     await closing;
     await owner.close(finalCleanup);
     expect(finalCleanup).toHaveBeenCalledOnce();
-    const next = retainGatewayPluginMetadata();
+    const next = retainGatewayPluginMetadata(createTestGatewayScheduler());
     try {
       expect(getPluginCache()).not.toBe(cache);
     } finally {
@@ -123,76 +144,39 @@ it("joins owned cleanup and final shared teardown before admitting another Gatew
   }
 });
 
-it("keeps boot metadata and process memos until the final Gateway releases them", async () => {
-  const firstAccessCache = getPluginCache();
-  const first = retainGatewayPluginMetadata();
-  const second = retainGatewayPluginMetadata();
-  try {
-    const snapshot = first.runBootstrap(() => createPluginMetadataSnapshotFixture());
-    first.publish(snapshot);
-    second.publish(snapshot);
-    setCurrentPluginMetadataSnapshotState(
-      snapshot,
-      "boot",
-      undefined,
-      undefined,
-      undefined,
-      "gateway",
-    );
-    clearMemo.mockClear();
-
-    clearPluginMetadataLifecycleCaches();
-    await second.close();
-    await second.close();
-
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
-    expect(clearMemo).not.toHaveBeenCalled();
-    expect(getPluginCache()).toBe(firstAccessCache);
-
-    await first.close();
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
-    expect(clearMemo).toHaveBeenCalledOnce();
-    expect(getPluginCache()).not.toBe(firstAccessCache);
-    await first.close();
-    expect(clearMemo).toHaveBeenCalledOnce();
-  } finally {
-    await Promise.all([second.close(), first.close()]);
-  }
-});
-
-it("allows startup planning metadata to refresh before a Gateway inventory is published", async () => {
-  const owner = retainGatewayPluginMetadata();
-  try {
-    setCurrentPluginMetadataSnapshotState(createPluginMetadataSnapshotFixture(), "planning");
-    clearPluginMetadataLifecycleCaches();
-    expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
-  } finally {
-    await owner.close();
-  }
-});
-
-it("keeps bootstrap facts usable when no replacement metadata snapshot is published", async () => {
-  const owner = retainGatewayPluginMetadata();
-  const cache = owner.runBootstrap(getPluginCache);
-  try {
-    owner.publish(undefined);
-    await owner.waitForRetirement();
-    clearPluginMetadataLifecycleCaches();
-    expect(getPluginCache()).toBe(cache);
-    const releaseFacts = retainPluginCache(cache);
-    releaseFacts();
-  } finally {
-    await owner.close();
-  }
-  expect(getPluginCache()).not.toBe(cache);
-});
+it.each([false, true])(
+  "refreshes bootstrap facts only before publication (%s)",
+  async (published) => {
+    const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
+    const cache = owner.runBootstrap(getPluginCache);
+    try {
+      if (published) {
+        owner.publish(undefined);
+        await owner.waitForRetirement();
+      } else {
+        setCurrentPluginMetadataSnapshotState(createPluginMetadataSnapshotFixture(), "planning");
+      }
+      clearPluginMetadataLifecycleCaches();
+      if (published) {
+        expect(getPluginCache()).toBe(cache);
+        const releaseFacts = retainPluginCache(cache);
+        releaseFacts();
+      } else {
+        expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
+      }
+    } finally {
+      await owner.close();
+    }
+    expect(getPluginCache()).not.toBe(cache);
+  },
+);
 
 it.each([true, false])(
   "observes deferred turn cleanup and joins it on shutdown (borrowed: %s)",
   async (borrowed) => {
     const cache = getPluginCache();
     const release = borrowed ? retainPluginCache(cache) : () => {};
-    const owner = retainGatewayPluginMetadata();
+    const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
     owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
     const next = withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture());
     const failure = {
@@ -250,7 +234,7 @@ it.each([false, true])(
     instance.lifecycle.onDispose(dispose);
     cache.setupModules.set("retained-publication", instance);
     const release = retainPluginCache(cache);
-    const owner = retainGatewayPluginMetadata();
+    const owner = retainGatewayPluginMetadata(createTestGatewayScheduler());
     owner.publish(owner.runBootstrap(() => createPluginMetadataSnapshotFixture()));
     owner.publish(
       withPluginCache(createPluginCache(), () => createPluginMetadataSnapshotFixture()),
@@ -305,8 +289,8 @@ it.each([false, true])(
 it("fences admission before retirement while an admitted sibling stays usable", async () => {
   const cache = getPluginCache();
   const stopProducers = vi.fn(async () => {});
-  const first = retainGatewayPluginMetadata(stopProducers);
-  const sibling = retainGatewayPluginMetadata(stopProducers);
+  const first = retainGatewayPluginMetadata(createTestGatewayScheduler(), stopProducers);
+  const sibling = retainGatewayPluginMetadata(createTestGatewayScheduler(), stopProducers);
   const instance = new PluginInstance("sibling-inventory");
   const callback = instance.wrap(() => "still-live");
   cache.setupModules.set("sibling-inventory", instance);
@@ -318,7 +302,7 @@ it("fences admission before retirement while an admitted sibling stays usable", 
   clearMemo.mockClear();
   await first.beginClose();
   try {
-    expect(() => retainGatewayPluginMetadata()).toThrow(/shut/i);
+    expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(/shut/i);
     expect(cache.retirement).toBeUndefined();
     expect(callback()).toBe("still-live");
     expect(stopProducers).not.toHaveBeenCalled();
@@ -329,7 +313,7 @@ it("fences admission before retirement while an admitted sibling stays usable", 
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
     expect(clearMemo).not.toHaveBeenCalled();
     expect(callback()).toBe("still-live");
-    const newcomer = retainGatewayPluginMetadata();
+    const newcomer = retainGatewayPluginMetadata(createTestGatewayScheduler());
     await newcomer.close();
     expect(stopProducers).not.toHaveBeenCalled();
     const prelude = sibling.beginClose();
@@ -350,8 +334,8 @@ it("joins the shared producer stop when the last admitted bootstrap closes", asy
     entered.resolve();
     await release.promise;
   });
-  const running = retainGatewayPluginMetadata(stopProducers);
-  const booting = retainGatewayPluginMetadata(stopProducers);
+  const running = retainGatewayPluginMetadata(createTestGatewayScheduler(), stopProducers);
+  const booting = retainGatewayPluginMetadata(createTestGatewayScheduler(), stopProducers);
   let closing: Promise<unknown> | undefined;
   let closed = false;
   try {
@@ -376,7 +360,7 @@ it("joins the shared producer stop when the last admitted bootstrap closes", asy
 
 function retainDistinctMetadataOwners() {
   const firstCache = getPluginCache();
-  const first = retainGatewayPluginMetadata();
+  const first = retainGatewayPluginMetadata(createTestGatewayScheduler());
   onTestFinished(async () => {
     await first.close();
   });
@@ -385,7 +369,9 @@ function retainDistinctMetadataOwners() {
   selectCurrentPluginMetadataCache(firstCache);
   setGatewayPluginMetadataSnapshot(firstSnapshot);
   const secondCache = createPluginCache();
-  const second = withPluginCache(secondCache, () => retainGatewayPluginMetadata());
+  const second = withPluginCache(secondCache, () =>
+    retainGatewayPluginMetadata(createTestGatewayScheduler()),
+  );
   onTestFinished(async () => {
     await second.close();
   });
@@ -460,7 +446,7 @@ it("selects a closing sibling's still-bound cache until its retirement begins", 
     expect(secondCache.retirement).toBeUndefined();
     expect(useDependency()).toBe("available");
     expect(finalCleanup).not.toHaveBeenCalled();
-    expect(() => retainGatewayPluginMetadata()).toThrow(/shut/i);
+    expect(() => retainGatewayPluginMetadata(createTestGatewayScheduler())).toThrow(/shut/i);
     await second.close(finalCleanup);
     expect(finalCleanup).toHaveBeenCalledOnce();
     expect(() => useDependency()).toThrow();

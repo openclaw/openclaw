@@ -1,49 +1,53 @@
 /** SQLite-backed Codex app-server thread bindings. */
 
-import { createHash } from "node:crypto";
 import {
-  AgentHarnessSessionSupersededError,
   embeddedAgentLog,
   type AgentHarnessSessionDeletionMutation,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  captureNativeSessionGenerationAuthority,
   createNativeSessionBindingLifecycle,
-  reclaimNativeSessionGeneration,
-  resolveNativeSessionBinding,
+  reclaimNativeSessionGenerationWithAuthority,
+  resolveNativeSessionBindingWithAuthority,
+  type NativeSessionBindingAuthority,
   type NativeSessionBindingLeaseOptions,
   type NativeSessionBindingStateStore,
   type NativeSessionGenerationAdoptionResult,
-  type NativeSessionGenerationOperations,
+  type NativeSessionGenerationOperationsV2,
   type NativeSessionGenerationReclaimPlan,
 } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  normalizeCodexAppServerBindingModelProvider,
-  type CodexAppServerAuthProfileLookup,
-} from "./auth-profile.js";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { CodexManagedThreadStore } from "./managed-thread-store.js";
 import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-owner.js";
+import type { CodexNativeSubagentPendingAssignment } from "./native-subagent-pending-assignments.js";
 import {
   adoptCodexNativeSubagentSubmissions,
-  mutateCodexNativeSubagentSubmissions,
   type CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
+import { createCodexSessionGenerationSupersededError } from "./session-binding-authority.js";
 import {
+  CODEX_APP_SERVER_BINDING_LEASE,
+  PHYSICAL_SESSION_RETIRE_TTL_MS,
+} from "./session-binding-meta.js";
+import {
+  mutateNativeSubagentBinding,
+  type CodexNativeSubagentBindingMutation,
+} from "./session-binding-native-mutations.js";
+import {
+  readCurrentNativePendingAssignments,
+  preserveNativePendingAssignments,
+  preserveNativeTaskImport,
   bindingStoreKey,
-  matchesCodexNativeSubagentSubmissionBinding,
+  matchesPendingSupervisionBranch,
   ownsStoredSessionGeneration,
   preserveCodexNativeSubagentSubmissions,
-  readCodexAppServerThreadBinding,
-  readCodexBindingTimestamp,
   readCurrentCodexAppServerBinding,
   readCurrentCodexAppServerBindings,
   readCurrentCodexNativeSubagentSubmissions,
-  readPluginAppPolicyContext,
   readStoredCodexAppServerBinding,
-  stripUndefinedBinding,
   validateBindingForWrite,
   type CodexAppServerBindingIdentity,
   type CodexAppServerPendingSupervisionBranch,
@@ -66,56 +70,27 @@ export {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 
-const BINDING_LEASE_RETRY_INTERVAL_MS = 1_000;
-const BOUNDED_BINDING_FINGERPRINT_PATTERN = /^sha256:[a-f0-9]{64}$/i;
+export { combineNativeSessionBindingAuthority as combineCodexBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+export {
+  createCodexSessionGenerationSupersededError,
+  resolveCodexRunSessionBindingAuthority,
+} from "./session-binding-authority.js";
+export {
+  createStoredCodexAppServerBinding,
+  hashCodexAppServerBindingFingerprint,
+  normalizeStoredCodexAppServerBindingFingerprints,
+} from "./session-binding-codec.js";
+export type CodexBindingAuthority = NativeSessionBindingAuthority;
+export type CodexBindingWithCurrent = NativeSessionBindingAuthority["withCurrent"];
 
 export {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
   CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS,
 } from "./session-binding-meta.js";
-export const CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS = 60_000;
-const BINDING_LEASE_STALE_MS = CODEX_APP_SERVER_BINDING_GUARDED_REQUEST_TIMEOUT_MS + 5_000;
-const BINDING_LEASE_WAIT_MS = BINDING_LEASE_STALE_MS + 5_000;
-const BINDING_LEASE_RENEW_INTERVAL_MS = Math.floor(BINDING_LEASE_STALE_MS / 3);
-// Physical session keys cannot have a successor generation. Retain their
-// retirement fence only long enough for bounded stale lease work to drain.
-const PHYSICAL_SESSION_RETIRE_TTL_MS = BINDING_LEASE_WAIT_MS;
-
-export type CodexRunSessionBindingAuthority = "current" | "ephemeral" | "superseded";
-
-/** Decides whether a run may share the durable stable-key binding owner. */
-export function resolveCodexRunSessionBindingAuthority(params: {
-  identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
-  config?: OpenClawConfig;
-  storePath?: string;
-}): CodexRunSessionBindingAuthority {
-  return captureNativeSessionGenerationAuthority({
-    ...params,
-    target: params.identity,
-    createSupersededError: createCodexSessionGenerationSupersededError,
-  }).state;
-}
-
-/** Builds the terminal coordination error used when a newer OpenClaw session owns the binding. */
-export function createCodexSessionGenerationSupersededError(
-  sessionId: string,
-): AgentHarnessSessionSupersededError {
-  return new AgentHarnessSessionSupersededError(
-    `Codex session generation is no longer current: ${sessionId}`,
-  );
-}
 
 type CodexAppServerBindingMutation =
-  | {
-      kind: "record-native-subagent-submission";
-      owner: CodexNativeSubagentHistoryOwner;
-      receipt: CodexNativeSubagentSubmission;
-    }
-  | {
-      kind: "consume-native-subagent-submission";
-      owner: CodexNativeSubagentHistoryOwner;
-      receipt: CodexNativeSubagentSubmission;
-    }
+  | CodexNativeSubagentBindingMutation
   | {
       kind: "set";
       binding: CodexAppServerThreadBinding;
@@ -124,6 +99,7 @@ type CodexAppServerBindingMutation =
   | {
       kind: "patch";
       threadId: string;
+      clientId?: string;
       patch: Partial<Omit<CodexAppServerThreadBinding, "threadId">>;
     }
   | {
@@ -149,111 +125,33 @@ type CodexAppServerBindingMutation =
   | {
       kind: "clear";
       threadId?: string;
+      clientId?: string;
     };
 
 export type CodexSessionGenerationRetirementResult = "applied" | "absent" | "conflict";
 
-export function hashCodexAppServerBindingFingerprint(canonical: string): string {
-  return `sha256:${createHash("sha256").update(canonical).digest("hex")}`;
-}
-
-function normalizeLegacyBindingFingerprint(value: unknown): unknown {
-  if (
-    typeof value !== "string" ||
-    value === "" ||
-    value === "[]" ||
-    BOUNDED_BINDING_FINGERPRINT_PATTERN.test(value)
-  ) {
-    return value;
+/** Attempt cleanup may only clear the physical owner captured before its awaited work. */
+export async function clearCodexBindingForClient(
+  store: CodexAppServerBindingStore,
+  identity: CodexAppServerBindingIdentity,
+  thread: Pick<CodexAppServerThreadBinding, "threadId" | "clientId">,
+  authority: CodexBindingAuthority,
+): Promise<boolean> {
+  if (!thread.clientId) {
+    return false;
   }
-  return hashCodexAppServerBindingFingerprint(value);
-}
-
-function normalizeLegacyBindingFingerprints<
-  T extends {
-    dynamicToolsFingerprint?: unknown;
-    userMcpServersFingerprint?: unknown;
-  },
->(record: T): T {
-  // Shipped sidecars can contain unbounded canonical JSON fingerprints. Bound
-  // them at the legacy encoder so plugin-state registration cannot reject the row.
-  let normalized = record;
-  for (const key of ["dynamicToolsFingerprint", "userMcpServersFingerprint"] as const) {
-    const value = record[key];
-    const next = normalizeLegacyBindingFingerprint(value);
-    if (next === value) {
-      continue;
-    }
-    if (normalized === record) {
-      normalized = { ...record };
-    }
-    Object.assign(normalized, { [key]: next });
-  }
-  return normalized;
-}
-
-export function normalizeStoredCodexAppServerBindingFingerprints(
-  value: unknown,
-): StoredCodexAppServerBinding | undefined {
-  const stored = readStoredCodexAppServerBinding(value);
-  if (!stored || stored.state !== "active") {
-    return stored;
-  }
-  const binding = normalizeLegacyBindingFingerprints(stored.binding);
-  return binding === stored.binding
-    ? stored
-    : readStoredCodexAppServerBinding({ ...stored, binding });
-}
-
-/** Encodes a migrated sidecar binding as one canonical plugin-state row. */
-export function createStoredCodexAppServerBinding(
-  value: unknown,
-  options: {
-    now?: string;
-    lookup?: Omit<CodexAppServerAuthProfileLookup, "authProfileId">;
-  } = {},
-): Extract<StoredCodexAppServerBinding, { state: "active" }> | undefined {
-  const rawRecord = asOptionalRecord(value);
-  if (!rawRecord) {
-    return undefined;
-  }
-  const record = normalizeLegacyBindingFingerprints(rawRecord);
-  if (record.schemaVersion !== 1 && record.schemaVersion !== 2) {
-    return undefined;
-  }
-  const pluginAppPolicyContext = readPluginAppPolicyContext(
-    record.pluginAppPolicyContext,
-    record.schemaVersion,
+  return await store.mutate(
+    identity,
+    { kind: "clear", threadId: thread.threadId, clientId: thread.clientId },
+    authority.assertCurrent,
+    authority,
   );
-  const historyCoveredThrough =
-    readCodexBindingTimestamp(record.historyCoveredThrough) ??
-    readCodexBindingTimestamp(record.updatedAt) ??
-    readCodexBindingTimestamp(record.createdAt) ??
-    readCodexBindingTimestamp(options.now) ??
-    new Date().toISOString();
-  const authProfileId = typeof record.authProfileId === "string" ? record.authProfileId : undefined;
-  const binding = readCodexAppServerThreadBinding({
-    ...record,
-    modelProvider: normalizeCodexAppServerBindingModelProvider({
-      ...options.lookup,
-      authProfileId,
-      modelProvider: typeof record.modelProvider === "string" ? record.modelProvider : undefined,
-    }),
-    cwd: typeof record.cwd === "string" ? record.cwd : "",
-    pluginAppPolicyContext,
-    historyCoveredThrough,
-  });
-  return binding
-    ? {
-        version: 1,
-        state: "active",
-        binding: stripUndefinedBinding(binding),
-      }
-    : undefined;
 }
 
 export type CodexBindingStateStore = NativeSessionBindingStateStore<StoredCodexAppServerBinding> &
-  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries" | "lookupMany">;
+  Pick<PluginStateSyncKeyedStore<StoredCodexAppServerBinding>, "entries"> & {
+    asyncReads: Pick<PluginStateKeyedStore<StoredCodexAppServerBinding>, "lookup" | "lookupMany">;
+  };
 
 function bindingLeaseLostError(key: string, cause?: unknown): Error {
   return new Error(`Lost Codex binding lease: ${key}`, cause === undefined ? undefined : { cause });
@@ -263,10 +161,14 @@ export type CodexAppServerBindingStore = {
   /** Durable ownership rows kept separate from replaceable session bindings. */
   managedThreads?: CodexManagedThreadStore;
   read(identity: CodexAppServerBindingIdentity): CodexAppServerThreadBinding | undefined;
-  /** Available when the host provides positional bulk state reads. */
-  readMany?: (
+  /** Fresh worker-backed acquisition with row-ordered binding validation. */
+  readMany: (
     identities: readonly CodexAppServerBindingIdentity[],
-  ) => Generator<CodexAppServerThreadBinding | undefined, undefined, void>;
+  ) => AsyncGenerator<CodexAppServerThreadBinding | undefined, undefined, void>;
+  readNativeSubagentAssignments?(
+    identity: CodexAppServerBindingIdentity,
+    owner: CodexNativeSubagentHistoryOwner,
+  ): readonly CodexNativeSubagentPendingAssignment[];
   readNativeSubagentSubmissions(
     identity: CodexAppServerBindingIdentity,
     owner: CodexNativeSubagentHistoryOwner,
@@ -279,6 +181,7 @@ export type CodexAppServerBindingStore = {
     identity: CodexAppServerBindingIdentity,
     mutation: CodexAppServerBindingMutation,
     assertCurrent?: () => void,
+    authority?: CodexBindingAuthority,
   ): Promise<boolean>;
   prepareSessionGenerationReclaim(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
@@ -287,6 +190,7 @@ export type CodexAppServerBindingStore = {
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
     expectedPreviousSessionId: string,
     assertCurrent?: () => void,
+    authority?: CodexBindingAuthority,
   ): Promise<NativeSessionGenerationAdoptionResult>;
   resetSessionGeneration(
     identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
@@ -303,7 +207,11 @@ export type CodexAppServerBindingStore = {
     ) => Promise<T>,
   ): Promise<T>;
   withThreadArchiveFence<T>(run: () => Promise<T>): Promise<T>;
-  withLease<T>(identity: CodexAppServerBindingIdentity, run: () => Promise<T>): Promise<T>;
+  withLease<T>(
+    identity: CodexAppServerBindingIdentity,
+    run: () => Promise<T>,
+    options?: { assertCurrent?: () => void; authority?: CodexBindingAuthority },
+  ): Promise<T>;
 };
 
 type CodexSessionGenerationReclaimParams = {
@@ -311,7 +219,6 @@ type CodexSessionGenerationReclaimParams = {
   config?: OpenClawConfig;
   storePath?: string;
   assertCurrent?: () => void;
-  onHostGenerationVerified?: (assertHostGeneration: () => void) => void;
   bindingStore: CodexAppServerBindingStore;
   reclaimStale?: boolean;
 };
@@ -320,7 +227,7 @@ type CodexSessionGenerationReclaimParams = {
 export async function reclaimCurrentCodexSessionGeneration(
   params: CodexSessionGenerationReclaimParams,
 ): Promise<boolean> {
-  return await reclaimNativeSessionGeneration({
+  return await reclaimNativeSessionGenerationWithAuthority({
     ...params,
     target: params.identity,
     generation: codexSessionGenerationOperations(params.bindingStore, params.identity),
@@ -338,12 +245,13 @@ export async function resolveCodexSessionBinding(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   assertBinding?: (binding: CodexAppServerThreadBinding | undefined) => void;
+  authority?: CodexBindingAuthority;
 }): Promise<{
   binding: CodexAppServerThreadBinding | undefined;
-  assertCurrent: () => void;
+  authority: CodexBindingAuthority;
 }> {
   const identity = params.identity;
-  return await resolveNativeSessionBinding({
+  return await resolveNativeSessionBindingWithAuthority({
     ...params,
     ...(identity.kind === "session"
       ? {
@@ -364,15 +272,13 @@ export function createCodexAppServerBindingStore(
   state: CodexBindingStateStore,
 ): CodexAppServerBindingStore {
   const lifecycle = createNativeSessionBindingLifecycle<StoredCodexAppServerBinding>(state, {
+    workerCodec: "codex",
     readRecord: readStoredCodexAppServerBinding,
-    lease: {
-      staleMs: BINDING_LEASE_STALE_MS,
-      waitMs: BINDING_LEASE_WAIT_MS,
-      retryIntervalMs: BINDING_LEASE_RETRY_INTERVAL_MS,
-      renewIntervalMs: BINDING_LEASE_RENEW_INTERVAL_MS,
-    },
+    lease: CODEX_APP_SERVER_BINDING_LEASE,
     releaseTtlMs: (key, current) =>
-      current.state === "active" || (current.retired === true && !key.startsWith("session:"))
+      current.nativeSubagentTaskImport !== undefined ||
+      current.state === "active" ||
+      (current.retired === true && !key.startsWith("session:"))
         ? undefined
         : current.retired === true
           ? PHYSICAL_SESSION_RETIRE_TTL_MS
@@ -396,9 +302,14 @@ export function createCodexAppServerBindingStore(
 
   const prepareLease = (
     identity: CodexAppServerBindingIdentity,
-    options: { allowRetired?: boolean; assertCurrent?: () => void } = {},
+    options: {
+      allowRetired?: boolean;
+      assertCurrent?: () => void;
+      authority?: CodexBindingAuthority;
+    } = {},
   ): NativeSessionBindingLeaseOptions<StoredCodexAppServerBinding> => ({
     assertCurrent: options.assertCurrent,
+    authority: options.authority,
     prepareLease(current, lease) {
       if (
         current?.state === "cleared" &&
@@ -418,6 +329,7 @@ export function createCodexAppServerBindingStore(
         version: 1,
         state: "cleared",
         ...preservedSessionGeneration(identity, current),
+        ...preserveNativeTaskImport(current),
         lease,
       };
     },
@@ -458,25 +370,23 @@ export function createCodexAppServerBindingStore(
               state: "cleared",
               ...(mode === "retire" ? { retired: true as const } : {}),
               ...storedSessionGeneration(identity, current),
+              ...preserveNativeTaskImport(current),
               ...(current.lease && current.lease.token === leaseToken
                 ? { lease: current.lease }
                 : {}),
             },
           };
         },
-        ttlMs,
+        (next) => (next.nativeSubagentTaskImport !== undefined ? undefined : ttlMs),
       );
     });
   };
 
   return {
     read: (identity) => readCurrentCodexAppServerBinding(state, identity),
-    ...(state.lookupMany
-      ? {
-          readMany: (identities: readonly CodexAppServerBindingIdentity[]) =>
-            readCurrentCodexAppServerBindings(state, identities),
-        }
-      : {}),
+    readMany: (identities) => readCurrentCodexAppServerBindings(state.asyncReads, identities),
+    readNativeSubagentAssignments: (identity, owner) =>
+      readCurrentNativePendingAssignments(state, identity, owner),
     readNativeSubagentSubmissions: (identity, owner) =>
       readCurrentCodexNativeSubagentSubmissions(state, identity, owner),
 
@@ -492,10 +402,7 @@ export function createCodexAppServerBindingStore(
           key === currentKey &&
           (currentIdentity.kind === "conversation" ||
             stored.sessionId === currentIdentity.sessionId.trim());
-        if (stored.state !== "active" || stored.binding.threadId !== threadId || isCurrentOwner) {
-          return false;
-        }
-        return true;
+        return stored.state === "active" && stored.binding.threadId === threadId && !isCurrentOwner;
       });
     },
 
@@ -524,7 +431,7 @@ export function createCodexAppServerBindingStore(
       return { kind: "verify", expectedPreviousSessionId: currentSessionId };
     },
 
-    async mutate(identity, mutation, assertCurrent) {
+    async mutate(identity, mutation, assertCurrent, authority) {
       return await lifecycle.withMutation(async () => {
         const key = bindingStoreKey(identity);
         // A retained legacy sidecar may be revisited by doctor after runtime
@@ -535,40 +442,12 @@ export function createCodexAppServerBindingStore(
           key,
           (current, leaseToken) => {
             if (
+              mutation.kind === "record-native-subagent-assignment" ||
+              mutation.kind === "consume-native-subagent-assignment" ||
               mutation.kind === "record-native-subagent-submission" ||
               mutation.kind === "consume-native-subagent-submission"
             ) {
-              if (!assertCurrent) {
-                throw new Error(
-                  "Codex native subagent submission mutation requires current authority.",
-                );
-              }
-              assertCurrent();
-              if (
-                current?.state !== "active" ||
-                !ownsStoredSessionGeneration(identity, current) ||
-                (identity.kind === "session" && mutation.owner.sessionId !== identity.sessionId) ||
-                !matchesCodexNativeSubagentSubmissionBinding(current.binding, mutation.owner)
-              ) {
-                return { result: false };
-              }
-              const changed = mutateCodexNativeSubagentSubmissions({
-                current: current.nativeSubagentSubmissions,
-                owner: mutation.owner,
-                receipt: mutation.receipt,
-                consume: mutation.kind === "consume-native-subagent-submission",
-              });
-              if (!changed.applied) {
-                return { result: false };
-              }
-              const { nativeSubagentSubmissions: _previous, ...bindingOwner } = current;
-              return {
-                result: true,
-                next: {
-                  ...bindingOwner,
-                  ...(changed.next ? { nativeSubagentSubmissions: changed.next } : {}),
-                },
-              };
+              return mutateNativeSubagentBinding({ identity, current, mutation, assertCurrent });
             }
             const ownsGeneration = ownsStoredSessionGeneration(identity, current);
             const ownedLease =
@@ -595,6 +474,7 @@ export function createCodexAppServerBindingStore(
                       version: 1,
                       state: "cleared",
                       sessionId: identity.sessionId,
+                      ...preserveNativeTaskImport(current),
                       ...ownedLease,
                     },
                   };
@@ -618,6 +498,7 @@ export function createCodexAppServerBindingStore(
                   version: 1,
                   state: "cleared",
                   sessionId: identity.sessionId,
+                  ...preserveNativeTaskImport(current),
                   ...ownedLease,
                 },
               };
@@ -637,6 +518,11 @@ export function createCodexAppServerBindingStore(
               mutation.binding.connectionScope !== "supervision" &&
               mutation.binding.threadId !== mutation.expectedThreadId;
             if (
+              // Recheck the physical owner on every CAS retry. Explicit undefined
+              // pins an absent legacy client ID; lifecycle operations omit the field.
+              ((mutation.kind === "patch" || mutation.kind === "clear") &&
+                Object.hasOwn(mutation, "clientId") &&
+                mutation.clientId !== active?.binding.clientId) ||
               (mutation.kind === "set" &&
                 ((mutation.if?.kind === "absent" && storedActive) ||
                   (current !== undefined && !ownsGeneration) ||
@@ -666,37 +552,42 @@ export function createCodexAppServerBindingStore(
                   version: 1,
                   state: "cleared",
                   ...storedSessionGeneration(identity, current),
+                  ...preserveNativeTaskImport(current),
                   ...ownedLease,
                 },
               };
             }
             let binding: CodexAppServerThreadBinding;
             if (mutation.kind === "set" || mutation.kind === "replace-thread") {
-              binding = validateBindingForWrite(mutation.binding);
+              binding = mutation.binding;
             } else if (mutation.kind === "patch-pending-supervision-branch") {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 pendingSupervisionBranch: mutation.pending,
-              });
-            } else if (mutation.kind === "commit-pending-supervision-branch") {
-              binding = validateBindingForWrite({
-                ...active!.binding,
-                ...mutation.patch,
-                threadId: mutation.threadId,
-                pendingSupervisionBranch: undefined,
-              });
+              };
             } else {
-              binding = validateBindingForWrite({
+              binding = {
                 ...active!.binding,
                 ...mutation.patch,
                 threadId: mutation.threadId,
-              });
+                ...(mutation.kind === "commit-pending-supervision-branch"
+                  ? { pendingSupervisionBranch: undefined }
+                  : {}),
+              };
             }
+            binding = validateBindingForWrite(binding);
             const nativeSubagentSubmissions = active
               ? preserveCodexNativeSubagentSubmissions(
                   active.binding,
                   binding,
                   active.nativeSubagentSubmissions,
+                )
+              : undefined;
+            const nativeSubagentAssignments = active
+              ? preserveNativePendingAssignments(
+                  active.binding,
+                  binding,
+                  active.nativeSubagentAssignments,
                 )
               : undefined;
             return {
@@ -705,8 +596,10 @@ export function createCodexAppServerBindingStore(
                 version: 1,
                 state: "active",
                 binding,
+                ...(nativeSubagentAssignments !== undefined ? { nativeSubagentAssignments } : {}),
                 ...(nativeSubagentSubmissions !== undefined ? { nativeSubagentSubmissions } : {}),
                 ...storedSessionGeneration(identity, current),
+                ...preserveNativeTaskImport(current),
                 ...ownedLease,
               },
             };
@@ -715,15 +608,20 @@ export function createCodexAppServerBindingStore(
           // the key afterwards is fenced by ownsStoredSessionGeneration on read
           // and displaced via reclaim-generation; durable stable-key fences come
           // from retireSessionGeneration, not runtime clears.
-          mutation.kind === "clear" && !retainLegacyClear && !lifecycle.hasLease(key)
-            ? 1
-            : undefined,
+          (next) =>
+            mutation.kind === "clear" &&
+            next.nativeSubagentTaskImport === undefined &&
+            !retainLegacyClear &&
+            !lifecycle.hasLease(key)
+              ? 1
+              : undefined,
           assertCurrent,
+          authority,
         );
       });
     },
 
-    async adoptSessionGeneration(identity, expectedPreviousSessionId, assertCurrent) {
+    async adoptSessionGeneration(identity, expectedPreviousSessionId, assertCurrent, authority) {
       return await lifecycle.withMutation(async () => {
         const key = bindingStoreKey(identity);
         const expectedSessionId = expectedPreviousSessionId.trim();
@@ -745,7 +643,11 @@ export function createCodexAppServerBindingStore(
             if (current.sessionId !== expectedSessionId) {
               return { result: "conflict" as const };
             }
-            const { nativeSubagentSubmissions, ...bindingOwner } = current;
+            const {
+              nativeSubagentSubmissions,
+              nativeSubagentAssignments: _assignments,
+              ...bindingOwner
+            } = current;
             const adoptedSubmissions =
               adoptCodexNativeSubagentSubmissions(nativeSubagentSubmissions);
             return {
@@ -761,6 +663,7 @@ export function createCodexAppServerBindingStore(
           },
           undefined,
           assertCurrent,
+          authority,
         );
       });
     },
@@ -787,49 +690,32 @@ export function createCodexAppServerBindingStore(
       );
     },
 
-    withLease: (identity, run) =>
-      lifecycle.withLease(bindingStoreKey(identity), run, prepareLease(identity)),
+    withLease: (identity, run, options) =>
+      lifecycle.withLease(bindingStoreKey(identity), run, prepareLease(identity, options)),
   };
 }
 
 function codexSessionGenerationOperations(
   store: CodexAppServerBindingStore,
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>,
-): NativeSessionGenerationOperations {
+): NativeSessionGenerationOperationsV2 {
   return {
     prepareReclaim: () => store.prepareSessionGenerationReclaim(identity),
-    adopt: (expectedPreviousSessionId, assertCurrent) =>
-      store.adoptSessionGeneration(identity, expectedPreviousSessionId, assertCurrent),
-    reclaim: (expectedPreviousSessionId, assertCurrent) =>
+    adopt: (expectedPreviousSessionId, authority) =>
+      store.adoptSessionGeneration(
+        identity,
+        expectedPreviousSessionId,
+        authority.assertCurrent,
+        authority,
+      ),
+    reclaim: (expectedPreviousSessionId, authority) =>
       store.mutate(
         identity,
         { kind: "reclaim-generation", expectedPreviousSessionId },
-        assertCurrent,
+        authority.assertCurrent,
+        authority,
       ),
   };
-}
-
-function matchesPendingSupervisionBranch(
-  binding: CodexAppServerThreadBinding | undefined,
-  expected: CodexAppServerPendingSupervisionBranch,
-): boolean {
-  const pending = binding?.pendingSupervisionBranch;
-  if (!pending || binding?.threadId !== expected.sourceThreadId) {
-    return false;
-  }
-  if (
-    pending.sourceThreadId !== expected.sourceThreadId ||
-    pending.connectionFingerprint !== expected.connectionFingerprint ||
-    pending.lastTurnId !== expected.lastTurnId
-  ) {
-    return false;
-  }
-  const currentCleanup = pending.cleanupThreadIds ?? [];
-  const expectedCleanup = expected.cleanupThreadIds ?? [];
-  return (
-    currentCleanup.length === expectedCleanup.length &&
-    currentCleanup.every((threadId, index) => threadId === expectedCleanup[index])
-  );
 }
 
 function isSameSupervisionOwner(
@@ -862,5 +748,3 @@ function preservedSessionGeneration(
   }
   return storedSessionGeneration(identity, current);
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

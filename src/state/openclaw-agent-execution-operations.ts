@@ -1,0 +1,409 @@
+import type { SessionTranscriptInitializationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
+import type { SessionEntryReplacementCommit } from "../config/sessions/session-accessor.sqlite-replacement-types.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { deferSqliteWorkerCommitReceipt } from "../infra/sqlite-worker-operation-admission.js";
+import type { AgentDatabaseMaintenanceOperations } from "./openclaw-agent-execution-maintenance.js";
+import type { AgentWorkerOperationContext } from "./openclaw-agent-operation-context.js";
+import type { WorkerOperationHandlers, WorkerOperations } from "./worker-operation-registry.js";
+
+type Handlers = WorkerOperationHandlers<AgentWorkerOperationContext>;
+type TranscriptInitialization = { sessionKey: string; sessionId: string; cwd?: string };
+
+let transcript:
+  | {
+      initialize: typeof import("../config/sessions/session-accessor.sqlite-transcript-header.js").ensureTranscriptHeader;
+      assertIdentity: typeof import("../config/sessions/session-accessor.sqlite-scope.js").assertSqliteTranscriptWriteIdentity;
+    }
+  | undefined;
+
+export function prepareAgentTranscript() {
+  return Promise.all([
+    import("../config/sessions/session-accessor.sqlite-transcript-header.js"),
+    import("../config/sessions/session-accessor.sqlite-scope.js"),
+  ]).then(([header, scope]) => {
+    transcript = {
+      initialize: header.ensureTranscriptHeader,
+      assertIdentity: scope.assertSqliteTranscriptWriteIdentity,
+    };
+  });
+}
+
+export async function loadAgentTranscriptOperations() {
+  await prepareAgentTranscript();
+  return {
+    "session.transcript.initialize": (input: TranscriptInitialization, context) => {
+      if (!transcript) {
+        throw new Error("Session transcript initialization was not prepared");
+      }
+      const { initialize } = transcript;
+      const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
+      assertIdentity(input);
+      return context.writeTransaction(
+        "session.entry.create-with-transcript",
+        "Session transcript",
+        (current) => {
+          const publication: SessionTranscriptInitializationPublication = {
+            kind: "session-transcript-initialized",
+            sessionKey: input.sessionKey,
+          };
+          initialize(
+            current,
+            { agentId: context.options.agentId, path: context.options.path, ...input },
+            input.cwd,
+            {
+              onPlaceholderInserted: ({ sessionId }) => {
+                publication.placeholder = { sessionId };
+              },
+            },
+          );
+          deferSqliteWorkerCommitReceipt(current.db, publication);
+          context.admit("commit", publication);
+          return publication;
+        },
+      );
+    },
+  } satisfies Handlers;
+}
+
+export async function loadAgentReplacementOperations() {
+  const [kernel, { assertSessionSubagentRunsCurrent }] = await Promise.all([
+    import("../config/sessions/session-accessor.sqlite-replacement-state.js"),
+    import("../config/sessions/session-accessor.sqlite-descendant-basis.js"),
+  ]);
+  return {
+    "session.entries.replace": (
+      input: SessionEntryReplacementCommit & { initializeTranscript?: TranscriptInitialization },
+      context,
+    ) =>
+      context.writeTransaction("session.entry-replacements", "Session replacement", (current) => {
+        assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
+        const result = kernel.commitSessionEntryReplacementsInDatabase(current, input, () => {
+          const initialization = input.initializeTranscript;
+          if (!initialization) {
+            return;
+          }
+          try {
+            if (!transcript) {
+              throw new Error("Session transcript initialization was not prepared");
+            }
+            const { initialize } = transcript;
+            const assertIdentity: typeof transcript.assertIdentity = transcript.assertIdentity;
+            assertIdentity(initialization);
+            initialize(
+              current,
+              { agentId: context.options.agentId, path: context.options.path, ...initialization },
+              initialization.cwd,
+            );
+          } catch (error) {
+            throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+              name: "SessionTranscriptInitializationError",
+            });
+          }
+        });
+        const publication = kernel.prepareSessionEntryReplacementPublication(result, current);
+        deferSqliteWorkerCommitReceipt(current.db, publication);
+        context.admit("commit", publication);
+        assertSessionSubagentRunsCurrent(input, context.options.env ?? process.env);
+        return { ...result, publication };
+      }),
+  } satisfies Handlers;
+}
+
+export async function loadAgentRestartRecoveryOperations() {
+  const kernel = await import("../config/sessions/session-accessor.sqlite-recovery.worker.js");
+  return {
+    "session.restart.recover": (
+      input: Parameters<typeof kernel.recoverRestartTombstoneInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.lifecycle.recover-tombstone", "Session recovery", (current) => {
+        const result = kernel.recoverRestartTombstoneInDatabase(current, input);
+        deferSqliteWorkerCommitReceipt(
+          current.db,
+          result.publication ?? { kind: "session-restart-recovery-unchanged" },
+        );
+        admit("commit", result.publication);
+        return result;
+      }),
+  } satisfies Handlers;
+}
+
+export async function loadAgentEntryReadOperations() {
+  const kernel = await import("../config/sessions/session-accessor.sqlite-entry-read.js");
+  return {
+    "session.entry.read": (input: { sessionKey: string }, { open }) =>
+      kernel.readSessionEntryRow(open(), input.sessionKey)?.entry,
+  } satisfies Handlers;
+}
+
+export async function loadAgentEntryPatchOperations() {
+  const kernel = await import("../config/sessions/session-entry-patch.worker.js");
+  return {
+    "session.entry.patch.prepare": (
+      input: Parameters<typeof kernel.readSessionEntryPatchSnapshot>[1],
+      { open },
+    ) => kernel.readSessionEntryPatchSnapshot(open(), input),
+    "session.entry.patch.commit": kernel.commitSessionEntryPatch,
+  } satisfies Handlers;
+}
+
+export async function loadAgentCompoundOperations() {
+  const turn = await import("../config/sessions/session-turn.worker.js");
+  const reset = await import("../config/sessions/session-reset.worker.js");
+  const lifecycle = await import("../config/sessions/session-lifecycle-projection.worker.js");
+  const predicates = await import("../config/sessions/session-turn-predicate.js");
+  await predicates.prepareSessionTurnPredicates();
+  return {
+    "session.turn.prepare": turn.prepareSessionTurn,
+    "session.turn.commit": turn.commitSessionTurn,
+    "session.lifecycle.reset": reset.commitSessionReset,
+    "session.lifecycle.project": lifecycle.commitSessionLifecycleProjection,
+  } satisfies Handlers;
+}
+
+export async function loadAgentMessageCutOperations() {
+  const kernel = await import("../config/sessions/session-message-cut.worker.js");
+  return { "session.messageCut.commit": kernel.commitSessionMessageCut } satisfies Handlers;
+}
+
+export async function loadAgentNativeBindingOperations() {
+  const kernel = await import("../config/sessions/session-native-binding.worker.js");
+  return {
+    "session.nativeBindings.delete": kernel.deleteSessionWithNativeBindings,
+  } satisfies Handlers;
+}
+
+export async function prepareAgentNativeBindingOperation(
+  input: import("../config/sessions/session-native-binding.types.js").SessionNativeBindingParticipants,
+  env?: NodeJS.ProcessEnv,
+) {
+  const kernel = await import("../config/sessions/session-native-binding.worker.js");
+  await kernel.prepareSessionNativeBindingDeletion(input, env);
+}
+
+export async function loadAgentTrajectoryOperations() {
+  const kernel = await import("../trajectory/runtime-store.sqlite.js");
+  return {
+    "trajectory.events.append": (
+      input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsInTransaction>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("trajectory.runtime.append", "Trajectory append", (current) => {
+        kernel.appendSqliteTrajectoryRuntimeEventsInTransaction(current, input);
+        deferSqliteWorkerCommitReceipt(current.db, { kind: "trajectory-runtime-append" });
+        admit("commit");
+      }),
+  } satisfies Handlers;
+}
+
+export async function loadAgentArchiveOperations() {
+  const kernel = await import("../config/sessions/session-accessor.sqlite-archive-store-kernel.js");
+  return {
+    "session.archives.preparePublication": (
+      input: Parameters<typeof kernel.prepareSessionTranscriptArchivePublishPlans>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.archive.publish", "Session archive publication", (current) => {
+        const result = kernel.prepareSessionTranscriptArchivePublishPlans(current, input);
+        admit("commit");
+        return result;
+      }),
+    "session.archives.recordPublication": (
+      input: {
+        results: Parameters<typeof kernel.recordSessionTranscriptArchivePublishResults>[1];
+        nowMs: number;
+      },
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.archive.publish", "Session archive publication", (current) => {
+        const result = kernel.recordSessionTranscriptArchivePublishResults(
+          current,
+          input.results,
+          input.nowMs,
+        );
+        admit("commit");
+        return result;
+      }),
+  } satisfies Handlers;
+}
+
+export async function loadAgentAcpOperations() {
+  const kernel = await import("../acp/runtime/session-meta-entry.worker.js");
+  return {
+    "session.entry.acp": (
+      input: Parameters<typeof kernel.mutateAcpSessionEntryInWorker>[2],
+      { open, options, admit },
+    ) => kernel.mutateAcpSessionEntryInWorker(open(), options, input, admit),
+  } satisfies Handlers;
+}
+
+export async function loadAgentProviderReviewOperations() {
+  const kernel = await import("../config/sessions/provider-review-store.worker.js");
+  return {
+    "session.providerReview.compare": (
+      input: Parameters<typeof kernel.compareSessionProviderReviewInWorker>[2],
+      { open, options, admit },
+    ) => kernel.compareSessionProviderReviewInWorker(open(), options, input, admit),
+  } satisfies Handlers;
+}
+
+export async function loadAgentReactionOperations() {
+  const kernel = await import("../config/sessions/session-reaction-store.kernel.js");
+  return {
+    "session.reaction.set": (
+      input: {
+        sessionKey: string;
+        params: Parameters<typeof kernel.setSessionReactionInDatabase>[2];
+      },
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session.reaction.set", "Reaction write", (current) => {
+        const result = kernel.setSessionReactionInDatabase(current, input.sessionKey, input.params);
+        admit("commit");
+        return result;
+      }),
+  } satisfies Handlers;
+}
+
+export async function loadAgentPendingInputOperations() {
+  const pending = await import("../config/sessions/session-pending-input-operations.kernel.js");
+  const kernel = await import("../config/sessions/session-pending-input-withdrawal.worker.js");
+  const history = await import("../config/sessions/session-pending-input-history-reconcile.js");
+  return {
+    "session.pendingInputs.read": (
+      input: Parameters<typeof pending.readPendingInput>[1],
+      { open },
+    ) => pending.readPendingInput(open(), input),
+    "session.pendingInputs.mutate": (
+      input: Parameters<typeof pending.mutatePendingInput>[0],
+      context,
+    ) => pending.mutatePendingInput(input, context, deferSqliteWorkerCommitReceipt),
+    "session.pendingInputs.interruptHistory": (
+      input: Parameters<typeof history.interruptPendingInputHistoryInDatabase>[2],
+      { open, options, admit },
+    ) => {
+      const database = open();
+      return history.interruptPendingInputHistoryInDatabase(
+        database,
+        options,
+        input,
+        admit,
+        (receipt) => deferSqliteWorkerCommitReceipt(database.db, receipt),
+      );
+    },
+    "session.pendingInputs.withdraw": (
+      input: Parameters<typeof kernel.discardSessionPendingInputInWorker>[2],
+      { open, options, admit },
+    ) => kernel.discardSessionPendingInputInWorker(open(), options, input, admit),
+  } satisfies Handlers;
+}
+
+export async function loadAgentArchivePruningOperations() {
+  const kernel = await import("../config/sessions/session-history-archive-pruning.worker.js");
+  return {
+    "session.archivePruning.pruneRetention": (
+      input: Parameters<typeof kernel.pruneSessionArchivesByRetentionInDatabase>[2],
+      { open, options, admit },
+    ) => kernel.pruneSessionArchivesByRetentionInDatabase(open(), options, input, admit),
+    "session.archivePruning.deletePublished": (
+      input: Parameters<typeof kernel.deletePublishedSessionArchiveInDatabase>[2],
+      { open, options, admit },
+    ) => kernel.deletePublishedSessionArchiveInDatabase(open(), options, input, admit),
+    "session.archivePruning.removeLegacy": (
+      input: { filePath: string },
+      { open, options, admit },
+    ) => kernel.removeLegacySessionArchiveInDatabase(open(), options, input.filePath, admit),
+    "session.archivePruning.reclaimPages": (input: { maxPages?: number }, { open, admit }) =>
+      open().walMaintenance.reclaimFreePages({
+        maxPages: input.maxPages,
+        beforeMutation: () => admit("transaction"),
+        onCommit: () => admit("commit"),
+      }),
+  } satisfies Handlers;
+}
+
+export async function loadConversationDeliveryOperations() {
+  const kernel = await import("../config/sessions/conversation-delivery-store.kernel.js");
+  return {
+    "conversation.delivery.begin": (
+      input: Parameters<typeof kernel.beginConversationDeliveryInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("conversation-delivery.begin", "Conversation delivery", (database) => {
+        const result = kernel.beginConversationDeliveryInDatabase(database, input);
+        admit("commit");
+        return result;
+      }),
+    "conversation.delivery.transition": (
+      input: Parameters<typeof kernel.transitionConversationDeliveryInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction(
+        `conversation-delivery.${input.status}`,
+        "Conversation delivery",
+        (database) => {
+          const result = kernel.transitionConversationDeliveryInDatabase(database, input);
+          admit("commit");
+          return result;
+        },
+      ),
+  } satisfies Handlers;
+}
+
+export async function loadUsageCacheOperations() {
+  const kernel = await import("../infra/session-cost-usage-cache.kernel.js");
+  return {
+    "usageCache.writeRollup": (
+      input: Parameters<typeof kernel.writeSessionCostUsageRollupInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session-cost-usage.rollup.write", "Usage cache", ({ db }) => {
+        const result = kernel.writeSessionCostUsageRollupInDatabase(db, input);
+        admit("commit");
+        return result;
+      }),
+    "usageCache.prune": (
+      input: Parameters<typeof kernel.pruneSessionCostUsageRollupsInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session-cost-usage.rollup.prune", "Usage cache", ({ db }) => {
+        kernel.pruneSessionCostUsageRollupsInDatabase(db, input);
+        admit("commit");
+      }),
+    "usageCache.acquireLock": (
+      input: Parameters<typeof kernel.acquireSessionCostUsageRefreshLockInDatabase>[1],
+      { writeTransaction, admit },
+    ) =>
+      writeTransaction("session-cost-usage.refresh-lock.acquire", "Usage cache", ({ db }) => {
+        const result = kernel.acquireSessionCostUsageRefreshLockInDatabase(db, input);
+        admit("commit");
+        return result;
+      }),
+    "usageCache.releaseLock": (input: string, { writeTransaction, admit }) =>
+      writeTransaction("session-cost-usage.refresh-lock.delete", "Usage cache", ({ db }) => {
+        kernel.deleteSessionCostUsageRefreshLockInDatabase(db, input);
+        admit("commit");
+      }),
+  } satisfies Handlers;
+}
+
+export type RegisteredAgentWorkerOperations = WorkerOperations<
+  Awaited<ReturnType<typeof loadUsageCacheOperations>> &
+    Awaited<ReturnType<typeof loadAgentTranscriptOperations>> &
+    Awaited<ReturnType<typeof loadAgentReplacementOperations>> &
+    Awaited<ReturnType<typeof loadAgentEntryReadOperations>> &
+    Awaited<ReturnType<typeof loadAgentEntryPatchOperations>> &
+    Awaited<ReturnType<typeof loadAgentCompoundOperations>> &
+    Awaited<ReturnType<typeof loadAgentNativeBindingOperations>> &
+    Awaited<ReturnType<typeof loadAgentMessageCutOperations>> &
+    Awaited<ReturnType<typeof loadAgentRestartRecoveryOperations>> &
+    Awaited<ReturnType<typeof loadAgentTrajectoryOperations>> &
+    Awaited<ReturnType<typeof loadAgentArchiveOperations>> &
+    Awaited<ReturnType<typeof loadAgentAcpOperations>> &
+    Awaited<ReturnType<typeof loadAgentProviderReviewOperations>> &
+    Awaited<ReturnType<typeof loadAgentReactionOperations>> &
+    Awaited<ReturnType<typeof loadAgentPendingInputOperations>> &
+    Awaited<ReturnType<typeof loadAgentArchivePruningOperations>> &
+    Awaited<ReturnType<typeof loadConversationDeliveryOperations>>
+> &
+  AgentDatabaseMaintenanceOperations;

@@ -1,8 +1,3 @@
-/**
- * Channel setup wizard helper functions.
- *
- * Prompts account ids, credentials, allowlists, and account-scoped setup config updates.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
@@ -13,7 +8,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SecretInput } from "../../config/types.secrets.js";
 import { resolveSecretInputModeForEnvSelection } from "../../plugins/provider-auth-mode.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import { setTopLevelChannelEnabledInConfigSection, writeChannelSection } from "./config-helpers.js";
 import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
@@ -30,9 +24,8 @@ import type {
   PromptAccountIdParams,
 } from "./setup-wizard-types.js";
 
-const loadProviderAuthInput = createLazyRuntimeModule(
-  () => import("../../plugins/provider-auth-ref.js"),
-);
+type WizardAllowFrom = NonNullable<ChannelSetupWizard["allowFrom"]>;
+type WizardGroupAccess = NonNullable<ChannelSetupWizard["groupAccess"]>;
 
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
@@ -148,10 +141,7 @@ export function normalizeAllowFromEntries(
 ): string[] {
   const normalized = normalizeStringEntries(entries)
     .map((entry) => {
-      if (entry === "*") {
-        return "*";
-      }
-      if (!normalizeEntry) {
+      if (entry === "*" || !normalizeEntry) {
         return entry;
       }
       return normalizeOptionalString(normalizeEntry(entry)) ?? "";
@@ -387,17 +377,9 @@ async function resolveGroupAllowlistWithLookupNotes<TResolved>(params: {
   }
 }
 
-export function createAccountScopedAllowFromSection(params: {
-  channel: string;
-  credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
-  helpTitle?: string;
-  helpLines?: string[];
-  message: string;
-  placeholder: string;
-  invalidWithoutCredentialNote: string;
-  parseId: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseId"]>;
-  resolveEntries: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]>;
-}): NonNullable<ChannelSetupWizard["allowFrom"]> {
+export function createAccountScopedAllowFromSection(
+  params: Omit<WizardAllowFrom, "apply" | "parseInputs"> & { channel: string },
+): WizardAllowFrom {
   return createAllowFromSection({
     ...params,
     apply: ({ cfg, accountId, allowFrom }) =>
@@ -410,26 +392,17 @@ export function createAccountScopedAllowFromSection(params: {
   });
 }
 
-export function createAccountScopedGroupAccessSection<TResolved>(params: {
-  channel: string;
-  label: string;
-  placeholder: string;
-  helpTitle?: string;
-  helpLines?: string[];
-  skipAllowlistEntries?: boolean;
-  currentPolicy: NonNullable<ChannelSetupWizard["groupAccess"]>["currentPolicy"];
-  currentEntries: NonNullable<ChannelSetupWizard["groupAccess"]>["currentEntries"];
-  updatePrompt: NonNullable<ChannelSetupWizard["groupAccess"]>["updatePrompt"];
-  resolveAllowlist?: NonNullable<
-    NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]
-  >;
-  fallbackResolved: (entries: string[]) => TResolved;
-  applyAllowlist: (params: {
-    cfg: OpenClawConfig;
-    accountId: string;
-    resolved: TResolved;
-  }) => OpenClawConfig;
-}): NonNullable<ChannelSetupWizard["groupAccess"]> {
+export function createAccountScopedGroupAccessSection<TResolved>(
+  params: Omit<WizardGroupAccess, "setPolicy" | "applyAllowlist"> & {
+    channel: string;
+    fallbackResolved: (entries: string[]) => TResolved;
+    applyAllowlist: (params: {
+      cfg: OpenClawConfig;
+      accountId: string;
+      resolved: TResolved;
+    }) => OpenClawConfig;
+  },
+): WizardGroupAccess {
   return {
     label: params.label,
     placeholder: params.placeholder,
@@ -660,7 +633,7 @@ export async function promptSingleChannelSecretInput(params: {
     return token ? { action: "set", value: token, resolvedValue: token } : { action: "keep" };
   }
 
-  const { promptSecretRefForSetup } = await loadProviderAuthInput();
+  const { promptSecretRefForSetup } = await import("../../plugins/provider-auth-ref.js");
   const resolved = await promptSecretRefForSetup({
     provider: params.providerHint,
     config: params.cfg,
@@ -785,18 +758,11 @@ export function createTopLevelChannelParsedAllowFromPrompt(params: {
   });
 }
 
-export function createAllowFromSection(params: {
-  helpTitle?: string;
-  helpLines?: string[];
-  credentialInputKey?: NonNullable<ChannelSetupWizard["allowFrom"]>["credentialInputKey"];
-  message: string;
-  placeholder: string;
-  invalidWithoutCredentialNote: string;
-  parseInputs?: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseInputs"]>;
-  parseId: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["parseId"]>;
-  resolveEntries?: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]>;
-  apply: NonNullable<NonNullable<ChannelSetupWizard["allowFrom"]>["apply"]>;
-}): NonNullable<ChannelSetupWizard["allowFrom"]> {
+export function createAllowFromSection(
+  params: Omit<WizardAllowFrom, "resolveEntries"> & {
+    resolveEntries?: WizardAllowFrom["resolveEntries"];
+  },
+): WizardAllowFrom {
   return {
     ...(params.helpTitle ? { helpTitle: params.helpTitle } : {}),
     ...(params.helpLines ? { helpLines: params.helpLines } : {}),

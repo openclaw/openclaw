@@ -231,6 +231,7 @@ export function createGateway(client: GatewayBrowserClient, connected = true): G
     connectionRevision: 0,
     eventLog: [],
     eventLogRevision: 0,
+    loadSelfProfile: async () => null,
     connect: () => undefined,
     setSessionKey: () => undefined,
     start: () => undefined,

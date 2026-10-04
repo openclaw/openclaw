@@ -129,6 +129,29 @@ ids from this provider's `models`. Ids are trimmed and must be non-empty. The fi
 is reserved for picker ordering and is not yet used. It is published only in catalog
 v2, never v1. Invalid manifest lists are omitted; invalid remote v2 lists are rejected.
 
+The catalog generator opts into local paired output with `--out <v1-file> --out-v2 <v2-file>`.
+It validates both bundles and prepares candidate bytes and previous-file backups
+before replacing either output. Paired destinations must resolve to distinct regular
+files or absent targets. Output symlinks and directory aliases are resolved before
+preparation; publication replaces each target in its real parent and leaves output
+symlinks intact. Dangling output symlinks create their targets if the target parents
+exist. Missing target parents and symlink cycles fail before either output is replaced.
+The v1-only writer is unchanged.
+
+Each file is replaced separately: this is **not** a multi-file atomic transaction.
+Use a single publisher and do not serve or deploy the pair until the command succeeds.
+If publication fails or the process stops between replacements, inspect the
+`.catalog-pair-*` directories beside both outputs. Each contains `next.json`,
+`previous.json` when the output existed, and `RECOVERY.txt` mapping both destinations
+and recovery directories. Stop competing writers, compare the current outputs with
+these artifacts, and explicitly restore or finish the pair before retrying. There
+is no automatic rollback or replay that could overwrite another writer's replacement.
+Identity checks detect observed changes but are not filesystem compare-and-swap;
+this protocol does not promise power-loss durability. After successful publication,
+cleanup failures warn with retained paths without reporting the pair as unpublished.
+Cleanup retains recovery entries when their device or inode is unknown (zero)
+or differs from the captured identity.
+
 Model fields:
 
 | Field                  | Type                                                           | What it means                                                                        |

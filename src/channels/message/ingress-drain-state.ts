@@ -1,3 +1,4 @@
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressQueueClaim, ChannelIngressQueueRecord } from "./ingress-queue.types.js";
 
@@ -41,6 +42,16 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function isPreAdoptionState<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): boolean {
+  return (
+    (state.phase === "dispatching" || state.phase === "deferred") &&
+    !state.guillotined &&
+    !state.superseded
+  );
+}
+
 export function createIngressSettleOwner<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
   removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,
@@ -77,7 +88,9 @@ export function createIngressSettleOwner<TPayload, TMetadata>(
     try {
       await settlePromise;
     } catch (err) {
-      settlePromise = undefined;
+      if (!hasSqliteWorkerOutcomeUnknown(err)) {
+        settlePromise = undefined;
+      }
       throw err;
     }
   };

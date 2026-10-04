@@ -74,9 +74,9 @@ export function readNativeTypeScriptConfig(options: {
       // Parsed options omit root JSON syntax errors; readConfigFile reports only
       // the first. Open a project only for the complete malformed-config report.
       parsing = false;
-      const snapshot = api.updateSnapshot({ openProjects: [configFileName] });
+      const snapshot = api.createSnapshot({ openProjects: [configFileName], ensurePrograms: true });
       assertValid();
-      const project = snapshot.getProject(configFileName);
+      const project = snapshot.getConfiguredProject(configFileName);
       if (!project) {
         throw new Error(`Native TypeScript did not open config ${configFileName}`);
       }

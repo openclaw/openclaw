@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { createSessionWorkStartChangedError } from "../config/sessions/lifecycle.js";
@@ -7,12 +8,12 @@ import type {
 } from "../config/sessions/restart-recovery-types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { isAgentMediatedCompletionSourceTool } from "../sessions/input-provenance.js";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
 import {
   captureHarnessCompletionRecovery,
   createHarnessCompletionSourceAssertion,
   getOwedHarnessCompletionTask,
-} from "../tasks/agent-harness-completion-recovery.js";
-import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+} from "./agent-harness-completion-recovery.js";
 import type { AgentCommandOpts } from "./command/types.js";
 import {
   collectDeliveredMediaUrls,
@@ -181,11 +182,10 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
   const payloadOutcomes: NonNullable<
     RestartRecoveryTerminalDeliveryEvidenceResult["deliveryStatus"]
   >["payloadOutcomes"] = Array.isArray(rawPayloadOutcomes)
-    ? rawPayloadOutcomes.flatMap((outcome) => {
-        if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
+    ? rawPayloadOutcomes.flatMap((record) => {
+        if (!isRecord(record)) {
           return [];
         }
-        const record = outcome as Record<string, unknown>;
         const outcomeStatus =
           record.status === "failed" || record.status === "sent" || record.status === "suppressed"
             ? record.status
@@ -222,11 +222,10 @@ export function buildRestartRecoveryTerminalDeliveryEvidence(
     : undefined;
   const messagingToolSentTargets: RestartRecoveryTerminalDeliveryEvidenceResult["messagingToolSentTargets"] =
     rawMessagingToolSentTargets
-      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((target) => {
-          if (!target || typeof target !== "object" || Array.isArray(target)) {
+      ? rawMessagingToolSentTargets.slice(0, 64).flatMap((record) => {
+          if (!isRecord(record)) {
             return [];
           }
-          const record = target as Record<string, unknown>;
           const mediaUrls = collectMessagingToolDeliveredMediaUrls({
             messagingToolSentTargets: [record],
           });
@@ -359,62 +358,53 @@ export function buildCurrentRunRestartRecoveryClaim(params: {
     params.entry.restartRecoveryDeliverySourceRunId === undefined;
   const adoptsExistingClaim =
     params.entry.restartRecoveryDeliveryRunId === params.runId && !bindsAdmittedHarnessSource;
+  if (adoptsExistingClaim) {
+    const entry = params.entry;
+    return {
+      ...(entry.restartRecoveryHarnessCompletion
+        ? { restartRecoveryHarnessCompletion: entry.restartRecoveryHarnessCompletion }
+        : {}),
+      restartRecoveryDeliveryContext: entry.restartRecoveryDeliveryContext,
+      restartRecoveryDeliveryMediaUrls: entry.restartRecoveryDeliveryMediaUrls,
+      restartRecoveryDisableMessageTool: entry.restartRecoveryDisableMessageTool,
+      restartRecoverySuppressTextDelivery: entry.restartRecoverySuppressTextDelivery,
+      restartRecoveryDeliveryRunId: params.runId,
+      restartRecoveryDeliverySourceRunId: entry.restartRecoveryDeliverySourceRunId,
+      restartRecoverySourceIngress: entry.restartRecoverySourceIngress,
+      restartRecoverySourceReplyDeliveryMode: entry.restartRecoverySourceReplyDeliveryMode,
+      restartRecoveryForceSafeTools: entry.restartRecoveryForceSafeTools,
+    };
+  }
   const createsTranscriptOnlySourceClaim =
     params.sourceRunId !== undefined && params.deliveryContext === undefined;
   const createsScopedDeliveryClaim = params.sourceRunId !== undefined;
-  if (!adoptsExistingClaim && createsScopedDeliveryClaim && !params.sourceIngress) {
+  if (createsScopedDeliveryClaim && !params.sourceIngress) {
     throw new Error("restart recovery source ownership is required for a new claim");
   }
   return {
-    ...(adoptsExistingClaim
-      ? params.entry.restartRecoveryHarnessCompletion
-        ? { restartRecoveryHarnessCompletion: params.entry.restartRecoveryHarnessCompletion }
-        : {}
-      : params.harnessCompletion
-        ? { restartRecoveryHarnessCompletion: params.harnessCompletion }
-        : params.entry.restartRecoveryHarnessCompletion
-          ? { restartRecoveryHarnessCompletion: undefined }
-          : {}),
-    restartRecoveryDeliveryContext: adoptsExistingClaim
-      ? params.entry.restartRecoveryDeliveryContext
-      : params.deliveryContext,
-    restartRecoveryDeliveryMediaUrls: adoptsExistingClaim
-      ? params.entry.restartRecoveryDeliveryMediaUrls
-      : createsScopedDeliveryClaim && params.deliveryMediaUrls !== undefined
+    ...(params.harnessCompletion
+      ? { restartRecoveryHarnessCompletion: params.harnessCompletion }
+      : params.entry.restartRecoveryHarnessCompletion
+        ? { restartRecoveryHarnessCompletion: undefined }
+        : {}),
+    restartRecoveryDeliveryContext: params.deliveryContext,
+    restartRecoveryDeliveryMediaUrls:
+      createsScopedDeliveryClaim && params.deliveryMediaUrls !== undefined
         ? [...params.deliveryMediaUrls]
         : undefined,
-    restartRecoveryDisableMessageTool: adoptsExistingClaim
-      ? params.entry.restartRecoveryDisableMessageTool
-      : createsScopedDeliveryClaim && params.disableMessageTool === true
-        ? true
-        : undefined,
-    restartRecoverySuppressTextDelivery: adoptsExistingClaim
-      ? params.entry.restartRecoverySuppressTextDelivery
-      : createsScopedDeliveryClaim && params.suppressTextDelivery === true
-        ? true
-        : undefined,
+    restartRecoveryDisableMessageTool:
+      createsScopedDeliveryClaim && params.disableMessageTool === true ? true : undefined,
+    restartRecoverySuppressTextDelivery:
+      createsScopedDeliveryClaim && params.suppressTextDelivery === true ? true : undefined,
     restartRecoveryDeliveryRunId:
-      params.deliveryContext || adoptsExistingClaim || createsTranscriptOnlySourceClaim
-        ? params.runId
-        : undefined,
-    restartRecoveryDeliverySourceRunId: adoptsExistingClaim
-      ? params.entry.restartRecoveryDeliverySourceRunId
-      : params.sourceRunId,
-    restartRecoverySourceIngress: adoptsExistingClaim
-      ? params.entry.restartRecoverySourceIngress
-      : createsScopedDeliveryClaim
-        ? params.sourceIngress
-        : undefined,
-    restartRecoverySourceReplyDeliveryMode: adoptsExistingClaim
-      ? params.entry.restartRecoverySourceReplyDeliveryMode
-      : params.sourceRunId
-        ? params.sourceReplyDeliveryMode
-        : undefined,
-    restartRecoveryForceSafeTools: adoptsExistingClaim
-      ? params.entry.restartRecoveryForceSafeTools
-      : createsScopedDeliveryClaim && params.forceRestartSafeTools === true
-        ? true
-        : undefined,
+      params.deliveryContext || createsTranscriptOnlySourceClaim ? params.runId : undefined,
+    restartRecoveryDeliverySourceRunId: params.sourceRunId,
+    restartRecoverySourceIngress: createsScopedDeliveryClaim ? params.sourceIngress : undefined,
+    restartRecoverySourceReplyDeliveryMode: params.sourceRunId
+      ? params.sourceReplyDeliveryMode
+      : undefined,
+    restartRecoveryForceSafeTools:
+      createsScopedDeliveryClaim && params.forceRestartSafeTools === true ? true : undefined,
   };
 }
 

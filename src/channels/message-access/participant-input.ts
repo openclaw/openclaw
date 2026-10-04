@@ -1,5 +1,12 @@
-import { bindCommandOwnerAuthority } from "../../auto-reply/command-owner-authority.js";
+import {
+  bindCommandOwnerAuthority,
+  captureCommandOwnerAssertion,
+  getCommandOwnerAuthority,
+} from "../../auto-reply/command-owner-authority.js";
+import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { captureChannelOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
 import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { takeChannelParticipantInput } from "./admission-evidence.js";
 import type { ChannelIngressHostOwner } from "./ingress-host-owner.js";
@@ -57,6 +64,24 @@ export function bindChannelParticipantInput(params: {
   ) {
     return;
   }
+  const requester = batch.at(-1)?.requesterProfile;
+  if (
+    requester &&
+    params.context.SenderId === principal.senderId &&
+    (params.context.AccountId ?? DEFAULT_ACCOUNT_ID) === principal.accountId &&
+    params.context.OriginatingChannel === principal.channelId &&
+    batch.every(
+      (input) => input?.requesterProfile?.id === requester.id && input.requesterProfile.isCurrent(),
+    )
+  ) {
+    bindRequesterProfile(params.context, {
+      ...requester,
+      isCurrent: () =>
+        params.owner.isLive() &&
+        params.owner.resolveGatewayContext?.() === gateway &&
+        batch.every((input) => input?.requesterProfile?.isCurrent()),
+    });
+  }
   const authority = batch.at(-1)?.commandOwnerAuthority;
   if (!authority?.source || !authority.isCurrent(gateway.getRuntimeConfig())) {
     return;
@@ -68,4 +93,17 @@ export function bindChannelParticipantInput(params: {
       params.owner.resolveGatewayContext?.() === gateway &&
       authority.isCurrent(gateway.getRuntimeConfig()),
   });
+  const assertCurrent = captureCommandOwnerAssertion(params.context);
+  const commandOwner = getCommandOwnerAuthority(params.context);
+  if (authority.operatorProfile && assertCurrent && commandOwner) {
+    bindCommandOwnerAuthority(params.context, {
+      ...commandOwner,
+      operatorAuthority: captureChannelOperatorRunAuthority({
+        ...authority.operatorProfile,
+        getRuntimeConfig: () => gateway.getRuntimeConfig(),
+        assertCurrent,
+        signal: authority.signal,
+      }),
+    });
+  }
 }

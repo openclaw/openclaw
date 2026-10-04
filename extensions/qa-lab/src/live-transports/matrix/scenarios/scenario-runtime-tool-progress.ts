@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements tool-progress scenarios.
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { QaSuiteScenarioSkipError } from "../../../errors.js";
@@ -125,48 +124,48 @@ async function runMatrixToolProgressScenario(
     isMatrixQaMessageLikeKind(event.kind) &&
     event.replacesEventId === previewRootEventId &&
     doesMatrixQaReplyBodyMatchToken(event, params.finalText);
-  const throwProgressTimeout = (err: unknown, previewEventId: string): never => {
-    throw new Error(
-      buildMatrixQaToolProgressTimeoutMessage({
-        cause: err,
-        events: context.observedEvents,
-        expectedPreviewKind: params.expectedPreviewKind,
-        previewEventId,
+  const waitForProgress = (
+    predicate: (event: MatrixQaObservedEvent) => boolean,
+    since: string | undefined,
+    previewEventId = "<not observed>",
+  ) =>
+    client
+      .waitForRoomEvent({
+        observedEvents: context.observedEvents,
+        predicate,
         roomId: context.roomId,
-        startIndex: startObservedIndex,
-        sutUserId: context.sutUserId,
-      }),
-    );
-  };
-  const preview = await client
-    .waitForRoomEvent({
-      observedEvents: context.observedEvents,
-      predicate: (event) =>
-        isProgressEvent(event) ||
-        ((params.allowFinalOnly === true ||
-          params.allowFinalBeforeProgress === true ||
-          params.allowTopLevelFinalWithProgress === true) &&
-          isFinalReply(event)),
-      roomId: context.roomId,
-      since: startSince,
-      timeoutMs: context.timeoutMs,
-    })
-    .catch((err: unknown) => throwProgressTimeout(err, "<not observed>"));
+        since,
+        timeoutMs: context.timeoutMs,
+      })
+      .catch((cause: unknown) => {
+        throw new Error(
+          buildMatrixQaToolProgressTimeoutMessage({
+            cause,
+            events: context.observedEvents,
+            expectedPreviewKind: params.expectedPreviewKind,
+            previewEventId,
+            roomId: context.roomId,
+            startIndex: startObservedIndex,
+            sutUserId: context.sutUserId,
+          }),
+        );
+      });
+  const preview = await waitForProgress(
+    (event) =>
+      isProgressEvent(event) ||
+      ((params.allowFinalOnly === true ||
+        params.allowFinalBeforeProgress === true ||
+        params.allowTopLevelFinalWithProgress === true) &&
+        isFinalReply(event)),
+    startSince,
+  );
   if (isFinalReply(preview.event)) {
     if (
       (params.allowFinalBeforeProgress === true ||
         params.allowTopLevelFinalWithProgress === true) &&
       params.allowFinalOnly !== true
     ) {
-      const progressAfterFinal = await client
-        .waitForRoomEvent({
-          observedEvents: context.observedEvents,
-          predicate: isProgressProofEvent,
-          roomId: context.roomId,
-          since: preview.since,
-          timeoutMs: context.timeoutMs,
-        })
-        .catch((err: unknown) => throwProgressTimeout(err, "<not observed>"));
+      const progressAfterFinal = await waitForProgress(isProgressProofEvent, preview.since);
       const progressPreviewEventId = getPreviewRootEventId(progressAfterFinal.event);
       await mentionProgressGate?.release();
       assertProgressStaysInPreview(preview.event.eventId, progressPreviewEventId);
@@ -239,19 +238,15 @@ async function runMatrixToolProgressScenario(
   let finalReplacementBeforeProgress: typeof preview | undefined;
   let progress = preview;
   if (!matchesExpectedProgress(preview.event.body)) {
-    const progressOrFinal = await client
-      .waitForRoomEvent({
-        observedEvents: context.observedEvents,
-        predicate: (event) =>
-          isProgressProofForPreview(event) ||
-          (params.allowFinalReplacementAsCompletion === true &&
-            isFinalReplacement(event, previewRootEventId)) ||
-          (allowTopLevelFinalWithProgress && isFinalReply(event)),
-        roomId: context.roomId,
-        since: preview.since,
-        timeoutMs: context.timeoutMs,
-      })
-      .catch((err: unknown) => throwProgressTimeout(err, previewRootEventId));
+    const progressOrFinal = await waitForProgress(
+      (event) =>
+        isProgressProofForPreview(event) ||
+        (params.allowFinalReplacementAsCompletion === true &&
+          isFinalReplacement(event, previewRootEventId)) ||
+        (allowTopLevelFinalWithProgress && isFinalReply(event)),
+      preview.since,
+      previewRootEventId,
+    );
     if (
       params.allowFinalReplacementAsCompletion === true &&
       isFinalReplacement(progressOrFinal.event, previewRootEventId)
@@ -260,15 +255,11 @@ async function runMatrixToolProgressScenario(
       progress = progressOrFinal;
     } else if (allowTopLevelFinalWithProgress && isFinalReply(progressOrFinal.event)) {
       topLevelFinalBeforeProgress = progressOrFinal;
-      progress = await client
-        .waitForRoomEvent({
-          observedEvents: context.observedEvents,
-          predicate: isProgressProofForPreview,
-          roomId: context.roomId,
-          since: progressOrFinal.since,
-          timeoutMs: context.timeoutMs,
-        })
-        .catch((err: unknown) => throwProgressTimeout(err, previewRootEventId));
+      progress = await waitForProgress(
+        isProgressProofForPreview,
+        progressOrFinal.since,
+        previewRootEventId,
+      );
     } else {
       progress = progressOrFinal;
     }

@@ -101,10 +101,7 @@ export async function quiesceLocalWorkspace(params: {
           engine,
           id,
           bridges,
-          assertCurrent: () => {
-            params.assertCurrent();
-            runtime.assertCurrent();
-          },
+          assertCurrent: params.assertCurrent,
         });
       });
     await validateSandboxContainerEngineTarget(engine, backendTarget);

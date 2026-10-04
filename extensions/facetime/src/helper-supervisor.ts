@@ -40,10 +40,6 @@ const TARGET_APP_PATHS: Record<FaceTimeHelperTarget, string> = {
   FaceTime: "/System/Applications/FaceTime.app",
   Phone: "/System/Applications/Phone.app",
 };
-const TARGET_EXECUTABLES: Record<FaceTimeHelperTarget, string> = {
-  FaceTime: "/System/Applications/FaceTime.app/Contents/MacOS/FaceTime",
-  Phone: "/System/Applications/Phone.app/Contents/MacOS/Phone",
-};
 const FACETIME_HELPER_TARGETS = ["FaceTime", "Phone"] as const;
 
 const DEFAULT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 30_000, 60_000] as const;
@@ -144,28 +140,22 @@ export class FaceTimeHelperSupervisor {
     if (!target || !state) {
       return;
     }
-    const staleProcessId = processId > 0 ? processId : undefined;
     const wasStale = state.stale;
     // A stale helper reconnects every five seconds until its host app exits.
     // Treat the whole stale episode as one operator action so reconnects from
     // the app or its services cannot flood logs. An identical callback also
     // keeps the existing process-exit monitor's original deadline.
-    if (state.stale && state.staleProcessId === staleProcessId) {
+    if (state.stale && state.staleProcessId === processId) {
       return;
     }
     state.connected = false;
     state.stale = true;
-    state.staleProcessId = staleProcessId;
+    state.staleProcessId = processId;
     state.lastError = `Restart ${target} to load the updated OpenClaw helper`;
     if (!wasStale) {
       this.params.logger.warn(`[facetime] ${state.lastError}`);
     }
-    if (processId > 0) {
-      this.#scheduleStaleProcessCheck(target, processId);
-    } else {
-      this.#cancelTimer(target);
-      void this.#resolveLegacyStaleProcess(target);
-    }
+    this.#scheduleStaleProcessCheck(target, processId);
   }
 
   status(): FaceTimeHelperSupervisorStatus {
@@ -240,34 +230,6 @@ export class FaceTimeHelperSupervisor {
     }, 2_000);
     timer.unref?.();
     this.#timers.set(target, timer);
-  }
-
-  async #resolveLegacyStaleProcess(target: FaceTimeHelperTarget): Promise<void> {
-    const state = this.#states.get(target);
-    if (!this.#started || !state?.stale || state.staleProcessId !== undefined) {
-      return;
-    }
-    try {
-      const result = await this.params.runCommandWithTimeout(
-        ["/usr/bin/pgrep", "-f", TARGET_EXECUTABLES[target]],
-        { timeoutMs: 5_000 },
-      );
-      const processId = Number.parseInt(result.stdout.trim().split(/\s+/u)[0] ?? "", 10);
-      if (result.code === 0 && Number.isSafeInteger(processId) && processId > 0) {
-        state.staleProcessId = processId;
-        this.#scheduleStaleProcessCheck(target, processId);
-        return;
-      }
-    } catch (error) {
-      this.params.logger.debug?.(
-        `[facetime] failed to resolve stale ${target} helper process: ${formatErrorMessage(error)}`,
-      );
-    }
-    if (this.#started && state.stale && state.staleProcessId === undefined) {
-      state.stale = false;
-      state.lastError = undefined;
-      this.#schedule(target, 0);
-    }
   }
 
   #enqueueInjection(target: FaceTimeHelperTarget): void {

@@ -1,4 +1,3 @@
-/** OpenRouter free-model scanner and fallback updater for model commands. */
 import { cancel, type CANCEL_SYMBOL, multiselect as clackMultiselect } from "@clack/prompts";
 import { getEnvApiKey } from "@openclaw/ai/internal/runtime";
 import {
@@ -150,24 +149,17 @@ function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   }
 }
 
-function parseOptionalNonNegativeFiniteOption(raw: unknown, label: string): number | undefined {
+function parseOptionalFiniteOption(
+  raw: unknown,
+  label: string,
+  allowZero = false,
+): number | undefined {
   if (raw === undefined || raw === null) {
     return undefined;
   }
   const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed < 0) {
-    throw new Error(`${label} must be >= 0`);
-  }
-  return parsed;
-}
-
-function parseOptionalPositiveFiniteOption(raw: unknown, label: string): number | undefined {
-  if (raw === undefined || raw === null) {
-    return undefined;
-  }
-  const parsed = parseStrictFiniteNumber(raw);
-  if (parsed === undefined || parsed <= 0) {
-    throw new Error(`${label} must be > 0`);
+  if (parsed === undefined || (allowZero ? parsed < 0 : parsed <= 0)) {
+    throw new Error(`${label} must be ${allowZero ? ">=" : ">"} 0`);
   }
   return parsed;
 }
@@ -183,7 +175,6 @@ function parsePositiveIntegerOption(raw: unknown, label: string, fallback: numbe
   return parsed;
 }
 
-/** Scans OpenRouter candidates, optionally probes them, then writes fallback defaults. */
 export async function modelsScanCommand(
   opts: {
     minParams?: string;
@@ -201,10 +192,10 @@ export async function modelsScanCommand(
   },
   runtime: RuntimeEnv,
 ) {
-  const minParams = parseOptionalNonNegativeFiniteOption(opts.minParams, "--min-params");
-  const maxAgeDays = parseOptionalNonNegativeFiniteOption(opts.maxAgeDays, "--max-age-days");
+  const minParams = parseOptionalFiniteOption(opts.minParams, "--min-params", true);
+  const maxAgeDays = parseOptionalFiniteOption(opts.maxAgeDays, "--max-age-days", true);
   const maxCandidates = parsePositiveIntegerOption(opts.maxCandidates, "--max-candidates", 6);
-  const timeout = parseOptionalPositiveFiniteOption(opts.timeout, "--timeout");
+  const timeout = parseOptionalFiniteOption(opts.timeout, "--timeout");
   const concurrency =
     opts.concurrency === undefined
       ? undefined

@@ -25,6 +25,11 @@ import {
   type LobsterPetElement,
 } from "./lobster-pet.test-support.ts";
 
+async function advancePetFrame(element: LobsterPetElement): Promise<void> {
+  vi.advanceTimersToNextFrame();
+  await element.updateComplete;
+}
+
 function poke(element: LobsterPetElement): void {
   const sprite = element.querySelector(".lobster-pet");
   sprite?.dispatchEvent(new MouseEvent("pointerdown", { button: 0 }));
@@ -163,6 +168,41 @@ describe("resolveLobsterRunOutcome", () => {
 });
 
 describe("lobster pet element", () => {
+  it("batches composer geometry reads before paint and retires detached work", async () => {
+    vi.useFakeTimers();
+    const element = createPet(42, "offline");
+    await element.updateComplete;
+    await advancePetFrame(element);
+    const composer = element.parentElement!;
+    const footer = composer.querySelector(".agent-chat__composer-footer")!;
+    const readStyle = vi.spyOn(window, "getComputedStyle");
+    try {
+      composer.getBoundingClientRect().width = 0;
+      // Lit/custom-element commits can span several microtasks before one paint.
+      for (let index = 0; index < 3; index++) {
+        footer.append(document.createElement("span"));
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      expect(readStyle).not.toHaveBeenCalled();
+      await advancePetFrame(element);
+      expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(element.hasAttribute("data-scene-ready")).toBe(false);
+      readStyle.mockClear();
+      footer.append(document.createElement("span"));
+      await vi.advanceTimersByTimeAsync(0);
+      element.remove();
+      await advancePetFrame(element);
+      expect(readStyle).not.toHaveBeenCalled();
+      composer.getBoundingClientRect().width = 720;
+      composer.prepend(element);
+      await advancePetFrame(element);
+      expect(readStyle.mock.calls.length).toBeLessThanOrEqual(1);
+      expect(element.hasAttribute("data-scene-ready")).toBe(true);
+    } finally {
+      readStyle.mockRestore();
+    }
+  });
+
   it("hides a shed floor shell when resized controls consume its lane", async () => {
     vi.useFakeTimers();
     const element = createPet(42, "offline") as LobsterPetElement & {
@@ -172,7 +212,7 @@ describe("lobster pet element", () => {
     };
     element.floorEnabled = true;
     await element.updateComplete;
-    await element.updateComplete;
+    await advancePetFrame(element);
     element.anchor = "floor";
     element.performAct("molt");
     await vi.advanceTimersByTimeAsync(2600);
@@ -181,7 +221,7 @@ describe("lobster pet element", () => {
     const lead = element.parentElement!.querySelector(".agent-chat__composer-lead")!;
     lead.getBoundingClientRect().width = 720;
     window.dispatchEvent(new Event("resize"));
-    await vi.advanceTimersByTimeAsync(0);
+    await advancePetFrame(element);
     await element.updateComplete;
     expect(element.querySelector(".lobster-pet--shell")).toBeNull();
   });
@@ -263,7 +303,7 @@ describe("lobster pet element", () => {
 
     const offline = createPet(7, "offline");
     await offline.updateComplete;
-    await offline.updateComplete;
+    await advancePetFrame(offline);
     expect(spritePresent(offline)).toBe(true);
     expect(spriteClasses(offline)).toContain("lobster-pet--offline");
   });

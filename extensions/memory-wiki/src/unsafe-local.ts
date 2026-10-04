@@ -6,15 +6,13 @@ import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { createWikiPageFilename, slugifyWikiSegment, toWikiPageSummary } from "./markdown.js";
 import {
-  createWikiPageFilename,
-  renderMarkdownFence,
-  renderWikiMarkdown,
-  slugifyWikiSegment,
-  toWikiPageSummary,
-} from "./markdown.js";
-import { syncImportedSourcePages, type BridgeMemoryWikiResult } from "./source-import.js";
-import { writeImportedSourcePage } from "./source-page-shared.js";
+  emptySourceImportResult,
+  syncImportedSourcePages,
+  type BridgeMemoryWikiResult,
+} from "./source-import.js";
+import { renderImportedSourcePage, writeImportedSourcePage } from "./source-page-shared.js";
 import { resolveArtifactKey } from "./source-path-shared.js";
 import {
   assertMemoryWikiSourceSyncStateCapacity,
@@ -148,10 +146,6 @@ function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePa
   };
 }
 
-function resolveUnsafeLocalTitle(artifact: UnsafeLocalArtifact): string {
-  return `Unsafe Local Import: ${artifact.relativePath}`;
-}
-
 async function writeUnsafeLocalSourcePage(params: {
   config: ResolvedMemoryWikiConfig;
   artifact: UnsafeLocalArtifact;
@@ -164,7 +158,7 @@ async function writeUnsafeLocalSourcePage(params: {
     configuredPath: params.artifact.configuredPath,
     absolutePath: params.artifact.absolutePath,
   });
-  const title = resolveUnsafeLocalTitle(params.artifact);
+  const title = `Unsafe Local Import: ${params.artifact.relativePath}`;
   const renderFingerprint = createHash("sha1")
     .update(
       JSON.stringify({
@@ -185,7 +179,7 @@ async function writeUnsafeLocalSourcePage(params: {
     state: params.state,
     prepareWrite: params.prepareWrite,
     buildRendered: (raw, updatedAt) =>
-      renderWikiMarkdown({
+      renderImportedSourcePage({
         frontmatter: {
           pageType: "source",
           id: pageId,
@@ -198,22 +192,14 @@ async function writeUnsafeLocalSourcePage(params: {
           status: "active",
           updatedAt,
         },
-        body: [
-          `# ${title}`,
-          "",
-          "## Unsafe Local Source",
+        sourceHeading: "Unsafe Local Source",
+        sourceDetails: [
           `- Configured path: \`${params.artifact.configuredPath}\``,
           `- Relative path: \`${params.artifact.relativePath}\``,
           `- Updated: ${updatedAt}`,
-          "",
-          "## Content",
-          renderMarkdownFence(raw, detectFenceLanguage(params.artifact.absolutePath)),
-          "",
-          "## Notes",
-          "<!-- openclaw:human:start -->",
-          "<!-- openclaw:human:end -->",
-          "",
-        ].join("\n"),
+        ],
+        content: raw,
+        language: detectFenceLanguage(params.artifact.absolutePath),
       }),
   });
 }
@@ -227,15 +213,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     !config.unsafeLocal.allowPrivateMemoryCoreAccess ||
     config.unsafeLocal.paths.length === 0
   ) {
-    return {
-      importedCount: 0,
-      updatedCount: 0,
-      skippedCount: 0,
-      removedCount: 0,
-      artifactCount: 0,
-      workspaces: 0,
-      pagePaths: [],
-    };
+    return emptySourceImportResult();
   }
 
   const vaultRootKey = await resolveArtifactKey(config.vault.path);

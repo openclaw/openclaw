@@ -24,23 +24,7 @@ const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
-type MicrosoftProviderConfig = {
-  enabled: boolean;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  outputFormatConfigured: boolean;
-  pitch?: string;
-  rate?: string;
-  volume?: string;
-  saveSubtitles: boolean;
-  proxy?: string;
-  timeoutMs?: number;
-};
-
-function normalizeMicrosoftProviderConfig(
-  rawConfig: Record<string, unknown>,
-): MicrosoftProviderConfig {
+function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const rawEdge = asOptionalRecord(rawConfig.edge);
   const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
@@ -52,7 +36,7 @@ function normalizeMicrosoftProviderConfig(
   });
 }
 
-function readMicrosoftProviderConfig(config: SpeechProviderConfig): MicrosoftProviderConfig {
+function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
   return {
     enabled: asBoolean(config.enabled) ?? true,
     voice: trimToUndefined(config.voice) ?? DEFAULT_EDGE_VOICE,
@@ -116,8 +100,10 @@ async function listMicrosoftVoices(
 ): Promise<SpeechVoiceOption[]> {
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
-    await import("openclaw/plugin-sdk/proxy-capture");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
+  // The shipped 2026.9.6 host lacks async diagnostics; remove optionality when the minimum advances.
+  const captureHost: Partial<Pick<typeof proxyCaptureSdk, "captureHttpExchangeAsync">> =
+    proxyCaptureSdk;
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
@@ -134,18 +120,21 @@ async function listMicrosoftVoices(
     timeoutMs,
   });
   try {
-    if (!isDebugProxyGlobalFetchPatchInstalled()) {
-      captureHttpExchange({
-        url,
-        method: "GET",
-        requestHeaders: headers,
-        response,
-        transport: "http",
-        meta: {
-          provider: "microsoft",
-          capability: "speech-voices",
-        },
-      });
+    if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void captureHost
+        .captureHttpExchangeAsync?.({
+          url,
+          method: "GET",
+          requestHeaders: headers,
+          response,
+          transport: "http",
+          meta: {
+            provider: "microsoft",
+            capability: "speech-voices",
+          },
+        })
+        .catch(() => {});
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
     const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");

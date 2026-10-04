@@ -245,18 +245,9 @@ internal data class CronEditorDraftState(
 
   fun observeJob(job: GatewayCronJobDetail): CronEditorDraftState {
     val incoming = job.toCronJobEdit()
-    if (incoming == edit) {
-      return CronEditorDraftState(
-        baseline = incoming,
-        edit = incoming,
-      )
-    }
-    if (incoming == baseline) {
-      return copy(hasIncomingConflict = false)
-    }
-    val canAdopt = !isDirty || saveSucceeded
-    if (!canAdopt) {
-      return copy(hasIncomingConflict = true)
+    if (incoming != edit) {
+      if (incoming == baseline) return copy(hasIncomingConflict = false)
+      if (isDirty && !saveSucceeded) return copy(hasIncomingConflict = true)
     }
     return CronEditorDraftState(
       baseline = incoming,

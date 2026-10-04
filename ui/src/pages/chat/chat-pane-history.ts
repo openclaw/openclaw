@@ -56,6 +56,7 @@ import { isTranscriptScrollKey } from "./chat-scroll-input.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
+import { readTranscriptViewport } from "./components/chat-transcript-scroll-events.ts";
 import { persistChatComposerState } from "./composer-persistence.ts";
 import {
   getChatSessionProjection,
@@ -110,30 +111,31 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       startedBeforeReady,
       readyAt,
       promise: reading
-        .then((snapshot) => {
+        .then((storedSnapshot) => {
           if (
-            !snapshot ||
             requests.initialSnapshotHydration !== hydration ||
+            requests.acceptedHistory ||
             this.state !== state ||
             !areUiSessionKeysEquivalent(state.sessionKey, sessionKey) ||
-            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey ||
-            readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })
+            resolveChatSnapshotKey(state, { sessionKey }) !== cacheKey
           ) {
-            return;
+            return hydration.complete?.();
           }
-          // The memory miss fences network replacement; the pane projection merges
-          // live and pending rows that arrived while IndexedDB was pending.
+          // A sibling can fill the shared cache while this pane still needs its
+          // own transcript. Adopt those messages before revalidating their cursor.
+          const cache = state.chatMessagesBySession;
+          const snapshot = readChatSessionSnapshot(cache, state, { sessionKey }) ?? storedSnapshot;
+          if (!snapshot) {
+            return hydration.complete?.();
+          }
           applyChatCacheSnapshot(state, snapshot);
           const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(
-            state.chatMessagesBySession,
-            state,
-            { sessionKey },
-            mergedSnapshot,
-          );
+          cacheChatSessionSnapshot(cache, state, { sessionKey }, mergedSnapshot);
+          // Release startup with the adopted cursor before Lit queues the snapshot render.
+          hydration.complete?.();
           state.requestUpdate?.();
         })
-        .catch(() => undefined)
+        .catch(() => hydration.complete?.())
         .finally(() => {
           if (requests.initialSnapshotHydration === hydration && !hydration.wait) {
             delete requests.initialSnapshotHydration;
@@ -284,8 +286,9 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
           ? event.target
           : null;
     const previousScrollTop = this.transcriptScrollTop;
-    if (root) {
-      this.transcriptScrollTop = root.scrollTop;
+    const viewport = root ? readTranscriptViewport(root) : null;
+    if (viewport) {
+      this.transcriptScrollTop = viewport.scrollTop;
       const renderedSessionKey = this.transcript.renderedSessionKey;
       const stateSessionKey = this.state?.sessionKey;
       if (
@@ -296,7 +299,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         saveChatSessionScrollPosition(
           this.paneId,
           renderedSessionKey,
-          captureChatSessionScrollPosition(root),
+          captureChatSessionScrollPosition(viewport),
         );
       }
     }
@@ -305,11 +308,11 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
     const hasUpwardIntent =
       !this.loadingOlder &&
       !this.transcript.isMaintenanceScroll &&
-      root !== null &&
+      viewport !== null &&
       previousScrollTop !== null &&
-      root.scrollTop < previousScrollTop &&
-      root.scrollTop < root.scrollHeight - root.clientHeight &&
-      root.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
+      viewport.scrollTop < previousScrollTop &&
+      viewport.scrollTop < viewport.scrollHeight - viewport.clientHeight &&
+      viewport.scrollTop <= CHAT_HISTORY_PREFETCH_EDGE_PX;
     const newHistoryIntent = hasUpwardIntent && this.consumeHistoryIntent();
     // A failed request or exhausted bootstrap stays disarmed until renewed
     // upward intent, preventing request loops without stranding older history.
@@ -441,6 +444,19 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
         }
         if (!result || generation !== this.olderLoadGeneration) {
           return false;
+        }
+        if (result.windowReset) {
+          applyChatCacheSnapshot(state, {
+            messages: result.messages ?? [],
+            pagination: resolveChatHistoryPagination(result),
+            sessionId: result.sessionInfo?.sessionId ?? result.sessionId ?? null,
+            displayedLeafEntryId: result.sessionInfo?.activeLeafEntryId ?? null,
+            deltaCursor: result.deltaCursor,
+          });
+          commitCurrentChatHistorySnapshot(state);
+          state.lastError = null;
+          prepended = true;
+          return true;
         }
         const resultSessionId =
           typeof result.sessionInfo?.sessionId === "string" && result.sessionInfo.sessionId.trim()

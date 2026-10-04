@@ -5,8 +5,7 @@ import { createRedactingStreamWriter } from "../logging/redacting-stream.js";
 import { attachChildProcessBridge } from "../process/child-process-bridge.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import {
-  buildCellCreateArgs,
-  buildCellRunArgs,
+  buildCellContainerArgs,
   validateCellContainerProfile,
   validateFleetImage,
   type CellContainerProfile,
@@ -426,15 +425,11 @@ const defaultFleetContainerCommandExecutor: FleetContainerCommandExecutor = asyn
     timeoutMs: COMMAND_TIMEOUT_MS,
     maxOutputBytes: COMMAND_MAX_OUTPUT_BYTES,
   });
-  const normalized = {
+  return {
     stdout: result.stdout,
     stderr: redactEnvironmentValues(result.stderr, args, options.redactValues),
     code: result.code ?? 1,
   };
-  if (normalized.code !== 0 && !options.allowFailure) {
-    throw commandFailureError(runtime, args, normalized, options.redactValues);
-  }
-  return normalized;
 };
 
 const defaultFleetContainerStreamExecutor: FleetContainerStreamExecutor = (
@@ -510,18 +505,10 @@ function isMissingNetworkError(stderr: string): boolean {
   );
 }
 
-function validateNetworkName(networkName: string): string {
-  const normalized = networkName.trim();
+function validateResourceName(resource: "container" | "network", name: string): string {
+  const normalized = name.trim();
   if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet network name is invalid.");
-  }
-  return normalized;
-}
-
-function validateContainerName(containerName: string): string {
-  const normalized = containerName.trim();
-  if (!normalized || normalized.startsWith("-")) {
-    throw new Error("Fleet container name is invalid.");
+    throw new Error(`Fleet ${resource} name is invalid.`);
   }
   return normalized;
 }
@@ -548,7 +535,7 @@ function buildLogsArgs(containerName: string, options: FleetContainerLogsOptions
     }
     args.push("--since", options.since);
   }
-  args.push(validateContainerName(containerName));
+  args.push(validateResourceName("container", containerName));
   return args;
 }
 export function createFleetContainerRuntime(
@@ -574,6 +561,35 @@ export function createFleetContainerRuntime(
     }
   };
 
+  const inspectResource = async <T extends { kind: "ok" }>(
+    runtime: FleetContainerRuntimeName,
+    resource: "container" | "network",
+    name: string,
+    isMissing: (stderr: string) => boolean,
+    parse: (stdout: string) => T,
+  ): Promise<T | { kind: "missing" } | { kind: "unavailable"; error: string }> => {
+    const args = [resource, "inspect", name];
+    let result: FleetContainerCommandResult;
+    try {
+      result = await execute(runtime, args, { allowFailure: true });
+    } catch (error) {
+      return { kind: "unavailable", error: formatExecutorError(error, runtime, args).message };
+    }
+    if (result.code !== 0) {
+      return isMissing(result.stderr)
+        ? { kind: "missing" }
+        : {
+            kind: "unavailable",
+            error: result.stderr.trim() || `${runtime} ${resource} inspect failed`,
+          };
+    }
+    try {
+      return parse(result.stdout);
+    } catch {
+      return { kind: "unavailable", error: `${resource} inspect returned an invalid response` };
+    }
+  };
+
   return {
     async assertLocal(runtime: FleetContainerRuntimeName): Promise<void> {
       if (runtime === "podman") {
@@ -596,69 +612,31 @@ export function createFleetContainerRuntime(
       runtime: FleetContainerRuntimeName,
       containerName: string,
     ): Promise<FleetContainerInspectResult> {
-      const args = ["container", "inspect", validateContainerName(containerName)];
-      let result: FleetContainerCommandResult;
-      try {
-        result = await execute(runtime, args, { allowFailure: true });
-      } catch (error) {
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: formatExecutorError(error, runtime, args).message,
-        };
-      }
-      if (result.code !== 0) {
-        if (isMissingContainerError(result.stderr)) {
-          return { kind: "missing", state: "missing" };
-        }
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: result.stderr.trim() || `${runtime} container inspect failed`,
-        };
-      }
-      try {
-        return parseInspectOutput(result.stdout);
-      } catch {
-        return {
-          kind: "unavailable",
-          state: "unknown",
-          error: "container inspect returned an invalid response",
-        };
-      }
+      const result = await inspectResource(
+        runtime,
+        "container",
+        validateResourceName("container", containerName),
+        isMissingContainerError,
+        parseInspectOutput,
+      );
+      return result.kind === "ok"
+        ? result
+        : result.kind === "missing"
+          ? { ...result, state: "missing" }
+          : { ...result, state: "unknown" };
     },
 
     async inspectNetwork(
       runtime: FleetContainerRuntimeName,
       networkName: string,
     ): Promise<FleetNetworkInspectResult> {
-      const args = ["network", "inspect", validateNetworkName(networkName)];
-      let result: FleetContainerCommandResult;
-      try {
-        result = await execute(runtime, args, { allowFailure: true });
-      } catch (error) {
-        return {
-          kind: "unavailable",
-          error: formatExecutorError(error, runtime, args).message,
-        };
-      }
-      if (result.code !== 0) {
-        if (isMissingNetworkError(result.stderr)) {
-          return { kind: "missing" };
-        }
-        return {
-          kind: "unavailable",
-          error: result.stderr.trim() || `${runtime} network inspect failed`,
-        };
-      }
-      try {
-        return parseNetworkInspectOutput(result.stdout);
-      } catch {
-        return {
-          kind: "unavailable",
-          error: "network inspect returned an invalid response",
-        };
-      }
+      return await inspectResource(
+        runtime,
+        "network",
+        validateResourceName("network", networkName),
+        isMissingNetworkError,
+        parseNetworkInspectOutput,
+      );
     },
 
     async isDockerRootless(): Promise<boolean> {
@@ -669,9 +647,7 @@ export function createFleetContainerRuntime(
     async run(profile: CellContainerProfile, start: boolean): Promise<void> {
       validateCellContainerProfile(profile);
       await withContainerEnvFile(profile.environment, async (environmentFile) => {
-        const args = start
-          ? buildCellRunArgs(profile, { environmentFile })
-          : buildCellCreateArgs(profile, { environmentFile });
+        const args = buildCellContainerArgs(start ? "run" : "create", profile, { environmentFile });
         await execute(profile.runtime, args, {
           redactValues: Object.values(profile.environment),
         });
@@ -698,24 +674,24 @@ export function createFleetContainerRuntime(
         "bridge",
         ...(options.internal ? ["--internal"] : []),
         ...labelArgs,
-        validateNetworkName(networkName),
+        validateResourceName("network", networkName),
       ]);
     },
 
     async removeNetwork(runtime: FleetContainerRuntimeName, networkName: string): Promise<void> {
-      await execute(runtime, ["network", "rm", validateNetworkName(networkName)]);
+      await execute(runtime, ["network", "rm", validateResourceName("network", networkName)]);
     },
 
     async start(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["start", validateContainerName(containerName)]);
+      await execute(runtime, ["start", validateResourceName("container", containerName)]);
     },
 
     async stop(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["stop", validateContainerName(containerName)]);
+      await execute(runtime, ["stop", validateResourceName("container", containerName)]);
     },
 
     async restart(runtime: FleetContainerRuntimeName, containerName: string): Promise<void> {
-      await execute(runtime, ["restart", validateContainerName(containerName)]);
+      await execute(runtime, ["restart", validateResourceName("container", containerName)]);
     },
 
     async logs(
@@ -752,7 +728,7 @@ export function createFleetContainerRuntime(
       await execute(runtime, [
         "rm",
         ...(force ? ["--force"] : []),
-        validateContainerName(containerName),
+        validateResourceName("container", containerName),
       ]);
     },
   };

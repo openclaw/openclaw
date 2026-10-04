@@ -142,10 +142,7 @@ function classify402Message(message: string): PaymentRequiredFailoverReason {
   if (hasExplicit402BillingSignal(normalized)) {
     return "billing";
   }
-  if (isRateLimitErrorMessage(normalized)) {
-    return "rate_limit";
-  }
-  if (hasRetryable402TransientSignal(normalized)) {
+  if (isRateLimitErrorMessage(normalized) || hasRetryable402TransientSignal(normalized)) {
     return "rate_limit";
   }
   return "billing";
@@ -390,11 +387,11 @@ const REPLAY_INVALID_RE =
   /\bprevious_response_id\b.*\b(?:invalid|unknown|not found|does not exist|expired|mismatch)\b|\btool_(?:use|call)\.(?:input|arguments)\b.*\b(?:missing|required)\b|\bincorrect role information\b|\broles must alternate\b|\binput item id does not belong to this connection\b/i;
 const THINKING_SIGNATURE_ERROR_RE =
   /\b(?:invalid|expired)\b.*\bsignature\b|\bsignature\b.*\b(?:invalid|expired)\b/i;
-function isThinkingSignatureReplayInvalidErrorMessage(raw: string): boolean {
-  return /\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw);
-}
 export function isReplayInvalidErrorMessage(raw: string): boolean {
-  return REPLAY_INVALID_RE.test(raw) || isThinkingSignatureReplayInvalidErrorMessage(raw);
+  return (
+    REPLAY_INVALID_RE.test(raw) ||
+    (/\bthinking\b/i.test(raw) && THINKING_SIGNATURE_ERROR_RE.test(raw))
+  );
 }
 // shared model runtime providers throw `Error("An unknown error occurred")` provider-agnostically
 // (anthropic, google, vertex, openai-completions, mistral, bedrock, etc.) when a
@@ -405,14 +402,12 @@ export function isGenericUnknownStreamErrorMessage(raw: string): boolean {
   return /^\s*an unknown error occurred\.?\s*$/i.test(raw);
 }
 export function isExactUnknownNoDetailsError(raw: string): boolean {
-  return (
-    normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
-  );
+  return normalizeOptionalLowercaseString(raw) === "unknown error (no error details in response)";
 }
 export function isClaudeCliAuthError(raw: string, provider?: string): boolean {
   // These upstream phrases overlap generic session/auth wording. Provider identity
   // must come from runner metadata so other CLIs cannot inherit Claude policy.
-  if (normalizeOptionalLowercaseString(provider)?.trim() !== "claude-cli") {
+  if (normalizeOptionalLowercaseString(provider) !== "claude-cli") {
     return false;
   }
   return /\bnot logged in\b\s*·\s*please run \/login\b|\bfailed to authenticate:\s*oauth session expired and could not be refreshed\b/i.test(

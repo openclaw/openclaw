@@ -83,7 +83,6 @@ function createPrivateQaClientOptions(connectorUrl: string, nonce: string): Clie
 
 type MSTeamsPrivateQaRuntime = {
   client: ClientOptions;
-  listenHost: "127.0.0.1";
   skipAuth: true;
   token: () => Promise<string>;
 };
@@ -120,7 +119,6 @@ export function resolveMSTeamsPrivateQaRuntime(
   const client = createPrivateQaClientOptions(parsedConnectorUrl.toString(), nonce);
   return {
     client,
-    listenHost: "127.0.0.1",
     skipAuth: true,
     token: async () => botToken,
   };

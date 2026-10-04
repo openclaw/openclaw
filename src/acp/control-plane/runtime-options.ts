@@ -1,4 +1,3 @@
-/** Validation and normalization for ACP session runtime options and config controls. */
 import { isAbsolute } from "node:path";
 import type { AcpRuntimeConfigOptionResult } from "@openclaw/acp-core/runtime/types";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
@@ -35,87 +34,41 @@ function failInvalidOption(message: string): never {
   throw new AcpRuntimeError("ACP_INVALID_RUNTIME_OPTION", message);
 }
 
-function validateNoControlChars(value: string, field: string): string {
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
+function validateBoundedText(value: unknown, field: string, maxLength: number): string {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    failInvalidOption(`${field} must not be empty.`);
+  }
+  if (normalized.length > maxLength) {
+    failInvalidOption(`${field} must be at most ${maxLength} characters.`);
+  }
+  for (let i = 0; i < normalized.length; i += 1) {
+    const code = normalized.charCodeAt(i);
     if (code < 32 || code === 127) {
       failInvalidOption(`${field} must not include control characters.`);
     }
   }
-  return value;
-}
-
-function validateBoundedText(params: { value: unknown; field: string; maxLength: number }): string {
-  const normalized = normalizeText(params.value);
-  if (!normalized) {
-    failInvalidOption(`${params.field} must not be empty.`);
-  }
-  if (normalized.length > params.maxLength) {
-    failInvalidOption(`${params.field} must be at most ${params.maxLength} characters.`);
-  }
-  return validateNoControlChars(normalized, params.field);
-}
-
-function validateBackendOptionKey(rawKey: unknown): string {
-  const key = validateBoundedText({
-    value: rawKey,
-    field: "ACP config key",
-    maxLength: MAX_BACKEND_OPTION_KEY_LENGTH,
-  });
-  if (!SAFE_OPTION_KEY_RE.test(key)) {
-    failInvalidOption(
-      "ACP config key must use letters, numbers, dots, colons, underscores, or dashes.",
-    );
-  }
-  return key;
-}
-
-function validateBackendOptionValue(rawValue: unknown): string {
-  return validateBoundedText({
-    value: rawValue,
-    field: "ACP config value",
-    maxLength: MAX_BACKEND_OPTION_VALUE_LENGTH,
-  });
+  return normalized;
 }
 
 export function validateRuntimeModeInput(rawMode: unknown): string {
-  return validateBoundedText({
-    value: rawMode,
-    field: "Runtime mode",
-    maxLength: MAX_RUNTIME_MODE_LENGTH,
-  });
+  return validateBoundedText(rawMode, "Runtime mode", MAX_RUNTIME_MODE_LENGTH);
 }
 
 export function validateRuntimeModelInput(rawModel: unknown): string {
-  return validateBoundedText({
-    value: rawModel,
-    field: "Model id",
-    maxLength: MAX_MODEL_LENGTH,
-  });
+  return validateBoundedText(rawModel, "Model id", MAX_MODEL_LENGTH);
 }
 
 function validateRuntimeThinkingInput(rawThinking: unknown): string {
-  return validateBoundedText({
-    value: rawThinking,
-    field: "Thinking level",
-    maxLength: MAX_THINKING_LENGTH,
-  });
+  return validateBoundedText(rawThinking, "Thinking level", MAX_THINKING_LENGTH);
 }
 
 export function validateRuntimePermissionProfileInput(rawProfile: unknown): string {
-  return validateBoundedText({
-    value: rawProfile,
-    field: "Permission profile",
-    maxLength: MAX_PERMISSION_PROFILE_LENGTH,
-  });
+  return validateBoundedText(rawProfile, "Permission profile", MAX_PERMISSION_PROFILE_LENGTH);
 }
 
 export function validateRuntimeCwdInput(rawCwd: unknown): string {
-  const cwd = validateBoundedText({
-    value: rawCwd,
-    field: "Working directory",
-    maxLength: MAX_CWD_LENGTH,
-  });
+  const cwd = validateBoundedText(rawCwd, "Working directory", MAX_CWD_LENGTH);
   if (!isAbsolute(cwd)) {
     failInvalidOption(`Working directory must be an absolute path. Received "${cwd}".`);
   }
@@ -150,9 +103,15 @@ export function validateRuntimeConfigOptionInput(
   key: string;
   value: string;
 } {
+  const key = validateBoundedText(rawKey, "ACP config key", MAX_BACKEND_OPTION_KEY_LENGTH);
+  if (!SAFE_OPTION_KEY_RE.test(key)) {
+    failInvalidOption(
+      "ACP config key must use letters, numbers, dots, colons, underscores, or dashes.",
+    );
+  }
   return {
-    key: validateBackendOptionKey(rawKey),
-    value: validateBackendOptionValue(rawValue),
+    key,
+    value: validateBoundedText(rawValue, "ACP config value", MAX_BACKEND_OPTION_VALUE_LENGTH),
   };
 }
 
@@ -220,32 +179,26 @@ export function validateRuntimeOptionPatch(
 export function normalizeRuntimeOptions(
   options: AcpSessionRuntimeOptions | undefined,
 ): AcpSessionRuntimeOptions {
-  const runtimeMode = normalizeText(options?.runtimeMode);
-  const model = normalizeText(options?.model);
-  const thinking = normalizeText(options?.thinking);
-  const cwd = normalizeText(options?.cwd);
-  const permissionProfile = normalizeText(options?.permissionProfile);
-  let timeoutSeconds: number | undefined;
+  const normalized: AcpSessionRuntimeOptions = {};
+  for (const key of ["runtimeMode", "model", "thinking", "cwd", "permissionProfile"] as const) {
+    const value = normalizeText(options?.[key]);
+    if (value) {
+      normalized[key] = value;
+    }
+  }
   if (typeof options?.timeoutSeconds === "number" && Number.isFinite(options.timeoutSeconds)) {
     const rounded = Math.round(options.timeoutSeconds);
     if (rounded > 0) {
-      timeoutSeconds = rounded;
+      normalized.timeoutSeconds = rounded;
     }
   }
   const backendExtrasEntries = Object.entries(options?.backendExtras ?? {})
     .map(([key, value]) => [normalizeText(key), normalizeText(value)] as const)
     .filter(([key, value]) => Boolean(key && value)) as Array<[string, string]>;
-  const backendExtras =
-    backendExtrasEntries.length > 0 ? Object.fromEntries(backendExtrasEntries) : undefined;
-  return {
-    ...(runtimeMode ? { runtimeMode } : {}),
-    ...(model ? { model } : {}),
-    ...(thinking ? { thinking } : {}),
-    ...(cwd ? { cwd } : {}),
-    ...(permissionProfile ? { permissionProfile } : {}),
-    ...(typeof timeoutSeconds === "number" ? { timeoutSeconds } : {}),
-    ...(backendExtras ? { backendExtras } : {}),
-  };
+  if (backendExtrasEntries.length > 0) {
+    normalized.backendExtras = Object.fromEntries(backendExtrasEntries);
+  }
+  return normalized;
 }
 
 export function mergeRuntimeOptions(params: {
@@ -383,7 +336,7 @@ function buildAdvertisedConfigOptionKeyMap(
 function resolveRuntimeConfigOptionAliases(key: string): readonly string[] {
   const normalizedKey = normalizeLowercaseStringOrEmpty(key);
   for (const aliases of Object.values(RUNTIME_CONFIG_OPTION_ALIASES)) {
-    if (aliases.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalizedKey)) {
+    if (aliases.some((alias) => alias === normalizedKey)) {
       return aliases;
     }
   }
@@ -434,15 +387,10 @@ export function inferRuntimeOptionPatchFromConfigOption(
   if (isThinkingConfigKey(normalizedKey)) {
     return { thinking: validateRuntimeThinkingInput(validated.value) };
   }
-  if (
-    normalizedKey === "approval_policy" ||
-    normalizedKey === "permission_profile" ||
-    normalizedKey === "permissions" ||
-    normalizedKey === "permission_mode"
-  ) {
+  if (RUNTIME_CONFIG_OPTION_ALIASES.permissionProfile.some((alias) => alias === normalizedKey)) {
     return { permissionProfile: validateRuntimePermissionProfileInput(validated.value) };
   }
-  if (normalizedKey === "timeout" || normalizedKey === "timeout_seconds") {
+  if (RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) => alias === normalizedKey)) {
     return { timeoutSeconds: parseRuntimeTimeoutSecondsInput(validated.value) };
   }
   if (normalizedKey === "cwd") {

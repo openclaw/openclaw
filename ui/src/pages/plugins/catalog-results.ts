@@ -15,11 +15,13 @@ import type {
   PluginDiscoveryResult,
   PluginInstallRequest,
 } from "../../lib/plugins/index.ts";
+import { renderCatalogGridSkeleton } from "./catalog-skeleton.ts";
 import { renderArtTile } from "./consent-dialog.ts";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
-  renderPluginCardIdentity,
+  renderPluginAuthor,
   renderPluginCardSummary,
+  renderPluginOfficialBadge,
   renderPluginStateStatus,
 } from "./plugin-card.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
@@ -39,9 +41,7 @@ export type PluginCatalogResultsProps = {
   categoriesError: string | null;
   onRetryCategories: () => void;
   featured: readonly PluginDiscoveryEntry[];
-  featuredLoading: boolean;
   trending: readonly PluginDiscoveryEntry[];
-  trendingLoading: boolean;
   loadingMore: boolean;
   loadMoreError: string | null;
   intent: PluginDiscoveryIntent;
@@ -70,6 +70,10 @@ const SECTION_SIZE = 8;
 // Estimate the current registry footprint without duplicating its taxonomy.
 // The actual labels, ordering, and count still come only from ClawHub.
 const CATEGORY_SKELETON_COUNT = 22;
+const PROMOTED_SECTIONS = [
+  ["featured", "pluginsPage.featuredTitle", icons.star],
+  ["trending", "pluginsPage.intentTrending", icons.barChart],
+] as const;
 
 // Category-only SVGs stay in the deferred Plugins page, outside the startup icon registry.
 const CATEGORY_ICONS: Readonly<Record<string, TemplateResult>> = {
@@ -210,14 +214,13 @@ function renderCatalogCard(
         >
           ${renderCatalogIcon(plugin, props)}
         </span>
-        ${renderPluginCardIdentity({
-          name: plugin.catalog.name,
-          attribution: {
-            ...(plugin.catalog.author ? { author: plugin.catalog.author } : {}),
-            official: plugin.catalog.official,
-          },
-          linkedAuthor: true,
-        })}
+        <div class="installed-plugins-card__identity">
+          <div class="plugin-card-title-row">
+            <h3>${plugin.catalog.name}</h3>
+            ${plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
+          </div>
+          ${renderPluginAuthor(plugin.catalog.author, { linked: true })}
+        </div>
       </div>
       <div class="plugin-catalog-card__action">
         ${
@@ -245,42 +248,6 @@ function renderCatalogCard(
   </article>`;
 }
 
-// Mirrors renderCatalogCard's geometry (art tile, title, action slot, two summary
-// lines) inside the real grid so the layout does not jump on load. Fills are kept
-// light and sparse on purpose: eight cards of solid bars read as a wall.
-function renderCatalogGridSkeleton(params: { label?: string; cards: number }): TemplateResult {
-  return html`<div
-    class="plugin-catalog-grid plugin-catalog-grid--skeleton"
-    role="status"
-    aria-busy="true"
-    aria-label=${params.label ?? t("common.loading")}
-  >
-    ${Array.from(
-      { length: params.cards },
-      () => html`<div
-        class="plugin-catalog-card oc-card plugin-catalog-card--skeleton"
-        aria-hidden="true"
-      >
-        <div class="plugin-catalog-card__head">
-          <div class="installed-plugins-card__head">
-            <span class="skeleton plugin-catalog-card__skeleton-art"></span>
-            <div class="installed-plugins-card__identity">
-              <span class="skeleton plugin-catalog-card__skeleton-title"></span>
-            </div>
-          </div>
-          <div class="plugin-catalog-card__action">
-            <span class="skeleton plugin-catalog-card__skeleton-action"></span>
-          </div>
-        </div>
-        <span class="plugin-catalog-card__skeleton-summary">
-          <span class="skeleton plugin-catalog-card__skeleton-line"></span>
-          <span class="skeleton plugin-catalog-card__skeleton-line"></span>
-        </span>
-      </div>`,
-    )}
-  </div>`;
-}
-
 function renderError(error: string, onRetry: () => void): TemplateResult {
   return html`<div class="callout danger oc-banner oc-banner-error" role="alert">
     <span>${formatUiExternalText(error)}</span>
@@ -299,12 +266,10 @@ function renderSection(params: {
   title: string;
   items: readonly PluginDiscoveryEntry[];
   loading?: boolean;
-  error?: string | null;
-  onRetry?: () => void;
   onViewAll?: () => void;
   props: PluginCatalogResultsProps;
 }): TemplateResult | typeof nothing {
-  if (!params.loading && !params.error && params.items.length === 0) {
+  if (!params.loading && params.items.length === 0) {
     return nothing;
   }
   return html`<section
@@ -328,50 +293,36 @@ function renderSection(params: {
     ${
       params.loading
         ? renderCatalogGridSkeleton({ cards: SECTION_SIZE })
-        : params.error && params.onRetry
-          ? renderError(params.error, params.onRetry)
-          : html`<div class="plugin-catalog-grid">
-              ${repeat(
-                params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items,
-                (plugin) => plugin.id,
-                (plugin) => renderCatalogCard(plugin, params.props),
-              )}
-            </div>`
+        : html`<div class="plugin-catalog-grid">
+            ${repeat(
+              params.onViewAll ? params.items.slice(0, SECTION_SIZE) : params.items,
+              (plugin) => plugin.id,
+              (plugin) => renderCatalogCard(plugin, params.props),
+            )}
+          </div>`
     }
   </section>`;
 }
 
 function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
-  const activeAll = props.intent === "all" && props.category === null;
   return html`<div
     class="plugin-catalog-chips"
     role="group"
     aria-label=${t("pluginsPage.categoriesLabel")}
   >
-    <button
-      type="button"
-      class="plugin-catalog-chip ${activeAll ? "is-active" : ""}"
-      aria-pressed=${activeAll}
-      @click=${() => props.onIntentChange("all")}
-    >
-      <span aria-hidden="true">${icons.layoutGrid}</span>${t("pluginsPage.intentAll")}
-    </button>
-    <button
-      type="button"
-      class="plugin-catalog-chip ${props.intent === "featured" ? "is-active" : ""}"
-      aria-pressed=${props.intent === "featured"}
-      @click=${() => props.onIntentChange("featured")}
-    >
-      <span aria-hidden="true">${icons.star}</span>${t("pluginsPage.featuredTitle")}
-    </button>
-    <button
-      type="button"
-      class="plugin-catalog-chip ${props.intent === "trending" ? "is-active" : ""}"
-      aria-pressed=${props.intent === "trending"}
-      @click=${() => props.onIntentChange("trending")}
-    >
-      <span aria-hidden="true">${icons.barChart}</span>${t("pluginsPage.intentTrending")}
-    </button>
+    ${([["all", "pluginsPage.intentAll", icons.layoutGrid], ...PROMOTED_SECTIONS] as const).map(
+      ([intent, label, icon]) => {
+        const active = props.intent === intent && (intent !== "all" || props.category === null);
+        return html`<button
+          type="button"
+          class="plugin-catalog-chip ${active ? "is-active" : ""}"
+          aria-pressed=${active}
+          @click=${() => props.onIntentChange(intent)}
+        >
+          <span aria-hidden="true">${icon}</span>${t(label)}
+        </button>`;
+      },
+    )}
     ${
       props.categoriesLoading
         ? html`<span class="sr-only" role="status">${t("pluginsPage.loadingCategories")}</span>
@@ -404,10 +355,9 @@ function renderCategoryChips(props: PluginCatalogResultsProps): TemplateResult {
 function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
   const items = props.result?.items ?? [];
   if (props.loading) {
-    return renderCatalogGridSkeleton({
-      label: t("pluginsPage.loadingDiscovery"),
-      cards: SECTION_SIZE,
-    });
+    return html`<openclaw-plugin-catalog-skeleton
+      .label=${t("pluginsPage.loadingDiscovery")}
+    ></openclaw-plugin-catalog-skeleton>`;
   }
   if (props.error) {
     return renderError(props.error, props.onRetry);
@@ -478,14 +428,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
     items.some((plugin) =>
       categories.some((category) => plugin.catalog.categories.includes(category.slug)),
     );
-  if (
-    !hasAnySection &&
-    !props.loading &&
-    !props.featuredLoading &&
-    !props.trendingLoading &&
-    !props.error &&
-    !props.remoteError
-  ) {
+  if (!hasAnySection && !props.loading && !props.error && !props.remoteError) {
     return renderPanelEmptyState({
       icon: icons.search,
       heading: t("pluginsPage.noDiscoveryResults"),
@@ -494,22 +437,16 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
   }
   return html`
     ${props.error ? renderError(props.error, props.onRetry) : nothing}
-    ${renderSection({
-      id: "featured",
-      title: t("pluginsPage.featuredTitle"),
-      items: props.featured,
-      loading: props.featuredLoading,
-      onViewAll: () => props.onIntentChange("featured"),
-      props,
-    })}
-    ${renderSection({
-      id: "trending",
-      title: t("pluginsPage.intentTrending"),
-      items: props.trending,
-      loading: props.trendingLoading,
-      onViewAll: () => props.onIntentChange("trending"),
-      props,
-    })}
+    ${PROMOTED_SECTIONS.map(([intent, label]) =>
+      renderSection({
+        id: intent,
+        title: t(label),
+        items: props[intent],
+        loading: props.loading,
+        onViewAll: () => props.onIntentChange(intent),
+        props,
+      }),
+    )}
     ${repeat(
       categories,
       (category) => category.slug,

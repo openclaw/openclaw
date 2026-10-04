@@ -1,4 +1,3 @@
-// TTS directive helpers parse inline speech directives from text.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
@@ -32,28 +31,6 @@ type TtsDirectiveTextStreamCleaner = {
   flush: () => string;
   hasBufferedDirectiveText: () => boolean;
 };
-
-function resolveDirectiveProviders(options?: ParseTtsDirectiveOptions): SpeechProviderPlugin[] {
-  const providers = options?.providers ?? listSpeechProviders(options?.cfg);
-  return providers.toSorted(compareSpeechProviderOrder);
-}
-
-function prioritizeProvider(
-  providers: readonly SpeechProviderPlugin[],
-  providerId: string | undefined,
-): SpeechProviderPlugin[] {
-  if (!providerId) {
-    return [...providers];
-  }
-  const preferredProvider = resolveDirectiveProvider(providers, providerId);
-  if (!preferredProvider) {
-    return [...providers];
-  }
-  return [
-    preferredProvider,
-    ...providers.filter((provider) => provider.id !== preferredProvider.id),
-  ];
-}
 
 function resolveDirectiveProvider(
   providers: readonly SpeechProviderPlugin[],
@@ -191,10 +168,6 @@ export function resolveTtsDirectiveFacts(
   }
 
   let providers: SpeechProviderPlugin[] | undefined;
-  const getProviders = () => {
-    providers ??= resolveDirectiveProviders(options);
-    return providers;
-  };
   const overrides: TtsDirectiveOverrides = {};
   const warnings: string[] = [];
   if (policy.allowText && facts.text != null) {
@@ -206,32 +179,33 @@ export function resolveTtsDirectiveFacts(
     if (declaredProviderId) {
       overrides.provider = declaredProviderId;
     }
-    let directiveProviders: SpeechProviderPlugin[] | undefined;
-    const getDirectiveProviders = () => {
-      if (directiveProviders) {
-        return directiveProviders;
-      }
-      if (declaredProviderId) {
-        const declaredProvider = resolveDirectiveProvider(getProviders(), declaredProviderId);
-        if (!declaredProvider) {
-          warnings.push(`unknown provider "${declaredProviderId}"`);
-          directiveProviders = [];
-          return directiveProviders;
-        }
-        directiveProviders = [declaredProvider];
-        return directiveProviders;
-      }
-      directiveProviders = prioritizeProvider(
-        getProviders(),
-        normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
-      );
-      return directiveProviders;
-    };
+    const values = Object.entries(directive.values);
+    if (values.length === 0) {
+      continue;
+    }
+    providers ??= (options?.providers ?? listSpeechProviders(options?.cfg)).toSorted(
+      compareSpeechProviderOrder,
+    );
+    const selectedProvider = resolveDirectiveProvider(
+      providers,
+      declaredProviderId || normalizeLowercaseStringOrEmpty(options?.preferredProviderId),
+    );
+    if (declaredProviderId && !selectedProvider) {
+      warnings.push(`unknown provider "${declaredProviderId}"`);
+      continue;
+    }
+    const directiveProviders = selectedProvider
+      ? [
+          selectedProvider,
+          ...(declaredProviderId
+            ? []
+            : providers.filter((provider) => provider.id !== selectedProvider.id)),
+        ]
+      : providers;
 
-    for (const [key, value] of Object.entries(directive.values)) {
+    for (const [key, value] of values) {
       let handled = false;
-      const directiveProvidersLocal = getDirectiveProviders();
-      for (const provider of directiveProvidersLocal) {
+      for (const provider of directiveProviders) {
         const genericSpeakerOverrides = parseGenericSpeakerDirective({
           key,
           value,
@@ -265,7 +239,7 @@ export function resolveTtsDirectiveFacts(
         handled = true;
         break;
       }
-      if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
+      if (!handled && declaredProviderId && directiveProviders.length > 0) {
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }

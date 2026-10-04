@@ -1,3 +1,5 @@
+import { setTimeout as delay } from "node:timers/promises";
+
 type ReconnectOutcome = "resolved" | "rejected";
 
 type ShouldReconnectParams = {
@@ -67,7 +69,13 @@ export async function runWithReconnect(
       return;
     }
     opts.onReconnect?.(delayMs);
-    await sleepAbortable(delayMs, opts.abortSignal);
+    try {
+      await delay(delayMs, undefined, { signal: opts.abortSignal });
+    } catch (delayError) {
+      if (!opts.abortSignal?.aborted) {
+        throw delayError;
+      }
+    }
     if (outcome === "rejected") {
       retryDelay = Math.min(retryDelay * 2, maxDelayMs);
     }
@@ -82,22 +90,4 @@ function withJitter(baseMs: number, jitterRatio: number, random: () => number): 
   const normalized = Math.max(0, Math.min(1, random()));
   const spread = baseMs * jitterRatio;
   return Math.max(1, Math.round(baseMs - spread + normalized * spread * 2));
-}
-
-function sleepAbortable(ms: number, signal?: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    if (signal?.aborted) {
-      resolve();
-      return;
-    }
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    const timer = setTimeout(() => {
-      signal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, ms);
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
 }

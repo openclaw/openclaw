@@ -12,25 +12,8 @@ import {
 } from "./registry-read.kernel.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-export type WorktreeRetirementOperations = {
-  "worktrees.deferCleanup": {
-    input: { observed: ManagedWorktreeRecord; reason: string | null };
-    output: boolean;
-  };
-  "worktrees.retireMissing": {
-    input: {
-      observed: Pick<
-        ManagedWorktreeRecord,
-        "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
-      >;
-      removedAt: number;
-    };
-    output: { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" };
-  };
-};
-
 export function deferWorktreeCleanupInWorker(
-  { observed, reason }: WorktreeRetirementOperations["worktrees.deferCleanup"]["input"],
+  { observed, reason }: { observed: ManagedWorktreeRecord; reason: string | null },
   options: OpenClawStateDatabaseOptions,
 ): boolean {
   return runOpenClawStateWriteTransaction(
@@ -59,9 +42,18 @@ export function deferWorktreeCleanupInWorker(
 }
 
 export function retireMissingWorktreeInWorker(
-  { observed, removedAt }: WorktreeRetirementOperations["worktrees.retireMissing"]["input"],
+  {
+    observed,
+    removedAt,
+  }: {
+    observed: Pick<
+      ManagedWorktreeRecord,
+      "id" | "path" | "lastActiveAt" | "repoRoot" | "repoFingerprint"
+    >;
+    removedAt: number;
+  },
   options: OpenClawStateDatabaseOptions,
-): WorktreeRetirementOperations["worktrees.retireMissing"]["output"] {
+): { record?: ManagedWorktreeRecord; protection?: "local-workspace-projection" } {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
@@ -95,18 +87,12 @@ export function retireMissingWorktreeInWorker(
           .where("repo_fingerprint", "=", observed.repoFingerprint)
           .returning(WORKTREE_RECORD_COLUMNS),
       ).rows[0];
-      const current =
-        retired ??
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<Pick<DB, "worktrees">>(db)
-            .selectFrom("worktrees")
-            .select(WORKTREE_RECORD_COLUMNS)
-            .where("id", "=", observed.id),
-        ).rows[0];
+      const record = retired
+        ? rowToRecord(retired)
+        : getRegistryWorktreeInDatabase(db, observed.id);
 
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
-      return { record: current ? rowToRecord(current) : undefined };
+      return { record };
     },
     options,
     { operationLabel: "worktrees.retireMissing" },

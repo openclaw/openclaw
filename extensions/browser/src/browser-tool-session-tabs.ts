@@ -2,6 +2,7 @@ import {
   asNullableRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserSessionTabAuthority } from "./browser-runtime-state.js";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
 import type * as sessionTabRegistry from "./browser/session-tab-registry.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
@@ -48,54 +49,6 @@ export function stripBrowserOpenInternalMetadata(value: unknown): unknown {
   return agentVisible;
 }
 
-async function trackOpenedBrowserTab(params: {
-  result: unknown;
-  sessionKey?: string;
-  fallbackProfile?: string;
-  route: BrowserSessionTabRoute;
-  track: SessionTabRegistry["trackSessionBrowserTab"];
-  closeTab: (targetId: string, profile?: string) => Promise<void>;
-}): Promise<void> {
-  const opened = readOpenedTab(params.result);
-  const profile = opened.profile ?? params.fallbackProfile;
-  try {
-    params.track({
-      sessionKey: params.sessionKey,
-      targetId: opened.targetId,
-      route: params.route,
-      profile,
-      ...(params.fallbackProfile && opened.profile && opened.profile !== params.fallbackProfile
-        ? { profileAliases: [params.fallbackProfile] }
-        : {}),
-      // Sandbox/browser-bridge tabs belong to a different browser process.
-      // Keep them process-local even if that server returned durable metadata.
-      ownership:
-        params.route.kind === "browser-control" && params.route.baseUrl
-          ? undefined
-          : opened.ownership,
-      aliases: opened.aliases,
-    });
-  } catch (trackingError) {
-    if (!opened.targetId) {
-      throw trackingError;
-    }
-    try {
-      await params.closeTab(opened.targetId, profile);
-    } catch (closeError) {
-      throw Object.assign(
-        new Error("Failed to register browser tab cleanup and close the newly opened tab", {
-          cause: closeError,
-        }),
-        {
-          name: "BrowserTabTrackingCompensationError",
-          errors: [trackingError, closeError],
-        },
-      );
-    }
-    throw trackingError;
-  }
-}
-
 export function createBrowserToolSessionTabs(params: {
   sessionKey?: string;
   requestedProfile?: string;
@@ -105,6 +58,7 @@ export function createBrowserToolSessionTabs(params: {
   routeProfile?: () => string | undefined;
   isHostFallbackActive?: () => boolean;
   registry: SessionTabRegistry;
+  authority?: BrowserSessionTabAuthority;
 }) {
   const trackedRoute = (): BrowserSessionTabRoute =>
     params.nodeRoute && !params.isHostFallbackActive?.()
@@ -123,17 +77,18 @@ export function createBrowserToolSessionTabs(params: {
       targetId,
       route,
       profile: trackedProfile(route),
+      ...(params.authority ? { authority: params.authority } : {}),
     };
   };
   return {
-    touch: (targetId: string | undefined): void => {
+    touch: async (targetId: string | undefined): Promise<void> => {
       if (targetId) {
-        params.registry.touchSessionBrowserTab(identity(targetId));
+        await params.registry.touchSessionBrowserTab(identity(targetId));
       }
     },
-    untrack: (targetId: string | undefined): void => {
+    untrack: async (targetId: string | undefined): Promise<void> => {
       if (targetId) {
-        params.registry.untrackSessionBrowserTab(identity(targetId));
+        await params.registry.untrackSessionBrowserTab(identity(targetId));
       }
     },
     trackOpened: async (
@@ -141,15 +96,44 @@ export function createBrowserToolSessionTabs(params: {
       closeTab: (targetId: string, openedProfile?: string) => Promise<void>,
     ): Promise<void> => {
       const route = trackedRoute();
-      const profile = trackedProfile(route);
-      await trackOpenedBrowserTab({
-        result,
-        sessionKey: params.sessionKey,
-        fallbackProfile: profile,
-        route,
-        track: params.registry.trackSessionBrowserTab,
-        closeTab,
-      });
+      const fallbackProfile = trackedProfile(route);
+      const opened = readOpenedTab(result);
+      const profile = opened.profile ?? fallbackProfile;
+      try {
+        await params.registry.trackSessionBrowserTab({
+          sessionKey: params.sessionKey,
+          targetId: opened.targetId,
+          route,
+          profile,
+          ...(fallbackProfile && opened.profile && opened.profile !== fallbackProfile
+            ? { profileAliases: [fallbackProfile] }
+            : {}),
+          // Sandbox/browser-bridge tabs belong to a different browser process.
+          // Keep them process-local even if that server returned durable metadata.
+          ownership:
+            route.kind === "browser-control" && route.baseUrl ? undefined : opened.ownership,
+          aliases: opened.aliases,
+          ...(params.authority ? { authority: params.authority } : {}),
+        });
+      } catch (trackingError) {
+        if (!opened.targetId) {
+          throw trackingError;
+        }
+        try {
+          await closeTab(opened.targetId, profile);
+        } catch (closeError) {
+          throw Object.assign(
+            new Error("Failed to register browser tab cleanup and close the newly opened tab", {
+              cause: closeError,
+            }),
+            {
+              name: "BrowserTabTrackingCompensationError",
+              errors: [trackingError, closeError],
+            },
+          );
+        }
+        throw trackingError;
+      }
     },
   };
 }

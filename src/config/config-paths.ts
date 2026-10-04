@@ -1,7 +1,7 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
+import { normalizeConfigModelSelectionParent } from "./model-input-normalization.js";
 
 type PathNode = Record<string, unknown>;
 
@@ -45,9 +45,11 @@ export function setConfigValueAtPath(root: PathNode, path: string[], value: unkn
     throw new Error("Config path must contain at least one segment");
   }
   let cursor: PathNode = root;
-  for (const key of path.slice(0, -1)) {
+  for (const [index, key] of path.slice(0, -1).entries()) {
     const existing = Object.hasOwn(cursor, key) ? cursor[key] : undefined;
-    const next: PathNode = isPlainObject(existing) ? existing : {};
+    const next: PathNode = isPlainObject(existing)
+      ? existing
+      : (normalizeConfigModelSelectionParent(existing, path, index) ?? {});
     if (next !== existing) {
       setOwnConfigProperty(cursor, key, next);
     }
@@ -57,7 +59,11 @@ export function setConfigValueAtPath(root: PathNode, path: string[], value: unkn
 }
 
 /** Removes a value at a config path and prunes empty parent objects created by setters. */
-export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean {
+export function unsetConfigValueAtPath(
+  root: PathNode,
+  path: string[],
+  preserveEmptyParentsFrom?: PathNode,
+): boolean {
   const leafKey = path.at(-1);
   if (leafKey === undefined) {
     return false;
@@ -81,11 +87,16 @@ export function unsetConfigValueAtPath(root: PathNode, path: string[]): boolean 
   delete cursor[leafKey];
   // Keep config writes tidy: removing foo.bar should also remove foo when it became empty, while
   // preserving any parent that still carries sibling config.
-  for (let idx = stack.length - 1; idx >= 0; idx -= 1) {
-    const { node, key } = expectDefined(stack[idx], "stack entry at idx");
+  for (const { node, key } of stack.toReversed()) {
     const child = node[key];
-    if (isPlainObject(child) && Object.keys(child).length === 0) {
+    if (
+      isPlainObject(child) &&
+      Object.keys(child).length === 0 &&
+      (!preserveEmptyParentsFrom ||
+        getConfigValueAtPath(preserveEmptyParentsFrom, path.slice(0, stack.length)) === undefined)
+    ) {
       delete node[key];
+      stack.pop();
     } else {
       break;
     }

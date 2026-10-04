@@ -1,4 +1,3 @@
-// Tlon plugin module implements send behavior.
 import { scot, da } from "@urbit/aura";
 import {
   createMessageReceiptFromOutboundResults,
@@ -8,13 +7,6 @@ import { markdownToStory, createImageBlock, isImageUrl, type Story } from "./sto
 
 type TlonPokeApi = {
   poke: (params: { app: string; mark: string; json: unknown }) => Promise<unknown>;
-};
-
-type SendTextParams = {
-  api: TlonPokeApi;
-  fromShip: string;
-  toShip: string;
-  text: string;
 };
 
 type SendStoryParams = {
@@ -43,9 +35,11 @@ function createTlonSendReceipt(params: {
   });
 }
 
-export async function sendDm({ api, fromShip, toShip, text }: SendTextParams) {
-  const story: Story = markdownToStory(text);
-  return sendDmWithStory({ api, fromShip, toShip, story, kind: "text" });
+export async function sendDm({
+  text,
+  ...params
+}: Omit<SendStoryParams, "story" | "kind"> & { text: string }) {
+  return sendDmWithStory({ ...params, story: markdownToStory(text), kind: "text" });
 }
 
 export async function sendDmWithStory({
@@ -89,15 +83,6 @@ export async function sendDmWithStory({
   };
 }
 
-type SendGroupParams = {
-  api: TlonPokeApi;
-  fromShip: string;
-  hostShip: string;
-  channelName: string;
-  text: string;
-  replyToId?: string | null;
-};
-
 type SendGroupStoryParams = {
   api: TlonPokeApi;
   fromShip: string;
@@ -109,23 +94,10 @@ type SendGroupStoryParams = {
 };
 
 export async function sendGroupMessage({
-  api,
-  fromShip,
-  hostShip,
-  channelName,
   text,
-  replyToId,
-}: SendGroupParams) {
-  const story: Story = markdownToStory(text);
-  return sendGroupMessageWithStory({
-    api,
-    fromShip,
-    hostShip,
-    channelName,
-    story,
-    replyToId,
-    kind: "text",
-  });
+  ...params
+}: Omit<SendGroupStoryParams, "story" | "kind"> & { text: string }) {
+  return sendGroupMessageWithStory({ ...params, story: markdownToStory(text), kind: "text" });
 }
 
 export async function sendGroupMessageWithStory({
@@ -143,46 +115,21 @@ export async function sendGroupMessageWithStory({
   let formattedReplyId = replyToId;
   if (replyToId && /^\d+$/.test(replyToId)) {
     try {
-      // scot('ud', n) formats a number as @ud with dots
       formattedReplyId = scot("ud", BigInt(replyToId));
     } catch {
       // Fall back to raw ID if formatting fails
     }
   }
 
+  const memo = { content: story, author: fromShip, sent: sentAt };
   const action = {
     channel: {
       nest: `chat/${hostShip}/${channelName}`,
-      action: formattedReplyId
-        ? {
-            // Thread reply - needs post wrapper around reply action
-            // ReplyActionAdd takes Memo: {content, author, sent} - no kind/blob/meta
-            post: {
-              reply: {
-                id: formattedReplyId,
-                action: {
-                  add: {
-                    content: story,
-                    author: fromShip,
-                    sent: sentAt,
-                  },
-                },
-              },
-            },
-          }
-        : {
-            // Regular post
-            post: {
-              add: {
-                content: story,
-                author: fromShip,
-                sent: sentAt,
-                kind: "/chat",
-                blob: null,
-                meta: null,
-              },
-            },
-          },
+      action: {
+        post: formattedReplyId
+          ? { reply: { id: formattedReplyId, action: { add: memo } } }
+          : { add: { ...memo, kind: "/chat", blob: null, meta: null } },
+      },
     },
   };
 
@@ -204,24 +151,18 @@ export async function sendGroupMessageWithStory({
   };
 }
 
-/**
- * Build a story with text and optional media (image)
- */
 export function buildMediaStory(text: string | undefined, mediaUrl: string | undefined): Story {
   const story: Story = [];
   const cleanText = text?.trim() ?? "";
   const cleanUrl = mediaUrl?.trim() ?? "";
 
-  // Add text content if present
   if (cleanText) {
     story.push(...markdownToStory(cleanText));
   }
 
-  // Add image block if URL looks like an image
   if (cleanUrl && isImageUrl(cleanUrl)) {
     story.push(createImageBlock(cleanUrl, ""));
   } else if (cleanUrl) {
-    // For non-image URLs, add as a link
     story.push({ inline: [{ link: { href: cleanUrl, content: cleanUrl } }] });
   }
 

@@ -38,38 +38,56 @@ const snapshot = (
   ],
 });
 
-it("coalesces viewer preparation and never reinstates membership revoked during a worker read", async () => {
-  const deferred = createDeferredCore<SessionMembershipFacts>();
-  readFacts
-    .mockReturnValueOnce(deferred.promise)
-    .mockResolvedValueOnce(snapshot(target.identity, []));
-  const projection = createSessionMembershipProjection();
-  projection.updateTargets([target]);
-  try {
-    const viewers = Array.from({ length: 50 }, () => projection.prepare());
-    projection.invalidate({
-      storePath: target.storePath,
-      sessionKey,
-      facts: { kind: "member", sessionId: "shared-session", identityId: "alice", present: false },
-    });
-    expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
-    deferred.resolve(snapshot(target.identity, ["alice"]));
-    await Promise.all(viewers);
-    expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
-    expect(projection.groupTargets().get("work")).toEqual([{ sessionKey, agentId: "main" }]);
-    expect(readFacts).toHaveBeenCalledTimes(2);
-    expect(projection.ready(target.filename, sessionKey)).toBe(true);
-    projection.invalidate({
-      storePath: target.filename,
-      sessionKey,
-      facts: { kind: "member", sessionId: "shared-session", identityId: "bob", present: true },
-    });
-    expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
-    expect(projection.needsPreparation).toBe(false);
-  } finally {
-    projection.dispose();
-  }
-});
+it.each(["member revocation", "owner reassignment"] as const)(
+  "coalesces viewer preparation without replaying stale membership after %s",
+  async (change) => {
+    const deferred = createDeferredCore<SessionMembershipFacts>();
+    readFacts.mockReturnValueOnce(deferred.promise);
+    if (change === "member revocation") {
+      readFacts.mockResolvedValueOnce(snapshot(target.identity, []));
+    }
+    const projection = createSessionMembershipProjection();
+    projection.updateTargets([target]);
+    try {
+      const viewers = Array.from({ length: 50 }, () => projection.prepare());
+      projection.invalidate({
+        storePath: change === "member revocation" ? target.storePath : target.filename,
+        sessionKey,
+        facts:
+          change === "member revocation"
+            ? { kind: "member", sessionId: "shared-session", identityId: "alice", present: false }
+            : {
+                kind: "owner",
+                sessionId: "shared-session",
+                lifecycleRevision: null,
+                owner: { actor: { type: "human", id: "bob" } },
+              },
+      });
+      if (change === "member revocation") {
+        expect(projection.membership(target.storePath, sessionKey)).toEqual([]);
+      }
+      deferred.resolve(snapshot(target.identity, ["alice"]));
+      await Promise.all(viewers);
+      expect(projection.membership(target.storePath, sessionKey)).toEqual(
+        change === "member revocation" ? [] : ["alice"],
+      );
+      expect(readFacts).toHaveBeenCalledTimes(change === "member revocation" ? 2 : 1);
+      if (change === "member revocation") {
+        expect(projection.groupTargets().get("work")).toEqual([{ sessionKey, agentId: "main" }]);
+        expect(projection.ready(target.filename, sessionKey)).toBe(true);
+        projection.invalidate({
+          storePath: target.filename,
+          sessionKey,
+          facts: { kind: "member", sessionId: "shared-session", identityId: "bob", present: true },
+        });
+        expect(projection.membership(target.storePath, sessionKey)).toEqual(["bob"]);
+      }
+      expect(projection.needsPreparation).toBe(false);
+    } finally {
+      projection.dispose();
+    }
+  },
+);
 
 it.each(["replace", "remove", "dispose"] as const)(
   "rejects an in-flight snapshot after store %s",

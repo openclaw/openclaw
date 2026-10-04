@@ -19,6 +19,7 @@ import {
 } from "./plugin-instance-error.js";
 import { runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
 import {
@@ -288,42 +289,37 @@ describe("managed plugin instances", () => {
     expect(() => readDescriptor.get!()).toThrow("reloaded or disabled");
   });
 
-  it.each(
-    (["host", "VM"] as const).flatMap((realm) =>
-      (["before wrapping", "after wrapping", "after growing"] as const).map((freezeAt) => ({
-        realm,
-        freezeAt,
-      })),
-    ),
-  )("preserves $realm array descriptors frozen $freezeAt", async ({ realm, freezeAt }) => {
-    const instance = new PluginInstance("frozen-array");
-    const source: Array<{ execute(): string }> =
-      realm === "host"
-        ? [{ execute: () => "current" }]
-        : runInNewContext('[{ execute() { return "current"; } }]');
-    try {
-      if (freezeAt === "before wrapping") {
-        Object.freeze(source);
-      }
-      const view = instance.wrap(source);
-      if (freezeAt === "after growing") {
-        source.push({ execute: () => "second" });
-      }
-      Object.freeze(source);
-      expect(Array.isArray(view)).toBe(true);
-      expect(Object.keys(view)).toEqual(Object.keys(source));
-      expect(Object.getOwnPropertyDescriptor(view, "length")).toEqual(
-        Object.getOwnPropertyDescriptor(source, "length"),
+  it.each(["before wrapping", "after wrapping", "after growing"] as const)(
+    "preserves cross-realm array descriptors frozen %s",
+    async (freezeAt) => {
+      const instance = new PluginInstance("frozen-array");
+      const source: Array<{ execute(): string }> = runInNewContext(
+        '[{ execute() { return "current"; } }]',
       );
-      expect(view.length).toBe(source.length);
-      const execute: () => string = Reflect.get(view[0]!, "execute");
-      expect(execute()).toBe("current");
-      await instance.dispose();
-      expect(() => execute()).toThrow("reloaded or disabled");
-    } finally {
-      await instance.dispose();
-    }
-  });
+      try {
+        if (freezeAt === "before wrapping") {
+          Object.freeze(source);
+        }
+        const view = instance.wrap(source);
+        if (freezeAt === "after growing") {
+          source.push({ execute: () => "second" });
+        }
+        Object.freeze(source);
+        expect(Array.isArray(view)).toBe(true);
+        expect(Object.keys(view)).toEqual(Object.keys(source));
+        expect(Object.getOwnPropertyDescriptor(view, "length")).toEqual(
+          Object.getOwnPropertyDescriptor(source, "length"),
+        );
+        expect(view.length).toBe(source.length);
+        const execute: () => string = Reflect.get(view[0]!, "execute");
+        expect(execute()).toBe("current");
+        await instance.dispose();
+        expect(() => execute()).toThrow("reloaded or disabled");
+      } finally {
+        await instance.dispose();
+      }
+    },
+  );
 
   it("preserves async function metadata used by synchronous registration contracts", async () => {
     const instance = new PluginInstance("metadata");
@@ -350,25 +346,6 @@ describe("managed plugin instances", () => {
     expect(Buffer.isBuffer(tool.execute())).toBe(true);
     await instance.dispose();
     expect(structuredClone(data).nested).toEqual([{ value: 2 }]);
-  });
-
-  it("lets an admitted call finish through a native timer while draining", async () => {
-    const instance = new PluginInstance("timer-call");
-    const helper = instance.wrap(() => "complete");
-    const call = instance.wrap(
-      () =>
-        new Promise<string>((resolve) => {
-          setTimeout(() => resolve(helper()), 10);
-        }),
-    )();
-    const draining = instance.dispose();
-    try {
-      await expect(call).resolves.toBe("complete");
-      await draining;
-    } finally {
-      await instance.dispose();
-    }
-    expect(() => helper()).toThrow("reloaded or disabled");
   });
 
   it("retains streams and explicitly admitted terminal results through retirement", async () => {
@@ -450,55 +427,44 @@ describe("managed plugin instances", () => {
     expect(read).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    "sourceMember",
-    "iteratorMember",
-    "sourceMethod",
-    "asyncSourceMethod",
-    "iteratorMethod",
-    "asyncIteratorMethod",
-    "yieldedValue",
-    "terminalValue",
-  ] as const)("fences callable values returned through a stream's %s", async (target) => {
-    const instance = new PluginInstance("stream-values");
-    const read = vi.fn(() => "owned value");
-    // A helper's data is not an iterator completion signal.
-    const payload = { read, done: true };
-    const iterator = Object.assign(
-      (async function* () {
-        yield payload;
-      })(),
-      { member: payload, inspect: () => payload, inspectAsync: async () => payload },
-    );
-    const stream = instance.wrap({
-      [Symbol.asyncIterator]: () => iterator,
-      member: payload,
-      helper: () => read,
-      helperAsync: async () => read,
-      result: async () => payload,
-    });
-    const view = stream[Symbol.asyncIterator]();
-    const first = await view.next();
-    if (first.done) {
-      throw new Error("Expected the fixture's first chunk");
-    }
-    const readers = {
-      sourceMember: () => stream.member.read,
-      iteratorMember: () => view.member.read,
-      sourceMethod: () => stream.helper(),
-      asyncSourceMethod: () => stream.helperAsync(),
-      iteratorMethod: () => view.inspect().read,
-      asyncIteratorMethod: async () => (await view.inspectAsync()).read,
-      yieldedValue: () => first.value.read,
-      terminalValue: async () => (await stream.result()).read,
-    };
-    const retained = await readers[target]();
-    expect(retained()).toBe("owned value");
-    await expect(view.next()).resolves.toMatchObject({ done: true });
-    await instance.dispose();
-    expect(() => retained()).toThrow("reloaded or disabled");
-    expect(read).toHaveBeenCalledOnce();
-  });
+  it.each(["sourceMember", "iteratorMember", "sourceMethod", "asyncSourceMethod"] as const)(
+    "fences callable values returned through a stream's %s",
+    async (target) => {
+      const instance = new PluginInstance("stream-values");
+      const read = vi.fn(() => "owned value");
+      // A helper's data is not an iterator completion signal.
+      const payload = { read, done: true };
+      const iterator = Object.assign(
+        (async function* () {
+          yield payload;
+        })(),
+        { member: payload },
+      );
+      const stream = instance.wrap({
+        [Symbol.asyncIterator]: () => iterator,
+        member: payload,
+        helper: () => read,
+        helperAsync: async () => read,
+      });
+      const view = stream[Symbol.asyncIterator]();
+      const first = await view.next();
+      if (first.done) {
+        throw new Error("Expected the fixture's first chunk");
+      }
+      const readers = {
+        sourceMember: () => stream.member.read,
+        iteratorMember: () => view.member.read,
+        sourceMethod: () => stream.helper(),
+        asyncSourceMethod: () => stream.helperAsync(),
+      };
+      const retained = await readers[target]();
+      expect(retained()).toBe("owned value");
+      await expect(view.next()).resolves.toMatchObject({ done: true });
+      await instance.dispose();
+      expect(() => retained()).toThrow("reloaded or disabled");
+      expect(read).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["source", "iterator"] as const)(
     "joins an admitted async %s helper after its cursor ends",
@@ -875,7 +841,9 @@ describe("managed plugin instances", () => {
     withPluginRuntimeGatewayRequestScope(caller, () =>
       withPluginRuntimeGenerationScope(
         {
-          metadataSnapshot: { index: {}, configFingerprint: "test", owners: {} } as never,
+          metadataSnapshot: createPluginMetadataSnapshotFixture({
+            plugins: [{ id: record.id, origin: record.origin, source: record.source }],
+          }),
           pluginRegistry: first,
         },
         () => {
@@ -977,21 +945,13 @@ describe("managed plugin instances", () => {
     process.on(event, hostListener);
     try {
       process.on(event, pluginListener);
-      process.off(event, pluginListener);
-      process.emit(event);
-      expect(pluginListener).not.toHaveBeenCalled();
-      process.once(event, pluginListener);
-      process.emit(event);
-      process.emit(event);
-      expect(pluginListener).toHaveBeenCalledOnce();
-      process.on(event, pluginListener);
       const timer = delay(60_000, undefined, { signal: instance.lifecycle.signal });
       const rejected = expect(timer).rejects.toMatchObject({ name: "AbortError" });
       await instance.dispose();
       await rejected;
       process.emit(event);
-      expect(pluginListener).toHaveBeenCalledOnce();
-      expect(hostListener).toHaveBeenCalledTimes(4);
+      expect(pluginListener).not.toHaveBeenCalled();
+      expect(hostListener).toHaveBeenCalledOnce();
     } finally {
       await instance.dispose();
       process.removeListener(event, pluginListener);

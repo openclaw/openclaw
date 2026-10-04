@@ -1,5 +1,13 @@
 #!/usr/bin/env bash
 # Shared in-container lifecycle helpers for Docker/Bash E2E lanes.
+OPENCLAW_E2E_INSTANCE_LIB_DIR="${BASH_SOURCE[0]}"
+if [[ "$OPENCLAW_E2E_INSTANCE_LIB_DIR" == */* ]]; then
+  OPENCLAW_E2E_INSTANCE_LIB_DIR="${OPENCLAW_E2E_INSTANCE_LIB_DIR%/*}"
+else
+  OPENCLAW_E2E_INSTANCE_LIB_DIR=.
+fi
+OPENCLAW_E2E_INSTANCE_LIB_DIR="$(cd "$OPENCLAW_E2E_INSTANCE_LIB_DIR" && pwd)"
+
 openclaw_e2e_eval_test_state_from_b64() {
   local encoded="${1:?missing OpenClaw test-state script}"
   local decoded
@@ -102,108 +110,7 @@ openclaw_e2e_maybe_timeout() {
         fi
       fi
       # Keep stdin attached to the child instead of consuming it as watchdog source.
-      node --input-type=module -e '
-const [, timeoutValue, command, ...args] = process.argv;
-const parseTimeoutMs = (value) => {
-  const match = /^([0-9]+(?:\.[0-9]+)?)(ms|s|m|h)?$/u.exec(String(value ?? "").trim());
-  if (!match) {
-    throw new Error(`unsupported timeout value: ${value}`);
-  }
-  const amount = Number(match[1]);
-  const unit = match[2] ?? "s";
-  const multiplier = unit === "ms" ? 1 : unit === "s" ? 1_000 : unit === "m" ? 60_000 : 3_600_000;
-  return Math.max(1, Math.ceil(amount * multiplier));
-};
-if (!command) {
-  console.error("missing command for Node watchdog");
-  process.exit(1);
-}
-const { spawn } = await import("node:child_process");
-let timeoutMs;
-try {
-  timeoutMs = parseTimeoutMs(timeoutValue);
-} catch (error) {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-}
-const child = spawn(command, args, {
-  detached: process.platform !== "win32",
-  env: process.env,
-  stdio: "inherit",
-});
-let timedOut = false;
-let parentSignal = null;
-let parentSignalTimer = null;
-const signalExitCodes = new Map([
-  ["SIGHUP", 129],
-  ["SIGINT", 130],
-  ["SIGTERM", 143],
-]);
-const killGraceMs = Number.parseInt(
-  process.env.OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS || "30000",
-  10,
-);
-const killTarget = process.platform === "win32" ? child.pid : -child.pid;
-const killChild = (signal) => {
-  if (!child.pid) {
-    return;
-  }
-  try {
-    process.kill(killTarget, signal);
-  } catch {
-    try {
-      child.kill(signal);
-    } catch {}
-  }
-};
-const timer = setTimeout(() => {
-  timedOut = true;
-  console.error(`OpenClaw E2E command timed out after ${timeoutValue}`);
-  killChild("SIGTERM");
-  setTimeout(() => killChild("SIGKILL"), killGraceMs).unref();
-}, timeoutMs);
-const forwardSignal = (signal) => {
-  if (parentSignal) {
-    killChild("SIGKILL");
-    process.exit(signalExitCodes.get(signal) ?? 1);
-  }
-  parentSignal = signal;
-  clearTimeout(timer);
-  killChild(signal);
-  parentSignalTimer = setTimeout(() => {
-    killChild("SIGKILL");
-    process.exit(signalExitCodes.get(signal) ?? 1);
-  }, killGraceMs);
-  parentSignalTimer.unref();
-};
-process.once("SIGINT", forwardSignal);
-process.once("SIGTERM", forwardSignal);
-process.once("SIGHUP", forwardSignal);
-child.on("close", (code, signal) => {
-  clearTimeout(timer);
-  if (parentSignalTimer) {
-    clearTimeout(parentSignalTimer);
-  }
-  if (timedOut) {
-    process.exit(124);
-  }
-  if (parentSignal) {
-    process.exit(signalExitCodes.get(parentSignal) ?? 1);
-  }
-  if (code !== null) {
-    process.exit(code);
-  }
-  if (signal) {
-    process.kill(process.pid, signal);
-  }
-  process.exit(1);
-});
-child.on("error", (error) => {
-  clearTimeout(timer);
-  console.error(error.message);
-  process.exit(127);
-});
-      ' -- "$timeout_value" "$@"
+      node "$OPENCLAW_E2E_INSTANCE_LIB_DIR/docker-e2e-watchdog.mjs" e2e "$timeout_value" "$@"
       return
     fi
     echo "timeout command not found and Node is unavailable; cannot bound OpenClaw E2E command after $timeout_value" >&2

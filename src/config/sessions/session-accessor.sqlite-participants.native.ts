@@ -26,18 +26,16 @@ import { MAX_SESSION_PARTICIPANTS } from "./session-entry-provenance.js";
 import {
   participantIdentityNamespace,
   mergeParticipantAggregate,
-  type SessionParticipantIdentity,
 } from "./session-participant-identity.js";
-
-export type RecordSessionParticipantResult = "inserted" | "updated" | "capped";
+import type {
+  RecordSessionParticipantResult,
+  SessionParticipantRecordInput,
+} from "./session-sharing-store.types.js";
+export type { RecordSessionParticipantResult } from "./session-sharing-store.types.js";
 
 export function recordSessionParticipant(
   scope: SessionAccessScope,
-  params: {
-    identity: SessionParticipantIdentity;
-    promptedAt?: number;
-    sessionAgentId?: string;
-  },
+  params: SessionParticipantRecordInput,
 ): RecordSessionParticipantResult | null {
   const actorId = params.identity.id;
   if (!actorId || (params.identity.type === "agent" && actorId === params.sessionAgentId)) {
@@ -129,6 +127,7 @@ export function recordSessionParticipant(
           agentId: resolved.agentId,
           sessionKey: resolved.sessionKey,
           reason: "participants",
+          scope: "session-entry",
         }),
       );
       return existing ? "updated" : "inserted";

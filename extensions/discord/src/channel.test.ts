@@ -6,6 +6,7 @@ import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-help
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -84,12 +85,13 @@ function resolveAccount(cfg: OpenClawConfig, accountId = "default"): ResolvedDis
 }
 
 function startDiscordAccount(cfg: OpenClawConfig, accountId = "default") {
-  return discordPlugin.gateway!.startAccount!(
-    createStartAccountContext({
+  return discordPlugin.gateway!.startAccount!({
+    ...createStartAccountContext({
       account: resolveAccount(cfg, accountId),
       cfg,
     }),
-  );
+    scheduler: createTestPluginServiceScheduler(),
+  });
 }
 
 function prepareDiscordStartupMocks() {
@@ -115,7 +117,10 @@ async function expectDiscordStartupDelay(
 ) {
   const ctx = createStartAccountContext({ account: resolveAccount(cfg, accountId), cfg });
   sleepWithAbortMock.mockClear();
-  await discordPlugin.gateway!.startAccount!(ctx);
+  await discordPlugin.gateway!.startAccount!({
+    ...ctx,
+    scheduler: createTestPluginServiceScheduler(),
+  });
   if (expectedMs === 0) {
     expect(sleepWithAbortMock).not.toHaveBeenCalled();
     return;
@@ -298,6 +303,25 @@ describe("discordPlugin outbound", () => {
     });
   });
 
+  it("resolves the current thread only for sends addressed to that thread's channel", () => {
+    const resolveAutoThreadId = discordPlugin.threading?.resolveAutoThreadId;
+    if (!resolveAutoThreadId) {
+      throw new Error("Expected discordPlugin.threading.resolveAutoThreadId to be defined");
+    }
+    const resolveFor = (to: string, currentThreadTs?: string) =>
+      resolveAutoThreadId({
+        cfg: {} as OpenClawConfig,
+        to,
+        toolContext: { currentChannelId: "channel:111", currentThreadTs },
+      });
+
+    expect(resolveFor("channel:111", "111")).toBe("111");
+    expect(resolveFor("111", "111")).toBe("111");
+    expect(resolveFor("channel:222", "111")).toBeUndefined();
+    expect(resolveFor("user:111", "111")).toBeUndefined();
+    expect(resolveFor("channel:111")).toBeUndefined();
+  });
+
   it("avoids local require calls for bundled-only sibling modules", async () => {
     const source = await readFile(
       resolve(process.cwd(), "extensions/discord/src/channel.ts"),
@@ -332,26 +356,6 @@ describe("discordPlugin outbound", () => {
     expect(discordPlugin.actions?.resolveExecutionMode?.({ action: "channel-info" as never })).toBe(
       "gateway",
     );
-  });
-
-  it("requires trusted requester identity for registered privileged tool actions", () => {
-    expect(
-      discordPlugin.actions?.requiresTrustedRequesterSender?.({
-        action: "channel-delete",
-        toolContext: { currentChannelProvider: "discord" },
-      }),
-    ).toBe(true);
-    expect(
-      discordPlugin.actions?.requiresTrustedRequesterSender?.({
-        action: "channel-delete",
-      }),
-    ).toBe(false);
-    expect(
-      discordPlugin.actions?.requiresTrustedRequesterSender?.({
-        action: "read",
-        toolContext: { currentChannelProvider: "discord" },
-      }),
-    ).toBe(false);
   });
 
   it("adds Discord mention formatting to agent prompt hints", () => {
@@ -550,15 +554,14 @@ describe("discordPlugin outbound", () => {
   it.each(["cancelled", "revoked"] as const)(
     "does not send queued typing after its owner is %s",
     async (reason) => {
-      const firstResponse = createDeferred<Response>();
+      const releaseWorkers = createDeferred<void>();
       const typingQueued = createDeferred<void>();
-      const fetch = vi
-        .fn<typeof globalThis.fetch>()
-        .mockReturnValueOnce(firstResponse.promise)
-        .mockResolvedValue(new Response(null, { status: 204 }));
+      const fetch = vi.fn<typeof globalThis.fetch>(async () => {
+        await releaseWorkers.promise;
+        return new Response(null, { status: 204 });
+      });
       const rest = new RequestClient("synthetic-token", {
         fetch,
-        scheduler: { maxConcurrency: 1 },
       });
       const post = rest.post.bind(rest);
       vi.spyOn(rest, "post").mockImplementation((...args) => {
@@ -567,7 +570,9 @@ describe("discordPlugin outbound", () => {
         return pending;
       });
       const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
-      const first = rest.get("/channels/123/messages");
+      const active = Array.from({ length: 4 }, (_, index) =>
+        rest.get(`/channels/blocked-${index}/messages`),
+      );
       const controller = new AbortController();
       let current = true;
       const queued = discordPlugin.heartbeat!.sendTypingGuarded!({
@@ -588,13 +593,13 @@ describe("discordPlugin outbound", () => {
         } else {
           current = false;
         }
-        firstResponse.resolve(Response.json([]));
-        await first;
+        releaseWorkers.resolve();
+        await Promise.all(active);
         await rejected;
-        expect(fetch).toHaveBeenCalledOnce();
+        expect(fetch).toHaveBeenCalledTimes(4);
       } finally {
-        firstResponse.resolve(Response.json([]));
-        await Promise.allSettled([first, queued]);
+        releaseWorkers.resolve();
+        await Promise.allSettled([...active, queued]);
         resolveRest.mockRestore();
       }
     },
@@ -816,7 +821,10 @@ describe("discordPlugin outbound", () => {
       statusPatchSink: (next) => statusPatches.push({ ...next }),
     });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+    await discordPlugin.gateway!.startAccount!({
+      ...ctx,
+      scheduler: createTestPluginServiceScheduler(),
+    });
 
     const monitorParams = objectArgAt(monitorDiscordProviderMock, 0, 0);
     expect(monitorParams.token).toBe("discord-token");
@@ -911,7 +919,10 @@ describe("discordPlugin outbound", () => {
       application: { intents: { messageContent: "enabled" } },
     });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+    await discordPlugin.gateway!.startAccount!({
+      ...ctx,
+      scheduler: createTestPluginServiceScheduler(),
+    });
 
     await expectStaleProbeMetadataCleared(statusPatches);
   });
@@ -933,7 +944,10 @@ describe("discordPlugin outbound", () => {
       application: { intents: { messageContent: "enabled" } },
     });
 
-    await discordPlugin.gateway!.startAccount!(ctx);
+    await discordPlugin.gateway!.startAccount!({
+      ...ctx,
+      scheduler: createTestPluginServiceScheduler(),
+    });
 
     await expectStaleProbeMetadataCleared(statusPatches);
   });

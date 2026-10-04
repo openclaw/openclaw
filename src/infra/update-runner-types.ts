@@ -1,77 +1,13 @@
-import type { z } from "zod";
-import type {
-  PluginUpdateIntegrityDriftParams,
-  PluginUpdateSummary,
-} from "../plugins/update-source.js";
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
-import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
-import type { UpdateFailureFact } from "./update-failure-facts.js";
-import type { GitRuntimeArtifactIdentity } from "./update-git-runtime.js";
 import type { GlobalInstallManager } from "./update-global.js";
-import type { UpdateRecovery } from "./update-recovery.js";
-import type { UpdateRollbackOutcome, UpdateRunRecordSchema } from "./update-run-schema.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-export type UpdateRunResult = {
-  localOverrides?: LocalPackageOverridesResult;
-  runId?: string;
-  status: "ok" | "error" | "skipped";
-  mode: "git" | "pnpm" | "bun" | "npm" | "unknown";
-  root?: string;
-  reason?: string;
-  /** The executing owner's terminal failure; steps also retain superseded attempts. */
-  failedStep?: UpdateStepResult;
-  gitRuntime?: GitRuntimeArtifactIdentity;
-  /** The preparation owner verified that completion needs no runtime regeneration. */
-  sourceRuntimePrepared?: boolean;
-  before?: { sha?: string | null; version?: string | null; buildId?: string | null };
-  after?: {
-    sha?: string | null;
-    version?: string | null;
-    buildId?: string | null;
-    upstreamRef?: string;
-  };
-  steps: UpdateStepResult[];
-  durationMs: number;
-  recovery?: UpdateRecovery;
-  verification?: Omit<
-    z.infer<typeof UpdateRunRecordSchema>["verification"],
-    "recovery" | "rollbackOutcome"
-  >;
-  rollbackOutcome?: UpdateRollbackOutcome;
-  postUpdate?: {
-    plugins?: {
-      failureFacts?: UpdateFailureFact[];
-      doctorLint?: UpdateStepResult;
-      status: "ok" | "warning" | "skipped" | "error";
-      reason?: string;
-      changed: boolean;
-      warnings?: Array<{
-        pluginId?: string;
-        source?: string;
-        errorCode?: string;
-        reason: string;
-        message: string;
-        guidance: string[];
-      }>;
-      sync: {
-        changed: boolean;
-        switchedToBundled: string[];
-        switchedToNpm: string[];
-        warnings: string[];
-        errors: string[];
-      };
-      npm: Pick<PluginUpdateSummary, "changed" | "outcomes">;
-      integrityDrifts: Array<
-        Omit<PluginUpdateIntegrityDriftParams, "dryRun"> & { action: "aborted" }
-      >;
-    };
-  };
-};
+export type { UpdateRunResult } from "./update-run-result.js";
 
 export type CommandRunner = (
   argv: string[],
@@ -98,8 +34,8 @@ type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 export type UpdateStepProgress = {
   onRollbackOutcome?: (outcome: NonNullable<UpdateRunResult["rollbackOutcome"]>) => void;
   onHeartbeat?: () => void;
-  onStepStart?: (step: UpdateStepInfo) => void;
-  onStepComplete?: (step: UpdateStepCompletion) => void;
+  onStepStart?: (step: UpdateStepInfo) => void | Promise<void>;
+  onStepComplete?: (step: UpdateStepCompletion) => void | Promise<void>;
 };
 
 type GitUpdateTarget = {
@@ -126,8 +62,8 @@ export type UpdateRunnerOptions = {
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
   progress?: UpdateStepProgress;
-  /** The finalizer owns retained source/runtime rollback after successful activation. */
-  onTransaction?: (transaction: PackageUpdateTransaction) => void;
+  /** Retain source/runtime before Doctor; the finalizer owns state-safe rollback. */
+  onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
 } & (
   | {
       /** CLI-owned activation Doctor retains its config writer and requester authority. */
@@ -148,6 +84,7 @@ export type UpdateRunnerOptions = {
 );
 
 export type UpdateInstallSurface =
+  | { kind: "immutable"; mode: "unknown"; root: string; packageRoot: string }
   | { kind: "git"; mode: "git"; root: string; packageRoot: string }
   | { kind: "global"; mode: GlobalInstallManager; root: string; packageRoot: string }
   | { kind: "package-root"; mode: "unknown"; root: string; packageRoot: string }
@@ -160,6 +97,7 @@ export type RunStepOptions = {
   cwd: string;
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
+  input?: string;
   progress?: UpdateStepProgress;
   stepIndex: number;
   totalSteps: number;

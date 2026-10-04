@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import SwiftUI
 import WatchKit
 
@@ -26,18 +27,11 @@ struct WatchInboxView: View {
     var onRefreshAppSnapshot: (() -> Void)?
     var onAppCommand: ((WatchAppCommand) -> Void)?
     var onSendChatMessage: ((String, Bool) async -> String?)?
+    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
 
     var body: some View {
         NavigationStack(path: self.$navigationPath) {
-            WatchControlSurfaceView(
-                store: self.store,
-                directNode: self.directNode,
-                onAction: self.onAction,
-                onExecApprovalDecision: self.onExecApprovalDecision,
-                onRefreshExecApprovalReview: self.onRefreshExecApprovalReview,
-                onRefreshAppSnapshot: self.onRefreshAppSnapshot,
-                onAppCommand: self.onAppCommand,
-                onSendChatMessage: self.onSendChatMessage)
+            self.controlSurface
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(for: WatchDestination.self) { destination in
                     switch destination {
@@ -47,20 +41,8 @@ struct WatchInboxView: View {
                 }
         }
     }
-}
 
-private struct WatchControlSurfaceView: View {
-    var store: WatchInboxStore
-    var directNode: WatchDirectNode
-    var onAction: ((WatchPromptAction) -> Void)?
-    var onExecApprovalDecision: ((String, String?, WatchExecApprovalDecision) -> Void)?
-    var onRefreshExecApprovalReview: (() -> Void)?
-    var onRefreshAppSnapshot: (() -> Void)?
-    var onAppCommand: ((WatchAppCommand) -> Void)?
-    var onSendChatMessage: ((String, Bool) async -> String?)?
-    @State private var selectedFace = WatchScreenshotMode.approvals ? 2 : 0
-
-    var body: some View {
+    private var controlSurface: some View {
         TabView(selection: self.$selectedFace) {
             self.nowFace
                 .tag(0)
@@ -76,23 +58,19 @@ private struct WatchControlSurfaceView: View {
         .navigationTitle("")
     }
 
-    private var faceCount: Int {
-        4
-    }
-
     private var pageRail: some View {
-        WatchPageRail(selectedIndex: self.selectedFace, pageCount: self.faceCount)
+        WatchPageRail(selectedIndex: self.selectedFace, pageCount: 4)
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.bottom, -5)
             .allowsHitTesting(false)
     }
 
     private var avatarImageSource: String? {
-        WatchAvatarSource.normalized(self.store.appSnapshot?.agentAvatarURL)
+        self.store.appSnapshot?.agentAvatarURL?.trimmedNonEmpty
     }
 
     private var avatarText: String? {
-        WatchAvatarSource.normalized(self.store.appSnapshot?.agentAvatarText)
+        self.store.appSnapshot?.agentAvatarText?.trimmedNonEmpty
     }
 
     private var nowFace: some View {
@@ -132,8 +110,8 @@ private struct WatchControlSurfaceView: View {
 
             if self.chatCount > 0 || self.approvalCount > 0 {
                 WatchCompactStatusStrip(
-                    inboxCount: self.chatCountText,
-                    approvalCount: self.approvalCountText,
+                    inboxCount: self.chatCount.formatted(),
+                    approvalCount: self.approvalCount.formatted(),
                     status: self.statusLine)
             }
         }
@@ -251,8 +229,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var promptDetails: String? {
-        let details = self.store.details?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return details.isEmpty ? nil : details
+        self.store.details?.trimmedNonEmpty
     }
 
     private var inboxHasItems: Bool {
@@ -291,7 +268,7 @@ private struct WatchControlSurfaceView: View {
                     subtitle: .verbatim(self.approvalDecisionSubtitle(record)),
                     accessory: .verbatim(self.approvalAccessory(record)))
 
-                if let warningText = WatchExecApprovalDisplay.warningText(record.approval.warningText) {
+                if let warningText = record.approval.warningText?.trimmedNonEmpty {
                     WatchApprovalWarning(text: warningText)
                 }
 
@@ -440,15 +417,7 @@ private struct WatchControlSurfaceView: View {
     }
 
     private var approvalCount: Int {
-        max(self.store.sortedExecApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
-    }
-
-    private var chatCountText: String {
-        self.chatCount.formatted()
-    }
-
-    private var approvalCountText: String {
-        self.approvalCount.formatted()
+        max(self.store.execApprovals.count, self.store.appSnapshot?.pendingApprovalCount ?? 0)
     }
 
     private var connectionLine: String {
@@ -471,10 +440,7 @@ private struct WatchControlSurfaceView: View {
         if let record = store.activeExecApproval {
             return record.approval.commandPreview ?? record.approval.commandText
         }
-        if self.chatCount > 0 {
-            return self.chatItems.last?.text ?? self.store.gatewaySummaryText
-        }
-        return self.store.gatewaySummaryText
+        return self.chatItems.last?.text ?? self.store.gatewaySummaryText
     }
 
     private var primarySubtitle: String {
@@ -642,13 +608,8 @@ private struct WatchFaceScroll<Content: View>: View {
 }
 
 private enum WatchAvatarSource {
-    static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     static func dataImage(from source: String?) -> UIImage? {
-        guard let source = normalized(source),
+        guard let source = source?.trimmedNonEmpty,
               source.lowercased().hasPrefix("data:image/"),
               let commaIndex = source.firstIndex(of: ",")
         else {
@@ -662,7 +623,7 @@ private enum WatchAvatarSource {
     }
 
     static func remoteURL(from source: String?) -> URL? {
-        guard let source = normalized(source),
+        guard let source = source?.trimmedNonEmpty,
               let url = URL(string: source),
               let scheme = url.scheme?.lowercased(),
               scheme == "https" || scheme == "http"
@@ -693,7 +654,7 @@ private struct WatchClawAvatar: View {
                 .strokeBorder(WatchClawStyle.accent.opacity(0.32), lineWidth: 1)
         }
         .shadow(color: WatchClawStyle.accent.opacity(0.30), radius: 5, y: 2)
-        .task(id: WatchAvatarSource.normalized(self.imageSource)) {
+        .task(id: self.imageSource?.trimmedNonEmpty) {
             self.dataImage = WatchAvatarSource.dataImage(from: self.imageSource)
         }
     }
@@ -720,7 +681,7 @@ private struct WatchClawAvatar: View {
     }
 
     @ViewBuilder private var fallbackContent: some View {
-        if let text = WatchAvatarSource.normalized(text) {
+        if let text = text?.trimmedNonEmpty {
             Text(String(text.prefix(3)))
                 .font(WatchClawType.avatar(size: self.size * 0.42))
                 .foregroundStyle(.white)
@@ -734,7 +695,7 @@ private struct WatchClawAvatar: View {
     }
 
     private var contentPadding: CGFloat {
-        WatchAvatarSource.normalized(self.imageSource) == nil ? self.size * 0.04 : 0
+        self.imageSource?.trimmedNonEmpty == nil ? self.size * 0.04 : 0
     }
 }
 
@@ -1078,15 +1039,8 @@ private enum WatchExecApprovalDisplay {
         }
     }
 
-    static func warningText(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
     static func statusText(for record: WatchExecApprovalRecord) -> String? {
-        let statusText = record.status?.localizedText()
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !statusText.isEmpty {
+        if let statusText = record.status?.localizedText().trimmedNonEmpty {
             return statusText
         }
         return record.isResolving ? String(localized: "Sending decision...") : nil
@@ -1449,7 +1403,7 @@ private struct WatchExecApprovalListView: View {
 
     var body: some View {
         WatchDetailScroll(title: "Approvals") {
-            if self.store.sortedExecApprovals.isEmpty {
+            if self.store.execApprovals.isEmpty {
                 WatchHeroCard(
                     label: .localized("Clear"),
                     title: .localized("No approvals waiting"),
@@ -1482,13 +1436,7 @@ private struct WatchExecApprovalListView: View {
     }
 
     private func metadataLine(for record: WatchExecApprovalRecord) -> String {
-        var parts: [String] = []
-        if let host = record.approval.host, !host.isEmpty {
-            parts.append(host)
-        }
-        if let nodeId = record.approval.nodeId, !nodeId.isEmpty {
-            parts.append(nodeId)
-        }
+        var parts = [record.approval.host, record.approval.nodeId].compactMap(\.self).filter { !$0.isEmpty }
         if let expiresText = Self.expiresText(record.approval.expiresAtMs) {
             parts.append(expiresText)
         }
@@ -1530,8 +1478,8 @@ private struct WatchExecApprovalDetailView: View {
 
             WatchApprovalCommandReview(commandText: self.commandText)
 
-            if let warningText = WatchExecApprovalDisplay.warningText(
-                self.currentRecord?.approval.warningText ?? self.record.approval.warningText)
+            if let warningText = (self.currentRecord?.approval.warningText ?? self.record.approval.warningText)?
+                .trimmedNonEmpty
             {
                 WatchApprovalWarning(text: warningText)
             }
@@ -1586,16 +1534,7 @@ private struct WatchExecApprovalDetailView: View {
 
     private var metadataSummary: String {
         let approval = self.currentRecord?.approval ?? self.record.approval
-        var parts: [String] = []
-        if let host = approval.host, !host.isEmpty {
-            parts.append(host)
-        }
-        if let nodeId = approval.nodeId, !nodeId.isEmpty {
-            parts.append(nodeId)
-        }
-        if let agentId = approval.agentId, !agentId.isEmpty {
-            parts.append(agentId)
-        }
+        let parts = [approval.host, approval.nodeId, approval.agentId].compactMap(\.self).filter { !$0.isEmpty }
         return parts.isEmpty
             ? String(localized: "Review command below")
             : parts.joined(separator: " · ")

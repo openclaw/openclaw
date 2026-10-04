@@ -11,7 +11,8 @@ import {
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
 import { installScheduledTask } from "./schtasks-install.js";
-import { buildScheduledTaskXml, resolveTaskScriptPath } from "./schtasks-layout.js";
+import { resolveTaskScriptPath } from "./schtasks-layout.js";
+import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { captureGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { native } from "./service-definition-backup.mocks.test-support.js";
 import { GatewayServiceDefinitionBackupReceiptSchema } from "./service-stage.js";

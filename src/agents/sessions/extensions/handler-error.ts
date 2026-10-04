@@ -1,4 +1,5 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { rethrowIncognitoSessionError } from "../../../state/incognito-session-error.js";
 import { SessionMetadataCommittedError } from "../session-manager-metadata-error.js";
 import type { ExtensionError } from "./types.js";
 
@@ -9,6 +10,7 @@ export function reportExtensionHandlerError(
   event: string,
   report: (error: ExtensionError) => void,
 ): void {
+  rethrowIncognitoSessionError(error);
   if (error instanceof SessionMetadataCommittedError) {
     throw error;
   }

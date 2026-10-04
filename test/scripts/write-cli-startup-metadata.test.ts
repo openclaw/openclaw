@@ -6,15 +6,21 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
+import { setTimeout as waitForRuntimeTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import { testing } from "../../scripts/write-cli-startup-metadata.ts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
-import { waitForChildClose, waitForPidFile } from "../helpers/process-wait.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 vi.mock("node:child_process", async (importOriginal) => {
@@ -36,8 +42,25 @@ const DEFAULT_COMMAND_HELP_NAMES = [
   "models",
   "plugins",
   "sessions",
-  "tasks",
 ] as const;
+
+function sourceSubcommandHelp() {
+  return {
+    config: "Usage: openclaw config\n",
+    doctor: "Usage: openclaw doctor\n",
+    gateway: "Usage: openclaw gateway\n",
+    models: "Usage: openclaw models\n",
+    plugins: "Usage: openclaw plugins\n",
+    sessions: "Usage: openclaw sessions\n",
+  };
+}
+
+const sourceHelpRenderers = {
+  renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
+  renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+  renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+  renderSourceSubcommandHelpTextRecord: sourceSubcommandHelp,
+};
 
 function writeFixtureFile(rootDir: string, relativePath: string, contents: string): void {
   const filePath = path.join(rootDir, relativePath);
@@ -46,41 +69,31 @@ function writeFixtureFile(rootDir: string, relativePath: string, contents: strin
 }
 
 function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
-  const fixtures = new Map<string, string>([
-    ["extensions/browser/src/cli/browser-cli.ts", "export const browserHelp = 'browser';\n"],
-    ["extensions/canvas/cli-metadata.ts", "export const canvasMetadata = 'canvas';\n"],
-    ["extensions/canvas/index.ts", "export const canvasEntry = 'canvas';\n"],
-    ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas';\n"],
-    ["src/cli/banner.ts", "export const banner = 'openclaw';\n"],
-    [
-      "src/cli/daemon-cli/register-service-commands.ts",
-      "export const gatewayServiceCommands = 'gateway';\n",
-    ],
-    ["src/cli/gateway-cli.ts", "export const gatewayHelp = 'gateway';\n"],
-    ["src/cli/gateway-cli/register.ts", "export const gatewayRegister = 'gateway';\n"],
-    ["src/cli/gateway-cli/run-command.ts", "export const gatewayRun = 'gateway';\n"],
-    ["src/cli/help-format.ts", "export const helpFormat = 'help';\n"],
-    ["src/cli/config-cli.ts", "export const configHelp = 'config';\n"],
-    ["src/cli/models-cli.ts", "export const modelsHelp = 'models';\n"],
-    ["src/cli/nodes-cli/register.ts", "export const nodesHelp = 'nodes';\n"],
-    ["src/cli/program/register.maintenance.ts", "export const maintenanceHelp = 'maintenance';\n"],
-    [
-      "src/cli/program/register.status-health-sessions.ts",
-      "export const statusHealthSessionsHelp = 'sessions';\n",
-    ],
-    ["src/cli/program/context.ts", "export const context = 'context';\n"],
-    ["src/cli/program/help.ts", "export const help = 'help';\n"],
-    ["src/cli/plugins-cli.ts", "export const pluginsHelp = 'plugins';\n"],
-    [
-      "src/plugins/register-plugin-cli-command-groups.ts",
-      "export const pluginCommandGroups = 'plugins';\n",
-    ],
-    ["src/cli/secrets-cli.ts", "export const secretsHelp = 'secrets';\n"],
-    ["packages/terminal-core/src/links.ts", "export const links = 'links';\n"],
-    ["packages/terminal-core/src/theme.ts", "export const theme = 'theme';\n"],
-  ]);
-  for (const [relativePath, contents] of fixtures) {
-    writeFixtureFile(rootDir, relativePath, contents);
+  for (const relativePath of [
+    "extensions/browser/src/cli/browser-cli.ts",
+    "extensions/canvas/cli-metadata.ts",
+    "extensions/canvas/index.ts",
+    "extensions/canvas/src/cli.ts",
+    "src/cli/banner.ts",
+    "src/cli/gateway-cli.ts",
+    "src/cli/gateway-cli/register.ts",
+    "src/cli/gateway-cli/run-command.ts",
+    "src/cli/help-format.ts",
+    "src/cli/config-cli.ts",
+    "src/cli/models-cli.ts",
+    "src/cli/nodes-cli/register.ts",
+    "src/cli/program/register.maintenance.ts",
+    "src/cli/program/context.ts",
+    "src/cli/program/help.ts",
+    "src/cli/plugins-cli.ts",
+    "src/cli/secrets-cli.ts",
+    "packages/terminal-core/src/links.ts",
+    "packages/terminal-core/src/theme.ts",
+    "src/cli/daemon-cli/register-service-commands.ts",
+    "src/cli/program/register.status-health-sessions.ts",
+    "src/plugins/register-plugin-cli-command-groups.ts",
+  ]) {
+    writeFixtureFile(rootDir, relativePath, "export {};\n");
   }
 }
 
@@ -101,24 +114,42 @@ function createSpawnTextChild() {
   });
 }
 
-async function waitForProcessExit(
-  pid: number,
-  timeoutMs = LOAD_SENSITIVE_PROCESS_TIMEOUT_MS,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!processIsAlive(pid)) {
-      return;
+// The renderer joins stopped process groups; only the OS reaper owns final PID
+// disappearance, so this residual preserves the stronger absence assertion.
+async function waitForProcessExit(pid: number, signal: AbortSignal): Promise<void> {
+  try {
+    while (processIsAlive(pid)) {
+      signal.throwIfAborted();
+      await waitForRuntimeTick(10, undefined, { signal });
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
+  } catch (error) {
+    if (signal.aborted) {
+      throw new Error(`process ${pid} was still alive when the test aborted`, { cause: error });
+    }
+    throw error;
   }
-  throw new Error(`process ${pid} was still alive after ${timeoutMs}ms`);
 }
+
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 describe("write-cli-startup-metadata", () => {
   const { createTempDir } = createScriptTestHarness();
+
+  function metadataFixture(prefix: string) {
+    const tempRoot = createTempDir(prefix);
+    const distDir = path.join(tempRoot, "dist");
+    const extensionsDir = path.join(tempRoot, "extensions");
+    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    writeStartupMetadataSourceSignatureFixture(tempRoot);
+    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
+    return { sourceRootDir: tempRoot, distDir, extensionsDir, outputPath };
+  }
 
   it("renders source root help without blocking sibling child events", async () => {
     const child = createSpawnTextChild();
@@ -160,10 +191,7 @@ describe("write-cli-startup-metadata", () => {
       await vi.importActual<typeof import("node:child_process")>("node:child_process")
     ).spawn;
     const spawnMock = vi.mocked(spawn);
-    const tempRoot = createTempDir("openclaw-startup-metadata-scheduling-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-scheduling-");
     const startedCommands: string[] = [];
     let activeCommands = 0;
     let maxActiveCommands = 0;
@@ -176,9 +204,6 @@ describe("write-cli-startup-metadata", () => {
     const rootHelpBlocked = new Promise<void>((resolve) => {
       releaseRootHelp = resolve;
     });
-
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
 
     spawnMock.mockImplementation((_command, args) => {
       const commandName = String(args[1]);
@@ -196,10 +221,7 @@ describe("write-cli-startup-metadata", () => {
 
     try {
       writePromise = testing.writeCliStartupMetadata({
-        distDir,
-        outputPath,
-        extensionsDir,
-        sourceRootDir: tempRoot,
+        ...metadata,
         renderBundledRootHelpText: async () => {
           reportRootHelpStarted();
           await rootHelpBlocked;
@@ -254,7 +276,6 @@ describe("write-cli-startup-metadata", () => {
         spawnProcess: spawnProcess as typeof spawn,
         timeoutMs: 5_000,
       });
-
       child[streamName].emit("error", streamError);
       child.emit("close", null, "SIGTERM");
 
@@ -293,10 +314,8 @@ describe("write-cli-startup-metadata", () => {
       await vi.importActual<typeof import("node:child_process")>("node:child_process")
     ).spawn;
     const spawnMock = vi.mocked(spawn);
-    const tempRoot = createTempDir("openclaw-startup-metadata-batch-failure-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-batch-failure-");
+    const { outputPath } = metadata;
     const events: string[] = [];
     const children: Array<ReturnType<typeof createSpawnTextChild> & { commandName: string }> = [];
     const realRmSync = fs.rmSync.bind(fs);
@@ -304,9 +323,6 @@ describe("write-cli-startup-metadata", () => {
       events.push("cleanup");
       return realRmSync(target, options);
     });
-
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
 
     spawnMock.mockImplementation((_command, args) => {
       const commandName = String(args[1]);
@@ -325,10 +341,7 @@ describe("write-cli-startup-metadata", () => {
 
     try {
       const writePromise = testing.writeCliStartupMetadata({
-        distDir,
-        outputPath,
-        extensionsDir,
-        sourceRootDir: tempRoot,
+        ...metadata,
         renderBundledRootHelpText: async () => "Usage: openclaw\n",
       });
       const deadline = Date.now() + 1_000;
@@ -370,10 +383,8 @@ describe("write-cli-startup-metadata", () => {
   it.runIf(process.platform !== "win32")(
     "preserves shared state when a canceled process group cannot be proven dead",
     async () => {
-      const tempRoot = createTempDir("openclaw-startup-metadata-undrained-tree-");
-      const distDir = path.join(tempRoot, "dist");
-      const extensionsDir = path.join(tempRoot, "extensions");
-      const outputPath = path.join(distDir, "cli-startup-metadata.json");
+      const metadata = metadataFixture("openclaw-startup-metadata-undrained-tree-");
+      const { sourceRootDir: tempRoot, outputPath } = metadata;
       const child = Object.assign(createSpawnTextChild(), { pid: 123 });
       const realProcessKill = process.kill.bind(process);
       const processKill = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
@@ -384,16 +395,11 @@ describe("write-cli-startup-metadata", () => {
       });
       let renderStateDir = "";
 
-      writeStartupMetadataSourceSignatureFixture(tempRoot);
-      writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
-
       try {
         const writePromise = testing.writeCliStartupMetadata({
-          distDir,
-          outputPath,
-          extensionsDir,
-          sourceRootDir: tempRoot,
+          ...metadata,
           renderBundledRootHelpText: async () => "Usage: openclaw\n",
+          ...sourceHelpRenderers,
           renderSourceBrowserHelpText: (renderContext, taskContext) => {
             renderStateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
             if (!taskContext) {
@@ -411,17 +417,6 @@ describe("write-cli-startup-metadata", () => {
               timeoutMs: 5_000,
             });
           },
-          renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-          renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-          renderSourceSubcommandHelpTextRecord: () => ({
-            config: "Usage: openclaw config\n",
-            doctor: "Usage: openclaw doctor\n",
-            gateway: "Usage: openclaw gateway\n",
-            models: "Usage: openclaw models\n",
-            plugins: "Usage: openclaw plugins\n",
-            sessions: "Usage: openclaw sessions\n",
-            tasks: "Usage: openclaw tasks\n",
-          }),
         });
         await new Promise((resolve) => {
           setImmediate(resolve);
@@ -606,9 +601,27 @@ if (role === "leaf") {
       const controller = String.raw`
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
+import childProcess, { spawn } from "node:child_process";
+import { syncBuiltinESMExports } from "node:module";
 import { pathToFileURL } from "node:url";
 const [root, mode, repo] = process.argv.slice(2);
+let ownedLeaderPid, completedPsFault;
+const originalSpawnSync = childProcess.spawnSync;
+if (mode === "unknown") {
+  childProcess.spawnSync = function (...args) {
+    const result = Reflect.apply(originalSpawnSync, this, args);
+    const [command, argv] = args;
+    if (command === "ps" && ownedLeaderPid !== undefined && Array.isArray(argv) &&
+        argv.length === 5 && argv[0] === "-s" && argv[1] === String(ownedLeaderPid) &&
+        argv[2] === "-L" && argv[3] === "-o" && argv[4] === "pgid=,state=" &&
+        result.status === 23 && result.signal === null && !result.error) {
+      completedPsFault ??= { groupPid: ownedLeaderPid, status: result.status,
+        signal: result.signal, errorPresent: !!result.error };
+    }
+    return result;
+  };
+  syncBuiltinESMExports();
+}
 const { testing } = await import(${JSON.stringify(metadataUrl.href)});
 const { inspectManagedProcessGroup, waitForManagedProcessGroupExit } =
   await import(pathToFileURL(path.join(repo, "scripts/lib/managed-child-process.mts")));
@@ -636,12 +649,14 @@ try {
     renderSourceNodesHelpText: (context, taskContext) => {
       if (!taskContext) throw new Error("missing actual supervisor task context");
       renderState = context.env.OPENCLAW_STATE_DIR;
+      // Unknown mode fails every snapshot while the reaper holds the stopped group.
       return testing.spawnText([file("actor.mjs"), root, "leader"], {
         cwd: root, env: process.env, failureMessage: "supervised nodes fixture failed",
-        timeoutMs: 120000, killGraceMs: 5000, maxOutputBytes: 16384,
+        timeoutMs: 120000, killGraceMs: mode === "unknown" ? 1000 : 5000, maxOutputBytes: 16384,
         onTerminalFailure: taskContext.reportFailure, signal: taskContext.signal,
         spawnProcess: (...args) => {
           const child = spawn(...args);
+          ownedLeaderPid = child.pid;
           child.once("exit", (code, signal) => events.push({ event: "exit", code, signal }));
           child.once("close", (code, signal) => {
             events.push({ event: "close", code, signal });
@@ -676,9 +691,14 @@ try {
   outcome = { ok: false, code: error.code ?? null,
     cleanupCode: error.processTreeCleanupFailure?.code ?? null,
     preserveRenderState: error.preserveRenderState === true };
+} finally {
+  if (mode === "unknown") {
+    childProcess.spawnSync = originalSpawnSync;
+    syncBuiltinESMExports();
+  }
 }
 await liveControl;
-publish("outcome.json", { ...outcome, events, elapsedMs: Date.now() - started,
+publish("outcome.json", { ...outcome, completedPsFault, events, elapsedMs: Date.now() - started,
   outputPresent: fs.existsSync(outputPath), statePresent: !!renderState && fs.existsSync(renderState) });
 `;
       // The reaper owns the controller and adopted leaf. It never scans or signals unrelated PIDs.
@@ -767,7 +787,7 @@ def threads(pid):
     for entry in entries:
         try:
             fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessLookupError):
             if entry.name == str(pid):
                 raise
             continue
@@ -903,8 +923,7 @@ try:
     reaped.append({"pid": reaped_pid, "status": reaped_status})
     if group_present():
         raise RuntimeError("renderer group remains after exact leaf reap")
-    wait(lambda: controller.poll() is not None)
-    report["controllerCode"] = controller.returncode
+    report["controllerCode"] = controller.wait(timeout=max(0, min(5, deadline - time.monotonic())))
 except BaseException as error:
     report["fixtureError"] = type(error).__name__ + ": " + str(error).replace(str(root), "<fixture>")
 finally:
@@ -954,7 +973,7 @@ finally:
           groupPresent: boolean;
           reaped: { pid: number; status: number }[];
         };
-        adopted: { pid: number };
+        adopted: { pid: number; pgid: number };
         signalZeroPresent: boolean;
         controllerCode: number;
         leaderClose: { code: number; signal: string | null };
@@ -967,6 +986,12 @@ finally:
           outputPresent: boolean;
           statePresent: boolean;
           events: { event: string; code: number; signal: string | null }[];
+          completedPsFault?: {
+            groupPid: number;
+            status: number;
+            signal: string | null;
+            errorPresent: boolean;
+          };
         };
         liveControl?: { observation: string; stopped: boolean; elapsedMs: number };
       };
@@ -1069,6 +1094,12 @@ finally:
         statePresent: true,
         outputPresent: false,
       });
+      expect(unknown.outcome.completedPsFault).toEqual({
+        groupPid: unknown.adopted.pgid,
+        status: 23,
+        signal: null,
+        errorPresent: false,
+      });
       expect(stopped.outcome, JSON.stringify(stopped.outcome)).toMatchObject({
         ok: true,
         nodesHelpText: "Usage: openclaw nodes\n",
@@ -1081,22 +1112,17 @@ finally:
 
   it.runIf(process.platform !== "win32")(
     "cancels a default-batch sibling process tree after another command fails",
-    async () => {
+    async ({ signal }) => {
       const actualSpawn = (
         await vi.importActual<typeof import("node:child_process")>("node:child_process")
       ).spawn;
       const spawnMock = vi.mocked(spawn);
-      const tempRoot = createTempDir("openclaw-startup-metadata-batch-tree-");
-      const distDir = path.join(tempRoot, "dist");
-      const extensionsDir = path.join(tempRoot, "extensions");
-      const outputPath = path.join(distDir, "cli-startup-metadata.json");
+      const metadata = metadataFixture("openclaw-startup-metadata-batch-tree-");
+      const { sourceRootDir: tempRoot, outputPath } = metadata;
       const grandchildPidPath = path.join(tempRoot, "grandchild.pid");
       const startedCommands: string[] = [];
       const startedChildren: Array<ReturnType<typeof spawn>> = [];
       let grandchildPid = 0;
-
-      writeStartupMetadataSourceSignatureFixture(tempRoot);
-      writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
 
       const failingScript = [
         "const { existsSync } = await import('node:fs');",
@@ -1146,10 +1172,7 @@ finally:
         const startedAt = Date.now();
         const error = await testing
           .writeCliStartupMetadata({
-            distDir,
-            outputPath,
-            extensionsDir,
-            sourceRootDir: tempRoot,
+            ...metadata,
             renderBundledRootHelpText: async () => "Usage: openclaw\n",
           })
           .then(
@@ -1157,13 +1180,15 @@ finally:
             (reason: unknown) => reason,
           );
 
-        grandchildPid = await waitForPidFile(grandchildPidPath, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
+        grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
+        expect(Number.isInteger(grandchildPid)).toBe(true);
+        expect(grandchildPid).toBeGreaterThan(0);
         expect(error).toBeInstanceOf(Error);
         expect((error as Error).message).toContain("browser sentinel failure");
         expect(Date.now() - startedAt).toBeLessThan(LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
         expect(startedCommands).toHaveLength(COMMAND_HELP_RENDER_CONCURRENCY);
         expect(startedCommands).not.toContain("tasks");
-        await waitForProcessExit(grandchildPid);
+        await waitForProcessExit(grandchildPid, signal);
         expect(existsSync(outputPath)).toBe(false);
       } finally {
         spawnMock.mockImplementation(actualSpawn);
@@ -1185,7 +1210,7 @@ finally:
 
   it.runIf(process.platform !== "win32")(
     "kills descendant processes when command help rendering times out",
-    async () => {
+    async ({ signal }) => {
       const tempRoot = createTempDir("openclaw-startup-metadata-timeout-");
       const markerPath = path.join(tempRoot, "grandchild.pid");
       const grandchildScript = [
@@ -1212,14 +1237,16 @@ finally:
         }),
       ).rejects.toThrow("render failed: timed out after 500ms");
 
-      const grandchildPid = await waitForPidFile(markerPath, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-      await waitForProcessExit(grandchildPid);
+      const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+      expect(Number.isInteger(grandchildPid)).toBe(true);
+      expect(grandchildPid).toBeGreaterThan(0);
+      await waitForProcessExit(grandchildPid, signal);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "drains descendants when a command leader exits nonzero",
-    async () => {
+    async ({ signal }) => {
       const tempRoot = createTempDir("openclaw-startup-metadata-nonzero-tree-");
       const markerPath = path.join(tempRoot, "grandchild.pid");
       const grandchildScript = [
@@ -1246,13 +1273,13 @@ finally:
       ).rejects.toThrow(/render failed: leader failed.*elapsed \d+ms/u);
 
       const grandchildPid = Number(readFileSync(markerPath, "utf8"));
-      await waitForProcessExit(grandchildPid);
+      await waitForProcessExit(grandchildPid, signal);
     },
   );
 
   it.runIf(process.platform !== "win32")(
     "waits for all command help descendants before re-raising parent signals",
-    async () => {
+    async ({ signal }) => {
       const tempRoot = createTempDir("openclaw-startup-metadata-signal-");
       const fastCommandPath = path.join(tempRoot, "fast-command.mjs");
       const fastReadyPath = path.join(tempRoot, "fast-ready");
@@ -1264,6 +1291,7 @@ finally:
       const outputPath = path.join(distDir, "cli-startup-metadata.json");
       const grandchildScript = [
         "process.on('SIGTERM', () => {});",
+        "process.send('ready');",
         "setInterval(() => {}, 1000);",
       ].join("\n");
       writeFixtureFile(
@@ -1271,8 +1299,10 @@ finally:
         "fast-command.mjs",
         [
           "import { writeFileSync } from 'node:fs';",
-          `writeFileSync(${JSON.stringify(fastReadyPath)}, "ready");`,
+          fixtureReceiptClientSource(receipts.endpoint),
           "process.on('SIGTERM', () => process.exit(0));",
+          `writeFileSync(${JSON.stringify(fastReadyPath)}, "ready");`,
+          `sendReceipt(${JSON.stringify(fastReadyPath)}, "ready");`,
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
@@ -1282,11 +1312,16 @@ finally:
         [
           "import { spawn } from 'node:child_process';",
           "import { writeFileSync } from 'node:fs';",
+          fixtureReceiptClientSource(receipts.endpoint),
           `const grandchild = spawn(process.execPath, ["--eval", ${JSON.stringify(
             grandchildScript,
-          )}], { stdio: "ignore" });`,
-          `writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          )}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });`,
           "process.on('SIGTERM', () => process.exit(0));",
+          "grandchild.once('message', () => {",
+          "  grandchild.disconnect();",
+          `  writeFileSync(${JSON.stringify(grandchildPidPath)}, String(grandchild.pid));`,
+          `  sendReceipt(${JSON.stringify(grandchildPidPath)}, "ready");`,
+          "});",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
       );
@@ -1325,7 +1360,7 @@ finally:
           "    config: 'Usage: openclaw config\\n',",
           "    doctor: 'Usage: openclaw doctor\\n', gateway: 'Usage: openclaw gateway\\n',",
           "    models: 'Usage: openclaw models\\n', plugins: 'Usage: openclaw plugins\\n',",
-          "    sessions: 'Usage: openclaw sessions\\n', tasks: 'Usage: openclaw tasks\\n',",
+          "    sessions: 'Usage: openclaw sessions\\n',",
           "  }),",
           "});",
         ].join("\n"),
@@ -1339,49 +1374,63 @@ finally:
           stdio: "ignore",
         },
       );
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          runner.once("error", reject);
+          runner.once("close", (code, exitSignal) => resolve({ code, signal: exitSignal }));
+        },
+      );
       let grandchildPid = 0;
+      let stopRequested = false;
 
       try {
-        const deadline = Date.now() + LOAD_SENSITIVE_PROCESS_TIMEOUT_MS;
-        grandchildPid = await waitForPidFile(grandchildPidPath, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS);
-        while (Date.now() < deadline) {
-          let fastReady = false;
-          try {
-            fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-          } catch {}
-          if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
-            break;
+        const readReadyRecords = () => {
+          const pid = existsSync(grandchildPidPath)
+            ? Number(readFileSync(grandchildPidPath, "utf8"))
+            : Number.NaN;
+          if (!Number.isInteger(pid) || pid <= 0) {
+            throw new Error(`timeout waiting for pid in ${grandchildPidPath}`);
           }
-          await new Promise((resolve) => {
-            setTimeout(resolve, 10);
-          });
-        }
+          expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
+          return pid;
+        };
+        // Both records precede their receipts. A runner exit can overtake socket
+        // delivery, so settlement checks the durable records before failing.
+        grandchildPid = await withinTest(
+          Promise.race([
+            Promise.all([
+              receipts.waitFor(grandchildPidPath, "ready"),
+              receipts.waitFor(fastReadyPath, "ready"),
+            ]).then(readReadyRecords),
+            closed.then(readReadyRecords),
+          ]),
+          signal,
+        );
         expect(readFileSync(fastReadyPath, "utf8")).toBe("ready");
         expect(grandchildPid).toBeGreaterThan(0);
         expect(processIsAlive(grandchildPid)).toBe(true);
 
+        stopRequested = true;
         runner.kill("SIGTERM");
 
-        await expect(waitForChildClose(runner, LOAD_SENSITIVE_PROCESS_TIMEOUT_MS)).resolves.toEqual(
-          {
-            code: null,
-            signal: "SIGTERM",
-          },
-        );
-        await waitForProcessExit(grandchildPid);
+        await expect(withinTest(closed, signal)).resolves.toEqual({
+          code: null,
+          signal: "SIGTERM",
+        });
+        await waitForProcessExit(grandchildPid, signal);
         const renderStateDir = readFileSync(renderStatePath, "utf8");
         expect(existsSync(renderStateDir)).toBe(false);
       } finally {
-        if (runner.pid && processIsAlive(runner.pid)) {
-          runner.kill("SIGKILL");
+        if (!stopRequested) {
+          runner.kill("SIGTERM");
         }
+        await closed;
         if (grandchildPid > 0 && processIsAlive(grandchildPid)) {
           process.kill(grandchildPid, "SIGKILL");
         }
       }
     },
   );
-
   it.each(["new", "existing", "symlinked parent"] as const)(
     "writes complete startup metadata with %s output and source-rendered help",
     async (outputKind) => {
@@ -1421,18 +1470,7 @@ finally:
         outputPath,
         extensionsDir,
         renderSourceRootHelpText: () => "Usage: openclaw\n",
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-        renderSourceSubcommandHelpTextRecord: () => ({
-          config: "Usage: openclaw config\n",
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        }),
+        ...sourceHelpRenderers,
       });
 
       const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
@@ -1449,7 +1487,6 @@ finally:
           models: string;
           plugins: string;
           sessions: string;
-          tasks: string;
         };
       };
       expect(written.channelOptions).toContain("matrix");
@@ -1468,7 +1505,6 @@ finally:
       expect(written.subcommandHelpText.models).toContain("openclaw models");
       expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
       expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
-      expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
       expect(fs.readdirSync(distDir)).toEqual(["cli-startup-metadata.json"]);
       if (process.platform !== "win32") {
         expect(fs.statSync(distDir).mode & 0o777).toBe(0o750);
@@ -1504,7 +1540,6 @@ finally:
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
           sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
         }),
       };
       await testing.writeCliStartupMetadata(options);
@@ -1551,37 +1586,18 @@ finally:
   );
 
   it("does not source-fallback a bundled root resource failure", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-root-resource-failure-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-root-resource-failure-");
+    const { outputPath } = metadata;
     const renderSourceRootHelpText = vi.fn(() => "Usage: source fallback\n");
-
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
 
     const error = await testing
       .writeCliStartupMetadata({
-        distDir,
-        outputPath,
-        extensionsDir,
-        sourceRootDir: tempRoot,
+        ...metadata,
         renderBundledRootHelpText: async () => {
           throw Object.assign(new Error("bundled root timed out"), { code: "ETIMEDOUT" });
         },
         renderSourceRootHelpText,
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-        renderSourceSubcommandHelpTextRecord: () => ({
-          config: "Usage: openclaw config\n",
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        }),
+        ...sourceHelpRenderers,
       })
       .then(
         () => undefined,
@@ -1625,18 +1641,7 @@ finally:
         extensionsDir,
         sourceRootDir: tempRoot,
         renderSourceRootHelpText,
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-        renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-        renderSourceSubcommandHelpTextRecord: () => ({
-          config: "Usage: openclaw config\n",
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        }),
+        ...sourceHelpRenderers,
       });
 
       const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
@@ -1648,17 +1653,13 @@ finally:
   );
 
   it("renders independent startup help snapshots concurrently", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-concurrency-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-concurrency-");
+    const { distDir, outputPath } = metadata;
     const started: string[] = [];
     const unblockers = new Map<string, () => void>();
     const expectedStarted = ["browser", "secrets", "nodes", "subcommands"];
 
     mkdirSync(distDir, { recursive: true });
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
 
     const renderAfterUnblock = (label: string, output: string): (() => Promise<string>) => {
       return async () => {
@@ -1684,10 +1685,7 @@ finally:
     };
 
     const writePromise = testing.writeCliStartupMetadata({
-      distDir,
-      outputPath,
-      extensionsDir,
-      sourceRootDir: tempRoot,
+      ...metadata,
       renderBundledRootHelpText: async () => "Usage: openclaw\n",
       renderSourceBrowserHelpText: renderAfterUnblock("browser", "Usage: openclaw browser\n"),
       renderSourceSecretsHelpText: renderAfterUnblock("secrets", "Usage: openclaw secrets\n"),
@@ -1697,15 +1695,7 @@ finally:
         await new Promise<void>((resolve) => {
           unblockers.set("subcommands", resolve);
         });
-        return {
-          config: "Usage: openclaw config\n",
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        };
+        return sourceSubcommandHelp();
       },
     });
 
@@ -1730,22 +1720,14 @@ finally:
     { title: "when rendering fails", failRender: true },
   ])("removes isolated root-help state $title", async ({ failRender }) => {
     const removeState = vi.spyOn(fs, "rmSync");
-    const tempRoot = createTempDir("openclaw-startup-metadata-cleanup-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-cleanup-");
     let stateDir = "";
     let statePresentDuringSiblingRender = false;
 
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
-
     const writeMetadata = testing.writeCliStartupMetadata({
-      distDir,
-      outputPath,
-      extensionsDir,
-      sourceRootDir: tempRoot,
+      ...metadata,
       renderBundledRootHelpText: async () => "Usage: openclaw\n",
+      ...sourceHelpRenderers,
       renderSourceBrowserHelpText: async (renderContext) => {
         stateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
         const sqliteDir = path.join(stateDir, "state");
@@ -1768,16 +1750,6 @@ finally:
         statePresentDuringSiblingRender = existsSync(stateDir);
         return "Usage: openclaw secrets\n";
       },
-      renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-      renderSourceSubcommandHelpTextRecord: () => ({
-        config: "Usage: openclaw config\n",
-        doctor: "Usage: openclaw doctor\n",
-        gateway: "Usage: openclaw gateway\n",
-        models: "Usage: openclaw models\n",
-        plugins: "Usage: openclaw plugins\n",
-        sessions: "Usage: openclaw sessions\n",
-        tasks: "Usage: openclaw tasks\n",
-      }),
     });
 
     if (failRender) {
@@ -1798,10 +1770,7 @@ finally:
   });
 
   it("does not let shared-state cleanup mask the primary render failure", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-cleanup-failure-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-cleanup-failure-");
     const cleanupFailure = new Error("cleanup failed");
     const realRmSync = fs.rmSync.bind(fs);
     let renderStateDir = "";
@@ -1812,32 +1781,16 @@ finally:
       return realRmSync(target, options);
     });
 
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
-
     try {
       const error = await testing
         .writeCliStartupMetadata({
-          distDir,
-          outputPath,
-          extensionsDir,
-          sourceRootDir: tempRoot,
+          ...metadata,
           renderBundledRootHelpText: async () => "Usage: openclaw\n",
+          ...sourceHelpRenderers,
           renderSourceBrowserHelpText: (renderContext) => {
             renderStateDir = renderContext.env?.OPENCLAW_STATE_DIR ?? "";
             throw new Error("primary browser failure");
           },
-          renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
-          renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
-          renderSourceSubcommandHelpTextRecord: () => ({
-            config: "Usage: openclaw config\n",
-            doctor: "Usage: openclaw doctor\n",
-            gateway: "Usage: openclaw gateway\n",
-            models: "Usage: openclaw models\n",
-            plugins: "Usage: openclaw plugins\n",
-            sessions: "Usage: openclaw sessions\n",
-            tasks: "Usage: openclaw tasks\n",
-          }),
         })
         .then(
           () => undefined,
@@ -1856,37 +1809,19 @@ finally:
   });
 
   it("regenerates nodes help when bundled canvas CLI help sources change", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-signature-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-signature-");
+    const { sourceRootDir: tempRoot, outputPath } = metadata;
     let nodesRenderCount = 0;
-
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
 
     const writeMetadata = async (): Promise<void> => {
       await testing.writeCliStartupMetadata({
-        distDir,
-        outputPath,
-        extensionsDir,
-        sourceRootDir: tempRoot,
+        ...metadata,
         renderBundledRootHelpText: async () => "Usage: openclaw\n",
-        renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
-        renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
+        ...sourceHelpRenderers,
         renderSourceNodesHelpText: () => {
           nodesRenderCount += 1;
           return `Usage: openclaw nodes ${nodesRenderCount}\n`;
         },
-        renderSourceSubcommandHelpTextRecord: () => ({
-          config: "Usage: openclaw config\n",
-          doctor: "Usage: openclaw doctor\n",
-          gateway: "Usage: openclaw gateway\n",
-          models: "Usage: openclaw models\n",
-          plugins: "Usage: openclaw plugins\n",
-          sessions: "Usage: openclaw sessions\n",
-          tasks: "Usage: openclaw tasks\n",
-        }),
       });
     };
 
@@ -1920,10 +1855,8 @@ finally:
   });
 
   it("regenerates help when build version or commit changes", async () => {
-    const tempRoot = createTempDir("openclaw-startup-metadata-build-identity-");
-    const distDir = path.join(tempRoot, "dist");
-    const extensionsDir = path.join(tempRoot, "extensions");
-    const outputPath = path.join(distDir, "cli-startup-metadata.json");
+    const metadata = metadataFixture("openclaw-startup-metadata-build-identity-");
+    const { distDir, outputPath } = metadata;
     let renderCount = 0;
     let commandRenderCount = 0;
 
@@ -1941,19 +1874,12 @@ finally:
         models: `${banner}\nUsage: openclaw models\n`,
         plugins: `${banner}\nUsage: openclaw plugins\n`,
         sessions: `${banner}\nUsage: openclaw sessions\n`,
-        tasks: `${banner}\nUsage: openclaw tasks\n`,
       };
     };
 
-    writeStartupMetadataSourceSignatureFixture(tempRoot);
-    writeFixtureFile(distDir, "root-help-fixture.js", "export function outputRootHelp() {}\n");
-
     const writeMetadata = async (): Promise<void> => {
       await testing.writeCliStartupMetadata({
-        distDir,
-        outputPath,
-        extensionsDir,
-        sourceRootDir: tempRoot,
+        ...metadata,
         renderBundledRootHelpText: async () => {
           renderCount += 1;
           return `Usage: openclaw ${renderCount}\n`;

@@ -58,16 +58,16 @@ struct UpdateOrchestrationTests {
             false,
             receipt: incomplete,
             defaults: defaults)
-        let inFlight = PostAppUpdateReceiptStore.setNotificationInFlight(
+        let inFlight = try #require(PostAppUpdateReceiptStore.setNotificationInFlight(
             true,
             receipt: completed,
-            defaults: defaults)
+            defaults: defaults))
         #expect(inFlight.notificationInFlight)
         #expect(!PostUpdateController.isNotificationOnlyRetry(inFlight))
-        let readyToRetry = PostAppUpdateReceiptStore.setNotificationInFlight(
+        let readyToRetry = try #require(PostAppUpdateReceiptStore.setNotificationInFlight(
             false,
             receipt: inFlight,
-            defaults: defaults)
+            defaults: defaults))
         let firstNotificationFailure = PostAppUpdateReceiptStore.recordNotificationFailure(
             receipt: readyToRetry,
             defaults: defaults)

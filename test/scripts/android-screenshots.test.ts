@@ -339,7 +339,7 @@ printf 'ready\\n' > "$FIXTURE_EMULATOR_READY"
         expect(size).toBe(dimensions);
         expect(colorspace.toLowerCase()).toBe("srgb");
         expect(depth).toBe("8");
-        expect(channels.toLowerCase()).toBe("srgb");
+        expect(channels.toLowerCase()).toMatch(/^srgb(?:[ \t]+3\.0)?$/);
         expect(Number(quality)).toBeGreaterThanOrEqual(90);
         const encoding = spawnSync("/usr/bin/file", [output], { encoding: "utf8" });
         expect(encoding.status, encoding.stderr).toBe(0);

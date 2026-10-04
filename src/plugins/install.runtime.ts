@@ -23,7 +23,6 @@ export { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifes
 export {
   scanInstalledPackageDependencyTree,
   scanBundleInstallSource,
-  scanFileInstallSource,
   scanPackageInstallSource,
 } from "./install-security-scan.js";
 export {

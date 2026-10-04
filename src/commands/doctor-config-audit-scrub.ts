@@ -1,4 +1,3 @@
-/** Doctor repair for redacting historical config audit log argv records. */
 import os from "node:os";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {

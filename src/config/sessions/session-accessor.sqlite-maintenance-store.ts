@@ -1,6 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
-import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { executeSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
@@ -31,14 +32,18 @@ import {
   readSessionMaintenanceCapCandidates,
   readSessionMaintenanceKeyProjection,
 } from "./session-accessor.sqlite-maintenance-candidates.js";
-import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { SqliteReclamationInputsChangedError } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";
 import {
   resolveSessionMaintenancePreserveKeys,
   type SessionMaintenancePreservationSnapshot,
 } from "./store-maintenance-preserve-snapshot.js";
 import { shouldRunSessionEntryMaintenance } from "./store-maintenance.js";
+import type { SessionEntry } from "./types.js";
 
 export function readSessionTranscriptJsonlBytesInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
@@ -92,9 +97,6 @@ function canSkipSessionEntryMaintenanceInDatabase(
   params: Pick<SessionEntryMaintenanceInput, "maintenance" | "forceMaintenance">,
   entryCount: number,
 ): boolean {
-  if (params.maintenance.mode === "warn") {
-    return true;
-  }
   if (params.forceMaintenance) {
     return false;
   }
@@ -110,21 +112,30 @@ function canSkipSessionEntryMaintenanceInDatabase(
   );
 }
 
-/** Inline callers already hold their transaction; workers prepare before write admission. */
+/** Inline callers already hold their transaction; workers prepare before the write transaction. */
 export function applySessionEntryMaintenanceInDatabase(
   database: OpenClawAgentDatabase,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
 ): SessionEntryMaintenancePlan {
-  return prepareSessionEntryMaintenanceInDatabase(database, params, readPreservation)(database);
+  let preservation: SessionMaintenancePreservationSnapshot | undefined;
+  return prepareSessionEntryMaintenanceInDatabase(
+    database,
+    params,
+    () => (preservation ??= readPreservation()),
+  )(database, onArchived);
 }
 
-/** The caller must fence this read snapshot before applying its selected changes. */
+/** Prepare before the write transaction; compare selected rows and protection dependencies inside it. */
 export function prepareSessionEntryMaintenanceInDatabase(
   reader: Pick<OpenClawAgentDatabase, "db">,
   params: Omit<SessionEntryMaintenanceInput, "preservation">,
   readPreservation: () => SessionMaintenancePreservationSnapshot,
-): (database: OpenClawAgentDatabase) => SessionEntryMaintenancePlan {
+): (
+  database: OpenClawAgentDatabase,
+  onArchived?: (sessionKey: string, previous: SessionEntry, current: SessionEntry) => void,
+) => SessionEntryMaintenancePlan {
   const maintenance = params.maintenance;
   if (maintenance.mode === "warn") {
     return emptySessionEntryMaintenancePlan;
@@ -148,21 +159,22 @@ export function prepareSessionEntryMaintenanceInDatabase(
   >();
   const archivedKeys = new Set<string>();
   let preserveKeys: ReadonlySet<string> | undefined;
+  let baseKeys: string[] = [];
   const readPreserveKeys = () => {
     if (!preserveKeys) {
       const snapshot = readPreservation();
       const keyProjection = readSessionMaintenanceKeyProjection(reader);
+      baseKeys = collectSqliteSessionMaintenanceBaseKeys(keyProjection, activeSessionKeys);
       preserveKeys = resolveSessionMaintenancePreserveKeys({
         snapshot,
         store: keyProjection,
-        baseKeys: collectSqliteSessionMaintenanceBaseKeys(keyProjection, activeSessionKeys),
+        baseKeys,
       });
     }
     return preserveKeys;
   };
   const { store, archived, capArchived, modelRunPruned, pruned, capped } =
     planSessionEntryMaintenance({
-      profile: "write",
       maintenance,
       initialUnarchivedCount: entryCount,
       forceMaintenance: params.forceMaintenance,
@@ -192,11 +204,78 @@ export function prepareSessionEntryMaintenanceInDatabase(
       onArchived: ({ key }) => archivedKeys.add(key),
     });
   const ageFact = recordSessionEntryMaintenanceAgeFact(reader, maintenance, plannedAt);
-  return (database) => {
-    const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
+  const selectedKeys = uniqueStrings([...archivedKeys, ...removalReasons.keys()]);
+  const readInputs = (database: Pick<OpenClawAgentDatabase, "db">) => {
+    const db = getSessionKysely(database.db);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("session_nodes")
+        .selectAll()
+        .where("session_key", "in", sqliteStringSet(selectedKeys))
+        .orderBy("session_key"),
+    ).rows;
+    return {
+      rows,
+      transcripts: uniqueStrings(rows.map((row) => row.current_session_id)).map((sessionId) =>
+        readTranscriptContextVersionInTransaction(database, sessionId),
+      ),
+      parents: executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_nodes")
+          .select(["session_key", "parent_session_key"])
+          .where("archived_at", "is", null)
+          .where("session_key", "in", sqliteStringSet(baseKeys))
+          .orderBy("session_key"),
+      ).rows,
+    };
+  };
+  const expected = selectedKeys.length > 0 ? readInputs(reader) : undefined;
+  return (database, onArchived) => {
+    if (
+      expected &&
+      (!isDeepStrictEqual(expected, readInputs(database)) ||
+        (capArchived + capped > 0 &&
+          readSessionEntryCount(database, { includeArchived: false }) < entryCount))
+    ) {
+      throw new SqliteReclamationInputsChangedError(
+        "SQLite maintenance candidate rows changed before commit",
+      );
+    }
     const selectedEntries = readSessionEntryStore(database, { sessionKeys: selectedKeys });
+    if (selectedKeys.length > 0) {
+      // Admission refreshes live protection after planning. Reread only its active
+      // ancestry under the writer lock; unrelated activity cannot invalidate victims.
+      const currentBaseKeys = new Set(baseKeys);
+      let pending = uniqueStrings([
+        params.activeSessionKey ?? "",
+        ...(params.activeSessionKeys ?? []),
+      ]);
+      while (pending.length > 0) {
+        pending = pending
+          .map(normalizeStoreSessionKey)
+          .filter((key) => key && !currentBaseKeys.has(key));
+        if (pending.length === 0) {
+          break;
+        }
+        pending.forEach((key) => currentBaseKeys.add(key));
+        pending = Object.values(readSessionMaintenanceKeyProjection(database, pending)).flatMap(
+          (entry) => (entry.parentSessionKey ? [entry.parentSessionKey] : []),
+        );
+      }
+      const currentPreserveKeys = resolveSessionMaintenancePreserveKeys({
+        snapshot: readPreservation(),
+        store: selectedEntries,
+        baseKeys: currentBaseKeys,
+      });
+      if (selectedKeys.some((key) => currentPreserveKeys.has(normalizeStoreSessionKey(key)))) {
+        throw new SqliteReclamationInputsChangedError(
+          "SQLite maintenance candidates became protected before commit",
+        );
+      }
+    }
     const archivedSessionKeys: string[] = [];
-    const archivedWorktrees: NonNullable<SessionEntryMaintenancePlan["archivedWorktrees"]> = [];
     for (const key of archivedKeys) {
       const previousEntry = selectedEntries[key];
       const planned = store[key];
@@ -210,14 +289,8 @@ export function prepareSessionEntryMaintenanceInDatabase(
       };
       delete entry.archivedBy;
       writeSessionEntry(database, key, entry, { canonicalPreviousEntry: previousEntry });
+      onArchived?.(key, previousEntry, entry);
       archivedSessionKeys.push(key);
-      if (entry.worktree) {
-        archivedWorktrees.push({
-          entry: cloneSessionEntry(entry),
-          sessionKey: key,
-          storePath: params.storePath,
-        });
-      }
     }
     const removals = [...removalReasons].flatMap(([sessionKey, maintenanceReason]) => {
       const expectedEntry = selectedEntries[sessionKey];
@@ -227,7 +300,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
     if (removals.length === 0) {
       return {
         archivedSessionKeys,
-        ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
         entryRemovals: [],
         stateDeletePlans: [],
         archived,
@@ -270,7 +342,6 @@ export function prepareSessionEntryMaintenanceInDatabase(
     }
     return {
       archivedSessionKeys,
-      ...(archivedWorktrees.length ? { archivedWorktrees } : {}),
       entryRemovals: removals,
       stateDeletePlans: deletePlans,
       archived,

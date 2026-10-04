@@ -2,15 +2,22 @@ import {
   compactChannelProgressDraftLine,
   formatChannelProgressDraftDiffStat,
   isChannelProgressAttentionLine,
+  resolveChannelProgressDraftMaxLineChars,
+  resolveChannelProgressDraftMaxLines,
+  resolveChannelStreamingPreviewToolProgress,
   selectPlanChecklistSteps,
   type ChannelProgressDraftCompositorLine,
   type ChannelProgressDraftCompositorSnapshot,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTelegramAccount } from "./accounts.js";
 import type { TelegramDraftPreview } from "./draft-stream-message.js";
 import { escapeTelegramHtml, renderTelegramHtmlText } from "./format.js";
+import { resolveTelegramPreviewStreamMode } from "./preview-streaming.js";
 import type { InputRichBlock, RichText } from "./rich-block-model.js";
 import { markdownToTelegramRichBlocks } from "./rich-blocks.js";
 import { buildTelegramRichBlocksPlan } from "./rich-message.js";
+import { resolveTelegramRichMessages } from "./rich-messages-config.js";
 
 function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine): boolean {
   if (typeof line === "string") {
@@ -170,6 +177,28 @@ export function renderTelegramProgressDraftPreview(
   }
   const plan = buildTelegramRichBlocksPlan(blocks, { skipEntityDetection: true });
   return options.richMessages
-    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true }
-    : { text: html.join("<br>"), parseMode: "HTML", complete: true };
+    ? { text: plan.plainText, richMessage: plan.richMessage, complete: true, linkPreview: false }
+    : { text: html.join("<br>"), parseMode: "HTML", complete: true, linkPreview: false };
+}
+
+/** Renders a progress snapshot with one account's progress-draft settings. */
+export function renderTelegramAccountProgressDraftPreview(
+  snapshot: ChannelProgressDraftCompositorSnapshot,
+  params: { cfg: OpenClawConfig; accountId?: string | null },
+): TelegramDraftPreview {
+  const accountConfig = resolveTelegramAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  }).config;
+  const streamMode = resolveTelegramPreviewStreamMode(accountConfig);
+  return renderTelegramProgressDraftPreview(snapshot, {
+    richMessages: resolveTelegramRichMessages({ ...params, accountConfig }),
+    toolProgress: resolveChannelStreamingPreviewToolProgress(
+      accountConfig,
+      streamMode !== "progress",
+      streamMode,
+    ),
+    maxLines: resolveChannelProgressDraftMaxLines(accountConfig),
+    maxLineChars: resolveChannelProgressDraftMaxLineChars(accountConfig),
+  });
 }

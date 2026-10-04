@@ -1,4 +1,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { expect } from "vitest";
+import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
@@ -52,6 +55,13 @@ export function createToolsInvokeHttpTestServer(params: {
         server.close((error) => (error ? reject(error) : resolve()));
       });
     },
+    setMethodRegistry(this: void, registry: GatewayMethodRegistry) {
+      const context = resolveGatewayContext?.();
+      if (!context) {
+        throw new Error("Expected initialized Gateway context");
+      }
+      context.getGatewayMethodRegistry = () => registry;
+    },
     resetContext() {
       const context = createGatewayRequestContext(makeContextParams());
       resolveGatewayContext = () => context;
@@ -59,3 +69,17 @@ export function createToolsInvokeHttpTestServer(params: {
     },
   };
 }
+
+export const expectOkInvokeResponse = async (res: Response) => {
+  expect(res.status).toBe(200);
+  const body: unknown = await res.json();
+  if (
+    !isRecord(body) ||
+    typeof body.ok !== "boolean" ||
+    (body.result !== undefined && !isRecord(body.result))
+  ) {
+    throw new Error("Expected an object tool response");
+  }
+  expect(body.ok).toBe(true);
+  return { ok: body.ok, result: body.result };
+};

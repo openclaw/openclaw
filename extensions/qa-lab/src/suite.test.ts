@@ -1,15 +1,15 @@
 // Qa Lab tests cover suite plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { QaLabServerHandle } from "./lab-server.types.js";
+import { remapModelRefForForcedRuntime } from "./model-selection.js";
 import { sanitizeQaProgressValue as sanitizeQaSuiteProgressValue } from "./progress-format.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
   buildQaIsolatedScenarioWorkerParams,
   mergeQaRuntimeEnvPatches,
-  remapModelRefForForcedRuntime,
 } from "./suite-support.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteResult } from "./suite-types.js";
 import {
   buildQaSuiteRuntimeMetrics,
@@ -152,11 +152,15 @@ describe("qa suite", () => {
       reportPath: "/qa-output/qa-suite-report.md",
       summaryPath: "/qa-output/qa-suite-summary.json",
       report: "",
-      scenarios: [
-        { name: "pass", status: "pass", steps: [] },
-        { name: "fail", status: "fail", steps: [] },
-        { name: "skip", status: "skip", steps: [] },
-      ],
+      ...recordQaSuiteTestResults(
+        undefined,
+        ["pass", "fail", "skip"].map((id) => makeQaSuiteTestScenario(id)),
+        [
+          { name: "pass", status: "pass", steps: [] },
+          { name: "fail", status: "fail", steps: [] },
+          { name: "skip", status: "skip", steps: [] },
+        ],
+      ),
       startedScenarioIds: ["pass", "fail", "skip"],
       watchUrl: "http://127.0.0.1:43123",
     } satisfies QaSuiteResult;

@@ -8,6 +8,7 @@ import { chromium } from "playwright";
 import type { Plugin } from "vite";
 import { defineConfig, defineProject, type ViteUserConfig } from "vitest/config";
 import type { Vitest } from "vitest/node";
+import { mermaidClassicBundlePlugin } from "../packages/mermaid-renderer/vite-plugin.ts";
 import {
   filterFilesByPatterns,
   intersectIncludePatterns,
@@ -39,87 +40,16 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
-    find: "@openclaw/gateway-client/browser",
-    replacement: path.resolve(repoRoot, "packages/gateway-client/src/browser.ts"),
-  },
-  {
-    find: "@openclaw/gateway-client/scope-upgrade",
-    replacement: path.resolve(repoRoot, "packages/gateway-client/src/scope-upgrade.ts"),
-  },
-  {
-    find: /^@openclaw\/gateway-protocol\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/gateway-protocol/src/$1.ts"),
-  },
-  {
-    find: /^@openclaw\/(gateway-protocol|retry)$/u,
-    replacement: path.resolve(repoRoot, "packages/$1/src/index.ts"),
-  },
-  {
     find: "../logging/redact.js",
     replacement: path.resolve(here, "src/lib/browser-redact.ts"),
   },
+  // Share package source projections without pulling Node-only dependency shims
+  // (such as zod and ws) into the browser projects.
   ...sharedVitestConfig.resolve.alias.filter(
-    (alias) => typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/"),
+    (alias) =>
+      alias.replacement.startsWith(`${path.join(repoRoot, "packages")}${path.sep}`) ||
+      (typeof alias.find === "string" && alias.find.startsWith("openclaw/plugin-sdk/")),
   ),
-  {
-    find: /^@openclaw\/model-catalog-core\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
-  },
-  {
-    find: "@openclaw/model-catalog-core",
-    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/index.ts"),
-  },
-  {
-    find: /^@openclaw\/normalization-core\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
-  },
-  {
-    find: "@openclaw/normalization-core",
-    replacement: path.resolve(repoRoot, "packages/normalization-core/src/index.ts"),
-  },
-  {
-    find: /^@openclaw\/media-core\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
-  },
-  {
-    find: "@openclaw/media-core",
-    replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/parse",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/parse.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/share-build",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/share-build.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/public-share",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/public-share.ts"),
-  },
-  {
-    find: "@openclaw/session-url-contract/session-key-normalization",
-    replacement: path.resolve(
-      repoRoot,
-      "packages/session-url-contract/src/session-key-normalization.ts",
-    ),
-  },
-  {
-    find: "@openclaw/session-url-contract",
-    replacement: path.resolve(repoRoot, "packages/session-url-contract/src/index.ts"),
-  },
-  {
-    find: "@openclaw/workboard-contract",
-    replacement: path.resolve(repoRoot, "packages/workboard-contract/src/index.ts"),
-  },
-  {
-    find: /^@openclaw\/net-policy\/(.+)$/u,
-    replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
-  },
-  {
-    find: "@openclaw/net-policy",
-    replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
-  },
 ];
 function includeUiTests(patterns: string[], env = process.env): string[] {
   const selected = intersectIncludePatterns(
@@ -212,6 +142,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
   return defineProject({
     root: here,
     plugins: [
+      mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
       createVitestProjectCachePlugin(),
       createRedactingReporterPlugin(),
@@ -232,6 +163,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@awesome.me/webawesome/dist/components/popover/popover.js",
         "@awesome.me/webawesome/dist/components/popup/popup.js",
         "@awesome.me/webawesome/dist/components/select/select.js",
+        "@awesome.me/webawesome/dist/components/tooltip/tooltip.js",
         "@codemirror/commands",
         "@codemirror/state",
         "@codemirror/view",
@@ -239,6 +171,7 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
+        "@noble/hashes/utils.js",
         "@openclaw/normalization-core > libphonenumber-js/min",
         "@openclaw/normalization-core > libphonenumber-js/min/metadata",
         "@openclaw/uirouter",
@@ -253,19 +186,19 @@ export function createUiBrowserVitestConfig(env = process.env): ViteUserConfig {
         "json5",
         "lit/async-directive.js",
         "lit/directive.js",
+        "lit/directives/guard.js",
         "lit/directives/if-defined.js",
         "lit/directives/keyed.js",
         "lit/directives/ref.js",
         "lit/directives/repeat.js",
         "lit/directives/style-map.js",
         "lit/directives/unsafe-html.js",
+        "lit/directives/until.js",
         "lit/static-html.js",
         "markdown-it",
-        "markdown-it-task-lists",
         "mdast-util-from-markdown",
         "mdast-util-gfm-table",
         "micromark-extension-gfm-table",
-        "pretty-ms",
         "remend",
         "typebox/compile",
         "typebox/guard",

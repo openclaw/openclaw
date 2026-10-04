@@ -1,5 +1,4 @@
-// Node pending methods queue and drain work for paired nodes that may reconnect
-// later, with optional APNs wake nudges.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -37,21 +36,14 @@ function respondPairingChanged(respond: RespondFn) {
   );
 }
 
-function resolveClientNodeId(
-  client: { connect?: { device?: { id?: string }; client?: { id?: string } } } | null,
-): string | null {
-  const nodeId = client?.connect?.device?.id ?? client?.connect?.client?.id ?? "";
-  const trimmed = nodeId.trim();
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-/** Gateway handlers for queueing work until a paired node reconnects. */
 export const nodePendingWorkHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateNodePendingDrainParams, "node.pending.drain", respond)) {
       return;
     }
-    const nodeId = resolveClientNodeId(client);
+    const nodeId = normalizeOptionalString(
+      client?.connect?.device?.id ?? client?.connect?.client?.id,
+    );
     if (!nodeId) {
       respond(
         false,

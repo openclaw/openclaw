@@ -248,6 +248,22 @@
   ],
   "overrides": [
     {
+      "files": ["packages/worker-runtime/**/*.{js,ts,mts,cts}"],
+      "rules": {
+        "eslint/no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^(?:openclaw(?:/|$)|(?:\\.\\./){3,}src/)",
+                "message": "worker-runtime must remain independent of application src; supply host behavior through its runtime contracts."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
       "files": ["extensions/browser/src/browser/routes/*.ts"],
       "rules": {
         "oxc/no-async-endpoint-handlers": "off"

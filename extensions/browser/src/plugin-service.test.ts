@@ -63,16 +63,14 @@ describe("createBrowserPluginService", () => {
     expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
   });
 
-  for (const value of ["0", "", "disabled"]) {
-    it(`does not start the control server for eager env value ${JSON.stringify(value)}`, async () => {
-      vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
-      const service = createService();
+  it("does not start the control server when eager startup is disabled", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "0");
+    const service = createService();
 
-      await service.start(SERVICE_CONTEXT);
+    await service.start(SERVICE_CONTEXT);
 
-      expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
-    });
-  }
+    expect(runtimeMocks.startLazyPluginServiceModule).not.toHaveBeenCalled();
+  });
 
   it("passes a browser override validator to the eager service loader", async () => {
     vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");

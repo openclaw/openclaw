@@ -1,9 +1,7 @@
-// Implements system prompt inspection commands for agent runtime sessions.
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope-config.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import type { EmbeddedContextFile } from "../../agents/embedded-agent-helpers.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import {
   mapSandboxSkillEntriesForPrompt,
@@ -12,34 +10,25 @@ import {
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../agents/prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../agents/runtime-prompt.js";
-import type { AgentTool } from "../../agents/runtime/index.js";
 import {
   ensureSandboxWorkspaceForSession,
   resolveSandboxRuntimeStatus,
 } from "../../agents/sandbox.js";
 import { buildConfiguredAgentSystemPrompt } from "../../agents/system-prompt-config.js";
-import type { WorkspaceBootstrapFile } from "../../agents/workspace.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveSessionSkillExecutionWorkspace } from "../../skills/loading/workspace-skill-roots.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import { getRemoteSkillEligibility } from "../../skills/runtime/remote.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
 import type { SkillEligibilityContext, SkillSnapshot } from "../../skills/types.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
 const log = createSubsystemLogger("auto-reply/commands-system-prompt");
-
-type CommandsSystemPromptBundle = {
-  systemPrompt: string;
-  tools: AgentTool[];
-  skillsPrompt: string;
-  bootstrapFiles: WorkspaceBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
-  sandboxRuntime: ReturnType<typeof resolveSandboxRuntimeStatus>;
-};
 
 function resolveCommandSkillsEligibility(params: {
   agentId: string;
@@ -82,7 +71,8 @@ async function resolveCommandSkillsPrompt(params: {
   sandboxed: boolean;
   sessionKey: string | undefined;
   workspaceDir: string; // Preserve the caller's sandbox task root.
-  executionWorkspaceDir: string;
+  executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   skillsSnapshot?: SkillSnapshot;
 }): Promise<string> {
   let skillsSnapshot: SkillSnapshot;
@@ -91,6 +81,7 @@ async function resolveCommandSkillsPrompt(params: {
       await resolveReusableWorkspaceSkillSnapshot({
         workspaceDir: resolveAgentWorkspaceDir(params.config, params.agentId),
         executionWorkspaceDir: params.executionWorkspaceDir,
+        executionWorkspaceFileHost: params.executionWorkspaceFileHost,
         config: params.config,
         agentId: params.agentId,
         resolveEligibility: () => ({
@@ -183,9 +174,7 @@ async function resolveCommandSkillsPrompt(params: {
   return skillsSnapshot.prompt;
 }
 
-export async function resolveCommandsSystemPromptBundle(
-  params: HandleCommandsParams,
-): Promise<CommandsSystemPromptBundle> {
+export async function resolveCommandsSystemPromptBundle(params: HandleCommandsParams) {
   const workspaceDir = params.workspaceDir;
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const sessionAgentId = params.agentId;
@@ -228,7 +217,10 @@ export async function resolveCommandsSystemPromptBundle(
     sandboxed: sandboxRuntime.sandboxed,
     sessionKey: toolPolicySessionKey,
     workspaceDir,
-    executionWorkspaceDir: targetSessionEntry?.worktree?.canonicalWorkspaceDir ?? workspaceDir,
+    ...resolveSessionSkillExecutionWorkspace(
+      targetSessionEntry?.worktree?.canonicalWorkspaceDir,
+      workspaceDir,
+    ),
     skillsSnapshot: targetSessionEntry?.skillsSnapshot,
   });
   const tools = (() => {
@@ -275,7 +267,7 @@ export async function resolveCommandsSystemPromptBundle(
     execElevated: {
       enabled: params.elevated.enabled,
       allowed: params.elevated.allowed,
-      defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
+      defaultLevel: params.resolvedElevatedLevel ?? "off",
     },
   });
   const sandboxInfo = sandboxRuntime.sandboxed
@@ -285,7 +277,7 @@ export async function resolveCommandsSystemPromptBundle(
         workspaceAccess: "rw" as const,
         elevated: {
           allowed: params.elevated.allowed,
-          defaultLevel: (params.resolvedElevatedLevel ?? "off") as "on" | "off" | "ask" | "full",
+          defaultLevel: params.resolvedElevatedLevel ?? "off",
           fullAccessAvailable: fullAccessState.available,
           ...(fullAccessState.blockedReason
             ? { fullAccessBlockedReason: fullAccessState.blockedReason }
@@ -301,6 +293,7 @@ export async function resolveCommandsSystemPromptBundle(
     workspaceDir,
   });
   const systemPrompt = buildConfiguredAgentSystemPrompt({
+    preparedTtsPreferences: params.opts?.preparedTtsPreferences ?? (await prepareTtsPreferences()),
     config: params.cfg,
     preparedModelRuntime,
     agentId: sessionAgentId,

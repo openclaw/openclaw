@@ -166,6 +166,17 @@ describe("security CLI", () => {
     ]);
   });
 
+  it("reports an unexpected fixer failure instead of emitting a successful JSON audit", async () => {
+    primeDeepAuditConfig();
+    const failure = new Error("Fixture repair failed");
+    fixSecurityFootguns.mockRejectedValueOnce(failure);
+
+    await expect(
+      createProgram().parseAsync(["security", "audit", "--fix", "--json"], { from: "user" }),
+    ).rejects.toBe(failure);
+    expect(runtimeLogs).toEqual([]);
+  });
+
   it.each([
     {
       title: "forwards --token to deep probe auth without altering command-level resolver mode",

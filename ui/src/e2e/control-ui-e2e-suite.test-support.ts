@@ -18,6 +18,7 @@ import {
   installControlUiRpcDiagnostics,
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { installControlUiE2eRendererStallProbe } from "../test-helpers/control-ui-e2e-renderer-stall.ts";
 import type { ControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 
 declare module "vitest" {
@@ -104,7 +105,7 @@ export function tooltipTitleText(item: Locator) {
 
 type HeldModuleContext = {
   closing: boolean;
-  pages: Map<Page, Array<{ release: () => void; installed: ReturnType<Page["route"]> }>>;
+  pages: Map<Page, Array<{ close: () => void; installed: ReturnType<Page["route"]> }>>;
 };
 const heldModuleContexts = new WeakMap<BrowserContext, HeldModuleContext>();
 
@@ -122,29 +123,37 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   if (held.closing) {
     throw new Error("Cannot hold a module after browser context cleanup begins");
   }
-  let release!: () => void;
-  let requested!: (url: string) => void;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const request = new Promise<string>((resolve) => {
-    requested = resolve;
-  });
+  const gate = createDeferredCore();
+  const request = createDeferredCore<string>();
+  // Cleanup can cancel an unused hold; callers still receive the original rejection.
+  void request.promise.catch(() => {});
+  const release = () => gate.resolve();
   let requests = 0;
   const installed = page.route(module, async (route) => {
     requests += 1;
-    const response = await route.fetch();
-    expect(response.status()).toBe(200);
-    requested(route.request().url());
-    await gate;
-    await route.fulfill({ response });
+    try {
+      const response = await route.fetch();
+      expect(response.status()).toBe(200);
+      request.resolve(route.request().url());
+      await gate.promise;
+      await route.fulfill({ response });
+    } catch (error) {
+      request.reject(error);
+      throw error;
+    }
   });
   // Register before awaiting installation so teardown also owns a pending route().
   const registrations = held.pages.get(page) ?? [];
-  registrations.push({ release, installed });
+  registrations.push({
+    close: () => {
+      release();
+      request.reject(new Error("Browser context cleanup canceled the held module request"));
+    },
+    installed,
+  });
   held.pages.set(page, registrations);
   await installed;
-  return { request, release, requests: () => requests };
+  return { request: request.promise, release, requests: () => requests };
 }
 
 class ControlUiE2eAcquisitionClosedError extends Error {}
@@ -304,7 +313,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
           },
           async () => {
             for (const registration of registrations) {
-              registration.release();
+              registration.close();
             }
             // Release all gates before joining active page/context callbacks.
             await settleControlUiCleanup(registrations.map(({ installed }) => installed));
@@ -607,6 +616,9 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
             const page = await context.newPage();
             fixture = { context, page };
             installControlUiRpcDiagnostics(page);
+            // A CDP session attached after a test's own session clears that session's
+            // emulation overrides (such as safe-area insets) on the next navigation.
+            await installControlUiE2eRendererStallProbe(page);
             try {
               return await run(fixture);
             } catch (error) {

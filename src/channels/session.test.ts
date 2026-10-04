@@ -1,38 +1,25 @@
-// Channel session tests cover session persistence, lookup, and lifecycle helpers.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 
-const recordSessionMetaFromInboundMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
-const updateLastRouteMock = vi.fn((_args?: unknown) => Promise.resolve(undefined));
+type InboundRuntime = typeof import("../config/sessions/inbound.runtime.js");
+const recordSessionMetaFromInboundMock = vi.fn(
+  (_args: Parameters<InboundRuntime["recordInboundSessionMeta"]>[0]) => Promise.resolve(undefined),
+);
+const updateLastRouteMock = vi.fn(
+  (_args: Parameters<InboundRuntime["updateSessionLastRoute"]>[0]) => Promise.resolve(undefined),
+);
 
 vi.mock("../config/sessions/inbound.runtime.js", () => ({
-  recordInboundSessionMeta: (args: unknown) => recordSessionMetaFromInboundMock(args),
-  updateSessionLastRoute: (args: unknown) => updateLastRouteMock(args),
+  recordInboundSessionMeta: (args: Parameters<InboundRuntime["recordInboundSessionMeta"]>[0]) =>
+    recordSessionMetaFromInboundMock(args),
+  updateSessionLastRoute: (args: Parameters<InboundRuntime["updateSessionLastRoute"]>[0]) =>
+    updateLastRouteMock(args),
 }));
 
 type SessionModule = typeof import("./session.js");
 
 let recordInboundSession: SessionModule["recordInboundSession"];
-
-function requireFirstCallArg(mock: ReturnType<typeof vi.fn>): {
-  sessionKey?: string;
-  ctx?: MsgContext;
-  createIfMissing?: boolean;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-  };
-} {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error("Expected mock call argument");
-  }
-  const [arg] = call;
-  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
-    throw new Error("Expected mock call argument to be an object");
-  }
-  return arg;
-}
 
 describe("recordInboundSession", () => {
   const ctx: MsgContext = {
@@ -41,6 +28,16 @@ describe("recordInboundSession", () => {
     SessionKey: "agent:main:demo-channel:1234:thread:42",
     OriginatingTo: "demo-channel:1234",
   };
+
+  function record(overrides: Partial<Parameters<SessionModule["recordInboundSession"]>[0]>) {
+    return recordInboundSession({
+      storePath: "/tmp/openclaw-session-store.json",
+      sessionKey: "agent:main:demo-channel:1234:thread:42",
+      ctx,
+      onRecordError: vi.fn(),
+      ...overrides,
+    });
+  }
 
   beforeAll(async () => {
     ({ recordInboundSession } = await import("./session.js"));
@@ -51,65 +48,89 @@ describe("recordInboundSession", () => {
     updateLastRouteMock.mockClear();
   });
 
+  it("settles metadata persistence before returning to the dispatcher", async () => {
+    const started = createDeferred();
+    const writer = createDeferred<undefined>();
+    recordSessionMetaFromInboundMock.mockImplementationOnce(() => {
+      started.resolve();
+      return writer.promise;
+    });
+    const returned = vi.fn();
+    const work = record({}).then(returned);
+    try {
+      await started.promise;
+      await Promise.resolve();
+      expect(returned).not.toHaveBeenCalled();
+    } finally {
+      writer.resolve(undefined);
+      await work;
+    }
+    expect(returned).toHaveBeenCalledOnce();
+  });
+
+  it("tracks slow error reporting without holding dispatch after a failed write", async ({
+    signal,
+  }) => {
+    const failure = new Error("metadata write failed");
+    const reporter = createDeferred();
+    const onRecordError = vi.fn(() => reporter.promise);
+    const reported = vi.fn();
+    let trackedTask: Promise<unknown> | undefined;
+    recordSessionMetaFromInboundMock.mockRejectedValueOnce(failure);
+    const work = record({
+      onRecordError,
+      trackSessionMetaTask: (task) => {
+        trackedTask = task;
+        void task.then(reported);
+      },
+    });
+    try {
+      await withinTest(work, signal);
+      expect(onRecordError).toHaveBeenCalledExactlyOnceWith(failure);
+      expect(trackedTask).toBeInstanceOf(Promise);
+      expect(reported).not.toHaveBeenCalled();
+    } finally {
+      reporter.reject(new Error("reporting failed"));
+      await work;
+      await trackedTask;
+    }
+    expect(reported).toHaveBeenCalledOnce();
+  });
+
   it("does not pass ctx when updating a different session key", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
+    await record({
       updateLastRoute: {
         sessionKey: "agent:main:main",
         channel: "demo-channel",
         to: "demo-channel:1234",
       },
-      onRecordError: vi.fn(),
     });
 
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:main");
-    expect(route.ctx).toBeUndefined();
-    expect(route.deliveryContext?.channel).toBe("demo-channel");
-    expect(route.deliveryContext?.to).toBe("demo-channel:1234");
-  });
-
-  it("passes ctx when updating the same session key", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
-      updateLastRoute: {
-        sessionKey: "agent:main:demo-channel:1234:thread:42",
-        channel: "demo-channel",
-        to: "demo-channel:1234",
-      },
-      onRecordError: vi.fn(),
-    });
-
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
-    expect(route.ctx).toBe(ctx);
-    expect(route.deliveryContext?.channel).toBe("demo-channel");
-    expect(route.deliveryContext?.to).toBe("demo-channel:1234");
+    const route = updateLastRouteMock.mock.calls[0]?.[0];
+    expect(route?.sessionKey).toBe("agent:main:main");
+    expect(route?.ctx).toBeUndefined();
+    expect(route?.deliveryContext?.channel).toBe("demo-channel");
+    expect(route?.deliveryContext?.to).toBe("demo-channel:1234");
   });
 
   it("normalizes mixed-case session keys before recording and route updates", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
+    await record({
       sessionKey: "Agent:Main:Demo-Channel:1234:Thread:42",
-      ctx,
       updateLastRoute: {
         sessionKey: "agent:main:demo-channel:1234:thread:42",
         channel: "demo-channel",
         to: "demo-channel:1234",
       },
-      onRecordError: vi.fn(),
     });
 
-    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).sessionKey).toBe(
+    expect(recordSessionMetaFromInboundMock.mock.calls[0]?.[0].sessionKey).toBe(
       "agent:main:demo-channel:1234:thread:42",
     );
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
-    expect(route.ctx).toBe(ctx);
+    const route = updateLastRouteMock.mock.calls[0]?.[0];
+    expect(route?.sessionKey).toBe("agent:main:demo-channel:1234:thread:42");
+    expect(route?.ctx).toBe(ctx);
+    expect(route?.deliveryContext?.channel).toBe("demo-channel");
+    expect(route?.deliveryContext?.to).toBe("demo-channel:1234");
   });
 
   it("preserves Signal group ids before recording and route updates", async () => {
@@ -123,8 +144,7 @@ describe("recordInboundSession", () => {
       OriginatingTo: `signal:group:${mixedGroupId}`,
     };
 
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
+    await record({
       sessionKey: `Agent:Main:Signal:Group:${mixedGroupId}`,
       ctx: signalCtx,
       updateLastRoute: {
@@ -132,24 +152,20 @@ describe("recordInboundSession", () => {
         channel: "signal",
         to: `signal:group:${mixedGroupId}`,
       },
-      onRecordError: vi.fn(),
     });
 
-    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).sessionKey).toBe(
+    expect(recordSessionMetaFromInboundMock.mock.calls[0]?.[0].sessionKey).toBe(
       `agent:main:signal:group:${mixedGroupId}`,
     );
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe(`agent:main:signal:group:${mixedGroupId}`);
-    expect(route.ctx).toBe(signalCtx);
+    const route = updateLastRouteMock.mock.calls[0]?.[0];
+    expect(route?.sessionKey).toBe(`agent:main:signal:group:${mixedGroupId}`);
+    expect(route?.ctx).toBe(signalCtx);
   });
 
   it("skips last-route updates when main DM owner pin mismatches sender", async () => {
     const onSkip = vi.fn();
 
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
+    await record({
       updateLastRoute: {
         sessionKey: "agent:main:main",
         channel: "demo-channel",
@@ -160,7 +176,6 @@ describe("recordInboundSession", () => {
           onSkip,
         },
       },
-      onRecordError: vi.fn(),
     });
 
     expect(updateLastRouteMock).not.toHaveBeenCalled();
@@ -171,37 +186,31 @@ describe("recordInboundSession", () => {
   });
 
   it("forwards session creation policy to last-route updates", async () => {
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
+    await record({
       createIfMissing: false,
       updateLastRoute: {
         sessionKey: "agent:main:main",
         channel: "demo-channel",
         to: "demo-channel:1234",
       },
-      onRecordError: vi.fn(),
     });
 
-    expect(requireFirstCallArg(recordSessionMetaFromInboundMock).createIfMissing).toBe(false);
-    const route = requireFirstCallArg(updateLastRouteMock);
-    expect(route.sessionKey).toBe("agent:main:main");
-    expect(route.createIfMissing).toBe(false);
+    expect(recordSessionMetaFromInboundMock.mock.calls[0]?.[0].createIfMissing).toBe(false);
+    const route = updateLastRouteMock.mock.calls[0]?.[0];
+    expect(route?.sessionKey).toBe("agent:main:main");
+    expect(route?.createIfMissing).toBe(false);
   });
 
   it.each([
     {
       name: "throws synchronously",
-      handler: (_err: unknown): void => {
+      handler: (_err: unknown): never => {
         throw new Error("handler failed");
       },
     },
     {
       name: "returns a rejected promise",
-      handler: ((_err: unknown) => Promise.reject(new Error("handler failed"))) as (
-        _err: unknown,
-      ) => void,
+      handler: (_err: unknown) => Promise.reject(new Error("handler failed")),
     },
   ])("settles the tracked meta task when onRecordError $name", async ({ handler }) => {
     const recordError = new Error("db failed");
@@ -209,10 +218,7 @@ describe("recordInboundSession", () => {
     const onRecordError = vi.fn(handler);
     let trackedMetaTask: Promise<unknown> | undefined;
 
-    await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
-      sessionKey: "agent:main:demo-channel:1234:thread:42",
-      ctx,
+    await record({
       onRecordError,
       trackSessionMetaTask: (task) => {
         trackedMetaTask = task;

@@ -18,6 +18,7 @@ import {
   setEmbeddedQuestionBroker,
 } from "../../infra/embedded-question-broker.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
 import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
@@ -208,7 +209,7 @@ describe("secrets request normalization", () => {
 describe("secrets tool", () => {
   it("returns a clear local store blocker without publishing a credential prompt", async () => {
     const previousMode = isEmbeddedMode();
-    const broker = new EmbeddedQuestionBroker();
+    const broker = new EmbeddedQuestionBroker(createTestGatewayScheduler());
     const events: string[] = [];
     broker.subscribe((event) => events.push(event.event));
     setEmbeddedMode(true);
@@ -653,7 +654,7 @@ describe("secrets tool", () => {
   ])(
     "preserves question truth and the original error after $label",
     async ({ error, abort, answered }) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(createTestGatewayScheduler());
       const controller = new AbortController();
       const sessionKey = "agent:main:secret-registration";
       const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };
@@ -730,7 +731,7 @@ describe("secrets tool", () => {
   ])(
     "does not cancel a refused registration (reason=$reason, abort=$abort)",
     async ({ reason, abort }) => {
-      const manager = new QuestionManager();
+      const manager = new QuestionManager(createTestGatewayScheduler());
       const controller = new AbortController();
       const sessionKey = "agent:main:secret-refusal";
       const args = { action: "request", name: "SERVICE_API_KEY", kind: "secret" };

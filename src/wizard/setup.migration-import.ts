@@ -14,7 +14,6 @@ import type {
   MigrationProviderPlugin,
 } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { t } from "./i18n/index.js";
 import { runWizardWithPromptNavigationScope } from "./navigation-prompter.js";
@@ -57,15 +56,33 @@ type SetupMigrationProviderDescriptor = {
   label: string;
   description?: string;
 };
-const loadMigrationProviderRuntimeModule = createLazyRuntimeModule(
-  () => import("../plugins/migration-provider-runtime.js"),
-);
 
-const loadMigrationContextModule = createLazyRuntimeModule(
-  () => import("../commands/migrate/context.js"),
-);
-
-const loadConfigPathsModule = createLazyRuntimeModule(() => import("../config/paths.js"));
+async function detectSetupMigrationSource(
+  provider: MigrationProviderPlugin,
+  ctx: MigrationProviderContext,
+): Promise<SetupMigrationDetection | undefined> {
+  if (!provider.detect) {
+    return undefined;
+  }
+  try {
+    const detection = await provider.detect(ctx);
+    if (detection.found) {
+      return {
+        providerId: provider.id,
+        label: detection.label ?? provider.label,
+        ...(detection.source ? { source: detection.source } : {}),
+        ...(detection.message ? { message: detection.message } : {}),
+      };
+    }
+  } catch (error) {
+    // Detection is advisory; one failing provider must not prevent onboarding
+    // from offering other migration sources.
+    ctx.logger.debug?.(
+      `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
+    );
+  }
+  return undefined;
+}
 
 export async function detectSetupMigrationSources(params: {
   config: OpenClawConfig;
@@ -76,9 +93,9 @@ export async function detectSetupMigrationSources(params: {
 }> {
   const [{ withPluginMigrationProviders }, { createMigrationLogger }, { resolveStateDir }] =
     await Promise.all([
-      loadMigrationProviderRuntimeModule(),
-      loadMigrationContextModule(),
-      loadConfigPathsModule(),
+      import("../plugins/migration-provider-runtime.js"),
+      import("../commands/migrate/context.js"),
+      import("../config/paths.js"),
     ]);
   return await withPluginMigrationProviders(
     {
@@ -94,29 +111,13 @@ export async function detectSetupMigrationSources(params: {
       const logger = createMigrationLogger(params.runtime);
       const detections: SetupMigrationDetection[] = [];
       for (const provider of providers) {
-        if (!provider.detect) {
-          continue;
-        }
-        try {
-          const detection = await provider.detect({
-            config: params.config,
-            stateDir,
-            logger,
-          });
-          if (detection.found) {
-            detections.push({
-              providerId: provider.id,
-              label: detection.label ?? provider.label,
-              ...(detection.source ? { source: detection.source } : {}),
-              ...(detection.message ? { message: detection.message } : {}),
-            });
-          }
-        } catch (error) {
-          // Detection is advisory; one failing provider must not prevent onboarding
-          // from offering other migration sources.
-          logger.debug?.(
-            `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
-          );
+        const detection = await detectSetupMigrationSource(provider, {
+          config: params.config,
+          stateDir,
+          logger,
+        });
+        if (detection) {
+          detections.push(detection);
         }
       }
       return { detections, providerDescriptors: providers.map(describeSetupMigrationProvider) };
@@ -291,7 +292,7 @@ async function withSetupMigrationProvider<T>(
   params: { providerId: string; baseConfig: OpenClawConfig },
   run: (resolved: { provider: MigrationProviderPlugin; baseConfig: OpenClawConfig }) => Promise<T>,
 ): Promise<T> {
-  const { withPluginMigrationProviders } = await loadMigrationProviderRuntimeModule();
+  const { withPluginMigrationProviders } = await import("../plugins/migration-provider-runtime.js");
   return await withPluginMigrationProviders(
     { cfg: params.baseConfig, providerId: params.providerId },
     async (providers) => {
@@ -359,9 +360,9 @@ export async function runSetupMigrationImport(params: {
     onboardHelpers,
   ] = await Promise.all([
     import("../commands/onboard-config.js"),
-    loadMigrationContextModule(),
+    import("../commands/migrate/context.js"),
     import("../commands/migrate/output.js"),
-    loadConfigPathsModule(),
+    import("../config/paths.js"),
     import("../commands/onboard-helpers.js"),
   ]);
   const providerId = await selectSetupMigrationProvider({
@@ -441,28 +442,14 @@ export async function runSetupMigrationImport(params: {
         });
         const migrationLogger = createMigrationLogger(params.runtime);
         const selectedDetections = [...params.detections];
-        if (
-          resolvedProvider.provider.detect &&
-          !selectedDetections.some((detection) => detection.providerId === providerId)
-        ) {
-          try {
-            const detection = await resolvedProvider.provider.detect({
-              config: resolvedProvider.baseConfig,
-              stateDir,
-              logger: migrationLogger,
-            });
-            if (detection.found) {
-              selectedDetections.push({
-                providerId,
-                label: detection.label ?? resolvedProvider.provider.label,
-                ...(detection.source ? { source: detection.source } : {}),
-                ...(detection.message ? { message: detection.message } : {}),
-              });
-            }
-          } catch (error) {
-            migrationLogger.debug?.(
-              `Migration provider ${providerId} detection failed: ${formatErrorMessage(error)}`,
-            );
+        if (!selectedDetections.some((detection) => detection.providerId === providerId)) {
+          const detection = await detectSetupMigrationSource(resolvedProvider.provider, {
+            config: resolvedProvider.baseConfig,
+            stateDir,
+            logger: migrationLogger,
+          });
+          if (detection) {
+            selectedDetections.push(detection);
           }
         }
         const sourceDefault = resolveImportSourceDefault({

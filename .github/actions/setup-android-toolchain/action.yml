@@ -77,8 +77,6 @@ runs:
         # Emulator archives may seed from base; base runs must never restore the larger payload.
         restore-keys: |
           ${{ inputs.install-screenshot-emulators == 'true' && format('{0}-android-sdk-v2-cmdline-15859902-platform-37.0-build-tools-36.0.0-base', runner.os) || '' }}
-          ${{ runner.os }}-android-sdk-v1-cmdline-15859902-platform-37.0-build-tools-36.0.0
-          ${{ runner.os }}-android-sdk-v1-cmdline-15859902-
 
     - name: Setup Android SDK command-line tools
       shell: bash

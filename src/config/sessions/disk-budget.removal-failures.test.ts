@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import nodeFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -315,10 +316,8 @@ describe("session artifact deletion failures", () => {
       await fs.writeFile(laterTranscript, Buffer.alloc(1000));
       await fs.writeFile(storePath, JSON.stringify(store, null, 2));
       const projected = projectSessionStoreForPersistence({ storePath, store });
-      const blob = [...projected.promptBlobs.values()][0];
-      if (!blob?.path) {
-        throw new Error("expected projected prompt blob path");
-      }
+      const hash = createHash("sha256").update(prompt).digest("hex");
+      const blobPath = path.join(dir, "skills-prompts", "sha256", hash.slice(0, 2), `${hash}.txt`);
       const retained = { ...projected.store };
       delete retained[oldKey];
       const highWaterBytes = Buffer.byteLength(JSON.stringify(retained, null, 2)) + 1600;
@@ -335,7 +334,7 @@ describe("session artifact deletion failures", () => {
         expect.soft(Object.keys(store)).toEqual([activeKey]);
         expect.soft(nodeFs.existsSync(laterTranscript)).toBe(false);
         expect(await fs.readFile(oldTranscript)).toEqual(Buffer.alloc(1000));
-        expect(await fs.readFile(blob.path, "utf8")).toBe(prompt);
+        expect(await fs.readFile(blobPath, "utf8")).toBe(prompt);
         const usage = await measureSessionPhysicalDiskUsage(storePath);
         // Legacy persistence appends a newline; the budget models the JSON payload.
         expect.soft(result).toMatchObject({

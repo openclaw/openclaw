@@ -15,37 +15,19 @@ type TelegramCallbackReplyParams = Omit<
   NonNullable<Parameters<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>[2]>,
   "direct_messages_topic_id" | "message_thread_id"
 >;
+type TelegramCallbackEditParams = Parameters<
+  RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]
+>[3];
 
-export interface TelegramCallbackMessageActions {
-  editCallbackMessage: (
-    text: string,
-    editParams?: Parameters<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>[3],
-  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageText"]>;
-  clearCallbackButtons: () => ReturnType<
-    RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]
-  >;
-  editCallbackButtons: (
-    buttons: TelegramCallbackButton[][],
-  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["editMessageReplyMarkup"]>;
-  editCallbackMessageWithButtons: (
-    text: string,
-    buttons: TelegramCallbackButton[][],
-    extra?: { parse_mode?: "HTML" | "Markdown" | "MarkdownV2" },
-  ) => Promise<void>;
-  deleteCallbackMessage: () => ReturnType<
-    RegisterTelegramHandlerParams["bot"]["api"]["deleteMessage"]
-  >;
-  replyToCallbackChat: (
-    text: string,
-    replyParams?: TelegramCallbackReplyParams,
-  ) => ReturnType<RegisterTelegramHandlerParams["bot"]["api"]["sendMessage"]>;
-}
+export type TelegramCallbackMessageActions = ReturnType<
+  typeof createTelegramCallbackMessageActions
+>;
 
 export function createTelegramCallbackMessageActions(params: {
   bot: RegisterTelegramHandlerParams["bot"];
   callbackMessage: Message;
   threadSpec: TelegramThreadSpec;
-}): TelegramCallbackMessageActions {
+}) {
   const { bot, callbackMessage, threadSpec } = params;
   const callbackBusinessParams =
     callbackMessage.business_connection_id !== undefined
@@ -54,23 +36,12 @@ export function createTelegramCallbackMessageActions(params: {
   const withCallbackBusinessParams = <T extends object>(value: T) =>
     callbackBusinessParams ? { ...callbackBusinessParams, ...value } : value;
 
-  const editCallbackMessage = async (
-    text: string,
-    editParams?: Parameters<typeof bot.api.editMessageText>[3],
-  ) => {
+  const editCallbackMessage = async (text: string, editParams?: TelegramCallbackEditParams) => {
     return await bot.api.editMessageText(
       callbackMessage.chat.id,
       callbackMessage.message_id,
       text,
       editParams ? withCallbackBusinessParams(editParams) : callbackBusinessParams,
-    );
-  };
-
-  const clearCallbackButtons = async () => {
-    return await bot.api.editMessageReplyMarkup(
-      callbackMessage.chat.id,
-      callbackMessage.message_id,
-      withCallbackBusinessParams({ reply_markup: { inline_keyboard: [] } }),
     );
   };
 
@@ -115,8 +86,10 @@ export function createTelegramCallbackMessageActions(params: {
       if (errStr.includes("no text in the message")) {
         try {
           await deleteCallbackMessage();
-        } catch {}
-        await replyToCallbackChat(text, keyboard ? { reply_markup: keyboard, ...extra } : extra);
+        } catch {
+          await editCallbackButtons([]).catch(() => {});
+        }
+        await replyToCallbackChat(text, editParams);
       } else if (!errStr.includes("message is not modified")) {
         throw editErr;
       }
@@ -125,7 +98,7 @@ export function createTelegramCallbackMessageActions(params: {
 
   return {
     editCallbackMessage,
-    clearCallbackButtons,
+    clearCallbackButtons: () => editCallbackButtons([]),
     editCallbackButtons,
     editCallbackMessageWithButtons,
     deleteCallbackMessage,

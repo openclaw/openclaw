@@ -651,38 +651,29 @@ function tokenize(text: string, opts?: { ftsTokenizer?: "unicode61" | "trigram" 
   const segments = normalized.split(/[\s\p{P}]+/u).filter(Boolean);
 
   for (const segment of segments) {
-    // Japanese text often mixes scripts (kanji/kana/ASCII) without spaces.
-    // Extract script-specific chunks so technical terms like "API" / "バグ" are retained.
-    if (/[\u3040-\u30ff]/.test(segment)) {
-      const jpParts =
-        segment.match(/[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g) ?? [];
-      for (const part of jpParts) {
-        if (/^[\u4e00-\u9fff]+$/.test(part)) {
-          tokens.push(part);
-          if (!useTrigram) {
-            for (let i = 0; i < part.length - 1; i++) {
-              tokens.push(part.slice(i, i + 2));
-            }
-          }
+    const japanese = /[\u3040-\u30ff]/.test(segment);
+    if (japanese || /[\u4e00-\u9fff]/.test(segment)) {
+      // Keep script runs separate so embedded ASCII terms survive and Han
+      // characters on either side are never joined into one term.
+      const parts =
+        segment.match(
+          japanese
+            ? /[a-z0-9_]+|[\u30a0-\u30ffー]+|[\u4e00-\u9fff]+|[\u3040-\u309f]{2,}/g
+            : /[a-z0-9_]+|[\u4e00-\u9fff]+/g,
+        ) ?? [];
+      for (const part of parts) {
+        const han = /^[\u4e00-\u9fff]+$/.test(part);
+        // Chinese default queries use unigrams; Japanese and trigram queries
+        // retain whole runs. Trigram FTS cannot match individual characters.
+        if (!japanese && han && !useTrigram) {
+          tokens.push(...Array.from(part));
         } else {
           tokens.push(part);
         }
-      }
-    } else if (/[\u4e00-\u9fff]/.test(segment)) {
-      const chars = Array.from(segment).filter((c) => /[\u4e00-\u9fff]/.test(c));
-      if (useTrigram) {
-        // In trigram mode, push the whole contiguous CJK block (mirroring the
-        // Japanese kanji path). SQLite's trigram FTS requires at least 3 characters
-        // per query term — individual characters silently return no results.
-        const block = chars.join("");
-        if (block.length > 0) {
-          tokens.push(block);
-        }
-      } else {
-        // Default mode: unigrams + bigrams for phrase matching
-        tokens.push(...chars);
-        for (let i = 0; i < chars.length - 1; i++) {
-          tokens.push(chars.slice(i, i + 2).join(""));
+        if (han && !useTrigram) {
+          for (let i = 0; i < part.length - 1; i++) {
+            tokens.push(part.slice(i, i + 2));
+          }
         }
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {
@@ -710,17 +701,11 @@ export function extractKeywords(
   query: string,
   opts?: { ftsTokenizer?: "unicode61" | "trigram" },
 ): string[] {
-  const tokens = tokenize(query, opts);
-  const keywords: string[] = [];
-  const seen = new Set<string>();
-
-  for (const token of tokens) {
-    if (isQueryStopWordToken(token) || !isValidKeyword(token) || seen.has(token)) {
-      continue;
-    }
-    seen.add(token);
-    keywords.push(token);
-  }
-
-  return keywords;
+  return [
+    ...new Set(
+      tokenize(query, opts).filter(
+        (token) => !isQueryStopWordToken(token) && isValidKeyword(token),
+      ),
+    ),
+  ];
 }

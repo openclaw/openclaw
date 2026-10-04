@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type { Model } from "openclaw/plugin-sdk/llm";
-/**
- * Routes compaction through selected native agent harnesses when supported.
- */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -57,12 +54,6 @@ import type {
   AgentHarnessNativeCompactionRequest,
 } from "./types.js";
 
-/**
- * Delegates session compaction to the selected agent harness when that runtime owns compaction.
- *
- * CLI runtimes and OpenClaw-native compaction stay on the embedded runner path; plugin harnesses
- * can opt in through their `compact` hook.
- */
 type InternalAgentHarnessCompactionOptions = {
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   sourceAuthority: AgentHarnessCompactionSourceAuthority;
@@ -498,16 +489,6 @@ async function maybeCompactAgentHarnessSessionInGeneration(
       },
       releaseBeforeResultWhenIdle: true,
     });
-    const resolveNativeToolPolicyRestricted = (targetHarness: AgentHarness) =>
-      resolveAgentHarnessNativeToolPolicyRestricted(
-        {
-          ...params,
-          agentId: compactIdentity.agentId,
-          provider: params.provider ?? "",
-          modelId: params.model ?? "",
-        },
-        targetHarness,
-      );
     const compactParams: CompactEmbeddedAgentSessionParams = {
       ...params,
       abortSignal,
@@ -525,7 +506,16 @@ async function maybeCompactAgentHarnessSessionInGeneration(
     });
     assertSourceCurrent();
     harness = resolved.harness;
-    const nativeToolPolicyRestricted = resolveNativeToolPolicyRestricted(harness);
+    const nativeToolPolicyRestricted = resolveAgentHarnessNativeToolPolicyRestricted(
+      {
+        ...params,
+        agentId: compactIdentity.agentId,
+        sandboxAgentId: runtimePolicyAgentId,
+        provider: params.provider ?? "",
+        modelId: params.model ?? "",
+      },
+      harness,
+    );
     compactParams.nativeToolSurface = nativeToolPolicyRestricted ? "host-isolated" : "unrestricted";
     const resolvedRuntimeAuthPlan = resolved.runtimeAuthPlan ?? runtimeAuthPlan;
     const nativeCompaction = resolveCodexAgentHarnessNativeCompaction(harness);

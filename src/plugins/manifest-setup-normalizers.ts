@@ -43,13 +43,23 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
     return undefined;
   }
 
-  const onProviders = normalizeTrimmedStringList(value.onProviders);
-  const onAgentHarnesses = normalizeTrimmedStringList(value.onAgentHarnesses);
-  const onCommands = normalizeTrimmedStringList(value.onCommands);
-  const onChannels = normalizeTrimmedStringList(value.onChannels);
-  const onRoutes = normalizeTrimmedStringList(value.onRoutes);
-  const onConfigPaths = normalizeTrimmedStringList(value.onConfigPaths);
-  const onStartup = typeof value.onStartup === "boolean" ? value.onStartup : undefined;
+  const activation: PluginManifestActivation = {};
+  if (typeof value.onStartup === "boolean") {
+    activation.onStartup = value.onStartup;
+  }
+  for (const key of [
+    "onProviders",
+    "onAgentHarnesses",
+    "onCommands",
+    "onChannels",
+    "onRoutes",
+    "onConfigPaths",
+  ] as const) {
+    const entries = normalizeTrimmedStringList(value[key]);
+    if (entries.length > 0) {
+      activation[key] = entries;
+    }
+  }
   const onCapabilities = normalizeTrimmedStringList(value.onCapabilities).filter(
     (capability): capability is PluginManifestActivationCapability =>
       capability === "provider" ||
@@ -58,16 +68,9 @@ export function normalizeManifestActivation(value: unknown): PluginManifestActiv
       capability === "hook",
   );
 
-  const activation = {
-    ...(onStartup !== undefined ? { onStartup } : {}),
-    ...(onProviders.length > 0 ? { onProviders } : {}),
-    ...(onAgentHarnesses.length > 0 ? { onAgentHarnesses } : {}),
-    ...(onCommands.length > 0 ? { onCommands } : {}),
-    ...(onChannels.length > 0 ? { onChannels } : {}),
-    ...(onRoutes.length > 0 ? { onRoutes } : {}),
-    ...(onConfigPaths.length > 0 ? { onConfigPaths } : {}),
-    ...(onCapabilities.length > 0 ? { onCapabilities } : {}),
-  } satisfies PluginManifestActivation;
+  if (onCapabilities.length > 0) {
+    activation.onCapabilities = onCapabilities;
+  }
 
   return Object.keys(activation).length > 0 ? activation : undefined;
 }
@@ -102,24 +105,20 @@ export function normalizeManifestCliCommands(
     return undefined;
   }
   const seen = new Set<string>();
-  const commands: PluginManifestCliCommand[] = [];
-  for (const entry of value) {
-    if (
-      !isRecord(entry) ||
-      typeof entry.name !== "string" ||
-      typeof entry.description !== "string"
-    ) {
-      continue;
-    }
-    const name = normalizeCommandDescriptorName(entry.name);
-    const description = sanitizeCommandDescriptorDescription(entry.description);
-    if (!name || !description || typeof entry.hasSubcommands !== "boolean" || seen.has(name)) {
-      continue;
-    }
-    seen.add(name);
-    commands.push({ name, description, hasSubcommands: entry.hasSubcommands });
-  }
-  return commands;
+  return (
+    normalizeManifestObjectList(value, (entry) => {
+      if (typeof entry.name !== "string" || typeof entry.description !== "string") {
+        return undefined;
+      }
+      const name = normalizeCommandDescriptorName(entry.name);
+      const description = sanitizeCommandDescriptorDescription(entry.description);
+      if (!name || !description || typeof entry.hasSubcommands !== "boolean" || seen.has(name)) {
+        return undefined;
+      }
+      seen.add(name);
+      return { name, description, hasSubcommands: entry.hasSubcommands };
+    }) ?? []
+  );
 }
 
 function normalizeManifestSetupProviders(
@@ -495,16 +494,11 @@ export function normalizeManifestChannelCommandDefaults(
   if (!isRecord(value)) {
     return undefined;
   }
-  const nativeCommandsAutoEnabled =
-    typeof value.nativeCommandsAutoEnabled === "boolean"
-      ? value.nativeCommandsAutoEnabled
-      : undefined;
-  const nativeSkillsAutoEnabled =
-    typeof value.nativeSkillsAutoEnabled === "boolean" ? value.nativeSkillsAutoEnabled : undefined;
-  return nativeCommandsAutoEnabled !== undefined || nativeSkillsAutoEnabled !== undefined
-    ? {
-        ...(nativeCommandsAutoEnabled !== undefined ? { nativeCommandsAutoEnabled } : {}),
-        ...(nativeSkillsAutoEnabled !== undefined ? { nativeSkillsAutoEnabled } : {}),
-      }
-    : undefined;
+  const commands: PluginManifestChannelCommandDefaults = {};
+  for (const key of ["nativeCommandsAutoEnabled", "nativeSkillsAutoEnabled"] as const) {
+    if (typeof value[key] === "boolean") {
+      commands[key] = value[key];
+    }
+  }
+  return Object.keys(commands).length > 0 ? commands : undefined;
 }

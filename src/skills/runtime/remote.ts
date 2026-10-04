@@ -17,10 +17,10 @@ import {
   isRemoteSkillEligibilityNode,
   parseBinProbePayload,
   supportsSystemRun,
-  supportsSystemWhich,
 } from "./remote-probe-utils.js";
 import {
   recordRemoteSkillNodeInfo,
+  remoteConnectionKey,
   removeRemoteNodeSkills,
   setRemoteSkillConnectionReconciler,
 } from "./remote-skills.js";
@@ -142,51 +142,6 @@ function upsertNode(
   });
 }
 
-function clearRemoteNodeBins(nodeId: string): boolean {
-  const existing = remoteNodes.get(nodeId);
-  if (!existing || existing.bins.size === 0) {
-    return false;
-  }
-  existing.bins = new Set();
-  return true;
-}
-
-function buildRemoteProbeSignature(params: {
-  command: string;
-  platform?: string;
-  deviceFamily?: string;
-  commands?: string[];
-  bins: string[];
-}): string {
-  return JSON.stringify([
-    params.command,
-    normalizeLowercaseStringOrEmpty(params.platform),
-    normalizeLowercaseStringOrEmpty(params.deviceFamily),
-    [...(params.commands ?? [])].toSorted(),
-    params.bins.toSorted(),
-  ]);
-}
-
-function restoreCachedRemoteNodeBins(nodeId: string): boolean {
-  const node = remoteNodes.get(nodeId);
-  const state = remoteNodeProbeStates.get(nodeId);
-  const cachedBins = state?.bins;
-  if (
-    !node ||
-    state?.pairingGeneration !== node.pairingGeneration ||
-    !cachedBins ||
-    areBinSetsEqual(node.bins, cachedBins)
-  ) {
-    return false;
-  }
-  node.bins = new Set(cachedBins);
-  return true;
-}
-
-function sameRemoteNodeOwner(left: RemoteNodeOwner, right: RemoteNodeOwner): boolean {
-  return left.connId === right.connId && left.pairingGeneration === right.pairingGeneration;
-}
-
 function isCurrentRemoteNodeOwner(nodeId: string, owner: RemoteNodeOwner): boolean {
   const current = remoteNodes.get(nodeId);
   return Boolean(
@@ -223,15 +178,15 @@ function recordRemoteNodeProbeFailure(
     nextProbeAfterMs: params.nowMs + backoffMs,
     failedProbeCount,
   });
-  const cleared = clearRemoteNodeBins(params.nodeId);
+  const node = remoteNodes.get(params.nodeId);
+  const cleared = Boolean(node?.bins.size);
+  if (node && cleared) {
+    node.bins = new Set();
+  }
   logRemoteBinProbeFailure(params.nodeId, err, context, phase);
   if (cleared) {
     bumpSkillsSnapshotVersion({ reason: "remote-node" });
   }
-}
-
-function remoteConnectionKey(nodeId: string, connId: string): string {
-  return `${nodeId}\0${connId}`;
 }
 
 function listCurrentRemoteConnectionKeys(): ReadonlySet<string> | undefined {
@@ -279,8 +234,7 @@ export async function primeRemoteSkillsCache() {
         { pairingGenerationAuthoritative: true },
       );
       if (
-        node.bins &&
-        node.bins.length > 0 &&
+        node.bins?.length &&
         isMacPlatform(node.platform, node.deviceFamily) &&
         supportsSystemRun(node.commands)
       ) {
@@ -374,7 +328,10 @@ export async function refreshRemoteNodeBins(params: RemoteNodeBinRefreshParams):
     const existing = remoteBinProbeInflight.get(params.nodeId);
     if (existing) {
       await existing.promise;
-      if (sameRemoteNodeOwner(existing, owner)) {
+      if (
+        existing.connId === owner.connId &&
+        existing.pairingGeneration === owner.pairingGeneration
+      ) {
         return;
       }
       // Replacement waiters resume together. Recheck the live owner and map
@@ -432,7 +389,7 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   if (!isMacPlatform(platform, deviceFamily)) {
     return;
   }
-  const canWhich = supportsSystemWhich(commands);
+  const canWhich = commands?.includes("system.which") ?? false;
   const canRun = supportsSystemRun(commands);
   if (!canWhich && !canRun) {
     return;
@@ -458,20 +415,27 @@ async function refreshRemoteNodeBinsUncoalesced(params: RemoteNodeBinRefreshPara
   const binsList = [...requiredBins];
   const timeoutMs = params.timeoutMs ?? 15_000;
   const command = canWhich ? "system.which" : "system.run";
-  const probeSignature = buildRemoteProbeSignature({
+  const probeSignature = JSON.stringify([
     command,
-    platform,
-    deviceFamily,
-    commands,
-    bins: binsList,
-  });
+    normalizeLowercaseStringOrEmpty(platform),
+    normalizeLowercaseStringOrEmpty(deviceFamily),
+    (commands ?? []).toSorted(),
+    binsList.toSorted(),
+  ]);
   const cachedProbe = remoteNodeProbeStates.get(params.nodeId);
   if (
     cachedProbe?.pairingGeneration === probeOwner.pairingGeneration &&
     cachedProbe.signature === probeSignature &&
     Date.now() < cachedProbe.nextProbeAfterMs
   ) {
-    if (restoreCachedRemoteNodeBins(params.nodeId)) {
+    const node = remoteNodes.get(params.nodeId);
+    if (
+      node &&
+      cachedProbe.pairingGeneration === node.pairingGeneration &&
+      cachedProbe.bins &&
+      !areBinSetsEqual(node.bins, cachedProbe.bins)
+    ) {
+      node.bins = new Set(cachedProbe.bins);
       bumpSkillsSnapshotVersion({ reason: "remote-node" });
     }
     return;
@@ -578,12 +542,10 @@ export function getRemoteSkillEligibility(options?: {
   const currentConnections = listCurrentRemoteConnectionKeys();
   const macNodes = [...remoteNodes.values()].filter(
     (node) =>
-      node.connected &&
+      isRemoteSkillEligibilityNode(node) &&
       (!currentConnections ||
         (node.connId !== undefined &&
-          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))) &&
-      isMacPlatform(node.platform, node.deviceFamily) &&
-      supportsSystemRun(node.commands),
+          currentConnections.has(remoteConnectionKey(node.nodeId, node.connId)))),
   );
   if (macNodes.length === 0) {
     return undefined;

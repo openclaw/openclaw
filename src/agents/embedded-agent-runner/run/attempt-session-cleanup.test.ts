@@ -48,6 +48,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
     attempt,
     transcriptLifecycle,
     sessionAgentId: "main",
+    toolSearchCatalogRef: {},
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,
     trajectoryEndRecorded: false,
@@ -80,9 +81,9 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
         trajectoryRecorder: input.trajectoryRecorder,
       }),
     );
-    expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1", agentId: "main" }),
-    );
+    expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith({
+      catalogRef: input.toolSearchCatalogRef,
+    });
     expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
       expect.objectContaining({ aborted: false }),
     );

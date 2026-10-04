@@ -29,6 +29,10 @@ function parseModelRef(raw?: string) {
   };
 }
 
+function configuredProvider(id: string, defaultModel: string) {
+  return { id, defaultModel, isConfigured: () => true };
+}
+
 describe("media-generation runtime shared candidates", () => {
   it.each([
     [0, undefined, undefined],
@@ -53,39 +57,17 @@ describe("media-generation runtime shared candidates", () => {
   );
 
   it("appends auth-backed provider defaults after explicit refs by default", () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.4",
-          },
-        },
-      },
-    } as OpenClawConfig;
-
     const candidates = resolveCapabilityModelCandidates({
-      cfg,
+      cfg: { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } },
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",
         fallbacks: ["fal/fal-ai/flux/dev"],
       },
       parseModelRef,
       listProviders: () => [
-        {
-          id: "google",
-          defaultModel: "gemini-3.1-flash-image-preview",
-          isConfigured: () => true,
-        },
-        {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          isConfigured: () => true,
-        },
-        {
-          id: "minimax",
-          defaultModel: "image-01",
-          isConfigured: () => true,
-        },
+        configuredProvider("google", "gemini-3.1-flash-image-preview"),
+        configuredProvider("openai", "gpt-image-1"),
+        configuredProvider("minimax", "image-01"),
       ],
     });
 
@@ -97,32 +79,14 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
-  it("auto-detects auth-backed provider defaults when no explicit media model is configured", () => {
-    const candidates = resolveCapabilityModelCandidates({
-      cfg: {} as OpenClawConfig,
-      modelConfig: undefined,
-      parseModelRef,
-      listProviders: () => [
-        {
-          id: "openai",
-          defaultModel: "gpt-image-1",
-          isConfigured: () => true,
-        },
-        {
-          id: "fal",
-          defaultModel: "fal-ai/flux/dev",
-          isConfigured: () => true,
-        },
-      ],
-    });
-
-    expect(candidates).toEqual([
-      { provider: "openai", model: "gpt-image-1" },
-      { provider: "fal", model: "fal-ai/flux/dev" },
-    ]);
-  });
-
-  it("auto-detects config-only providers that do not implement custom readiness", () => {
+  it.each([
+    [
+      "uses generic auth without custom readiness",
+      undefined,
+      [{ provider: "media-config-only", model: "configured-video" }],
+    ],
+    ["honors an owner readiness veto over generic auth", () => false, []],
+  ] as const)("%s", (_name, isConfigured, expected) => {
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
         models: {
@@ -134,71 +98,31 @@ describe("media-generation runtime shared candidates", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      },
       modelConfig: undefined,
       parseModelRef,
       listProviders: () => [
         {
           id: "media-config-only",
           defaultModel: "configured-video",
+          isConfigured,
         },
       ],
     });
 
-    expect(candidates).toEqual([{ provider: "media-config-only", model: "configured-video" }]);
-  });
-
-  it("preserves an owner readiness veto even when generic config contains an API key", () => {
-    const candidates = resolveCapabilityModelCandidates({
-      cfg: {
-        models: {
-          providers: {
-            "media-config-only": {
-              apiKey: "config-only-media-key",
-              baseUrl: "https://media.example.test/v1",
-              models: [],
-            },
-          },
-        },
-      } as OpenClawConfig,
-      modelConfig: undefined,
-      parseModelRef,
-      listProviders: () => [
-        {
-          id: "media-config-only",
-          defaultModel: "configured-video",
-          isConfigured: () => false,
-        },
-      ],
-    });
-
-    expect(candidates).toEqual([]);
+    expect(candidates).toEqual(expected);
   });
 
   it("orders auto-detected provider defaults by canonical aliases", () => {
     const candidates = resolveCapabilityModelCandidates({
-      cfg: {
-        agents: {
-          defaults: {
-            model: {
-              primary: "media-alias/gpt-5.5",
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg: { agents: { defaults: { model: { primary: "media-alias/gpt-5.5" } } } },
       modelConfig: undefined,
       parseModelRef,
       listProviders: () => [
+        configuredProvider("fal", "fal-ai/flux/dev"),
         {
-          id: "fal",
-          defaultModel: "fal-ai/flux/dev",
-          isConfigured: () => true,
-        },
-        {
-          id: "openai",
+          ...configuredProvider("openai", "gpt-image-2"),
           aliases: ["media-alias"],
-          defaultModel: "gpt-image-2",
-          isConfigured: () => true,
         },
       ],
     });
@@ -213,11 +137,7 @@ describe("media-generation runtime shared candidates", () => {
     let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
-        agents: {
-          defaults: {
-            mediaGenerationAutoProviderFallback: false,
-          },
-        },
+        agents: { defaults: { mediaGenerationAutoProviderFallback: false } },
       } as OpenClawConfig,
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",
@@ -225,13 +145,7 @@ describe("media-generation runtime shared candidates", () => {
       parseModelRef,
       listProviders: () => {
         listProviderCalls += 1;
-        return [
-          {
-            id: "openai",
-            defaultModel: "gpt-image-1",
-            isConfigured: () => true,
-          },
-        ];
+        return [configuredProvider("openai", "gpt-image-1")];
       },
     });
 
@@ -244,26 +158,14 @@ describe("media-generation runtime shared candidates", () => {
 
   it("treats an explicit model override as exact-only", () => {
     const candidates = resolveCapabilityModelCandidates({
-      cfg: {
-        agents: {
-          defaults: {
-            mediaGenerationAutoProviderFallback: false,
-          },
-        },
-      } as OpenClawConfig,
+      cfg: {},
       modelConfig: {
         primary: "google/gemini-3.1-flash-image-preview",
         fallbacks: ["fal/fal-ai/flux/dev"],
       },
       modelOverride: "openai/gpt-image-2",
       parseModelRef,
-      listProviders: () => [
-        {
-          id: "google",
-          defaultModel: "gemini-3.1-flash-image-preview",
-          isConfigured: () => true,
-        },
-      ],
+      listProviders: () => [configuredProvider("google", "gemini-3.1-flash-image-preview")],
     });
 
     expect(candidates).toEqual([{ provider: "openai", model: "gpt-image-2" }]);
@@ -271,7 +173,7 @@ describe("media-generation runtime shared candidates", () => {
 
   it("resolves slash-containing provider model IDs from registered provider models", () => {
     const candidates = resolveCapabilityModelCandidates({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       modelConfig: {
         primary: "openai/gpt-image-2",
       },
@@ -279,10 +181,8 @@ describe("media-generation runtime shared candidates", () => {
       parseModelRef,
       listProviders: () => [
         {
-          id: "fal",
-          defaultModel: "fal-ai/flux/dev",
+          ...configuredProvider("fal", "fal-ai/flux/dev"),
           models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
-          isConfigured: () => true,
         },
       ],
     });
@@ -292,23 +192,19 @@ describe("media-generation runtime shared candidates", () => {
 
   it("prefers explicit provider refs over colliding slash-containing model IDs", () => {
     const candidates = resolveCapabilityModelCandidates({
-      cfg: {} as OpenClawConfig,
+      cfg: {},
       modelConfig: {
         primary: "google/lyria-3-pro-preview",
       },
       parseModelRef,
       listProviders: () => [
         {
-          id: "google",
-          defaultModel: "lyria-3-clip-preview",
+          ...configuredProvider("google", "lyria-3-clip-preview"),
           models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
-          isConfigured: () => true,
         },
         {
-          id: "openrouter",
-          defaultModel: "google/lyria-3-clip-preview",
+          ...configuredProvider("openrouter", "google/lyria-3-clip-preview"),
           models: ["google/lyria-3-clip-preview", "google/lyria-3-pro-preview"],
-          isConfigured: () => true,
         },
       ],
     });
@@ -321,12 +217,23 @@ describe("media-generation candidate lifecycle", () => {
   it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
     const calls: string[] = [];
     const result = await runMediaGenerationCandidates({
-      candidates: ["missing", "skipped", "failed", "success", "unused"].map((provider) => ({
-        provider,
-        model: "model",
-      })),
+      request: {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: {
+                  primary: "missing/model",
+                  fallbacks: ["skipped/model", "failed/model", "success/model", "unused/model"],
+                },
+              },
+            },
+          },
+        },
+        autoProviderFallback: false,
+      },
+      listProviders: () => [],
       capability: "image",
-      includeSkipFailureDetails: true,
       getProvider(id) {
         calls.push(`lookup:${id}`);
         return id === "missing" ? undefined : { id };
@@ -386,10 +293,17 @@ describe("media-generation candidate lifecycle", () => {
       const lookedUp: string[] = [];
       let executions = 0;
       const result = runMediaGenerationCandidates({
-        candidates: [
-          { provider: "primary", model: "model" },
-          { provider: "fallback", model: "model" },
-        ],
+        request: {
+          cfg: {
+            agents: {
+              defaults: {
+                mediaModels: { video: { primary: "primary/model", fallbacks: ["fallback/model"] } },
+              },
+            },
+          },
+          autoProviderFallback: false,
+        },
+        listProviders: () => [],
         capability: "video",
         getProvider(id) {
           lookedUp.push(id);
@@ -462,15 +376,6 @@ describe("media-generation runtime shared normalization", () => {
     ).toBe("16:9");
   });
 
-  it("maps unsupported resolutions to the closest supported resolution", () => {
-    expect(
-      resolveClosestResolution({
-        requestedResolution: "2K",
-        supportedResolutions: ["1K", "4K"],
-      }),
-    ).toBe("1K");
-  });
-
   it("maps video-style resolutions by numeric distance", () => {
     expect(
       resolveClosestResolution({
@@ -491,6 +396,37 @@ describe("media-generation runtime shared normalization", () => {
     ).toBeUndefined();
   });
 
+  it("keeps geometry tie-breaking independent of provider declaration order", () => {
+    for (const reverse of [false, true]) {
+      const ordered = <T>(values: T[]) => (reverse ? values.toReversed() : values);
+      expect(
+        resolveClosestAspectRatio({
+          requestedAspectRatio: "3:3",
+          supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
+        }),
+      ).toBe("1:1");
+      expect(
+        resolveClosestSize({
+          requestedAspectRatio: "1:1",
+          supportedSizes: ordered(["invalid", "128x128", "64x64"]),
+        }),
+      ).toBe("64x64");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "480P",
+          supportedResolutions: ordered(["invalid", "360P", "600P"]),
+        }),
+      ).toBe("600P");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "medium",
+          supportedResolutions: ordered(["invalid", "small", "large"]),
+          order: ["small", "medium", "large"],
+        }),
+      ).toBe("small");
+    }
+  });
+
   it("clamps durations to the closest supported max", () => {
     expect(normalizeDurationToClosestMax(12, 8)).toBe(8);
     expect(normalizeDurationToClosestMax(6, 8)).toBe(6);
@@ -498,6 +434,12 @@ describe("media-generation runtime shared normalization", () => {
 });
 
 describe("media-generation runtime shared failure summaries", () => {
+  const abortedAttempts = ["minimax", "minimax-portal"].map((provider) => ({
+    provider,
+    model: "music-2.6",
+    error: "This operation was aborted",
+  }));
+
   it("collapses abort cascades behind the non-abort failure", () => {
     expect(() =>
       throwCapabilityGenerationFailure({
@@ -508,16 +450,7 @@ describe("media-generation runtime shared failure summaries", () => {
             model: "lyria-3-clip-preview",
             error: "Manually set deadline 1s is too short. Minimum allowed deadline is 10s.",
           },
-          {
-            provider: "minimax",
-            model: "music-2.6",
-            error: "This operation was aborted",
-          },
-          {
-            provider: "minimax-portal",
-            model: "music-2.6",
-            error: "This operation was aborted",
-          },
+          ...abortedAttempts,
         ],
         lastError: new Error("This operation was aborted"),
       }),
@@ -530,18 +463,7 @@ describe("media-generation runtime shared failure summaries", () => {
     expect(() =>
       throwCapabilityGenerationFailure({
         capabilityLabel: "music generation",
-        attempts: [
-          {
-            provider: "minimax",
-            model: "music-2.6",
-            error: "This operation was aborted",
-          },
-          {
-            provider: "minimax-portal",
-            model: "music-2.6",
-            error: "This operation was aborted",
-          },
-        ],
+        attempts: abortedAttempts,
         lastError: new Error("This operation was aborted"),
       }),
     ).toThrow(

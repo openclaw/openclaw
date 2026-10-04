@@ -5,7 +5,8 @@ import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
-import { swapStagedPackageInstall, type PackageUpdateTransaction } from "./package-update-swap.js";
+import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "./package-update-swap.js";
 import {
   createPackageSwapFixture,
   createRetainedPackageSwap,
@@ -211,9 +212,10 @@ describe("retained package transaction authority", () => {
     await withTestDir({ prefix: "openclaw-retirement-owner-" }, async (base) => {
       const { transaction, packageRoot } = await createRetainedPackageSwap(base);
       let current = true;
+      const refusal = new Error("retirement executor lost");
       const assertCurrent = () => {
         if (!current) {
-          throw new Error("retirement executor lost");
+          throw refusal;
         }
       };
       const backupRoot = await fs.realpath(transaction.backupRoot);
@@ -232,11 +234,11 @@ describe("retained package transaction authority", () => {
       const unlink = vi.spyOn(fs, "unlink");
       const rmdir = vi.spyOn(fs, "rmdir");
       const rename = vi.spyOn(fs, "rename");
-      await expect(
-        transaction.complete({ activationVerified: true }, assertCurrent),
-      ).rejects.toThrow("retirement executor lost");
-      await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toThrow(
-        "retirement executor lost",
+      await expect(transaction.complete({ activationVerified: true }, assertCurrent)).rejects.toBe(
+        refusal,
+      );
+      await expect(transaction.complete({ activationVerified: true }, () => {})).rejects.toBe(
+        refusal,
       );
       expect(injections).toBe(1);
       expect(rename).not.toHaveBeenCalled();

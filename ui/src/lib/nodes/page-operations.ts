@@ -1,7 +1,7 @@
 // Presentation-free by contract: confirmations and secret reveals belong to the owning
 // page, because native window.confirm/window.prompt silently answer in webviews with no
 // dialog bridge and would end the action with no outcome and no recorded reason.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ExecApprovalsNodeSnapshot as GatewayExecApprovalsNodeSnapshot,
   ExecApprovalsSnapshot as GatewayExecApprovalsSnapshot,
@@ -31,8 +31,6 @@ export type ExecSecurity = ExecApprovalsResolvedDefaults["security"];
 export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
-
-export type ExecApprovalsAllowlistEntry = NonNullable<WireExecApprovalsAgent["allowlist"]>[number];
 
 type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
 
@@ -212,35 +210,36 @@ export async function loadDevices(state: DevicesState, opts?: { quiet?: boolean 
   }
 }
 
-// Device results belong to the captured connection; node pairing refreshes the current inventory.
-async function runDevicePairingRequest(
+// Persist accepted mutations before fencing their captured connection's view refresh.
+async function runDeviceMutation<T>(
   state: DevicesState,
-  requestId: string,
-  method: "device.pair.approve" | "device.pair.reject",
-) {
+  mutate: (client: GatewayRequestClient) => Promise<T>,
+): Promise<T | null> {
   const client = state.client;
   if (!client || !state.connected) {
-    return;
+    return null;
   }
   const generation = state.requestGeneration;
   try {
-    await client.request(method, { requestId });
+    const result = await mutate(client);
     if (isCurrentNodesRequest(state, client, generation)) {
       await loadDevices(state);
     }
+    return result;
   } catch (err) {
     if (isCurrentNodesRequest(state, client, generation)) {
       state.devicesError = formatUiError(err);
     }
+    return null;
   }
 }
 
-export function approveDevicePairing(state: DevicesState, requestId: string) {
-  return runDevicePairingRequest(state, requestId, "device.pair.approve");
+export async function approveDevicePairing(state: DevicesState, requestId: string) {
+  await runDeviceMutation(state, (client) => client.request("device.pair.approve", { requestId }));
 }
 
-export function rejectDevicePairing(state: DevicesState, requestId: string) {
-  return runDevicePairingRequest(state, requestId, "device.pair.reject");
+export async function rejectDevicePairing(state: DevicesState, requestId: string) {
+  await runDeviceMutation(state, (client) => client.request("device.pair.reject", { requestId }));
 }
 
 /** Entry removal request resolved from the unified inventory row. */
@@ -278,17 +277,25 @@ async function reloadInventory(state: InventoryState, opts?: { error?: string })
   }
 }
 
-export async function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
+// Inventory mutations refresh the current connection, including after failed partial removals.
+async function runInventoryMutation(
+  state: InventoryState,
+  mutate: (client: GatewayRequestClient) => Promise<unknown>,
+) {
   const client = state.client;
   if (!client || !state.connected) {
     return;
   }
   try {
-    await removeInventoryEntryRpc(client, entry);
+    await mutate(client);
     await reloadInventory(state);
   } catch (err) {
     await reloadInventory(state, { error: formatUiError(err) });
   }
+}
+
+export function removeInventoryEntry(state: InventoryState, entry: InventoryRemovalRequest) {
+  return runInventoryMutation(state, (client) => removeInventoryEntryRpc(client, entry));
 }
 
 export async function removeStaleInventoryEntries(
@@ -317,13 +324,7 @@ export async function removeStaleInventoryEntries(
   );
 }
 
-/**
- * Renames one paired device through the shared operator-alias RPC. Returns
- * `null` when the alias landed (the caller's dialog closes) and a displayable
- * message when it did not, so a rejected attempt stays visible and retryable.
- * Successful renames refresh the captured request scope; rejected attempts
- * remain visible in the dialog and in `devicesError`.
- */
+/** Null closes the rename dialog; an error leaves the attempted alias retryable. */
 export async function renameDevice(
   state: DevicesState,
   params: { deviceId: string; label: string },
@@ -350,28 +351,14 @@ export async function renameDevice(
   }
 }
 
-async function runNodePairingRequest(
-  state: InventoryState,
-  requestId: string,
-  method: "node.pair.approve" | "node.pair.reject",
-) {
-  if (!state.client || !state.connected) {
-    return;
-  }
-  try {
-    await state.client.request(method, { requestId });
-    await reloadInventory(state);
-  } catch (err) {
-    await reloadInventory(state, { error: formatUiError(err) });
-  }
-}
-
 export function approveNodePairingRequest(state: InventoryState, requestId: string) {
-  return runNodePairingRequest(state, requestId, "node.pair.approve");
+  return runInventoryMutation(state, (client) =>
+    client.request("node.pair.approve", { requestId }),
+  );
 }
 
 export function rejectNodePairingRequest(state: InventoryState, requestId: string) {
-  return runNodePairingRequest(state, requestId, "node.pair.reject");
+  return runInventoryMutation(state, (client) => client.request("node.pair.reject", { requestId }));
 }
 
 /**
@@ -392,28 +379,15 @@ function matchesRequestedGrant(value: unknown, requested: string): boolean {
   return typeof value === "string" && value.trim().length > 0 && value.trim() === requested.trim();
 }
 
-/**
- * Parses the raw `device.token.rotate` payload, which reaches this client unvalidated:
- * the browser Gateway client resolves `frame.payload` directly, so the registered result
- * schema never runs here. Only `DeviceTokenRotateResultSchema`'s shapes are accepted —
- * a complete envelope for the requested grant, a token that is absent or a non-empty string,
- * and `tokenDelivery` paired with the secret. Anything else describes a rotation whose
- * outcome is unknown, and both dialogs would lie about it: one claims a credential arrived,
- * the other that the device re-credentials on its own. The old token is dead either way, so
- * the operator gets the error and the recovery step. Gateways released before `tokenDelivery`
- * omit only that field; they still return the rest of the result they rotated.
- */
+// Browser RPC responses are unvalidated. Require the requested grant and a matching
+// delivery/secret pair before presenting either outcome: the old token is already dead.
 function classifyRotationOutcome(
   payload: unknown,
   requested: { deviceId: string; role: string },
 ): RotatedDeviceTokenOutcome {
-  const result = isRecord(payload) ? payload : undefined;
+  const result = asOptionalRecord(payload);
   const scopes = result?.scopes;
   const rotatedAtMs = result?.rotatedAtMs;
-  // `scopes` and `rotatedAtMs` are required by the result schema, and the grant has to be the
-  // one this page asked to rotate: a reply naming another device or role says nothing about
-  // this request, so reporting it would tell the operator a credential they still hold was
-  // replaced.
   const identified =
     matchesRequestedGrant(result?.deviceId, requested.deviceId) &&
     matchesRequestedGrant(result?.role, requested.role) &&
@@ -422,26 +396,16 @@ function classifyRotationOutcome(
     typeof rotatedAtMs === "number" &&
     Number.isInteger(rotatedAtMs) &&
     rotatedAtMs >= 0;
-  // An absent token and a present-but-invalid one are different answers: the schema bounds
-  // `token` to a non-empty string, so `token: ""` is a malformed envelope rather than a
-  // rotation that withheld the secret.
+  // An empty token is malformed, not a withheld secret.
   const rawToken = result?.token;
   const token = typeof rawToken === "string" && rawToken.length > 0 ? rawToken : undefined;
   const tokenAbsent = rawToken === undefined;
   const delivery = result?.tokenDelivery;
   if (identified) {
-    if (delivery === undefined) {
-      if (token) {
-        return { delivery: "in-band", token };
-      }
-      if (tokenAbsent) {
-        return { delivery: "withheld-cross-device" };
-      }
-    }
-    if (delivery === "in-band" && token) {
+    if (token && (delivery === undefined || delivery === "in-band")) {
       return { delivery: "in-band", token };
     }
-    if (delivery === "withheld-cross-device" && tokenAbsent) {
+    if (tokenAbsent && (delivery === undefined || delivery === "withheld-cross-device")) {
       return { delivery: "withheld-cross-device" };
     }
   }
@@ -455,12 +419,7 @@ export async function rotateDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string; scopes?: string[] },
 ): Promise<RotatedDeviceTokenOutcome | null> {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return null;
-  }
-  const generation = state.requestGeneration;
-  try {
+  return runDeviceMutation(state, async (client) => {
     const { gatewayUrl, ...requestParams } = params;
     const res = await client.request<{
       token?: string;
@@ -484,28 +443,15 @@ export async function rotateDeviceToken(
         });
       }
     }
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
     return outcome;
-  } catch (err) {
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = formatUiError(err);
-    }
-    return null;
-  }
+  });
 }
 
 export async function revokeDeviceToken(
   state: DevicesState,
   params: { deviceId: string; gatewayUrl: string; role: string },
 ) {
-  const client = state.client;
-  if (!client || !state.connected) {
-    return;
-  }
-  const generation = state.requestGeneration;
-  try {
+  await runDeviceMutation(state, async (client) => {
     const { gatewayUrl, ...requestParams } = params;
     await client.request("device.token.revoke", requestParams);
     const identity = await loadOrCreateDeviceIdentity();
@@ -518,14 +464,7 @@ export async function revokeDeviceToken(
         role: requestParams.role,
       });
     }
-    if (isCurrentNodesRequest(state, client, generation)) {
-      await loadDevices(state);
-    }
-  } catch (err) {
-    if (isCurrentNodesRequest(state, client, generation)) {
-      state.devicesError = formatUiError(err);
-    }
-  }
+  });
 }
 
 function resolveExecApprovalsRpc(

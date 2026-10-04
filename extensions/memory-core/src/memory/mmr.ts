@@ -1,3 +1,4 @@
+import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jaccardSimilarity, tokenize } from "./tokenize.js";
 
@@ -8,12 +9,7 @@ type MMRItem = {
   snippet: string;
 };
 
-export type MMRConfig = {
-  /** Enable/disable MMR re-ranking. Default: false (opt-in) */
-  enabled: boolean;
-  /** Lambda parameter: 0 = max diversity, 1 = max relevance. Default: 0.7 */
-  lambda: number;
-};
+export type MMRConfig = ResolvedMemorySearchConfig["query"]["hybrid"]["mmr"];
 
 export const DEFAULT_MMR_CONFIG: MMRConfig = {
   enabled: false,
@@ -42,7 +38,7 @@ export function applyMMRToHybridResults<T extends MMRItem & { path: string; star
   }
   const clampedLambda = Math.max(0, Math.min(1, lambda));
   if (clampedLambda === 1) {
-    return [...items].toSorted((a, b) => b.score - a.score);
+    return items.toSorted((a, b) => b.score - a.score);
   }
   const prepared: PreparedMMRItem<T>[] = items.map((item) => {
     const snippet = item.snippet;

@@ -1,6 +1,6 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type RawBuilder } from "kysely";
 import {
+  createSqliteQueryCache,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   prepareSqliteQuerySync,
@@ -22,7 +22,6 @@ import {
   resolveTranscriptBoundaryWindow,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
-import { SessionTranscriptProjectionUnavailableError } from "./session-transcript-projection-error.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { transcriptEventNavigationSql } from "./transcript-payload.js";
 
@@ -133,23 +132,19 @@ function selectVisibleHistoryBoundaries(
 
 type HistoryCountParameters = { sessionId: string; boundaryActivePosition: number };
 
-const historyCountReaders = new WeakMap<
-  DatabaseSync,
-  Map<
-    HistoryBoundaryQueryShape,
-    (params: HistoryCountParameters) => { event_count: number } | undefined
-  >
->();
+const historyCountReaders = createSqliteQueryCache(
+  () =>
+    new Map<
+      HistoryBoundaryQueryShape,
+      (params: HistoryCountParameters) => { event_count: number } | undefined
+    >(),
+);
 
 function getHistoryCountReader(
   database: CurrentTranscriptProjection["database"],
   shape: HistoryBoundaryQueryShape,
 ) {
-  let readers = historyCountReaders.get(database.db);
-  if (!readers) {
-    readers = new Map();
-    historyCountReaders.set(database.db, readers);
-  }
+  const readers = historyCountReaders(database.db);
   let read = readers.get(shape);
   if (!read) {
     // Retain compilation only; each snapshot supplies its current session and reset bound.
@@ -366,23 +361,20 @@ export function captureHistoryReadWindow(
   };
 }
 
-export function assertHistoryReadWindow(
+export function resolveHistoryReadWindowChange(
   projection: CurrentTranscriptProjection,
   history: VisibleHistoryProjection,
   expected: TranscriptReadWindow | undefined,
-): void {
+): { anchorSeq?: number } | undefined {
   if (!expected) {
-    return;
+    return undefined;
   }
-  if (
-    expected.source !== history.displaySource ||
-    expected.latestResetRawSeq !== history.latestResetRawSeq
-  ) {
-    throw new SessionTranscriptProjectionUnavailableError(projection.resolved.sessionId);
+  if (expected.source !== history.displaySource) {
+    return {};
   }
   const anchor = expected.anchor;
   if (!anchor) {
-    return;
+    return expected.latestResetRawSeq === history.latestResetRawSeq ? undefined : {};
   }
   const row = executeSqliteQueryTakeFirstSync(
     projection.database.db,
@@ -407,7 +399,7 @@ export function assertHistoryReadWindow(
             history,
             position,
           );
-  if (seq !== anchor.seq) {
-    throw new SessionTranscriptProjectionUnavailableError(projection.resolved.sessionId);
-  }
+  return seq === anchor.seq && expected.latestResetRawSeq === history.latestResetRawSeq
+    ? undefined
+    : { anchorSeq: seq };
 }

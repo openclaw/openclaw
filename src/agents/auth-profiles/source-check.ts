@@ -2,6 +2,7 @@
  * Auth-profile source probes for runtime and persisted stores.
  * These checks intentionally avoid loading secret-bearing credential payloads.
  */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
@@ -16,40 +17,24 @@ import {
   readPersistedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath,
 } from "./sqlite.js";
-import type { AuthProfileCredential } from "./types.js";
+import type { AuthProfileStore } from "./types.js";
 
-function normalizeProvider(provider: string): string {
-  return provider.trim().toLowerCase();
-}
-
-function isAuthProfileCredential(value: unknown): value is AuthProfileCredential {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const credential = value as { provider?: unknown; type?: unknown };
-  const type = credential.type;
-  return (
-    typeof credential.provider === "string" &&
-    (type === "api_key" || type === "token" || type === "oauth")
-  );
-}
-
-function rawStoreHasProviderProfile(
-  raw: unknown,
+function storeHasProviderProfile(
+  store: AuthProfileStore | null,
   provider: string,
   profileIds?: readonly string[],
 ): boolean {
-  const profiles = coercePersistedAuthProfileStore(raw)?.profiles;
+  const profiles = store?.profiles;
   if (!profiles) {
     return false;
   }
-  const expected = normalizeProvider(provider);
+  const expected = normalizeLowercaseStringOrEmpty(provider);
   const credentials =
     profileIds?.map((profileId) => profiles[profileId]) ?? Object.values(profiles);
   return credentials.some(
     (credential) =>
-      isAuthProfileCredential(credential) &&
-      normalizeProvider(credential.provider) === expected &&
+      credential !== undefined &&
+      normalizeLowercaseStringOrEmpty(credential.provider) === expected &&
       evaluateStoredCredentialEligibility({ credential }).eligible,
   );
 }
@@ -63,12 +48,14 @@ function canonicalStoreOwnsProviderRoute(
   if (inspection.status === "missing") {
     return false;
   }
-  if (inspection.status === "unreadable" || !coercePersistedAuthProfileStore(inspection.raw)) {
+  const store =
+    inspection.status === "readable" ? coercePersistedAuthProfileStore(inspection.raw) : null;
+  if (!store) {
     // A present but unreadable canonical row must route through the loader so
     // AUTH_PROFILE_STORE_UNREADABLE fails closed before env/config fallback.
     return true;
   }
-  return rawStoreHasProviderProfile(inspection.raw, provider, profileIds);
+  return storeHasProviderProfile(store, provider, profileIds);
 }
 
 /** Returns true when any local/runtime/main auth profile source exists. */
@@ -121,7 +108,7 @@ export function hasAuthProfileStoreSourceForProvider(
   agentDir?: string,
   options?: AuthProfileSourceForProviderOptions,
 ): boolean {
-  if (!normalizeProvider(provider)) {
+  if (!normalizeLowercaseStringOrEmpty(provider)) {
     return false;
   }
   const profileIds = options?.profileIds;
@@ -129,7 +116,13 @@ export function hasAuthProfileStoreSourceForProvider(
     return false;
   }
   const localRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (rawStoreHasProviderProfile(localRuntimeStore, provider, profileIds)) {
+  if (
+    storeHasProviderProfile(
+      coercePersistedAuthProfileStore(localRuntimeStore),
+      provider,
+      profileIds,
+    )
+  ) {
     return true;
   }
   // A retired credential source is intentionally opaque to runtime. Treat it
@@ -146,7 +139,9 @@ export function hasAuthProfileStoreSourceForProvider(
     return false;
   }
   const mainRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore();
-  if (rawStoreHasProviderProfile(mainRuntimeStore, provider, profileIds)) {
+  if (
+    storeHasProviderProfile(coercePersistedAuthProfileStore(mainRuntimeStore), provider, profileIds)
+  ) {
     return true;
   }
   if (hasLegacyAuthProfileCredentialSource()) {

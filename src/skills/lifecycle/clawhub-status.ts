@@ -192,22 +192,15 @@ export function resolveClawHubSkillStatusLinkSync(params: {
       },
     );
   }
+  const { version: _version, ...origin } = originRead.origin;
   return {
+    ...origin,
     status: "linked",
     valid: true,
     registry: lockedRegistry,
     slug: trackedSlug,
-    ...(ownerHandle ? { ownerHandle } : {}),
-    ...(requestedReference ? { requestedReference } : {}),
-    ...(trustState ? { trustState } : {}),
-    installedVersion: locked.version,
-    installedAt: locked.installedAt,
     originPath: originRead.path,
     lockPath: lockRead.path,
-    ...(sourceUrl ? { sourceUrl } : {}),
-    ...(artifact ? { artifact } : {}),
-    ...(skillFile ? { skillFile } : {}),
-    ...(fileTreeSha256 ? { fileTreeSha256 } : {}),
   };
 }
 
@@ -263,10 +256,6 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
   return readLocalSkillCardSync(skillDir, true)?.content;
 }
 
-function normalizeOptionalSelector(value: string | undefined): string | undefined {
-  return value?.trim() || undefined;
-}
-
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
@@ -291,8 +280,8 @@ export async function resolveClawHubSkillVerificationTarget(
         baseUrl: resolveClawHubBaseUrl(params.baseUrl),
       });
     }
-    const version = normalizeOptionalSelector(params.version);
-    const tag = normalizeOptionalSelector(params.tag);
+    const version = normalizeOptionalStringValue(params.version);
+    const tag = normalizeOptionalStringValue(params.tag);
     if (version && tag) {
       return { ok: false, error: "Use either --version or --tag." };
     }
@@ -418,12 +407,7 @@ export async function resolveClawHubSkillVerificationTarget(
     const selector: ClawHubSkillVerificationSelector = version ? "version" : tag ? "tag" : "latest";
     return {
       ok: true,
-      slug: requestedRef.slug,
-      ...(requestedRef.ownerHandle ? { ownerHandle: requestedRef.ownerHandle } : {}),
-      ...(requestedRef.requestedReference
-        ? { requestedReference: requestedRef.requestedReference }
-        : {}),
-      ...(requestedRef.trustState ? { trustState: requestedRef.trustState } : {}),
+      ...requestedRef,
       baseUrl: registry,
       version,
       tag,

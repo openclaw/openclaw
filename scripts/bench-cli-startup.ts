@@ -1,4 +1,3 @@
-// Bench Cli Startup script supports OpenClaw repository automation.
 import { execFileSync, spawn } from "node:child_process";
 import {
   mkdirSync,
@@ -315,239 +314,67 @@ const VALUE_FLAGS = new Set([
 ]);
 const BOOLEAN_FLAGS = new Set(["--help", "--json", "--runtime-rss"]);
 
+function responseCase(
+  id: string,
+  args: string[],
+  options: Partial<Pick<CommandCase, "presets" | "firstOutputBudgetMs" | "exitBudgetMs">> = {},
+): CommandCase {
+  return {
+    id,
+    name: args.join(" "),
+    args,
+    presets: ["response"],
+    firstOutputBudgetMs: 2_500,
+    exitBudgetMs: 6_000,
+    ...options,
+  };
+}
+
 const COMMAND_CASES: readonly CommandCase[] = [
-  {
-    id: "version",
-    name: "--version",
-    args: ["--version"],
+  responseCase("version", ["--version"], {
     presets: ["startup", "response"],
     firstOutputBudgetMs: 1_000,
     exitBudgetMs: 2_000,
-  },
-  {
-    id: "help",
-    name: "--help",
-    args: ["--help"],
+  }),
+  responseCase("help", ["--help"], {
     presets: ["startup", "response"],
     firstOutputBudgetMs: 1_000,
     exitBudgetMs: 2_000,
-  },
-  {
-    id: "onboardHelp",
-    name: "onboard --help",
-    args: ["onboard", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "setupHelp",
-    name: "setup --help",
-    args: ["setup", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "configureHelp",
-    name: "configure --help",
-    args: ["configure", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "channelsAddHelp",
-    name: "channels add --help",
-    args: ["channels", "add", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "channelsParent",
-    name: "channels",
-    args: ["channels"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "doctorHelp",
-    name: "doctor --help",
-    args: ["doctor", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "modelsHelp",
-    name: "models --help",
-    args: ["models", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pluginsHelp",
-    name: "plugins --help",
-    args: ["plugins", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pluginsParent",
-    name: "plugins",
-    args: ["plugins"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pluginsListJson",
-    name: "plugins list --json",
-    args: ["plugins", "list", "--json"],
-    presets: ["response", "real"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "gatewayHelp",
-    name: "gateway --help",
-    args: ["gateway", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "agentsHelp",
-    name: "agents --help",
-    args: ["agents", "--help"],
-    presets: ["response"],
+  }),
+  responseCase("onboardHelp", ["onboard", "--help"]),
+  responseCase("setupHelp", ["setup", "--help"]),
+  responseCase("configureHelp", ["configure", "--help"]),
+  responseCase("channelsAddHelp", ["channels", "add", "--help"]),
+  responseCase("channelsParent", ["channels"]),
+  responseCase("doctorHelp", ["doctor", "--help"]),
+  responseCase("modelsHelp", ["models", "--help"]),
+  responseCase("pluginsHelp", ["plugins", "--help"]),
+  responseCase("pluginsParent", ["plugins"]),
+  responseCase("pluginsListJson", ["plugins", "list", "--json"], { presets: ["response", "real"] }),
+  responseCase("gatewayHelp", ["gateway", "--help"]),
+  responseCase("agentsHelp", ["agents", "--help"], {
     firstOutputBudgetMs: 3_500,
     exitBudgetMs: 8_000,
-  },
-  {
-    id: "sessionsHelp",
-    name: "sessions --help",
-    args: ["sessions", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "tasksHelp",
-    name: "tasks --help",
-    args: ["tasks", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "messageHelp",
-    name: "message --help",
-    args: ["message", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "pairingHelp",
-    name: "pairing --help",
-    args: ["pairing", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "authHelp",
-    name: "auth --help",
-    args: ["auth", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "configHelp",
-    name: "config --help",
-    args: ["config", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "secretsHelp",
-    name: "secrets --help",
-    args: ["secrets", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "skillsHelp",
-    name: "skills --help",
-    args: ["skills", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "nodesHelp",
-    name: "nodes --help",
-    args: ["nodes", "--help"],
-    presets: ["response"],
+  }),
+  responseCase("sessionsHelp", ["sessions", "--help"]),
+  responseCase("messageHelp", ["message", "--help"]),
+  responseCase("pairingHelp", ["pairing", "--help"]),
+  responseCase("authHelp", ["auth", "--help"]),
+  responseCase("configHelp", ["config", "--help"]),
+  responseCase("secretsHelp", ["secrets", "--help"]),
+  responseCase("skillsHelp", ["skills", "--help"]),
+  responseCase("nodesHelp", ["nodes", "--help"], {
     firstOutputBudgetMs: 3_500,
     exitBudgetMs: 8_000,
-  },
-  {
-    id: "directoryHelp",
-    name: "directory --help",
-    args: ["directory", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "sandboxHelp",
-    name: "sandbox --help",
-    args: ["sandbox", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "devicesParent",
-    name: "devices",
-    args: ["devices"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "mcpParent",
-    name: "mcp",
-    args: ["mcp"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
-  {
-    id: "browserHelp",
-    name: "browser --help",
-    args: ["browser", "--help"],
-    presets: ["response"],
+  }),
+  responseCase("directoryHelp", ["directory", "--help"]),
+  responseCase("sandboxHelp", ["sandbox", "--help"]),
+  responseCase("devicesParent", ["devices"]),
+  responseCase("mcpParent", ["mcp"]),
+  responseCase("browserHelp", ["browser", "--help"], {
     firstOutputBudgetMs: 1_500,
     exitBudgetMs: 3_000,
-  },
-  {
-    id: "webhooksHelp",
-    name: "webhooks --help",
-    args: ["webhooks", "--help"],
-    presets: ["response"],
-    firstOutputBudgetMs: 2_500,
-    exitBudgetMs: 6_000,
-  },
+  }),
   {
     id: "health",
     name: "health",
@@ -576,24 +403,6 @@ const COMMAND_CASES: readonly CommandCase[] = [
     id: "sessionsJson",
     name: "sessions --json",
     args: ["sessions", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksJson",
-    name: "tasks --json",
-    args: ["tasks", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksListJson",
-    name: "tasks list --json",
-    args: ["tasks", "list", "--json"],
-    presets: ["real"],
-  },
-  {
-    id: "tasksAuditJson",
-    name: "tasks audit --json",
-    args: ["tasks", "audit", "--json"],
     presets: ["real"],
   },
   {
@@ -646,56 +455,31 @@ const COMMAND_CASES: readonly CommandCase[] = [
   },
 ] as const;
 
-function parseFlagValue(flag: string): string | undefined {
-  const idx = process.argv.indexOf(flag);
-  if (idx === -1) {
-    return undefined;
-  }
-  const value = process.argv[idx + 1];
-  if (!value || value.startsWith("-")) {
-    throw new Error(`${flag} requires a value`);
-  }
-  return value;
-}
-
-function hasFlag(flag: string): boolean {
-  return process.argv.includes(flag);
-}
-
-function parseRepeatableFlag(flag: string): string[] {
-  const values: string[] = [];
-  for (let i = 0; i < process.argv.length; i += 1) {
-    const value = process.argv[i + 1];
-    if (process.argv[i] === flag && value && !value.startsWith("-")) {
-      values.push(value);
-    }
-  }
-  return values;
-}
-
-function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void {
-  const seenSingleValueFlags = new Set<string>();
+function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): Map<string, string[]> {
+  const flags = new Map<string, string[]>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = expectDefined(argv[index], `CLI benchmark argument at index ${index}`);
     if (VALUE_FLAGS.has(arg)) {
-      if (arg !== "--case") {
-        if (seenSingleValueFlags.has(arg)) {
-          throw new Error(`${arg} was provided more than once`);
-        }
-        seenSingleValueFlags.add(arg);
+      if (arg !== "--case" && flags.has(arg)) {
+        throw new Error(`${arg} was provided more than once`);
       }
       const value = argv[index + 1];
       if (!value || value.startsWith("-")) {
         throw new Error(`${arg} requires a value`);
       }
+      const values = flags.get(arg) ?? [];
+      values.push(value);
+      flags.set(arg, values);
       index += 1;
       continue;
     }
     if (BOOLEAN_FLAGS.has(arg)) {
+      flags.set(arg, []);
       continue;
     }
     throw new Error(`Unknown argument: ${arg}`);
   }
+  return flags;
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
@@ -783,42 +567,23 @@ function resolveCases(options: { presets: string[]; caseIds: string[] }): Comman
   );
 }
 
-function median(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  if (sorted.length % 2 === 0) {
-    return (
-      (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
-        expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
-      2
-    );
-  }
-  return expectDefined(sorted[mid], "middle CLI benchmark sample");
-}
-
-function percentile(values: number[], p: number): number {
-  if (values.length === 0) {
-    return 0;
-  }
-  const sorted = [...values].toSorted((a, b) => a - b);
-  const index = Math.min(sorted.length - 1, Math.floor((p / 100) * sorted.length));
-  return sorted[index] ?? 0;
-}
-
 function summarizeNumbers(values: number[]): SummaryStats {
+  const sorted = values.toSorted((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
   const total = values.reduce((sum, value) => sum + value, 0);
-  const avg = values.length > 0 ? total / values.length : 0;
-  const min = values.length > 0 ? Math.min(...values) : 0;
-  const max = values.length > 0 ? Math.max(...values) : 0;
   return {
-    avg,
-    p50: median(values),
-    p95: percentile(values, 95),
-    min,
-    max,
+    avg: values.length > 0 ? total / values.length : 0,
+    p50:
+      sorted.length === 0
+        ? 0
+        : sorted.length % 2 === 0
+          ? (expectDefined(sorted[mid - 1], "lower middle CLI benchmark sample") +
+              expectDefined(sorted[mid], "upper middle CLI benchmark sample")) /
+            2
+          : expectDefined(sorted[mid], "middle CLI benchmark sample"),
+    p95: sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))] ?? 0,
+    min: values.length > 0 ? Math.min(...values) : 0,
+    max: values.length > 0 ? Math.max(...values) : 0,
   };
 }
 
@@ -1054,10 +819,6 @@ function memoryInvocationEntries(entry: string): string[] {
   return entries;
 }
 
-function nodeImportSpecifierForPath(filePath: string): string {
-  return pathToFileURL(filePath).href;
-}
-
 function buildCpuOrHeapFlags(options: { cpuProfDir?: string; heapProfDir?: string }): string[] {
   const flags: string[] = [];
   if (options.cpuProfDir) {
@@ -1112,7 +873,7 @@ async function runSample(params: {
         ]
       : []),
     "--import",
-    nodeImportSpecifierForPath(rssHookPath),
+    pathToFileURL(rssHookPath).href,
     ...buildCpuOrHeapFlags({
       cpuProfDir: params.cpuProfDir,
       heapProfDir: params.heapProfDir,
@@ -1536,26 +1297,27 @@ async function buildSuiteResult(params: {
   };
 }
 
-function parseOptions(): CliOptions {
-  const presets = parsePresets(parseFlagValue("--preset"));
+function parseOptions(flags: Map<string, string[]>): CliOptions {
+  const value = (flag: string) => flags.get(flag)?.[0];
+  const presets = parsePresets(value("--preset"));
   const cases = resolveCases({
     presets,
-    caseIds: parseRepeatableFlag("--case"),
+    caseIds: flags.get("--case") ?? [],
   });
   return {
     cases,
-    compareBaseline: parseFlagValue("--compare-baseline"),
-    compareCandidate: parseFlagValue("--compare-candidate"),
-    entryPrimary: parseFlagValue("--entry-primary") ?? parseFlagValue("--entry") ?? DEFAULT_ENTRY,
-    entrySecondary: parseFlagValue("--entry-secondary"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
-    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
-    runtimeRss: hasFlag("--runtime-rss"),
-    json: hasFlag("--json"),
-    output: parseFlagValue("--output"),
-    cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    heapProfDir: parseFlagValue("--heap-prof-dir"),
+    compareBaseline: value("--compare-baseline"),
+    compareCandidate: value("--compare-candidate"),
+    entryPrimary: value("--entry-primary") ?? value("--entry") ?? DEFAULT_ENTRY,
+    entrySecondary: value("--entry-secondary"),
+    runs: parsePositiveInt(value("--runs"), DEFAULT_RUNS, "--runs"),
+    warmup: parseNonNegativeInt(value("--warmup"), DEFAULT_WARMUP, "--warmup"),
+    timeoutMs: parsePositiveInt(value("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    runtimeRss: flags.has("--runtime-rss"),
+    json: flags.has("--json"),
+    output: value("--output"),
+    cpuProfDir: value("--cpu-prof-dir"),
+    heapProfDir: value("--heap-prof-dir"),
   };
 }
 
@@ -1615,13 +1377,13 @@ function readBenchmarkComparison(
 }
 
 async function main(): Promise<void> {
-  validateCliArgs();
-  if (hasFlag("--help")) {
+  const flags = validateCliArgs();
+  if (flags.has("--help")) {
     printUsage();
     return;
   }
 
-  const options = parseOptions();
+  const options = parseOptions(flags);
   const transport = sampleTransport();
   if (transport && options.runtimeRss) {
     throw new Error("Cross-user runtime RSS sampling is not supported");
@@ -1732,7 +1494,6 @@ async function main(): Promise<void> {
 export const testing = {
   buildConfigFixture,
   collectFailedSamples,
-  nodeImportSpecifierForPath,
   parseGatewayPortEnv,
   parseNonNegativeInt,
   parsePositiveInt,

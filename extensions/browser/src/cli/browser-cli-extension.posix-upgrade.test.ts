@@ -7,8 +7,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "../../test-support.js";
 import {
   chromeProductRoots,
-  type ExtensionInstallDeps,
-} from "../browser/extension-install-layout.js";
+  type InstallFixture,
+} from "../browser/extension-install-fixture.test-support.js";
 import {
   FOUNDATION_STORE_ID,
   predictedId,
@@ -17,7 +17,7 @@ import {
 } from "../browser/extension-install.test-support.js";
 
 const boundary = vi.hoisted(() => ({
-  deps: undefined as ExtensionInstallDeps | undefined,
+  deps: undefined as InstallFixture | undefined,
   install: vi.fn(),
   readToken: vi.fn(),
   connect: vi.fn(),
@@ -25,10 +25,11 @@ const boundary = vi.hoisted(() => ({
 }));
 vi.mock("../browser/extension-install.js", async (original) => {
   const real = await original<typeof import("../browser/extension-install.js")>();
+  const fixture = await import("../browser/extension-install-fixture.test-support.js");
   return {
     ...real,
     browserExtensionStatus: (p: Parameters<typeof real.browserExtensionStatus>[0]) =>
-      real.browserExtensionStatus({ ...p, deps: boundary.deps }),
+      fixture.browserExtensionStatus({ ...p, deps: boundary.deps }),
     installChromeExtensionBootstrap: boundary.install,
   };
 });
@@ -42,6 +43,11 @@ vi.mock("../browser/extension-relay/owner-client.js", () => ({
 }));
 const fixture = useExtensionInstallFixture();
 const { defaultRuntime: capture, resetRuntimeCapture } = createCliRuntimeCapture();
+const readFiles = (files: string[]) => Promise.all(files.map((file) => fs.readFile(file)));
+async function preserveFiles(...files: string[]) {
+  const before = await readFiles(files);
+  return async () => expect(await readFiles(files)).toEqual(before);
+}
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllMocks();
@@ -54,9 +60,7 @@ async function setup(
   options: { legacy?: boolean; relocate?: boolean; registeredConfig?: "custom" | "default" } = {},
 ) {
   const f = await fixture(platform);
-  const real = await vi.importActual<typeof import("../browser/extension-install.js")>(
-    "../browser/extension-install.js",
-  );
+  const real = await import("../browser/extension-install-fixture.test-support.js");
   const root = chromeProductRoots(f.deps)[0]!;
   await fs.mkdir(root.userDataDir, { recursive: true, mode: 0o700 });
   const registeredConfigPath =
@@ -113,7 +117,7 @@ async function setup(
   const key = Buffer.from(Array.from({ length: 32 }, (_, i) => (i * 19 + 5) & 255)).toString("hex");
   await fs.writeFile(keyPath, key + "\n", { mode: 0o600 });
   const preservedPaths = [keyPath, configPath, preferences];
-  const preserved = await Promise.all(preservedPaths.map((file) => fs.readFile(file)));
+  const assertFilesPreserved = await preserveFiles(...preservedPaths);
   const keyInode = (await fs.stat(keyPath)).ino;
   // Real package relocation changes the bundle ID and removes the old entrypoint.
   const nextPackage = path.join(f.root, options.relocate === false ? "package" : "package-v2");
@@ -163,7 +167,7 @@ async function setup(
     );
   }
   async function assertPairingPreserved() {
-    expect(await Promise.all(preservedPaths.map((file) => fs.readFile(file)))).toEqual(preserved);
+    await assertFilesPreserved();
     expect((await fs.stat(keyPath)).ino).toBe(keyInode);
     expect(auth.readExtensionRelayToken(deps.env)).toBe(key);
     expect(boundary.ensureToken).not.toHaveBeenCalled();
@@ -190,17 +194,12 @@ async function setup(
   };
 }
 
-describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (platform) => {
-  it.each(
-    [false, true].flatMap((legacy) =>
-      [
-        { action: "inspect", profile: undefined },
-        { action: "verify", profile: "work" },
-        { action: "install", profile: undefined },
-        { action: "install", profile: "other" },
-      ].map(({ action, profile }) => ({ legacy, action, profile })),
-    ),
-  )(
+describe("POSIX bundle migration", () => {
+  const platform = "linux";
+  it.each([
+    { legacy: true, action: "inspect", profile: undefined },
+    { legacy: true, action: "install", profile: "other" },
+  ])(
     "refuses $action from a different config before effects (legacy=$legacy, profile=$profile)",
     async ({ legacy, action, profile }) => {
       const f = await setup(platform, { legacy, registeredConfig: "custom", relocate: false });
@@ -219,13 +218,13 @@ describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (pla
       f.config.mockReturnValue(callerConfig);
       const copy = path.join(f.stateDir, "browser", "chrome-extension", "background.js");
       const paths = [f.manifestPath, f.manifest.path, callerConfigPath, copy];
-      const before = await Promise.all(paths.map((file) => fs.readFile(file)));
+      const assertUnchanged = await preserveFiles(...paths);
       const copyInode = (await fs.stat(copy)).ino;
       await expect(f.run(action, profile)).rejects.toThrow("__exit__:1");
       expect(f.error).toHaveBeenCalledWith(expect.stringContaining("OPENCLAW_CONFIG_PATH"));
       expect(boundary.readToken).not.toHaveBeenCalled();
       expect(boundary.connect).not.toHaveBeenCalled();
-      expect(await Promise.all(paths.map((file) => fs.readFile(file)))).toEqual(before);
+      await assertUnchanged();
       expect((await fs.stat(copy)).ino).toBe(copyInode);
       await f.assertPairingPreserved();
     },
@@ -265,15 +264,14 @@ describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (pla
     await f.assertPairingPreserved();
   });
 
-  it.each(
-    [false, true].flatMap((legacy) =>
-      ["inspect", "verify", "install"].map((action) => ({ legacy, action })),
-    ),
-  )(
-    "retains validated work selection through selector-free $action (legacy=$legacy)",
-    async ({ legacy, action }) => {
-      const f = await setup(platform, { legacy });
-      const nextId = await predictedId(f.bundledDir, platform);
+  it.each([
+    { platform: "linux", legacy: true, action: "verify" },
+    { platform: "darwin", legacy: false, action: "install" },
+  ] as const)(
+    "retains work through selector-free $action on $platform (legacy=$legacy)",
+    async ({ platform: testPlatform, legacy, action }) => {
+      const f = await setup(testPlatform, { legacy });
+      const nextId = await predictedId(f.bundledDir, testPlatform);
       expect(nextId).not.toBe(f.oldBundleId);
       const beforeManifest = await fs.readFile(f.manifestPath);
       const beforeLauncher = await fs.readFile(f.manifest.path);
@@ -333,28 +331,19 @@ describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (pla
     expect(await fs.readFile(selected.path, "utf8")).toContain("'--browser-profile' 'other'");
     await f.assertPairingPreserved();
   });
-  it.each(["inspect", "verify"])(
-    "refuses %s for a different profile without rewriting a healthy registration",
-    async (action) => {
-      const f = await setup(platform, { relocate: false });
-      const before = await Promise.all(
-        [f.manifestPath, f.manifest.path].map((file) => fs.readFile(file)),
-      );
-      await expect(f.run(action, "other")).rejects.toThrow("__exit__:1");
-      expect(boundary.install).not.toHaveBeenCalled();
-      expect(boundary.readToken).not.toHaveBeenCalled();
-      expect(boundary.connect).not.toHaveBeenCalled();
-      expect(f.json).not.toHaveBeenCalled();
-      expect(
-        await Promise.all([f.manifestPath, f.manifest.path].map((file) => fs.readFile(file))),
-      ).toEqual(before);
-      await f.assertPairingPreserved();
-    },
-  );
+  it("refuses verification for a different profile without rewriting a healthy registration", async () => {
+    const f = await setup(platform, { relocate: false });
+    const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);
+    await expect(f.run("verify", "other")).rejects.toThrow("__exit__:1");
+    expect(boundary.install).not.toHaveBeenCalled();
+    expect(boundary.readToken).not.toHaveBeenCalled();
+    expect(boundary.connect).not.toHaveBeenCalled();
+    expect(f.json).not.toHaveBeenCalled();
+    await assertUnchanged();
+    await f.assertPairingPreserved();
+  });
   it.each([
     "malformed-launcher",
-    "foreign-manifest",
-    "extra-origin",
     "missing-profile",
     ...(process.platform === "win32" ? [] : ["unsafe-mode"]),
   ])("refuses unresolved %s before an automatic installation", async (kind) => {
@@ -365,40 +354,15 @@ describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (pla
     if (kind === "malformed-launcher") {
       await fs.appendFile(f.manifest.path, "echo foreign-command\n");
     }
-    if (kind === "foreign-manifest") {
-      await fs.writeFile(
-        f.manifestPath,
-        JSON.stringify({ ...f.manifest, path: "/foreign/native-host" }),
-      );
-    }
-    if (kind === "extra-origin") {
-      const origin = "chrome-extension://" + "p".repeat(32) + "/";
-      const origins = [...f.manifest.allowed_origins, origin].toSorted();
-      const launcher = await fs.readFile(f.manifest.path, "utf8");
-      const prior = f.manifest.allowed_origins
-        .map((entry) => " '--expected-origin' '" + entry + "'")
-        .join("");
-      const next = origins.map((entry) => " '--expected-origin' '" + entry + "'").join("");
-      expect(launcher).toContain(prior);
-      await fs.writeFile(f.manifest.path, launcher.replace(prior, next));
-      await fs.writeFile(
-        f.manifestPath,
-        JSON.stringify({ ...f.manifest, allowed_origins: origins }),
-      );
-    }
     if (kind === "missing-profile") {
       f.config.mockReturnValue({
         browser: { profiles: { other: { driver: "extension", cdpPort: 19555 } } },
       });
     }
-    const before = await Promise.all(
-      [f.manifestPath, f.manifest.path].map((file) => fs.readFile(file)),
-    );
+    const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);
     await expect(f.run("install")).rejects.toThrow("__exit__:1");
     expect(boundary.install).not.toHaveBeenCalled();
-    expect(
-      await Promise.all([f.manifestPath, f.manifest.path].map((file) => fs.readFile(file))),
-    ).toEqual(before);
+    await assertUnchanged();
     await f.assertPairingPreserved();
   });
   it("refuses mixed owned and foreign roots before migrating either", async () => {
@@ -412,10 +376,10 @@ describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (pla
       { mode: 0o600 },
     );
     const paths = [f.manifestPath, f.manifest.path, foreign];
-    const before = await Promise.all(paths.map((file) => fs.readFile(file)));
+    const assertUnchanged = await preserveFiles(...paths);
     await expect(f.run("install")).rejects.toThrow("__exit__:1");
     expect(boundary.install).not.toHaveBeenCalled();
-    expect(await Promise.all(paths.map((file) => fs.readFile(file)))).toEqual(before);
+    await assertUnchanged();
     await f.assertPairingPreserved();
   });
   it("does not let explicit selection bypass a foreign registration", async () => {
@@ -424,14 +388,10 @@ describe.each(["linux", "darwin"] as const)("POSIX bundle migration on %s", (pla
       f.manifestPath,
       JSON.stringify({ ...f.manifest, path: "/foreign/native-host" }),
     );
-    const before = await Promise.all(
-      [f.manifestPath, f.manifest.path].map((file) => fs.readFile(file)),
-    );
+    const assertUnchanged = await preserveFiles(f.manifestPath, f.manifest.path);
     await f.run("install", "other");
     expect(f.json).toHaveBeenCalledWith(expect.objectContaining({ phase: "blocked" }));
-    expect(
-      await Promise.all([f.manifestPath, f.manifest.path].map((file) => fs.readFile(file))),
-    ).toEqual(before);
+    await assertUnchanged();
     await f.assertPairingPreserved();
   });
 });

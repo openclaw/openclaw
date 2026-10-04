@@ -87,13 +87,12 @@ function resolveProviderChoiceOptions(params?: {
  * them before any surface sees them.
  */
 export function formatAuthChoiceChoicesForCli(params?: {
-  includeSkip?: boolean;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): string {
   const values = [
-    ...formatStaticAuthChoiceChoicesForCli(params).split("|"),
+    ...formatStaticAuthChoiceChoicesForCli().split("|"),
     ...resolveProviderSetupFlowContributions({ ...params, scope: "all" }).map(
       (contribution) => contribution.option.value,
     ),
@@ -102,7 +101,6 @@ export function formatAuthChoiceChoicesForCli(params?: {
   return uniqueStrings(values).join("|");
 }
 
-/** Build flat auth-choice options from core choices plus provider setup flows. */
 function buildAuthChoiceOptions(params: {
   assistantVisibleOnly?: boolean;
   detectedProviderIds?: ReadonlySet<string>;

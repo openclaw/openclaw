@@ -1,5 +1,3 @@
-// Gateway auxiliary method handlers.
-// Wires reload, secrets, exec approval, and plugin approval RPC handlers.
 import { randomUUID } from "node:crypto";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../agents/mcp-codex-tool-approval.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -16,6 +14,7 @@ import {
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequestPayload,
 } from "../infra/exec-approvals.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../infra/plugin-approval-canonical-decisions.js";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import {
@@ -73,9 +72,9 @@ type GatewayAuxHandlerLogger = {
   debug?: (message: string) => void;
 };
 
-/** Create auxiliary gateway handlers that are not part of the core descriptor set. */
 export function createGatewayAuxHandlers(
   params: GatewaySecretsReloaderParams & {
+    scheduler: GatewayScheduler;
     log: GatewayAuxHandlerLogger;
     onApprovalLifecycle?: (event: OperatorApprovalLifecycleEvent) => void;
     onAgentRunAuthorityClosed?: (
@@ -118,6 +117,7 @@ export function createGatewayAuxHandlers(
     retainPlacementStandingGrant?: PlacementStandingGrantRuntime["retain"],
   ) =>
     new ExecApprovalManager<TPayload>({
+      scheduler: params.scheduler,
       approvalKind,
       persistence: approvalPersistence,
       resolveAudienceSessionKeys: resolveApprovalSessionAudienceWithFallback,
@@ -181,17 +181,14 @@ export function createGatewayAuxHandlers(
     { cacheRejections: true },
   );
   const reloadSecrets = createGatewaySecretsReloader(params);
-  const loadSecretsModule = createLazyPromise(() => import("./server-methods/secrets.js"), {
-    cacheRejections: true,
-  });
   const loadSecretStoreWriteService = createLazyPromise(
     async () => {
-      const { createSecretStoreWriteService } = await loadSecretsModule();
+      const { createSecretStoreWriteService } = await import("./server-methods/secrets.js");
       return createSecretStoreWriteService({ reloadSecrets, log: params.log });
     },
     { cacheRejections: true },
   );
-  const questionManager = new QuestionManager(() =>
+  const questionManager = new QuestionManager(params.scheduler, () =>
     params.log.warn?.("Question terminal publication failed; answer state retained."),
   );
   const loadQuestionHandlers = createLazyPromise(
@@ -200,7 +197,7 @@ export function createGatewayAuxHandlers(
         import("./server-methods/question.js"),
         loadSecretStoreWriteService(),
       ]);
-      return createQuestionHandlers(questionManager, storeWriteService);
+      return createQuestionHandlers(questionManager, storeWriteService, params.scheduler);
     },
     { cacheRejections: true },
   );
@@ -382,7 +379,7 @@ export function createGatewayAuxHandlers(
   const loadSecretsHandlers = createLazyPromise(
     async () => {
       const [{ createSecretsHandlers }, storeWriteService] = await Promise.all([
-        loadSecretsModule(),
+        import("./server-methods/secrets.js"),
         loadSecretStoreWriteService(),
       ]);
       return createSecretsHandlers({

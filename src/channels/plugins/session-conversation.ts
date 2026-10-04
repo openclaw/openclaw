@@ -1,8 +1,3 @@
-/**
- * Session conversation key helpers.
- *
- * Resolves threaded channel session keys through plugin hooks and generic parsing.
- */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -19,9 +14,6 @@ import { normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 import type { ChannelMessagingAdapter } from "./types.core.js";
 
-/**
- * Normalized conversation id details for one channel raw id.
- */
 type ResolvedSessionConversation = {
   id: string;
   threadId: string | undefined;
@@ -29,18 +21,11 @@ type ResolvedSessionConversation = {
   parentConversationCandidates: string[];
 };
 
-/**
- * Parsed session-key conversation reference with parent/thread metadata.
- */
-type ResolvedSessionConversationRef = {
+type ResolvedSessionConversationRef = ResolvedSessionConversation & {
   channel: string;
   kind: "group" | "channel";
   rawId: string;
-  id: string;
-  threadId: string | undefined;
   baseSessionKey: string;
-  baseConversationId: string;
-  parentConversationCandidates: string[];
 };
 
 type SessionConversationHookResult = ReturnType<
@@ -172,7 +157,6 @@ function isBundledSessionConversationFallbackDisabled(channel: string): boolean 
   return Boolean(entry) && typeof entry === "object" && entry.enabled === false;
 }
 
-/** Resolves one raw channel conversation id into base/thread conversation metadata. */
 export function resolveSessionConversation(params: {
   channel: string;
   kind: "group" | "channel";
@@ -254,9 +238,6 @@ export function resolveSessionConversationRef(
   };
 }
 
-/**
- * Resolves thread suffix metadata from a session key, using channel hooks when available.
- */
 export function resolveSessionThreadInfo(
   sessionKey: string | undefined | null,
   opts: SessionConversationResolutionOptions = {},
@@ -274,9 +255,6 @@ export function resolveSessionThreadInfo(
   };
 }
 
-/**
- * Resolves the parent session key for a threaded child session.
- */
 export function resolveSessionParentSessionKey(
   sessionKey: string | undefined | null,
 ): string | null {

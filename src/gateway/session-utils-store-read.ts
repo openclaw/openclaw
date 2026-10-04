@@ -6,23 +6,14 @@ import {
   loadExactSessionEntryCandidates,
   loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
+import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
 import type {
   CapturedSessionEntryReadSource,
-  SessionEntryListScope,
   SessionEntryReadSource,
-} from "../config/sessions/session-accessor.types.js";
+} from "../config/sessions/session-entry-read-source.types.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 
-/**
- * Request-scoped store reuse.
- *
- * Sharing resolution runs once per listed row, and each run materialized every
- * entry of a candidate store, making `sessions.list` quadratic in entries. A
- * caller that resolves many keys against the same stores passes one cache so
- * each store is materialized once. Entries are shared across rows within that
- * request, so cached stores are read-only to their holder; the cache is never
- * process-global, so it cannot serve a later request stale rows.
- */
+/** Request-local, read-only views avoid rematerializing a store for each sharing lookup. */
 type GatewaySessionStoreView = {
   store: Record<string, SessionEntry>;
   readSource?: SessionEntryReadSource;
@@ -35,7 +26,15 @@ export type GatewaySessionStoreRead = {
   storePath: string;
   clone?: boolean;
   agentId?: string;
-  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]>;
+  options: {
+    env?: NodeJS.ProcessEnv;
+    readOnly?: boolean;
+    cache?: GatewaySessionStoreCache;
+    exactKeys?: readonly string[];
+    projection?: SessionEntryListScope["projection"];
+    readConsistency?: SessionEntryListScope["readConsistency"];
+    readSource?: SessionEntryReadSource;
+  };
   result?: Result<Record<string, SessionEntry>, unknown>;
   readSource?: SessionEntryReadSource;
   capturedReadSource?: CapturedSessionEntryReadSource;
@@ -46,12 +45,16 @@ export function readGatewaySessionStore(
   read: GatewaySessionStoreRead,
 ): Record<string, SessionEntry> {
   if (read.result === undefined) {
-    const loaded = loadGatewaySessionLookupStore(
-      read.storePath,
-      read.clone,
-      read.agentId,
-      read.options,
-    );
+    const { storePath, clone, agentId, options } = read;
+    const cache = options.cache;
+    const cacheKey = cache
+      ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}`
+      : "";
+    let loaded = cache?.get(cacheKey);
+    if (!loaded) {
+      loaded = loadGatewaySessionLookupStore(read);
+      cache?.set(cacheKey, loaded);
+    }
     read.result = ok(loaded.store);
     read.readSource = loaded.readSource;
     read.capturedReadSource = loaded.capturedReadSource;
@@ -68,6 +71,7 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
   const results = loadExactSessionEntryCandidatesReadOnlyBatch(
     pending.map((read) => ({
       agentId: read.agentId,
+      env: read.options.env,
       storePath: read.storePath,
       projection: read.options.projection,
       clone: false,
@@ -89,41 +93,12 @@ export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStore
   }
 }
 
-function loadGatewaySessionLookupStore(
-  storePath: string,
-  clone: boolean | undefined,
-  agentId?: string,
-  options: {
-    readOnly?: boolean;
-    cache?: GatewaySessionStoreCache;
-    exactKeys?: readonly string[];
-    listKeys?: readonly string[];
-    projection?: SessionEntryListScope["projection"];
-    readConsistency?: SessionEntryListScope["readConsistency"];
-    readSource?: SessionEntryReadSource;
-  } = {},
-): GatewaySessionStoreView {
-  const cache = options.cache;
-  const cacheKey = cache
-    ? `${storePath}\u0000${agentId ?? ""}\u0000${clone === false ? "0" : "1"}\u0000${options.readOnly}\u0000${options.projection ?? "full"}\u0000${options.readConsistency ?? ""}\u0000${options.exactKeys?.join("\u0001") ?? ""}\u0000${options.listKeys ? JSON.stringify(options.listKeys) : ""}`
-    : "";
-  if (cache) {
-    const cached = cache.get(cacheKey);
-    if (cached) {
-      return cached;
-    }
-  }
-  const loaded = loadGatewaySessionLookupStoreUncached(storePath, clone, agentId, options);
-  cache?.set(cacheKey, loaded);
-  return loaded;
-}
-
-function loadGatewaySessionLookupStoreUncached(
-  storePath: string,
-  clone: boolean | undefined,
-  agentId?: string,
-  options: NonNullable<Parameters<typeof loadGatewaySessionLookupStore>[3]> = {},
-): GatewaySessionStoreView {
+function loadGatewaySessionLookupStore({
+  storePath,
+  clone,
+  agentId,
+  options,
+}: GatewaySessionStoreRead): GatewaySessionStoreView {
   if (options.exactKeys) {
     // Borrowed listing views and probes never create stores; ordinary owned reads may.
     let readSource: SessionEntryReadSource | undefined;
@@ -137,17 +112,12 @@ function loadGatewaySessionLookupStoreUncached(
         };
     const entries = loadExactSessionEntryCandidates({
       ...target,
+      env: options.env,
       projection: options.projection,
       sessionKeys: options.exactKeys,
-      onReadSource: (source, physical) => {
-        readSource = source;
-        capturedReadSource = physical
-          ? {
-              ...source,
-              databaseIdentity: physical.identity,
-              databaseBirthtime: physical.birthtime,
-            }
-          : undefined;
+      onReadSource: (source) => {
+        readSource = { agentId: source.agentId, path: source.path };
+        capturedReadSource = source;
       },
     });
     return {
@@ -162,11 +132,11 @@ function loadGatewaySessionLookupStoreUncached(
   return {
     store: Object.fromEntries(
       listEntries({
+        env: options.env,
         ...(agentId ? { agentId } : {}),
         ...(clone === false ? { clone: false } : {}),
         ...(options.projection ? { projection: options.projection } : {}),
         ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
-        ...(options.listKeys ? { sessionKeys: options.listKeys } : {}),
         storePath,
       }).map(({ sessionKey, entry }) => [sessionKey, entry]),
     ),

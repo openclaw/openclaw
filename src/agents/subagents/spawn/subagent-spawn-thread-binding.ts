@@ -1,16 +1,9 @@
 import { deliveryContextFromConversation } from "../../../channels/route-projection.js";
-import {
-  resolveThreadBindingIntroText,
-  resolveThreadBindingThreadName,
-} from "../../../channels/thread-bindings-messages.js";
-import {
-  resolveThreadBindingIdleTimeoutMsForChannel,
-  resolveThreadBindingMaxAgeMsForChannel,
-} from "../../../channels/thread-bindings-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { prepareSpawnThreadBinding } from "../../spawn-plan.js";
+import { buildSpawnThreadBinding } from "./spawn-thread-binding.js";
 import { getSessionBindingService } from "./subagent-spawn.runtime.js";
 import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
@@ -22,12 +15,7 @@ export async function bindThreadForSubagentSpawn(params: {
   label?: string;
   mode: SpawnSubagentMode;
   requesterSessionKey?: string;
-  requester: {
-    channel?: string;
-    accountId?: string;
-    to?: string;
-    threadId?: string | number;
-  };
+  requester: DeliveryContext;
 }): Promise<
   | { status: "ok"; deliveryOrigin?: DeliveryContext }
   | {
@@ -55,42 +43,16 @@ export async function bindThreadForSubagentSpawn(params: {
 
   try {
     params.assertActive?.();
-    const binding = await getSessionBindingService().bind({
-      targetSessionKey: params.childSessionKey,
-      targetKind: "subagent",
-      conversation: {
-        channel: prepared.binding.channel,
-        accountId: prepared.binding.accountId,
-        conversationId: prepared.binding.conversationId,
-        ...(prepared.binding.parentConversationId
-          ? { parentConversationId: prepared.binding.parentConversationId }
-          : {}),
-      },
-      placement: prepared.binding.placement,
-      metadata: {
-        threadName: resolveThreadBindingThreadName({
-          agentId: params.agentId,
-          label: params.label || params.agentId,
-        }),
+    const binding = await getSessionBindingService().bind(
+      buildSpawnThreadBinding({
+        cfg: params.cfg,
+        sessionKey: params.childSessionKey,
+        targetKind: "subagent",
         agentId: params.agentId,
-        label: params.label || undefined,
-        boundBy: "system",
-        introText: resolveThreadBindingIntroText({
-          agentId: params.agentId,
-          label: params.label || undefined,
-          idleTimeoutMs: resolveThreadBindingIdleTimeoutMsForChannel({
-            cfg: params.cfg,
-            channel: prepared.binding.channel,
-            accountId: prepared.binding.accountId,
-          }),
-          maxAgeMs: resolveThreadBindingMaxAgeMsForChannel({
-            cfg: params.cfg,
-            channel: prepared.binding.channel,
-            accountId: prepared.binding.accountId,
-          }),
-        }),
-      },
-    });
+        label: params.label,
+        binding: prepared.binding,
+      }),
+    );
     if (!binding.conversation.conversationId) {
       return {
         status: "error",

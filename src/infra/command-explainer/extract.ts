@@ -1,5 +1,3 @@
-// Rich shell command explainer walks tree-sitter-bash nodes into command steps,
-// nested wrapper payloads, source spans, and risk annotations.
 import type { Node as TreeSitterNode } from "web-tree-sitter";
 import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
 import {
@@ -8,8 +6,8 @@ import {
   detectCommandCarrierArgv,
   detectInlineEvalArgv,
   detectShellWrapperThroughCarrierArgv,
-  SOURCE_EXECUTABLES,
 } from "../command-analysis/risks.js";
+import { SOURCE_EXECUTABLES } from "../command-carriers.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,
@@ -71,8 +69,6 @@ const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 const MAX_COMMAND_EXPLANATION_NODES = 50_000;
 
 export class CommandExplanationWorkLimitError extends Error {}
-
-const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_PARSEABLE_SHELL_WRAPPERS);
 
 // Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
@@ -308,10 +304,6 @@ function decodeUnquotedShellTextWithOffsets(text: string): DecodedShellText {
   return decoded;
 }
 
-function decodeUnquotedShellText(text: string): string {
-  return decodeUnquotedShellTextWithOffsets(text).value;
-}
-
 function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
   const hasQuotes = text.startsWith('"') && text.endsWith('"');
   const bodyStart = hasQuotes ? 1 : 0;
@@ -340,10 +332,6 @@ function decodeDoubleQuotedTextWithOffsets(text: string): DecodedShellText {
     appendDecodedText(decoded, ch, sourceOffset + 1);
   }
   return decoded;
-}
-
-function decodeDoubleQuotedText(text: string): string {
-  return decodeDoubleQuotedTextWithOffsets(text).value;
 }
 
 const ANSI_C_SIMPLE_ESCAPES: Record<string, string> = {
@@ -388,60 +376,32 @@ function decodeAnsiCStringWithOffsets(text: string): DecodedShellText {
       continue;
     }
 
-    if (next === "x") {
-      const hex = body.slice(index + 2).match(/^[0-9A-Fa-f]{1,2}/)?.[0] ?? "";
-      if (hex) {
-        appendDecodedText(
-          decoded,
-          String.fromCodePoint(Number.parseInt(hex, 16)),
-          sourceOffset + 2 + hex.length,
-        );
-        index += 1 + hex.length;
-        continue;
-      }
+    let digits: string | undefined;
+    let radix = 16;
+    let prefixLength = 2;
+    if (next === "x" || next === "u" || next === "U") {
+      const maxLength = next === "x" ? 2 : next === "u" ? 4 : 8;
+      digits = body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0];
+    } else if (/^[0-7]$/.test(next)) {
+      digits = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0];
+      radix = 8;
+      prefixLength = 1;
     }
-
-    if (next === "u" || next === "U") {
-      const maxLength = next === "u" ? 4 : 8;
-      const hex =
-        body.slice(index + 2).match(new RegExp(`^[0-9A-Fa-f]{1,${maxLength}}`))?.[0] ?? "";
-      if (hex) {
-        const codePoint = Number.parseInt(hex, 16);
-        try {
-          appendDecodedText(
-            decoded,
-            String.fromCodePoint(codePoint),
-            sourceOffset + 2 + hex.length,
-          );
-        } catch {
-          appendDecodedText(decoded, `\\${next}${hex}`, sourceOffset + 2 + hex.length);
-        }
-        index += 1 + hex.length;
-        continue;
+    if (digits) {
+      const endOffset = sourceOffset + prefixLength + digits.length;
+      try {
+        appendDecodedText(decoded, String.fromCodePoint(Number.parseInt(digits, radix)), endOffset);
+      } catch {
+        appendDecodedText(decoded, `\\${next}${digits}`, endOffset);
       }
-    }
-
-    if (/^[0-7]$/.test(next)) {
-      const octal = body.slice(index + 1).match(/^[0-7]{1,3}/)?.[0] ?? "";
-      if (octal) {
-        appendDecodedText(
-          decoded,
-          String.fromCodePoint(Number.parseInt(octal, 8)),
-          sourceOffset + 1 + octal.length,
-        );
-        index += octal.length;
-        continue;
-      }
+      index += prefixLength + digits.length - 1;
+      continue;
     }
 
     appendDecodedText(decoded, next, sourceOffset + 2);
     index += 1;
   }
   return decoded;
-}
-
-function decodeAnsiCString(text: string): string {
-  return decodeAnsiCStringWithOffsets(text).value;
 }
 
 function hasDynamicWordPart(root: TreeSitterNode): boolean {
@@ -472,7 +432,8 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
   ) {
     return {
       kind: "dynamic",
-      value: node.type === "string" ? decodeDoubleQuotedText(node.text) : node.text,
+      value:
+        node.type === "string" ? decodeDoubleQuotedTextWithOffsets(node.text).value : node.text,
     };
   }
 
@@ -480,9 +441,10 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
     case "command_name": {
       const parts = node.namedChildren;
       if (parts.length === 0) {
-        return hasUnescapedDynamicPattern(node.text)
-          ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
-          : { kind: "literal", value: decodeUnquotedShellText(node.text) };
+        return {
+          kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
+          value: decodeUnquotedShellTextWithOffsets(node.text).value,
+        };
       }
       let value = "";
       for (const part of parts) {
@@ -495,18 +457,19 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
       return { kind: "literal", value };
     }
     case "word":
-      return hasUnescapedDynamicPattern(node.text)
-        ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
-        : { kind: "literal", value: decodeUnquotedShellText(node.text) };
+      return {
+        kind: hasUnescapedDynamicPattern(node.text) ? "dynamic" : "literal",
+        value: decodeUnquotedShellTextWithOffsets(node.text).value,
+      };
     case "raw_string":
       return { kind: "literal", value: node.text.slice(1, -1) };
     case "string":
-      return { kind: "literal", value: decodeDoubleQuotedText(node.text) };
+      return { kind: "literal", value: decodeDoubleQuotedTextWithOffsets(node.text).value };
     case "ansi_c_string":
-      return { kind: "literal", value: decodeAnsiCString(node.text) };
+      return { kind: "literal", value: decodeAnsiCStringWithOffsets(node.text).value };
     case "concatenation": {
       if (hasUnescapedDynamicPattern(node.text)) {
-        return { kind: "dynamic", value: decodeUnquotedShellText(node.text) };
+        return { kind: "dynamic", value: decodeUnquotedShellTextWithOffsets(node.text).value };
       }
       let value = "";
       let dynamic = false;
@@ -517,12 +480,15 @@ function shellWordValue(node: TreeSitterNode): ShellWordValue {
           dynamic = true;
         }
       }
-      return dynamic ? { kind: "dynamic", value } : { kind: "literal", value };
+      return { kind: dynamic ? "dynamic" : "literal", value };
     }
     default:
-      return node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
-        ? { kind: "dynamic", value: decodeUnquotedShellText(node.text) }
-        : { kind: "literal", value: decodeUnquotedShellText(node.text) };
+      return {
+        kind: node.namedChildren.some((child) => shellWordValue(child).kind === "dynamic")
+          ? "dynamic"
+          : "literal",
+        value: decodeUnquotedShellTextWithOffsets(node.text).value,
+      };
   }
 }
 
@@ -620,9 +586,6 @@ function recordShape(node: TreeSitterNode, output: MutableExplanation): void {
   if (hasDirectChildType(node, "&")) {
     output.shapes.add("background");
   }
-  if (node.type === "pipeline") {
-    output.shapes.add("pipeline");
-  }
   if (node.type === "list") {
     if (hasDirectChildType(node, "&&")) {
       output.shapes.add("and");
@@ -631,25 +594,21 @@ function recordShape(node: TreeSitterNode, output: MutableExplanation): void {
       output.shapes.add("or");
     }
   }
-  if (node.type === "if_statement") {
-    output.shapes.add("if");
-  }
-  if (node.type === "for_statement") {
-    output.shapes.add("for");
-  }
-  if (node.type === "while_statement") {
-    output.shapes.add("while");
-  }
-  if (node.type === "case_statement") {
-    output.shapes.add("case");
-  }
-  if (node.type === "subshell") {
-    output.shapes.add("subshell");
-  }
-  if (node.type === "compound_statement") {
-    output.shapes.add("group");
+  const shape = STATEMENT_SHAPES.get(node.type);
+  if (shape) {
+    output.shapes.add(shape);
   }
 }
+
+const STATEMENT_SHAPES = new Map<string, CommandShape>([
+  ["pipeline", "pipeline"],
+  ["if_statement", "if"],
+  ["for_statement", "for"],
+  ["while_statement", "while"],
+  ["case_statement", "case"],
+  ["subshell", "subshell"],
+  ["compound_statement", "group"],
+]);
 
 function shellCommandFlag(
   argv: string[],
@@ -698,7 +657,7 @@ function shellCommandFlag(
 
 function canParseShellWrapperPayload(transportArgv: string[], commandFlag: string | null): boolean {
   const shellExecutable = normalizeExecutableToken(transportArgv[0] ?? "");
-  if (!PARSEABLE_SHELL_WRAPPERS.has(shellExecutable)) {
+  if (!POSIX_PARSEABLE_SHELL_WRAPPERS.has(shellExecutable)) {
     return false;
   }
   const lowerFlag = commandFlag?.toLowerCase() ?? "";

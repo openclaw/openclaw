@@ -9,45 +9,77 @@ import SwiftUI
 final class StatusMenuSessions: NSObject {
     static let shared = StatusMenuSessions()
 
-    private(set) var rows: [SessionRow] = []
-    private(set) var errorText: String?
-    private(set) var cachedSnapshot: SessionStoreSnapshot?
+    private struct Cache {
+        let revision: UInt64?
+        var lease: GatewayConnection.ServerLease?
+        var snapshot: SessionStoreSnapshot?
+        var error: String?
+        var updatedAt: Date?
+    }
 
-    @ObservationIgnored private var updatedAt: Date?
+    private var cache: Cache?
+    @ObservationIgnored private let control: ControlChannel
     @ObservationIgnored private var previewTasks: [Task<Void, Never>] = []
     @ObservationIgnored private let refreshInterval: TimeInterval = 12
 
+    init(control: ControlChannel = .shared) {
+        self.control = control
+        super.init()
+    }
+
+    private var currentCache: Cache? {
+        guard let cache,
+              cache.revision == self.control.gateway.selectedEndpointRevision,
+              cache.lease.map(self.control.gateway.serverLeaseMatchesCurrentRoute) != false
+        else { return nil }
+        return cache
+    }
+
+    var cachedSnapshot: SessionStoreSnapshot? {
+        self.currentCache?.snapshot
+    }
+
+    var rows: [SessionRow] {
+        self.cachedSnapshot?.rows ?? []
+    }
+
+    var errorText: String? {
+        self.currentCache?.error
+    }
+
     func refresh(force: Bool = false) async {
         guard !Task.isCancelled else { return }
-        if !force,
-           let updatedAt,
-           Date().timeIntervalSince(updatedAt) < self.refreshInterval
-        {
+        var cache = self.currentCache ?? Cache(revision: self.control.gateway.selectedEndpointRevision)
+        if !force, let updatedAt = cache.updatedAt, Date().timeIntervalSince(updatedAt) < self.refreshInterval {
             return
         }
 
-        guard case .connected = ControlChannel.shared.state else {
-            self.errorText = self.cachedSnapshot == nil
-                ? nil
-                : String(localized: "Gateway disconnected (showing cached)")
-            self.updatedAt = Date()
+        guard case .connected = self.control.state else {
+            cache.error = cache.snapshot == nil ? nil : String(localized: "Gateway disconnected (showing cached)")
+            cache.updatedAt = Date()
+            self.cache = cache
             return
         }
 
+        func isCurrent() -> Bool {
+            !Task.isCancelled && cache.revision == self.control.gateway.selectedEndpointRevision &&
+                cache.lease.map(self.control.gateway.serverLeaseMatchesCurrentState) != false
+        }
         do {
-            let snapshot = try await SessionLoader.loadSnapshot(limit: 32)
-            guard !Task.isCancelled else { return }
-            self.cachedSnapshot = snapshot
-            self.rows = snapshot.rows
-            self.errorText = nil
-            self.updatedAt = Date()
-            self.prewarmPreviews(for: snapshot.rows)
+            cache.lease = try await self.control.acquireServerLease()
+            guard isCurrent() else { return }
+            cache.snapshot = try await SessionLoader.loadSnapshot(limit: 32, control: self.control)
+            guard isCurrent() else { return }
+            cache.error = nil
+            cache.updatedAt = Date()
+            self.cache = cache
+            self.prewarmPreviews(for: cache.snapshot?.rows ?? [])
         } catch {
-            guard !Task.isCancelled else { return }
-            self.cachedSnapshot = nil
-            self.rows = []
-            self.errorText = self.compactError(error)
-            self.updatedAt = Date()
+            guard isCurrent() else { return }
+            cache.snapshot = nil
+            cache.error = self.compactError(error)
+            cache.updatedAt = Date()
+            self.cache = cache
         }
     }
 
@@ -89,18 +121,13 @@ final class StatusMenuSessions: NSObject {
             .map(\.key)
         guard !keys.isEmpty else { return }
         self.previewTasks.append(Task {
-            await SessionMenuPreviewLoader.prewarm(sessionKeys: keys, maxItems: 10)
+            await SessionMenuPreviewLoader.prewarm(sessionKeys: keys, maxItems: 10, gateway: self.control.gateway)
         })
     }
 
     private func compactError(_ error: Error) -> String {
-        if let loadError = error as? SessionLoadError {
-            switch loadError {
-            case .gatewayUnavailable:
-                return String(localized: "No connection to gateway")
-            case .decodeFailed:
-                return String(localized: "Sessions unavailable")
-            }
+        if case .gatewayUnavailable = error as? SessionLoadError {
+            return String(localized: "No connection to gateway")
         }
         return String(localized: "Sessions unavailable")
     }
@@ -340,9 +367,12 @@ extension StatusMenuSessions {
                 status: .loading)
                 .environment(\.isEnabled, true))
 
+        let gateway = self.control.gateway
+        let revision = gateway.selectedEndpointRevision
         self.previewTasks.append(Task { [weak item] in
-            let snapshot = await SessionMenuPreviewLoader.load(sessionKey: sessionKey, maxItems: 10)
-            guard !Task.isCancelled, let item else { return }
+            let snapshot = await SessionMenuPreviewLoader.load(
+                sessionKey: sessionKey, maxItems: 10, gateway: gateway)
+            guard !Task.isCancelled, gateway.selectedEndpointRevision == revision, let item else { return }
             StatusMenuRenderer.configureHostedView(
                 item,
                 rootView: SessionMenuPreviewView(
@@ -371,22 +401,17 @@ extension StatusMenuSessions {
               let key = payload["key"],
               let value = payload["value"]
         else { return }
-        Task {
-            do {
-                let request = OpenClawChatGatewayRequests.patchSession(
-                    sessionKey: key,
-                    agentID: nil,
-                    label: nil,
-                    category: nil,
-                    color: .some(value.isEmpty ? nil : value),
-                    pinned: nil,
-                    archived: nil,
-                    unreadPatch: nil)
-                _ = try await ControlChannel.shared.request(request)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update color failed"), error: error)
-            }
+        self.performSessionAction(errorTitle: String(localized: "Update color failed")) {
+            let request = OpenClawChatGatewayRequests.patchSession(
+                sessionKey: key,
+                agentID: nil,
+                label: nil,
+                category: nil,
+                color: .some(value.isEmpty ? nil : value),
+                pinned: nil,
+                archived: nil,
+                unreadPatch: nil)
+            _ = try await ControlChannel.shared.request(request)
         }
     }
 
@@ -396,13 +421,8 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
 
-        Task {
-            do {
-                try await SessionActions.patchSession(key: key, thinking: .some(value))
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update thinking failed"), error: error)
-            }
+        self.performSessionAction(errorTitle: String(localized: "Update thinking failed")) {
+            try await SessionActions.patchSession(key: key, thinking: .some(value))
         }
     }
 
@@ -412,13 +432,8 @@ extension StatusMenuSessions {
               let value = payload["value"]
         else { return }
 
-        Task {
-            do {
-                try await SessionActions.patchSession(key: key, verbose: .some(value))
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Update verbose failed"), error: error)
-            }
+        self.performSessionAction(errorTitle: String(localized: "Update verbose failed")) {
+            try await SessionActions.patchSession(key: key, verbose: .some(value))
         }
     }
 
@@ -431,38 +446,32 @@ extension StatusMenuSessions {
 
     @objc private func resetSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Reset session?"),
-                message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
-                action: String(localized: "Reset"))
-            else { return }
-
-            do {
+        self.performSessionAction(
+            errorTitle: String(localized: "Reset failed"),
+            confirm: {
+                await SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Reset session?"),
+                    message: String(format: String(localized: "Starts a new session ID for “%@”."), key),
+                    action: String(localized: "Reset"))
+            },
+            action: {
                 try await SessionActions.resetSession(key: key)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Reset failed"), error: error)
-            }
-        }
+            })
     }
 
     @objc private func compactSession(_ sender: NSMenuItem) {
         guard let key = sender.representedObject as? String else { return }
-        Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Compact session log?"),
-                message: String(localized: "Keeps the last 400 lines and archives the old file."),
-                action: String(localized: "Compact"))
-            else { return }
-
-            do {
+        self.performSessionAction(
+            errorTitle: String(localized: "Compact failed"),
+            confirm: {
+                await SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Compact session log?"),
+                    message: String(localized: "Keeps the last 400 lines and archives the old file."),
+                    action: String(localized: "Compact"))
+            },
+            action: {
                 try await SessionActions.compactSession(key: key, maxLines: 400)
-                await self.refresh(force: true)
-            } catch {
-                SessionActions.presentError(title: String(localized: "Compact failed"), error: error)
-            }
-        }
+            })
     }
 
     @objc private func deleteSession(_ sender: NSMenuItem) {
@@ -471,18 +480,33 @@ extension StatusMenuSessions {
               key != "global"
         else { return }
 
-        Task {
-            guard SessionActions.confirmDestructiveAction(
-                title: String(localized: "Delete session?"),
-                message: String(format: String(localized: "Deletes the “%@” entry and archives its transcript."), key),
-                action: String(localized: "Delete"))
-            else { return }
-
-            do {
+        self.performSessionAction(
+            errorTitle: String(localized: "Delete failed"),
+            confirm: {
+                await SessionActions.confirmDestructiveAction(
+                    title: String(localized: "Delete session?"),
+                    message: String(
+                        format: String(localized: "Deletes the “%@” entry and archives its transcript."),
+                        key),
+                    action: String(localized: "Delete"))
+            },
+            action: {
                 try await SessionActions.deleteSession(key: key)
+            })
+    }
+
+    private func performSessionAction(
+        errorTitle: String,
+        confirm: @escaping @MainActor () async -> Bool = { true },
+        action: @escaping @MainActor () async throws -> Void)
+    {
+        Task {
+            guard await confirm() else { return }
+            do {
+                try await action()
                 await self.refresh(force: true)
             } catch {
-                SessionActions.presentError(title: String(localized: "Delete failed"), error: error)
+                SessionActions.presentError(title: errorTitle, error: error)
             }
         }
     }

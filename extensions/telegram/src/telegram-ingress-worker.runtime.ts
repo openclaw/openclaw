@@ -143,7 +143,7 @@ async function fetchJson(params: {
     ).toString("utf8");
     let json: TelegramGetUpdatesJson;
     try {
-      json = JSON.parse(raw) as TelegramGetUpdatesJson;
+      json = (JSON.parse(raw) as TelegramGetUpdatesJson | null) ?? {};
     } catch (err) {
       if (!response.ok) {
         throw createTelegramGetUpdatesError({
@@ -180,6 +180,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
   deps?: TelegramIngressRuntimeDeps;
 }): Promise<void> {
   const { options, port } = params;
+  const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const stopController = new AbortController();
   let stopped = false;
   let activeController: AbortController | undefined;
@@ -193,7 +194,6 @@ export async function runTelegramIngressWorkerRuntime(params: {
   const fetchImpl = params.deps?.fetch ?? transport?.fetch ?? globalThis.fetch;
   const closeTransport =
     params.deps?.closeTransport ?? (() => transport?.close() ?? Promise.resolve());
-  const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
@@ -343,11 +343,7 @@ const runtimePort =
     ? null
     : ({
         postMessage(message) {
-          Reflect.apply(
-            Reflect.get(workerPort, "postMessage") as (value: unknown) => void,
-            workerPort,
-            [message],
-          );
+          workerPort.postMessage(message, []);
         },
         onMessage(listener) {
           workerPort.on("message", listener);

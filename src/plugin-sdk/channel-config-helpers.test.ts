@@ -188,20 +188,76 @@ describe("channel DM access helpers", () => {
     ]);
   });
 
-  it("migrates top-canonical legacy dm aliases", () => {
+  it.each([
+    {
+      name: "moves both aliases and removes the empty DM section",
+      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
+      expected: { dmPolicy: "allowlist", allowFrom: ["U1"] },
+      expectedChanges: [
+        "Moved channels.demo.dm.policy → channels.demo.dmPolicy.",
+        "Moved channels.demo.dm.allowFrom → channels.demo.allowFrom.",
+        "Removed empty channels.demo.dm after migration.",
+      ],
+    },
+    {
+      name: "removes matching aliases using normalized allowlist equality",
+      entry: {
+        dmPolicy: "allowlist",
+        allowFrom: ["U1", 42],
+        dm: { policy: "allowlist", allowFrom: [" U1 ", "42"], enabled: false },
+      },
+      expected: { dmPolicy: "allowlist", allowFrom: ["U1", 42], dm: { enabled: false } },
+      expectedChanges: [
+        "Removed channels.demo.dm.policy (dmPolicy already set).",
+        "Removed channels.demo.dm.allowFrom (allowFrom already set).",
+      ],
+    },
+    {
+      name: "preserves conflicting policies and differently ordered allowlists",
+      entry: {
+        dmPolicy: "disabled",
+        allowFrom: ["U1", "U2"],
+        dm: { policy: "open", allowFrom: ["U2", "U1"] },
+      },
+      expected: {
+        dmPolicy: "disabled",
+        allowFrom: ["U1", "U2"],
+        dm: { policy: "open", allowFrom: ["U2", "U1"] },
+      },
+      expectedChanges: [],
+    },
+    {
+      name: "keeps nested allowlists when their channel opts out of promotion",
+      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
+      promoteAllowFrom: false,
+      expected: { dmPolicy: "allowlist", dm: { allowFrom: ["U1"] } },
+      expectedChanges: ["Moved channels.demo.dm.policy → channels.demo.dmPolicy."],
+    },
+    {
+      name: "leaves an empty DM section untouched when no migration ran",
+      entry: { dm: {} },
+      expected: { dm: {} },
+      expectedChanges: [],
+    },
+  ])("$name", ({ entry, expected, expectedChanges, promoteAllowFrom }) => {
+    const original = structuredClone(entry);
     const changes: string[] = [];
     const result = normalizeLegacyDmAliases({
-      entry: { dm: { policy: "allowlist", allowFrom: ["U1"] } },
-      pathPrefix: "channels.slack",
+      entry,
+      pathPrefix: "channels.demo",
       changes,
+      promoteAllowFrom,
     });
 
-    expect(result.entry).toEqual({ dmPolicy: "allowlist", allowFrom: ["U1"] });
-    expect(changes).toEqual([
-      "Moved channels.slack.dm.policy → channels.slack.dmPolicy.",
-      "Moved channels.slack.dm.allowFrom → channels.slack.allowFrom.",
-      "Removed empty channels.slack.dm after migration.",
-    ]);
+    expect(result.entry).toEqual(expected);
+    expect(changes).toEqual(expectedChanges);
+    expect(entry).toEqual(original);
+    if (expectedChanges.length === 0) {
+      expect(result).toEqual({ entry, changed: false });
+      expect(result.entry).toBe(entry);
+    } else {
+      expect(result.changed).toBe(true);
+    }
   });
 });
 

@@ -1,4 +1,5 @@
 import {
+  request as httpRequest,
   ServerResponse,
   type ClientRequest,
   type IncomingHttpHeaders,
@@ -107,7 +108,7 @@ export function handleUpgradeRequest(
   handler(request, response, { stream, stopBuffering });
 }
 
-/** Forwards one authorized HTTPS request, retaining ownership across a WebSocket upgrade. */
+/** Forwards one authorized request, retaining ownership across a WebSocket upgrade. */
 type ForwardRequest = {
   request: IncomingMessage;
   response: ServerResponse;
@@ -148,15 +149,16 @@ function sendSecretEgressRequest(
   }
   let refused = false;
   let upgraded = false;
+  const secure = target.protocol === "https:";
   const upstream = forward.ownResource(
-    httpsRequest(
+    (secure ? httpsRequest : httpRequest)(
       {
-        hostname: target.hostname,
-        port: target.port || 443,
+        hostname: secure ? target.hostname : host,
+        port: target.port || (secure ? 443 : 80),
         path: `${target.pathname}${target.search}`,
         method: forward.request.method,
         headers,
-        agent: forward.upstreamTlsAgent,
+        agent: secure ? forward.upstreamTlsAgent : false,
       },
       (upstreamResponse) => {
         forward.ownResource(upstreamResponse);
@@ -362,13 +364,6 @@ export function createSecretEgressBodyBudget(): (length: number) => (() => void)
   };
 }
 
-function allocateBufferedRequestBody(length: number): Buffer {
-  if (!Number.isSafeInteger(length) || length < 0 || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
-    throw new RangeError("Invalid buffered request body length");
-  }
-  return Buffer.allocUnsafeSlow(length);
-}
-
 /** Collect original bytes, then authorize/substitute synchronously at the send boundary. */
 export function forwardSecretEgressRequest(
   forward: Omit<ForwardRequest, "target" | "headers" | "substituted"> & {
@@ -481,7 +476,7 @@ export function forwardSecretEgressRequest(
       release();
     }
   });
-  if (!releaseBudget) {
+  if (!releaseBudget || length > MAX_BUFFERED_REQUEST_BODY_BYTES) {
     refuse(
       "upload-capacity",
       503,
@@ -492,7 +487,7 @@ export function forwardSecretEgressRequest(
   try {
     // One exact backing store: chunk count, BufferList nodes and shared slabs
     // cannot amplify retained memory. Every byte is initialized before scanning.
-    body = allocateBufferedRequestBody(length);
+    body = Buffer.allocUnsafeSlow(length);
     let received = 0;
     collector = forward.ownResource(
       new Writable({

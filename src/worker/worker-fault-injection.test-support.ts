@@ -18,6 +18,10 @@ import {
   resolveSessionTranscriptRuntimeTarget,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import {
+  captureSessionTranscriptStorageEnvironment,
+  captureSessionTranscriptTargetBinding,
+} from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import * as workerServer from "../gateway/server/ws-connection/worker-connection.js";
@@ -35,7 +39,7 @@ import {
 } from "../gateway/worker-environments/placement-worker-gate.js";
 import * as workerEnv from "../gateway/worker-environments/service.js";
 import * as envStore from "../gateway/worker-environments/store.js";
-import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-store.js";
+import { createWorkerTranscriptCommitStore } from "../gateway/worker-environments/transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "../gateway/worker-environments/transcript-commit.js";
 import { onAgentRuntimeEvent } from "../infra/agent-events.js";
 import type { WorkerProvider, WorkerSshEndpoint } from "../plugins/types.js";
@@ -49,7 +53,9 @@ import {
   WorkerFaultPlacementLifecycle,
 } from "./worker-fault-placement-lifecycle.test-support.js";
 import { bindWorkerFixtureTurnSource } from "./worker-fault-session-target.test-support.js";
-import * as workerRpc from "./worker-rpc-clients.js";
+import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
+import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
+import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
 
 export const SESSION_ID = "fault-session";
 export const SESSION_KEY = "agent:main:fault-session";
@@ -146,9 +152,9 @@ type ProviderPlan =
 
 export type WorkerClients = {
   connection: WorkerConnection;
-  transcript: workerRpc.WorkerTranscriptCommitClient;
-  live: workerRpc.WorkerLiveEventClient;
-  inference: workerRpc.WorkerInferenceProxyClient;
+  transcript: WorkerTranscriptCommitClient;
+  live: WorkerLiveEventClient;
+  inference: WorkerInferenceProxyClient;
 };
 
 type WorkerClientOptions = {
@@ -175,6 +181,10 @@ export class ComposedGatewayHarness {
   transcriptGate: TranscriptGate | undefined;
   providerPlan: ProviderPlan = { kind: "immediate", text: "done" };
 
+  // The simulated worker changes process.env; Gateway storage must survive service restarts.
+  private readonly gatewayStorageEnvironment = captureSessionTranscriptStorageEnvironment(
+    process.env,
+  );
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly connectionWork = new GatewayConnectionWork();
@@ -231,7 +241,7 @@ export class ComposedGatewayHarness {
     // Leave room for Vitest temp nesting within Darwin's Unix socket pathname limit.
     this.socketPath = path.join(root, "s");
     this.cfg = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       session: {
         mainKey: "main",
         store: path.join(root, "agents", "{agentId}", "sessions", "sessions.json"),
@@ -319,7 +329,7 @@ export class ComposedGatewayHarness {
       source = await bindWorkerFixtureTurnSource(this.placementStore, claim, this.sessionTarget);
       this.turnSources.set(claim.claimId, source);
     }
-    return {
+    const descriptor: WorkerLaunchDescriptor = {
       version: 4,
       connectionEndpoint: { kind: "unix", socketPath: this.socketPath },
       admission: {
@@ -352,6 +362,8 @@ export class ComposedGatewayHarness {
         },
       },
     };
+    source.setToolAssignment(descriptor.assignment);
+    return descriptor;
   }
 
   async createClients(params: WorkerClientOptions = {}): Promise<WorkerClients> {
@@ -362,21 +374,20 @@ export class ComposedGatewayHarness {
       connectParams: buildWorkerConnectParams(descriptor),
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 5_000,
-      requestTimeoutMs: 2_000,
       reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
     });
     return {
       connection,
-      transcript: new workerRpc.WorkerTranscriptCommitClient(connection, {
+      transcript: new WorkerTranscriptCommitClient(connection, {
         runEpoch: epoch,
         baseLeafId: params.baseLeafId ?? null,
         initialSeq: params.initialSeq ?? 1,
       }),
-      live: new workerRpc.WorkerLiveEventClient(connection, {
+      live: new WorkerLiveEventClient(connection, {
         runEpoch: epoch,
         initialAckedSeq: params.initialAckedSeq ?? 0,
       }),
-      inference: new workerRpc.WorkerInferenceProxyClient(connection),
+      inference: new WorkerInferenceProxyClient(connection),
     };
   }
 
@@ -409,7 +420,7 @@ export class ComposedGatewayHarness {
       throw new Error("fault placement has no active worker claim to reclaim");
     }
     await this.settleRun(staleClaim.runId);
-    this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
+    await this.placementLifecycle.reclaimPlacement(placement, staleClaim.owner.ownerEpoch);
     const attached = this.store.get(ENVIRONMENT_ID);
     if (!attached || attached.state !== "attached") {
       throw new Error("fault environment is not attached");
@@ -554,7 +565,13 @@ export class ComposedGatewayHarness {
           gate.entered.resolve();
           await gate.release.promise;
         }
-        const result = await committer.commit(params);
+        const result = await committer.commit({
+          ...params,
+          sessionTarget: captureSessionTranscriptTargetBinding({
+            ...params.sessionTarget,
+            env: this.gatewayStorageEnvironment,
+          }),
+        });
         if (gate?.phase === "after-apply") {
           gate.entered.resolve();
           await gate.release.promise;

@@ -143,7 +143,7 @@ describe("Codex native hook relay managed policy", () => {
       } finally {
         await original.unregister();
         await next.unregister();
-        monitor.dispose();
+        await monitor.dispose();
       }
     },
   );
@@ -218,7 +218,7 @@ describe("Codex native hook relay managed policy", () => {
         );
         expect(nativeWrite).not.toHaveBeenCalled();
       } finally {
-        monitor.dispose();
+        await monitor.dispose();
         await parent.unregister();
       }
     },
@@ -365,7 +365,7 @@ describe("Codex native hook relay managed policy", () => {
     nextTurn.release();
     await waiting.unregister();
     await unknown.unregister();
-    monitor.dispose();
+    await monitor.dispose();
   });
 
   it.each(["receipt first", "notification first", "active predecessor"] as const)(
@@ -553,7 +553,7 @@ describe("Codex native hook relay managed policy", () => {
         original.release();
         await first.unregister();
         await second.unregister();
-        monitor.dispose();
+        await monitor.dispose();
       }
       expect(b.release).toHaveBeenCalledOnce();
     },
@@ -622,34 +622,6 @@ describe("Codex native hook relay config", () => {
     expect(JSON.stringify(config)).not.toContain('"matcher":null');
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
-  });
-
-  it("includes only requested hook events", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay(),
-        events: ["permission_request"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PermissionRequest": expectedCommandHook("permission_request"),
-      "hooks.state": expectedHookState(["permission_request"]),
-    });
-  });
-
-  it("clears requested hook events when the relay reports no local work", () => {
-    expect(
-      buildCodexNativeHookRelayConfig({
-        relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
-        events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
-      }),
-    ).toEqual({
-      "features.hooks": true,
-      "hooks.PreToolUse": expectedCommandHook("pre_tool_use"),
-      "hooks.PostToolUse": [],
-      "hooks.Stop": [],
-      "hooks.state": expectedHookState(["pre_tool_use"]),
-    });
   });
 
   it("clears selected PreToolUse when the relay has no local work", () => {

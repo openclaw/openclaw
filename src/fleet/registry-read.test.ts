@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -51,60 +50,42 @@ function watchNativeSql() {
   return observeMainThreadSql();
 }
 
-it.each(["cached", "fresh"] as const)(
-  "reads a %s registry in the worker and preserves the cached writer",
+it.each(["cached", "fresh", "artifact", "maintenance"] as const)(
+  "reads a %s registry off-thread and preserves source ownership",
   async (mode) => {
     expect(isMainThread).toBe(true);
-    const { root, env } = fixture();
+    const { root, env, databasePath } = fixture();
     const record = await seed(env, root);
-    const source = openOpenClawStateDatabase({ env });
-    if (mode === "fresh") {
+    const maintenance =
+      mode === "maintenance" ? createOpenClawDatabaseMaintenanceScope() : undefined;
+    const source = maintenance
+      ? maintenance.run(() => openOpenClawStateDatabase({ env }))
+      : openOpenClawStateDatabase({ env });
+    if (mode === "fresh" || mode === "artifact") {
       await closeOpenClawStateDatabaseAsync();
     }
+    const sourceBytes = mode === "artifact" ? fs.readFileSync(databasePath) : undefined;
     const calls = watchNativeSql();
-    const startedAt = performance.now();
-    try {
+    const read = async () => {
       expect(await listFleetCells(env)).toEqual([record]);
       expect(await getFleetCell(env, record.tenantId)).toEqual(record);
-      const mainThreadSqlCalls = calls.count();
-      console.info("fleet registry read", {
-        mode,
-        mainThreadSqlCalls,
-        elapsedMs: Math.round(performance.now() - startedAt),
-      });
-      expect(mainThreadSqlCalls).toBe(0);
-      expect(source.db.isOpen).toBe(mode === "cached");
+    };
+    try {
+      await (mode === "artifact" ? withArtifactPreservingStateReads(read) : read());
+      calls.expectIdle();
     } finally {
       vi.restoreAllMocks();
+      await maintenance?.close();
+    }
+    expect(source.db.isOpen).toBe(mode === "cached" || mode === "maintenance");
+    if (sourceBytes) {
+      expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
+    }
+    if (maintenance) {
+      expect(await listFleetCells(env)).toEqual([record]);
     }
   },
 );
-
-it("prepares and retires an artifact registry snapshot without main-thread SQL", async () => {
-  const { root, env, databasePath } = fixture();
-  const record = await seed(env, root);
-  await closeOpenClawStateDatabaseAsync();
-  const sourceBytes = fs.readFileSync(databasePath);
-  const calls = watchNativeSql();
-  const startedAt = performance.now();
-  const read = async () => {
-    expect(await listFleetCells(env)).toEqual([record]);
-    expect(await getFleetCell(env, record.tenantId)).toEqual(record);
-  };
-  try {
-    await withArtifactPreservingStateReads(read);
-    const mainThreadSqlCalls = calls.count();
-    console.info("fleet snapshot lifecycle", {
-      mode: "artifact",
-      mainThreadSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
-    });
-    expect(mainThreadSqlCalls).toBe(0);
-  } finally {
-    vi.restoreAllMocks();
-  }
-  expect(fs.readFileSync(databasePath)).toEqual(sourceBytes);
-});
 
 it("reads current committed registry rows while a cached native iterator retains older rows", async () => {
   expect(isMainThread).toBe(true);
@@ -160,7 +141,6 @@ it("commits a complete leased registry operation off the main thread and reopens
   expect(isMainThread).toBe(true);
   const { root, env } = fixture();
   const calls = watchNativeSql();
-  const startedAt = performance.now();
   try {
     await withFleetCellOperation({
       env,
@@ -175,12 +155,7 @@ it("commits a complete leased registry operation off the main thread and reopens
         await updateFleetCellImage(env, "alpha", "fixture:committed");
       },
     });
-    const mainThreadSqlCalls = calls.count();
-    console.info("fleet registry operation", {
-      mainThreadSqlCalls,
-      elapsedMs: Math.round(performance.now() - startedAt),
-    });
-    expect(mainThreadSqlCalls).toBe(0);
+    calls.expectIdle();
   } finally {
     vi.restoreAllMocks();
   }
@@ -214,25 +189,4 @@ it("joins an admitted read before its disposable source scope exits", async () =
     );
   });
   expect(outcome).toEqual(record);
-});
-
-it("preserves a maintenance-created cached writer after an independent admitted registry read", async () => {
-  const { root, env } = fixture();
-  const record = await seed(env, root);
-  const maintenance = createOpenClawDatabaseMaintenanceScope(() => undefined);
-  const source = maintenance.run(() => openOpenClawStateDatabase({ env }));
-  try {
-    const calls = watchNativeSql();
-    try {
-      expect(await getFleetCell(env, record.tenantId)).toEqual(record);
-      calls.expectIdle();
-    } finally {
-      vi.restoreAllMocks();
-    }
-    await maintenance.close();
-    expect(source.db.isOpen).toBe(true);
-    expect(await listFleetCells(env)).toEqual([record]);
-  } finally {
-    await maintenance.close();
-  }
 });

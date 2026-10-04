@@ -75,49 +75,40 @@ export function stripProgressCardRawContentBlocks(input: string): string {
   // Pair each opener with the first compatible close after the opener ends.
   // Closing-tag positions are monotonic, so binary search avoids rescanning the
   // remaining message for every unmatched opening tag.
-  const closingTagsByName = new Map<string, number[]>();
-  for (let index = 0; index < tags.length; index += 1) {
-    const tag = tags[index];
-    if (!tag?.isClosing) {
-      continue;
+  const closingTagsByName = new Map<string, ProgressCardRawContentTag[]>();
+  for (const tag of tags) {
+    if (tag.isClosing) {
+      const closers = closingTagsByName.get(tag.name) ?? [];
+      closers.push(tag);
+      closingTagsByName.set(tag.name, closers);
     }
-    const indices = closingTagsByName.get(tag.name) ?? [];
-    indices.push(index);
-    closingTagsByName.set(tag.name, indices);
   }
   let output = "";
   let cursor = 0;
-  for (let index = 0; index < tags.length; index += 1) {
-    const tag = tags[index];
-    if (!tag || tag.isClosing) {
+  for (const tag of tags) {
+    if (tag.isClosing || tag.start < cursor) {
       continue;
     }
-    const closingIndices = closingTagsByName.get(tag.name);
-    if (!closingIndices) {
+    const closers = closingTagsByName.get(tag.name);
+    if (!closers) {
       continue;
     }
     let low = 0;
-    let high = closingIndices.length;
+    let high = closers.length;
     while (low < high) {
       const middle = low + Math.floor((high - low) / 2);
-      const closeIndex = closingIndices[middle];
-      const close = closeIndex === undefined ? undefined : tags[closeIndex];
-      if (close && close.start >= tag.end) {
+      if (closers[middle]!.start >= tag.end) {
         high = middle;
       } else {
         low = middle + 1;
       }
     }
-    const closeIndex = closingIndices[low];
-    const close = closeIndex === undefined ? undefined : tags[closeIndex];
+    const close = closers[low];
     if (!close) {
       continue;
     }
     output += input.slice(cursor, tag.start);
     cursor = close.end;
-    while ((tags[index + 1]?.start ?? Number.POSITIVE_INFINITY) < cursor) {
-      index += 1;
-    }
   }
   return cursor === 0 ? input : output + input.slice(cursor);
 }

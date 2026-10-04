@@ -2,8 +2,27 @@ import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import type { PluginCandidate } from "../discovery.js";
+import { readPluginMetadataStateRowSync } from "../installed-plugin-index-row.js";
+import {
+  resolveInstalledPluginIndexStateDatabaseOptions,
+  type InstalledPluginIndexStoreOptions,
+} from "../installed-plugin-index-store-path.js";
 import { refreshPersistedInstalledPluginIndex } from "../installed-plugin-index-store-write.js";
 import type { InstalledPluginIndex } from "../installed-plugin-index.js";
+
+/** Observe the durable index without consuming the production metadata cache. */
+export function readPersistedInstalledPluginIndexRowSync(
+  options: InstalledPluginIndexStoreOptions,
+): { value_json: string } | undefined {
+  if (options.filePath?.endsWith(".json")) {
+    return undefined;
+  }
+  return readPluginMetadataStateRowSync(
+    "installed-index",
+    resolveInstalledPluginIndexStateDatabaseOptions(options),
+    options.artifactPreservingReadOnly,
+  );
+}
 
 /** Seed fixture state without adding an unleased production record writer. */
 export async function seedInstalledPluginIndex(
@@ -13,7 +32,7 @@ export async function seedInstalledPluginIndex(
     "reason" | "installRecords" | "lease"
   > = {},
 ): Promise<void> {
-  refreshPersistedInstalledPluginIndex({
+  await refreshPersistedInstalledPluginIndex({
     ...options,
     reason: "source-changed",
     installRecords: records,

@@ -193,7 +193,7 @@ export async function triageCommand(
   let findings: readonly HealthFinding[] = [];
   if (!deferDiagnostics) {
     try {
-      const { collectDoctorFindings } = await import("./doctor-lint.js");
+      const { collectDoctorFindings } = await import("./doctor-lint-runner.js");
       findings = await collectDoctorFindings(runtime);
     } catch (error) {
       findings = [
@@ -431,11 +431,13 @@ export async function triageCommand(
       }
       return;
     }
-    if (handoff.agent === "claude" && !automatic) {
+    let claudeSafeMode = false;
+    if (handoff.agent === "claude") {
       const { probeClaudeSafeMode } = await import("./triage-claude.js");
       const probe = await probeClaudeSafeMode({
         argv: [handoff.program.command, ...handoff.program.leadingArgv],
         env: targetEnv,
+        signal: automatic?.signal ?? options.recovery?.signal,
         ...agentOptions,
       });
       if (!probe.ok) {
@@ -448,16 +450,17 @@ export async function triageCommand(
       if (!isCurrent()) {
         return;
       }
-      if (!probe.supported) {
-        runtime.error("Claude --safe-mode unavailable; update to Claude Code 2.1.169+.");
-        runtime.log(`Run without safe mode: ${handoffCommands.external.claude}`);
-        exitCliAfterOutput(runtime, 1);
+      claudeSafeMode = probe.supported;
+      if (!claudeSafeMode) {
+        runtime.log(
+          "Claude --safe-mode unavailable; running claude -p with normal customization settings.",
+        );
       }
     }
     runtime.log(`Starting ${handoff.agent}; use --agent <name> to select another coding agent.`);
     const args =
       handoff.agent === "claude"
-        ? ["--safe-mode", prompt]
+        ? [claudeSafeMode ? "--safe-mode" : "-p", prompt]
         : handoff.agent === "qwen"
           ? ["--prompt-interactive", prompt]
           : handoff.agent === "opencode" || handoff.agent === "kimi"
@@ -474,7 +477,7 @@ export async function triageCommand(
         const { runUtf8CommandWithTimeout } = await import("../process/exec.js");
         const automaticArgs =
           handoff.agent === "claude"
-            ? ["--safe-mode", "-p"]
+            ? [...(claudeSafeMode ? ["--safe-mode"] : []), "-p"]
             : ["exec", "--skip-git-repo-check", "-"];
         if (!isCurrent()) {
           return;
@@ -593,7 +596,6 @@ export async function triageCommand(
           ),
         ),
     },
-    budget: { maxTurns: 1 },
     isCurrent,
     onEvent: (event) => {
       if (event.type === "turn-started" && isCurrent()) {

@@ -52,17 +52,20 @@ function collectorSchema(
   return { ...schema, properties: { ...properties, ...fields } };
 }
 
-function collectorFieldsFromSchema(schema: unknown): Record<string, unknown> | undefined {
-  if (!isRecord(schema) || !isRecord(schema.properties)) {
-    return undefined;
-  }
-  const properties = schema.properties;
-  const fields = Object.fromEntries(
+function selectCollectorFields(properties: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
     COLLECTOR_FIELDS.filter((field) => field in properties).map((field) => [
       field,
       properties[field],
     ]),
   );
+}
+
+function collectorFieldsFromSchema(schema: unknown): Record<string, unknown> | undefined {
+  if (!isRecord(schema) || !isRecord(schema.properties)) {
+    return undefined;
+  }
+  const fields = selectCollectorFields(schema.properties);
   return Object.keys(fields).length > 0 ? fields : undefined;
 }
 
@@ -71,12 +74,7 @@ export function bindCollectorSpawnTool<T extends AnyAgentTool>(
   properties: Record<string, unknown>,
   signal?: AbortSignal,
 ): T {
-  const fields = Object.fromEntries(
-    COLLECTOR_FIELDS.filter((field) => field in properties).map((field) => [
-      field,
-      properties[field],
-    ]),
-  );
+  const fields = selectCollectorFields(properties);
   const capability: SpawnCapability = { nativeReader: undefined, signal };
   const binding: AgentToolAvailabilityBinding = {
     prepare(current, callableTools) {

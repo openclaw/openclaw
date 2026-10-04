@@ -88,13 +88,13 @@ export class ChatTranscriptController implements ReactiveController {
     return this.sessionVirtualizer?.scrollElement ?? null;
   }
 
+  syncViewportGeometry(): void {
+    this.sessionVirtualizer?.syncViewportGeometry();
+  }
+
   hostConnected(): void {
     this.connected = true;
     this.sessionVirtualizer?.connect();
-  }
-
-  hostUpdate(): void {
-    this.sessionVirtualizer?.prepareUpdate();
   }
 
   hostUpdated(): void {

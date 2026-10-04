@@ -31,7 +31,9 @@ const DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS = 3_000;
 
 /** One output stream retains ownership through queued and audible playback. */
 export class DiscordRealtimeOutput {
-  readonly activity = createRealtimeVoiceOutputActivityTracker();
+  readonly activity = createRealtimeVoiceOutputActivityTracker({
+    now: () => performance.now(),
+  });
   private readonly converter = createRealtimePcmToDiscordConverter();
   private readonly stream = new PassThrough({ highWaterMark: DISCORD_RAW_PCM_FRAME_BYTES * 128 });
   private request: DiscordRealtimePlayerRequest | undefined;

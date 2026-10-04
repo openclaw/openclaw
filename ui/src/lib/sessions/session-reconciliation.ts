@@ -532,7 +532,7 @@ export function createSessionReconciliation(host: Host) {
       const source = roster.observations.inheritRow({ ...corrected }, corrected);
       const select = roster.observations.observeFields(
         source,
-        fields,
+        rowInfo.isAncestorReference ? roster.observations.fieldNames(previousRow) : fields,
         createSessionWriteObservation(
           eventObservation.revision,
           rowInfo.updatedAt,
@@ -642,7 +642,14 @@ export function createSessionReconciliation(host: Host) {
           eventResult: reduced,
           ...(!reduced.deletedKey &&
           (!reduced.admittedRow || !Array.isArray(asNullableRecord(snapshot)?.ancestorSessions))
-            ? { invalidateRevision: eventObservation.revision }
+            ? reduced.admittedRow && asNullableRecord(asNullableRecord(snapshot)?.session)
+              ? {
+                  certification: {
+                    revision: eventObservation.revision,
+                    reason: invalidationReason,
+                  },
+                }
+              : { invalidateRevision: eventObservation.revision }
             : {}),
         };
       },

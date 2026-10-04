@@ -59,40 +59,37 @@ afterEach(async () => {
 
 test("exports the producing agent identity on run, harness, message, tool-loop, and model-call spans", async () => {
   const { service, ctx } = await startOtelService({ traces: true });
+  const agent = { agentId: "ops", sessionId: "session-agent" };
+  const model = {
+    ...agent,
+    runId: "run-agent-1",
+    provider: "anthropic",
+    model: "claude-opus-4-7",
+  };
 
   emitTrustedDiagnosticEvent({
     type: "run.completed",
-    runId: "run-agent-1",
-    agentId: "ops",
-    sessionId: "session-agent",
-    provider: "anthropic",
-    model: "claude-opus-4-7",
+    ...model,
     durationMs: 100,
     outcome: "completed",
   });
   emitTrustedDiagnosticEvent({
     type: "harness.run.completed",
-    runId: "run-agent-1",
-    agentId: "ops",
-    sessionId: "session-agent",
+    ...model,
     harnessId: "claude-cli",
-    provider: "anthropic",
-    model: "claude-opus-4-7",
     durationMs: 100,
     outcome: "completed",
   });
   emitTrustedDiagnosticEvent({
     type: "message.processed",
-    agentId: "ops",
-    sessionId: "session-agent",
+    ...agent,
     channel: "webchat",
     durationMs: 5,
     outcome: "completed",
   });
   emitTrustedDiagnosticEvent({
     type: "tool.loop",
-    agentId: "ops",
-    sessionId: "session-agent",
+    ...agent,
     toolName: "read",
     level: "warning",
     action: "warn",
@@ -102,12 +99,8 @@ test("exports the producing agent identity on run, harness, message, tool-loop, 
   });
   emitTrustedDiagnosticEvent({
     type: "model.call.completed",
-    runId: "run-agent-1",
+    ...model,
     callId: "call-agent-1",
-    agentId: "ops",
-    sessionId: "session-agent",
-    provider: "anthropic",
-    model: "claude-opus-4-7",
     api: "claude-code",
     transport: "stdio-live",
     observationUnit: "turn",

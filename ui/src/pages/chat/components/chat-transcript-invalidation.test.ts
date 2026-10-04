@@ -9,6 +9,7 @@ import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import type { BoardProvider } from "../../../lib/board/provider.ts";
 import * as messageNormalizer from "../../../lib/chat/message-normalizer.ts";
 import * as videoPoster from "../../../lib/media/video-poster.ts";
+import { PRESENTATION_CHANGED_EVENT } from "../../../lit/presentation-binding.ts";
 import { createSessionCapabilityFixture, createTestChatPane } from "../chat-pane.test-support.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
 import {
@@ -18,8 +19,9 @@ import {
   getExpansionStateVersion,
 } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
+import { saveChatSessionScrollPosition } from "../scroll.ts";
+import * as chatMessage from "./chat-message-group.ts";
 import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
-import * as chatMessage from "./chat-message.ts";
 import {
   renderTranscriptSearch,
   resetTranscriptSession,
@@ -278,17 +280,35 @@ describe("chat transcript invalidation", () => {
       },
     );
 
-    it("retains visible inactive video previews, releases hidden rows and restores them on return", async () => {
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-      props.transcriptVisible = false;
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeNull();
-      expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
-      props.transcriptVisible = true;
-      await renderPreview();
-      expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
-    });
+    it.each(["rendered", "parked"] as const)(
+      "retains inactive previews and releases hidden rows with a %s parent",
+      async (parent) => {
+        const owner = new EventTarget();
+        let visible = true;
+        if (parent === "parked") {
+          props.transcriptVisible = { owner, isPresented: () => visible };
+        }
+        await renderPreview();
+        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+        if (parent === "parked") {
+          visible = false;
+          owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+          resetTranscriptSession(props.paneId, container);
+        } else {
+          props.transcriptVisible = false;
+          await renderPreview();
+        }
+        expect(container.querySelector(".chat-video-preview img")).toBeNull();
+        expect(revokeObjectURL).toHaveBeenCalledWith("blob:transcript-poster");
+        visible = true;
+        owner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+        if (parent === "rendered") {
+          props.transcriptVisible = true;
+        }
+        await renderPreview();
+        expect(container.querySelector(".chat-video-preview img")).toBeInstanceOf(HTMLImageElement);
+      },
+    );
   });
 
   it("updates persisted named references when the connection catalog changes without transcript edits", () => {
@@ -459,7 +479,11 @@ describe("chat transcript invalidation", () => {
     async (phase) => {
       vi.spyOn(Date, "now").mockReturnValue(60_000);
       const props = threadProps(`pane-terminal-status-${phase}`);
-      const transcript = createTestTranscript();
+      saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+        scrollTop: 0,
+        anchorToEnd: false,
+      });
+      const transcript = createTestTranscript(props.paneId);
       const container = document.body.appendChild(document.createElement("div"));
       const rerender = () => {
         render(renderChatThread(props, transcript), container);
@@ -593,7 +617,10 @@ describe("chat transcript invalidation", () => {
 
   it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
-    const props = threadProps("pane-session-metadata");
+    const props = threadProps("pane-session-metadata", "agent:main:main", [
+      { role: "user", senderLabel: "Alex", content: "Hello" },
+      { role: "assistant", content: "Hi" },
+    ]);
     props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
     const transcript = createTestTranscript();
     const container = document.body.appendChild(document.createElement("div"));
@@ -935,7 +962,11 @@ describe("chat transcript invalidation", () => {
         },
       ],
     };
-    const toolVisibilityController = createTestTranscript();
+    saveChatSessionScrollPosition(toolVisibilityProps.paneId, toolVisibilitySession, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const toolVisibilityController = createTestTranscript(toolVisibilityProps.paneId);
     const toolVisibilityPane = document.body.appendChild(document.createElement("div"));
     const renderToolVisibility = (next = toolVisibilityProps) =>
       render(renderChatThread(next, toolVisibilityController), toolVisibilityPane);

@@ -33,9 +33,7 @@ async function createWorker(filename?: URL) {
 
 describe("worker CPU lifecycle", () => {
   it.each([
-    ["sqlite-store.worker.js", "sqlite-store.worker.js"],
     ["sqlite-store.worker.ts", "sqlite-store.worker.js"],
-    ["session-history.worker.js", "session-history.worker.js"],
     ["private-session-worker.js", "other"],
   ])(
     "attributes %s and removes direct and owned Worker samples at native exit",
@@ -259,14 +257,28 @@ describe("worker CPU lifecycle", () => {
     }
   });
 
-  it("retains native ownership through stalled reads and removes it only at exit", async () => {
+  it.each(["stall", "recovery"])("owns native counter reads through %s", async (mode) => {
     const initial = getTrackedWorkerCpuSources();
     const worker = await createWorker();
-    const read = createDeferredCore<NodeJS.CpuUsage>();
-    const cpuUsage = vi.spyOn(worker, "cpuUsage").mockReturnValue(read.promise);
+    const cpuUsage = vi.spyOn(worker, "cpuUsage");
     const tracked = getTrackedWorkerCpuSources();
-    expect(tracked.workers).toHaveLength(initial.workers.length + 1);
     const source = tracked.workers.at(-1)!;
+    if (mode === "recovery") {
+      cpuUsage
+        .mockRejectedValueOnce(new Error("not running"))
+        .mockImplementationOnce(() => {
+          throw new Error("unsupported");
+        })
+        .mockResolvedValue({ user: 100, system: 10 });
+      await expect(source.cpuUsage()).resolves.toBeUndefined();
+      await expect(source.cpuUsage()).resolves.toBeUndefined();
+      await expect(source.cpuUsage()).resolves.toEqual({ user: 100, system: 10 });
+      expect(cpuUsage).toHaveBeenCalledTimes(3);
+      return;
+    }
+    const read = createDeferredCore<NodeJS.CpuUsage>();
+    cpuUsage.mockReturnValue(read.promise);
+    expect(tracked.workers).toHaveLength(initial.workers.length + 1);
     const pending = source.cpuUsage();
     await expect(source.cpuUsage()).resolves.toBeUndefined();
     await expect(getTrackedWorkerCpuSources().workers.at(-1)!.cpuUsage()).resolves.toBeUndefined();
@@ -277,21 +289,5 @@ describe("worker CPU lifecycle", () => {
     read.resolve({ user: 100, system: 10 });
     await pending;
     expect(getTrackedWorkerCpuSources().workers).toEqual(initial.workers);
-  });
-
-  it("recovers after rejected or synchronously unavailable native counters", async () => {
-    const worker = await createWorker();
-    const cpuUsage = vi
-      .spyOn(worker, "cpuUsage")
-      .mockRejectedValueOnce(new Error("not running"))
-      .mockImplementationOnce(() => {
-        throw new Error("unsupported");
-      })
-      .mockResolvedValue({ user: 100, system: 10 });
-    const source = getTrackedWorkerCpuSources().workers.at(-1)!;
-    await expect(source.cpuUsage()).resolves.toBeUndefined();
-    await expect(source.cpuUsage()).resolves.toBeUndefined();
-    await expect(source.cpuUsage()).resolves.toEqual({ user: 100, system: 10 });
-    expect(cpuUsage).toHaveBeenCalledTimes(3);
   });
 });

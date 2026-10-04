@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildCodexOpenClawPromptContext,
-  buildCodexWatchedSessionsContext,
+  prepareCodexWatchedSessionsContext,
   readMirroredSessionHistoryMessages,
   renderCodexSkillsInstructions,
 } from "./attempt-context.js";
@@ -37,9 +37,6 @@ export async function prepareCodexAttemptContext(
   const {
     connection,
     runtimeParams,
-    activeSessionId,
-    activeSessionFile,
-    buildActiveRunAttemptParams,
     effectiveContextWindowInfo,
     effectiveContextTokenBudget,
     effectiveRuntimeProviderId,
@@ -63,8 +60,8 @@ export async function prepareCodexAttemptContext(
   const { toolBridge } = attemptTools;
   const activeTranscriptTarget = {
     agentId: sessionAgentId,
-    sessionFile: activeSessionFile,
-    sessionId: activeSessionId,
+    sessionFile: runtimeParams.sessionFile,
+    sessionId: runtimeParams.sessionId,
     sessionKey: contextSessionKey,
     sessionTarget: params.sessionTarget,
   };
@@ -77,8 +74,10 @@ export async function prepareCodexAttemptContext(
       ...(transcriptReadFence ? { admission: transcriptReadFence } : {}),
     });
     connection.runAbortController.signal.throwIfAborted();
-    connection.assertCurrent();
-    return messages;
+    return await connection.withCurrent(() => {
+      connection.assertCurrent();
+      return messages;
+    });
   };
   const historyState = {
     messages:
@@ -124,12 +123,16 @@ export async function prepareCodexAttemptContext(
       agentAccountId: params.agentAccountId,
     }),
     channelContext: params.channelContext,
+    // Prompt hooks (Active Memory recall) need the turn's host-resolved memory audience,
+    // as dynamic tools already receive it; the shared hook builder adds its currency guard.
+    ...(params.memoryAudience ? { memoryAudience: params.memoryAudience } : {}),
+    sandboxed: sandbox?.enabled === true,
     ...hookContextWindowFields,
   };
   const hookRunner = getAgentHarnessHookRunner();
   const buildActiveContextEngineRuntimeContext = () =>
     buildHarnessContextEngineRuntimeContext({
-      attempt: buildActiveRunAttemptParams(),
+      attempt: { ...runtimeParams },
       workspaceDir: effectiveWorkspace,
       cwd: effectiveCwd,
       agentDir,
@@ -141,9 +144,9 @@ export async function prepareCodexAttemptContext(
     await bootstrapHarnessContextEngine({
       hadSessionFile: hadSessionTranscriptState,
       contextEngine: activeContextEngine,
-      sessionId: activeSessionId,
+      sessionId: runtimeParams.sessionId,
       sessionKey: contextSessionKey,
-      sessionFile: activeSessionFile,
+      sessionFile: runtimeParams.sessionFile,
       sessionTarget: params.sessionTarget,
       runtimeContext: buildActiveContextEngineRuntimeContext(),
       transcriptReadFence: params.userTurnTranscriptRecorder?.getAdmissionReceipt(),
@@ -180,18 +183,31 @@ export async function prepareCodexAttemptContext(
   const skillsInstructions = renderCodexSkillsInstructions({
     attempt: runtimeParams,
     skillsPrompt: params.skillsSnapshot?.prompt,
+    dynamicTools: toolBridge.availableSpecs,
   });
+  // This section uses the existing native thread carrier only when there is no
+  // managed parent-local inference route; it is separate from immutable policy.
+  const refreshableInstructions =
+    joinPresentSections(
+      skillsInstructions,
+      workspaceBootstrapContext.sharedPersonaInstructions,
+      workspaceBootstrapContext.memoryInstructions,
+    ) || undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
     }),
     agentWorkspaceDeveloperInstructions,
   );
-  const watchedSessionsContext = buildCodexWatchedSessionsContext({
+  const watchedSessionsContext = await prepareCodexWatchedSessionsContext({
     attempt: runtimeParams,
     dynamicTools: toolBridge.availableSpecs,
     sessionKey: contextSessionKey,
     sandboxed: sandbox?.enabled === true,
+    assertCurrent: () => {
+      connection.runAbortController.signal.throwIfAborted();
+      connection.assertCurrent();
+    },
   });
   const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
     buildCodexOpenClawPromptContext({
@@ -236,6 +252,7 @@ export async function prepareCodexAttemptContext(
     baseDeveloperInstructions,
     buildOpenClawPromptContext,
     skillsInstructions,
+    refreshableInstructions,
     promptState,
     codexContextProjectionMaxChars,
     codexContinuityProjectionMaxChars,

@@ -1,5 +1,6 @@
 // Pairing approval keeps host policy live until the worker commits its authoritative rows.
 import type { DeviceBootstrapProfile } from "../shared/device-bootstrap-profile.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import type {
   ApproveDevicePairingResult,
   DeviceBootstrapApprovalOptions,
@@ -7,8 +8,8 @@ import type {
   DevicePairingForbiddenResult,
 } from "./device-pairing-core.types.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
+import { publishDevicePairingResolution } from "./device-pairing-resolution.js";
 import { resolvePairingRequestExpiry } from "./device-pairing-state.kernel.js";
-import type { DevicePairingAdmissionFacts } from "./device-pairing-worker-contract.js";
 import {
   DevicePairingAuthorityRefusedError,
   executeDevicePairingMutation,
@@ -81,23 +82,25 @@ export async function approveDevicePairing(
   const { isApprovalCurrent: _isApprovalCurrent, ...wireOptions } = options ?? {};
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
-    try {
-      return await executeDevicePairingMutation(
-        {
-          type: "devicePairing.approve",
-          input: { requestId, options: wireOptions, nowMs: Date.now() },
-        },
-        {
-          baseDir,
-          admit: admission.admit,
-        },
+    const result = await executeDevicePairingMutation(
+      {
+        type: "devicePairing.approve",
+        input: { requestId, options: wireOptions, nowMs: Date.now() },
+      },
+      {
+        baseDir,
+        onAuthorityRefused: () => admission.refusedResult,
+        admit: admission.admit,
+      },
+    );
+    if (result?.status === "approved") {
+      publishDevicePairingResolution(
+        { requestId, deviceId: result.device.deviceId },
+        "approved",
+        baseDir,
       );
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return admission.refusedResult;
-      }
-      throw error;
     }
+    return result;
   });
 }
 
@@ -122,29 +125,30 @@ export async function approveBootstrapDevicePairing(
   const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   return await withDevicePairingLock(async () => {
     const admission = approvalAdmission(options);
-    try {
-      const { result } = await executeDevicePairingMutation(
-        {
-          type: "devicePairing.approveBootstrap",
-          input: {
-            requestId,
-            bootstrapProfile,
-            accessMetadata: options?.accessMetadata,
-            nowMs: Date.now(),
-          },
+    const { result } = await executeDevicePairingMutation(
+      {
+        type: "devicePairing.approveBootstrap",
+        input: {
+          requestId,
+          bootstrapProfile,
+          accessMetadata: options?.accessMetadata,
+          nowMs: Date.now(),
         },
-        {
-          baseDir,
-          onTokensReplaced: options?.onTokensReplaced,
-          admit: admission.admit,
-        },
+      },
+      {
+        baseDir,
+        onTokensReplaced: options?.onTokensReplaced,
+        onAuthorityRefused: () => ({ result: admission.refusedResult, replacedRoles: [] }),
+        admit: admission.admit,
+      },
+    );
+    if (result?.status === "approved") {
+      publishDevicePairingResolution(
+        { requestId, deviceId: result.device.deviceId },
+        "approved",
+        baseDir,
       );
-      return result;
-    } catch (error) {
-      if (error instanceof DevicePairingAuthorityRefusedError) {
-        return admission.refusedResult;
-      }
-      throw error;
     }
+    return result;
   });
 }

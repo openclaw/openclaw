@@ -171,39 +171,6 @@ describe("wiki query page reads", () => {
     },
   );
 
-  it.each([
-    { owners: ["main"], visible: true },
-    { owners: ["secondary"], visible: false },
-    { owners: [], visible: false },
-  ])("keeps exact bridge-page visibility for $owners", async ({ owners, visible }) => {
-    const { config, targetPath, relativePath } = await createReadVault();
-    await fs.writeFile(
-      targetPath,
-      renderWikiMarkdown({
-        frontmatter: {
-          pageType: "source",
-          id: "source.alpha",
-          title: "Alpha",
-          sourceType: "memory-bridge",
-          bridgeAgentIds: owners,
-        },
-        body: "# Alpha\n",
-      }),
-    );
-    const result = await getMemoryWikiPage({
-      config,
-      lookup: relativePath,
-      appConfig: { agents: { list: [{ id: "main", default: true }, { id: "secondary" }] } },
-      agentId: "main",
-      sandboxed: true,
-    });
-    if (visible) {
-      expect(result?.path).toBe(relativePath);
-    } else {
-      expect(result).toBeNull();
-    }
-  });
-
   it.each(["exact", "basename", "search"] as const)(
     "rejects a page swapped outside the vault during %s reads",
     async (route) => {

@@ -1,13 +1,12 @@
 // Skill tool dispatch tests cover policy-filtered tool surfaces.
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { createOpenClawTools } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSkillDispatchTools, type SkillToolDispatchDependencies } from "./tool-dispatch.js";
 
 function makeTool(name: string) {
@@ -29,6 +28,18 @@ const createOpenClawToolsMock = vi.fn<SkillToolDispatchDependencies["createOpenC
 const dependencies: SkillToolDispatchDependencies = {
   createOpenClawTools: createOpenClawToolsMock,
 };
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-skill-delegated-policy-");
+
+const dispatchDefaults = {
+  message: { surface: "telegram", senderId: "user-1" },
+  cfg: {},
+  agentId: "main",
+  sessionKey: "agent:main:telegram:direct:user-1",
+  workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+  provider: "openai",
+  model: "gpt-5.5",
+  senderIsOwner: true,
+} satisfies Parameters<typeof resolveSkillDispatchTools>[0];
 
 describe("resolveSkillDispatchTools", () => {
   it.each([
@@ -71,6 +82,7 @@ describe("resolveSkillDispatchTools", () => {
   ])("applies $agentId sandbox policy to global skill dispatch", ({ agentId, expectedTools }) => {
     const tools = resolveSkillDispatchTools(
       {
+        ...dispatchDefaults,
         message: { surface: "webchat" },
         cfg: {
           session: { scope: "global" },
@@ -86,10 +98,7 @@ describe("resolveSkillDispatchTools", () => {
         },
         agentId,
         sessionKey: "global",
-        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-        provider: "openai",
         model: "gpt-5.6-luna",
-        senderIsOwner: true,
       },
       dependencies,
     );
@@ -100,6 +109,7 @@ describe("resolveSkillDispatchTools", () => {
   it("passes final filtered tool surface to cron jobs", () => {
     const tools = resolveSkillDispatchTools(
       {
+        ...dispatchDefaults,
         message: {
           surface: "telegram",
           senderId: "user-1",
@@ -107,13 +117,8 @@ describe("resolveSkillDispatchTools", () => {
         },
         cfg: {
           tools: { allow: ["read", "cron"] },
-        } as OpenClawConfig,
-        agentId: "main",
+        },
         sessionKey: "agent:main:telegram:group:restricted-room",
-        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-        provider: "openai",
-        model: "gpt-5.5",
-        senderIsOwner: true,
       },
       dependencies,
     );
@@ -126,19 +131,7 @@ describe("resolveSkillDispatchTools", () => {
   });
 
   it("passes unrestricted skill-dispatch tool surfaces to cron jobs", () => {
-    const tools = resolveSkillDispatchTools(
-      {
-        message: { surface: "telegram", senderId: "user-1" },
-        cfg: {} as OpenClawConfig,
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:user-1",
-        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-        provider: "openai",
-        model: "gpt-5.5",
-        senderIsOwner: true,
-      },
-      dependencies,
-    );
+    const tools = resolveSkillDispatchTools(dispatchDefaults, dependencies);
 
     const args = createOpenClawToolsMock.mock.calls.at(-1)?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron", "exec", "conversations_send"]);
@@ -153,14 +146,7 @@ describe("resolveSkillDispatchTools", () => {
   it("carries command skill file identity into tool diagnostics", () => {
     resolveSkillDispatchTools(
       {
-        message: { surface: "telegram", senderId: "user-1" },
-        cfg: {} as OpenClawConfig,
-        agentId: "main",
-        sessionKey: "agent:main:telegram:direct:user-1",
-        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-        provider: "openai",
-        model: "gpt-5.5",
-        senderIsOwner: true,
+        ...dispatchDefaults,
         skillCommand: {
           name: "daily-brief",
           skillFile: "/workspace/skills/daily-brief/SKILL.md",
@@ -179,7 +165,7 @@ describe("resolveSkillDispatchTools", () => {
   });
 
   it("uses persisted delegated policy instead of a sender wildcard", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-skill-delegated-policy-"));
+    const tempDir = sessionDirs.make();
     const storePath = path.join(tempDir, "sessions.json");
     const sessionKey = "agent:main:subagent:skill-child";
     await replaceSessionEntry({ storePath, sessionKey }, {
@@ -192,44 +178,32 @@ describe("resolveSkillDispatchTools", () => {
       inheritedToolPolicyVersion: 1,
     } as SessionEntry);
 
-    try {
-      const tools = resolveSkillDispatchTools(
-        {
-          message: { surface: "telegram" },
-          cfg: {
-            session: { store: storePath },
-            tools: {
-              toolsBySender: {
-                "*": { deny: ["group:runtime", "group:fs"] },
-                "id:alice": {},
-              },
+    const tools = resolveSkillDispatchTools(
+      {
+        ...dispatchDefaults,
+        message: { surface: "telegram" },
+        cfg: {
+          session: { store: storePath },
+          tools: {
+            toolsBySender: {
+              "*": { deny: ["group:runtime", "group:fs"] },
+              "id:alice": {},
             },
-          } as OpenClawConfig,
-          agentId: "main",
-          sessionKey,
-          workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-          provider: "openai",
-          model: "gpt-5.5",
-          senderIsOwner: true,
+          },
         },
-        dependencies,
-      );
+        sessionKey,
+      },
+      dependencies,
+    );
 
-      expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
-    } finally {
-      fs.rmSync(tempDir, { recursive: true, force: true });
-    }
+    expect(tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(["read", "exec"]));
   });
 
   it("removes owner-only core tools for authorized non-owner dispatch", () => {
     const common = {
+      ...dispatchDefaults,
       message: { surface: "telegram", senderId: "allowed-user" },
-      cfg: {} as OpenClawConfig,
-      agentId: "main",
       sessionKey: "agent:main:telegram:direct:allowed-user",
-      workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
-      provider: "openai",
-      model: "gpt-5.5",
     };
 
     const nonOwnerTools = resolveSkillDispatchTools(

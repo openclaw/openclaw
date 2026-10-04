@@ -410,7 +410,7 @@ test.each(
         elements.get("#install-hint")?.textContent,
         externalService
           ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-          : "Installs the CLI and managed Node runtime in ~/.openclaw.",
+          : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
       );
       if (phase === "unconfigured") {
         assert.deepEqual(

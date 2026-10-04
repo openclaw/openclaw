@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
@@ -87,7 +88,7 @@ function computerActIdempotencyKey(params: {
   if (params.purpose) {
     parts.push(params.purpose);
   }
-  const digest = crypto.createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  const digest = sha256Hex(JSON.stringify(parts));
   // The automatic read shares a tool-call id with input, but must never replay its result.
   if (params.purpose) {
     return `computer.observation:v1:${digest}`;
@@ -193,19 +194,12 @@ export class ComputerToolSession {
     }
   }
 
-  private setComputerState(next: ComputerState): void {
-    this.computerState = next;
-    if (!this.options.contextEpoch) {
-      return;
-    }
-    if (next.kind !== "frame") {
+  setTarget(target: ComputerTarget): void {
+    this.computerState = { kind: "target", target };
+    if (this.options.contextEpoch) {
       delete this.options.contextEpoch.frameToolCallId;
       delete this.options.contextEpoch.frameImageIdentity;
     }
-  }
-
-  setTarget(target: ComputerTarget): void {
-    this.setComputerState({ kind: "target", target });
   }
 
   private prepareScreenshotTarget(target: ComputerTarget): void {
@@ -330,19 +324,15 @@ export class ComputerToolSession {
     ) {
       throw new Error("Computer control is bound to this session's desktop");
     }
-    const explicitScreenIndex = (() => {
-      if (params.input.screenIndex === undefined) {
-        return undefined;
-      }
-      if (
-        typeof params.input.screenIndex !== "number" ||
-        !Number.isInteger(params.input.screenIndex) ||
-        params.input.screenIndex < 0
-      ) {
-        throw new Error("screenIndex must be a non-negative integer");
-      }
-      return params.input.screenIndex;
-    })();
+    const explicitScreenIndex = params.input.screenIndex;
+    if (
+      explicitScreenIndex !== undefined &&
+      (typeof explicitScreenIndex !== "number" ||
+        !Number.isInteger(explicitScreenIndex) ||
+        explicitScreenIndex < 0)
+    ) {
+      throw new Error("screenIndex must be a non-negative integer");
+    }
     const needsFrame = computerActionNeedsFrame(params.action, params.input);
     const priorTarget =
       this.computerState.kind === "unbound" ? undefined : this.computerState.target;
@@ -407,13 +397,21 @@ export class ComputerToolSession {
     const advertisedActions = this.options.availableActions(
       capabilities?.actions ?? this.options.defaultActions,
     );
-    if (!advertisedActions.includes(params.action)) {
+    if (
+      params.action === "take_control" &&
+      !this.options.transport &&
+      !(binding.host.host === "node" && binding.host.environmentId)
+    ) {
+      throw new Error("take_control is only available for an attached or session desktop");
+    }
+    const providerAction = params.action === "take_control" ? "screenshot" : params.action;
+    if (!advertisedActions.includes(providerAction)) {
       throw new Error(
         `${COMPUTER_CONTRACT_MISMATCH}: computer ${targetKey} does not advertise action ${params.action}`,
       );
     }
     validateCapabilityBoundInput({
-      action: params.action,
+      action: providerAction,
       input: params.input,
       targetKey,
       capabilities,
@@ -472,6 +470,30 @@ export class ComputerToolSession {
       targetForHost?.screenIndex ??
       0;
     return { target: { ...binding.host, screenIndex }, frame, capabilities };
+  }
+
+  async takeControl(
+    resolved: ResolvedComputerTarget,
+    toolCallId: string,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.assertOpen();
+    signal?.throwIfAborted();
+    // Human input invalidates both coordinate frames and targeted observation refs.
+    // Clear before dispatch, including uncertain failures, so no old target is reused.
+    this.setTarget(resolved.target);
+    this.observationState = undefined;
+    const binding = this.executionTargets.get(computerHostKey(resolved.target))!;
+    await binding.invoke({
+      command: COMPUTER_ACT_COMMAND,
+      commandParams: { action: "__take_control", executionId: this.options.executionId },
+      idempotencyKey: computerActIdempotencyKey({
+        scope: this.options.idempotencyScope,
+        toolCallId,
+      }),
+      signal,
+    });
+    signal?.throwIfAborted();
   }
 
   async captureScreenshot(
@@ -645,7 +667,6 @@ export class ComputerToolSession {
         this.cleanupBindings.clear();
         const results = await Promise.allSettled(
           targets.map(async (binding) => {
-            const targetKey = computerHostKey(binding.host);
             await binding.invoke({
               command: COMPUTER_ACT_COMMAND,
               commandParams: {
@@ -653,7 +674,7 @@ export class ComputerToolSession {
                 executionId: this.options.executionId,
                 reason,
               },
-              idempotencyKey: `computer.close:${this.options.executionId}:${targetKey}`,
+              idempotencyKey: `computer.close:${this.options.executionId}:${computerHostKey(binding.host)}`,
             });
           }),
         );
@@ -663,13 +684,11 @@ export class ComputerToolSession {
           this.options.transport ||
           binding?.host.host === "gateway" ||
           (binding?.host.host === "node" && binding.host.environmentId !== undefined);
-        if (targets.some(ownsCleanup)) {
-          const failures = results.flatMap((result, index) =>
-            result.status === "rejected" && ownsCleanup(targets[index]) ? [result.reason] : [],
-          );
-          if (failures.length > 0) {
-            throw new AggregateError(failures, "computer: session desktop cleanup failed");
-          }
+        const failures = results.flatMap((result, index) =>
+          result.status === "rejected" && ownsCleanup(targets[index]) ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "computer: session desktop cleanup failed");
         }
       });
     return await this.disposePromise;

@@ -1,8 +1,4 @@
-/**
- * Gateway call helpers for built-in tools.
- *
- * Resolves gateway URL/token overrides, local credentials, and least-privilege operator scopes.
- */
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -12,6 +8,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -25,7 +22,7 @@ import {
   type AgentRuntimeIdentity,
   type AgentRuntimeIdentityTokenParams,
 } from "../../gateway/agent-runtime-identity-token.js";
-import { callGateway } from "../../gateway/call.js";
+import { callGateway, type CallGatewayOptions } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig, trimToUndefined } from "../../gateway/credentials.js";
 import { resolveMessageActionTurnCapability } from "../../gateway/message-action-turn-capability.js";
 import {
@@ -53,7 +50,6 @@ import {
   staleGatewayAgentRuntimeIdentityError,
 } from "./gateway-transport-errors.js";
 
-/** Optional gateway connection overrides accepted by agent tools. */
 export type GatewayCallOptions = {
   gatewayUrl?: string;
   gatewayToken?: string;
@@ -72,7 +68,6 @@ export function readGatewayToolOperatorScopes(): readonly string[] | undefined {
 
 type GatewayOverrideTarget = "local" | "remote";
 
-/** Reads common gateway options from tool parameters while preserving explicit token whitespace. */
 export function readGatewayCallOptions(params: Record<string, unknown>): GatewayCallOptions {
   return {
     gatewayUrl: readToolStringParam(params, "gatewayUrl", { trim: false }),
@@ -81,9 +76,6 @@ export function readGatewayCallOptions(params: Record<string, unknown>): Gateway
   };
 }
 
-/**
- * Canonicalizes websocket URLs for allowlist comparisons without retaining paths or credentials.
- */
 function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: string } {
   const input = raw.trim();
   let url: URL;
@@ -109,7 +101,6 @@ function canonicalizeToolGatewayWsUrl(raw: string): { origin: string; key: strin
   }
 
   const origin = url.origin;
-  // Key: protocol + host only, lowercased. (host includes IPv6 brackets + port when present)
   const key = `${url.protocol}//${normalizeLowercaseStringOrEmpty(url.host)}`;
   return { origin, key };
 }
@@ -127,18 +118,16 @@ function resolveLocalGatewayUrlKeys(cfg: OpenClawConfig): Set<string> {
 }
 
 function resolveConfiguredRemoteGatewayKey(cfg: OpenClawConfig): string | undefined {
-  let remoteKey: string | undefined;
   const remoteUrl = normalizeOptionalString(cfg.gateway?.remote?.url) ?? "";
   if (remoteUrl) {
     try {
-      const remote = canonicalizeToolGatewayWsUrl(remoteUrl);
-      remoteKey = remote.key;
+      return canonicalizeToolGatewayWsUrl(remoteUrl).key;
     } catch {
       // Misconfigured remote URL should not make ordinary tool calls fail; only explicit
       // gatewayUrl overrides need strict validation.
     }
   }
-  return remoteKey;
+  return undefined;
 }
 
 function resolveDefaultGatewayTarget(params: {
@@ -201,9 +190,6 @@ function resolveGatewayOverrideToken(params: {
   }).token;
 }
 
-/**
- * Resolves the gateway URL, token, and timeout for agent tool calls.
- */
 export function resolveGatewayOptions(opts?: GatewayCallOptions) {
   const cfg = getRuntimeConfig();
   const validatedOverride =
@@ -228,10 +214,7 @@ export function resolveGatewayOptions(opts?: GatewayCallOptions) {
         explicitToken,
       })
     : explicitToken;
-  const timeoutMs =
-    typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-      ? Math.max(1, Math.floor(opts.timeoutMs))
-      : 30_000;
+  const timeoutMs = resolveIntegerOption(opts?.timeoutMs, 30_000, { min: 1 });
   const envGatewayUrl = trimToUndefined(process.env.OPENCLAW_GATEWAY_URL);
   const target: GatewayOverrideTarget = localConfig
     ? "local"
@@ -373,8 +356,7 @@ async function resolveApprovalRequesterDeviceIdentityForGatewayTool(params: {
       }
       return identity;
     }
-    const identity = await loadOrCreateDeviceIdentityAsync();
-    return identity;
+    return await loadOrCreateDeviceIdentityAsync();
   } catch (error) {
     if (isNodeApprovalReplay) {
       throw new Error(
@@ -636,9 +618,6 @@ export function shouldUseInProcessGatewayTool(opts: GatewayCallOptions): boolean
   );
 }
 
-/**
- * Calls a gateway method as the agent-tool backend client with least-privilege scopes.
- */
 export async function callGatewayTool<T = Record<string, unknown>>(
   method: string,
   opts: GatewayCallOptions,
@@ -648,6 +627,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     scopes?: OperatorScope[];
     requireAgentRuntimeIdentity?: boolean;
     signal?: AbortSignal;
+    onHelloOk?: CallGatewayOptions["onHelloOk"];
     dispatchAuthority?: { version: 2; kind: "run" | "source-bound"; assertCurrent: () => void };
   },
 ) {
@@ -662,6 +642,7 @@ export async function callGatewayTool<T = Record<string, unknown>>(
   const gateway = resolveGatewayOptions(opts);
   const resolveGatewayContext = getGatewayToolCallerIdentity()?.gatewayContextResolver;
   const callParams = attachNodeInvokeTurnSource(method, params);
+  const nodeInvoke = method === "node.invoke" ? asNullableRecord(callParams) : null;
   const scopes = Array.isArray(extra?.scopes)
     ? extra.scopes
     : resolveLeastPrivilegeOperatorScopesForMethod(method, callParams);
@@ -723,6 +704,12 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     timeoutMs: gateway.timeoutMs,
     signal: extra?.signal,
     expectFinal: extra?.expectFinal,
+    onHelloOk: extra?.onHelloOk,
+    requiredCapabilities:
+      (nodeInvoke?.command === "system.run" || nodeInvoke?.command === "system.run.prepare") &&
+      asNullableRecord(nodeInvoke.params)?.executionContext !== undefined
+        ? [SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY]
+        : undefined,
     assertDispatchCurrent: extra?.dispatchAuthority?.assertCurrent,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: "agent",

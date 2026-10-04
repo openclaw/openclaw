@@ -1,6 +1,3 @@
-/**
- * Resolves command session ids, keys, stores, and persisted thinking state.
- */
 import crypto from "node:crypto";
 import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
@@ -61,7 +58,6 @@ import { clearBootstrapSnapshotOnSessionRollover } from "../bootstrap-cache.js";
 import { clearAllCliSessions } from "../cli-session.js";
 import { transitionMainSessionRecovery } from "../main-session-recovery/main-session-recovery-state.js";
 
-/** Resolved command session identity plus backing store metadata. */
 type SessionResolution = {
   sessionAgentId: string;
   sessionId: string;
@@ -79,6 +75,14 @@ type SessionKeyResolution = {
   sessionKey?: string;
   sessionEntry?: InternalSessionEntry;
   storePath: string;
+};
+
+type SessionRequest = {
+  cfg: OpenClawConfig;
+  to?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
 };
 
 export function clearRotatedSessionMetadata(entry: InternalSessionEntry): InternalSessionEntry {
@@ -169,7 +173,6 @@ function loadCommandSessionEntries(params: {
   });
 }
 
-/** Builds the synthetic session key used for explicit session-id runs. */
 export function buildExplicitSessionIdSessionKey(params: {
   sessionId: string;
   agentId?: string;
@@ -387,14 +390,9 @@ export function resolveStoredSessionKeyForSessionId(opts: {
   };
 }
 
-function resolveSessionKeyForRequestInternal(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  createMissingSessionId: boolean;
-}): SessionKeyResolution {
+function resolveSessionKeyForRequestInternal(
+  opts: SessionRequest & { createMissingSessionId: boolean },
+): SessionKeyResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
@@ -571,38 +569,18 @@ export function resolveExistingSessionKeyForRequest(opts: {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: false });
 }
 
-/** Resolves the session key/store targeted by one command request. */
-export function resolveSessionKeyForRequestCore(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionKeyResolution {
+export function resolveSessionKeyForRequestCore(opts: SessionRequest): SessionKeyResolution {
   return resolveSessionKeyForRequestInternal({ ...opts, createMissingSessionId: true });
 }
 
-/** Resolves or creates the session used by one agent command request. */
-export function resolveSession(opts: {
-  cfg: OpenClawConfig;
-  to?: string;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-}): SessionResolution {
+export function resolveSession(opts: SessionRequest): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const {
     agentId: resolvedAgentId,
     sessionKey,
     sessionEntry,
     storePath,
-  } = resolveSessionKeyForRequestCore({
-    cfg: opts.cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
-    sessionKey: opts.sessionKey,
-    agentId: opts.agentId,
-  });
+  } = resolveSessionKeyForRequestCore(opts);
   const now = Date.now();
 
   const sessionAgentId =

@@ -209,7 +209,8 @@ flow:
                 expr: |-
                   (async () => {
                     const history = await env.gateway.call('chat.history', { sessionKey, limit: 100, maxChars: 131072 }, { timeoutMs: liveTurnTimeoutMs(env, 15000) });
-                    const messages = history.messages ?? [];
+                    const rawMessages = history.messages ?? [];
+                    const messages = projectQaToolMessages(rawMessages);
                     const textOf = (value) => typeof value === 'string'
                       ? value
                       : Array.isArray(value)

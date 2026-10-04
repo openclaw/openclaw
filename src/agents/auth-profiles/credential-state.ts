@@ -4,7 +4,7 @@
  * auth selection, refresh, health, and doctor flows.
  */
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
-import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
+import { parseSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
 import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
@@ -95,7 +95,7 @@ export function evaluateStoredCredentialEligibility(params: {
   // unresolved refs are classified separately for callers to surface useful copy.
   if (credential.type === "api_key") {
     const hasKey = normalizeSecretInputString(credential.key) !== undefined;
-    const hasKeyRef = coerceSecretRef(credential.keyRef) !== null;
+    const hasKeyRef = parseSecretRef(credential.keyRef) !== null;
     if (isMalformedApiKeyInput(credential.key)) {
       return { eligible: false, reasonCode: "malformed_api_key" };
     }
@@ -107,7 +107,7 @@ export function evaluateStoredCredentialEligibility(params: {
 
   if (credential.type === "token") {
     const hasToken = normalizeSecretInputString(credential.token) !== undefined;
-    const hasTokenRef = coerceSecretRef(credential.tokenRef) !== null;
+    const hasTokenRef = parseSecretRef(credential.tokenRef) !== null;
     if (!hasToken && !hasTokenRef) {
       return { eligible: false, reasonCode: "missing_credential" };
     }

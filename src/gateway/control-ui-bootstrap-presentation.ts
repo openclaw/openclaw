@@ -16,5 +16,6 @@ export function resolveControlUiBootstrapPresentation(config: OpenClawConfig | u
     environment: config?.gateway?.controlUi?.environment,
     communityInvite: config?.gateway?.controlUi?.communityInvite !== false,
     newSessionModelDefaults: config?.gateway?.controlUi?.newSessionModelDefaults ?? "last-used",
+    uploadsEnabled: config?.gateway?.uploads?.enabled !== false,
   } satisfies Partial<ControlUiBootstrapConfig>;
 }

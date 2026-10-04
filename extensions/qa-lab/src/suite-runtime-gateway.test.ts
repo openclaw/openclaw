@@ -4,6 +4,7 @@ import timersPromises from "node:timers/promises";
 import { promisify } from "node:util";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { QaSuiteInfraError } from "./errors.js";
 import {
   applyConfig,
   fetchJson,
@@ -11,6 +12,7 @@ import {
   restartGatewayWithConfigPatch,
   waitForConfigRestartSettle,
   waitForGatewayHealthy,
+  waitForTransportReady,
 } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -57,16 +59,38 @@ function createConfigMutationEnv(
 }
 
 describe("qa suite gateway helpers", () => {
-  it.each([
-    {
-      name: "restarts through the authenticated gateway config patch",
-      alreadyApplied: false,
-    },
-    {
-      name: "forces a restart when the authenticated gateway config patch was already applied",
-      alreadyApplied: true,
-    },
-  ])("$name", async ({ alreadyApplied }) => {
+  it("classifies transport readiness failures without replacing typed infrastructure errors", async () => {
+    const readinessError = new Error(
+      'telegram account "sut" did not become ready; last probe error: proxy returned 502',
+    );
+    const failedEnv = createRestartSettleEnv(async () => {
+      throw readinessError;
+    });
+
+    const failure = await waitForTransportReady(failedEnv, 1_234).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(QaSuiteInfraError);
+    expect(failure).toMatchObject({
+      name: "QaSuiteInfraError",
+      code: "transport_ready_timeout",
+      cause: readinessError,
+    });
+    if (!(failure instanceof QaSuiteInfraError)) {
+      throw failure;
+    }
+    expect(failure.message).toContain(readinessError.message);
+
+    const typedError = new QaSuiteInfraError("gateway_ready_timeout", "gateway stayed down");
+    await expect(
+      waitForTransportReady(
+        createRestartSettleEnv(async () => {
+          throw typedError;
+        }),
+      ),
+    ).rejects.toBe(typedError);
+  });
+
+  it("forces an authenticated restart even when the config patch was already applied", async () => {
     vi.useFakeTimers();
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({
@@ -81,7 +105,7 @@ describe("qa suite gateway helpers", () => {
           hash: "hash-1",
           config: {
             gateway: { auth: { token: "keep-me" } },
-            ...(alreadyApplied ? patch : {}),
+            ...patch,
           },
         };
       }
@@ -414,7 +438,7 @@ describe("qa suite gateway helpers", () => {
         profile: "coding",
       },
       agents: {
-        list: [{ id: "qa", model: { primary: "openai/gpt-5.6-luna" } }],
+        entries: { qa: { model: { primary: "openai/gpt-5.6-luna" } } },
       },
       meta: {
         updatedAt: "2026-04-25T10:00:00.000Z",
@@ -657,33 +681,6 @@ describe("qa suite gateway helpers", () => {
       }),
       { timeoutMs: 180_000 },
     );
-  });
-
-  it("waits for transport readiness after gateway restart health", async () => {
-    vi.useFakeTimers();
-    const release = vi.fn(async () => {});
-    fetchWithSsrFGuardMock.mockResolvedValue({
-      response: { ok: true },
-      release,
-    });
-    const waitReady = vi.fn(async () => {});
-
-    const settling = waitForConfigRestartSettle(createRestartSettleEnv(waitReady), 0, 5_000);
-
-    await vi.advanceTimersByTimeAsync(750);
-    await settling;
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:43123/readyz",
-        auditContext: "qa-lab-suite-wait-for-gateway-healthy",
-      }),
-    );
-    expect(waitReady).toHaveBeenCalledWith({
-      gateway: { baseUrl: "http://127.0.0.1:43123" },
-      timeoutMs: expect.any(Number),
-    });
-    expect(release).toHaveBeenCalled();
   });
 
   it("keeps polling gateway health instead of sleeping blindly through restart settle", async () => {

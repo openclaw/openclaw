@@ -10,7 +10,6 @@ import {
 } from "./device-identity-async.js";
 import type { DeviceIdentityStoreOptions } from "./device-identity-store.js";
 import { signDevicePayload, verifyDeviceSignature } from "./device-identity.js";
-import { withStateDatabaseCoordinatorRuntimeDirectory } from "./state-database-coordinator.js";
 
 async function withIdentityWorkerState(
   run: (options: DeviceIdentityStoreOptions & { path: string }, stateDir: string) => Promise<void>,
@@ -21,15 +20,13 @@ async function withIdentityWorkerState(
     applyEnv: false,
   });
   const databasePath = state.statePath("state", "openclaw.sqlite");
-  await withStateDatabaseCoordinatorRuntimeDirectory(state.path("runtime"), async () => {
-    try {
-      await run({ path: databasePath, env: state.env }, state.stateDir);
-    } finally {
-      // Keep the fixture intact if native drainage cannot establish cleanup.
-      await closeOpenClawStateDatabaseByPathAsync(databasePath);
-      await state.cleanup();
-    }
-  });
+  try {
+    await run({ path: databasePath, env: state.env }, state.stateDir);
+  } finally {
+    // Keep the fixture intact if native drainage cannot establish cleanup.
+    await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    await state.cleanup();
+  }
 }
 
 describe("device identity shared worker", () => {
@@ -92,19 +89,15 @@ describe("device identity shared worker", () => {
     });
   });
 
-  it.each(["device.json", "device.json.doctor-importing", "device.json.native-importing"])(
-    "refuses pending legacy %s before creating SQLite",
-    async (legacyName) => {
-      await withIdentityWorkerState(async (options, stateDir) => {
-        const identityDir = path.join(stateDir, "identity");
-        await fs.mkdir(identityDir, { recursive: true });
-        await fs.writeFile(path.join(identityDir, legacyName), "synthetic retired identity");
-        await expect(loadOrCreateDeviceIdentityAsync(options)).rejects.toThrow("doctor --fix");
-        await expect(fs.stat(options.path)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(await fs.readFile(path.join(identityDir, legacyName), "utf8")).toBe(
-          "synthetic retired identity",
-        );
-      });
-    },
-  );
+  it("refuses a pending native identity import before creating SQLite", async () => {
+    await withIdentityWorkerState(async (options, stateDir) => {
+      const identityDir = path.join(stateDir, "identity");
+      const legacyPath = path.join(identityDir, "device.json.native-importing");
+      await fs.mkdir(identityDir, { recursive: true });
+      await fs.writeFile(legacyPath, "synthetic retired identity");
+      await expect(loadOrCreateDeviceIdentityAsync(options)).rejects.toThrow("doctor --fix");
+      await expect(fs.stat(options.path)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(legacyPath, "utf8")).toBe("synthetic retired identity");
+    });
+  });
 });

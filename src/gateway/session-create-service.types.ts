@@ -123,6 +123,8 @@ export type CreateGatewaySessionParams = {
   pendingWorktree?: InternalSessionEntry["pendingWorktree"];
   incognito?: boolean;
   visibility?: SessionVisibility;
+  /** Trusted creation default; existing keyed sessions retain their current visibility. */
+  defaultVisibility?: SessionVisibility;
   /** Trusted catalog-owned model/runtime pair, persisted and locked together. */
   catalogTarget?: TrustedCatalogSessionTarget;
   parentSessionKey?: string;
@@ -193,6 +195,8 @@ export type CreateGatewaySessionParams = {
     actor?: SessionCreatedActor;
     /** Host-verified human requester for matching spawn-owner inheritance. */
     requesterProfileId?: string;
+    /** Trusted owner status of the spawning invocation, never synthetic child launch authority. */
+    requesterSenderIsOwner?: boolean;
     sandbox?: "required";
     skillLibrarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
     /** Trusted config-resolved spawn model provenance for the `model` field. */

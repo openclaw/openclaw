@@ -6,32 +6,11 @@ export const MAX_OTEL_CONTENT_ARRAY_ITEMS = 200;
 const MAX_OTEL_ERROR_MESSAGE_CHARS = 4 * 1024;
 const PRELOADED_OTEL_SDK_ENV = "OPENCLAW_OTEL_PRELOADED";
 
-export type OtelContentCapturePolicy = {
-  inputMessages: boolean;
-  outputMessages: boolean;
-  toolInputs: boolean;
-  toolOutputs: boolean;
-  systemPrompt: boolean;
-  toolDefinitions: boolean;
-  logBodies: boolean;
-};
-
-const NO_CONTENT_CAPTURE: OtelContentCapturePolicy = {
-  inputMessages: false,
-  outputMessages: false,
-  toolInputs: false,
-  toolOutputs: false,
-  systemPrompt: false,
-  toolDefinitions: false,
-  logBodies: false,
-};
-
-function clampOtelLogText(value: string, maxChars: number): string {
-  return value.length > maxChars ? `${truncateUtf16Safe(value, maxChars)}...(truncated)` : value;
-}
-
 export function normalizeOtelLogString(value: string, maxChars: number): string {
-  return clampOtelLogText(redactSensitiveText(value), maxChars);
+  const redacted = redactSensitiveText(value);
+  return redacted.length > maxChars
+    ? `${truncateUtf16Safe(redacted, maxChars)}...(truncated)`
+    : redacted;
 }
 
 export function normalizeOtelErrorMessage(value: string | undefined): string | undefined {
@@ -40,20 +19,6 @@ export function normalizeOtelErrorMessage(value: string | undefined): string | u
   }
   const normalized = normalizeOtelLogString(value.trim(), MAX_OTEL_ERROR_MESSAGE_CHARS);
   return normalized || undefined;
-}
-
-export function resolveContentCapturePolicy(value: unknown): OtelContentCapturePolicy {
-  return value === true
-    ? {
-        inputMessages: true,
-        outputMessages: true,
-        toolInputs: true,
-        toolOutputs: true,
-        systemPrompt: false,
-        toolDefinitions: true,
-        logBodies: true,
-      }
-    : NO_CONTENT_CAPTURE;
 }
 
 export function hasPreloadedOtelSdk(): boolean {
@@ -65,12 +30,9 @@ export function normalizeOtelContentValue(value: unknown): string | undefined {
     return normalizeOtelLogString(value, MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
   }
   if (Array.isArray(value)) {
-    const items: string[] = [];
-    for (const item of value.slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)) {
-      if (typeof item === "string") {
-        items.push(item);
-      }
-    }
+    const items = value
+      .slice(0, MAX_OTEL_CONTENT_ARRAY_ITEMS)
+      .filter((item): item is string => typeof item === "string");
     if (items.length > 0) {
       return normalizeOtelLogString(items.join("\n"), MAX_OTEL_CONTENT_ATTRIBUTE_CHARS);
     }

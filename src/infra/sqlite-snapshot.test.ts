@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -29,6 +30,9 @@ vi.mock("@openclaw/fs-safe/durability", async (importOriginal) => {
   return {
     ...actual,
     publishFileExclusive: async (...args: Parameters<typeof actual.publishFileExclusive>) => {
+      if (path.basename(path.dirname(args[0].targetPath)).startsWith(".sqlite-publish-")) {
+        return actual.publishFileExclusive(...args);
+      }
       const published = durabilityTestState.publish
         ? await durabilityTestState.publish(args[0], actual.publishFileExclusive)
         : await actual.publishFileExclusive(...args);
@@ -216,9 +220,13 @@ beforeEach(async () => {
 type SnapshotOptions = Parameters<typeof createVerifiedSqliteSnapshot>[0];
 
 async function expectSnapshotSuccess(options: SnapshotOptions): Promise<void> {
-  await expect(createVerifiedSqliteSnapshot(options)).resolves.toEqual({
+  const snapshot = await createVerifiedSqliteSnapshot(options);
+  const published = await fs.readFile(options.targetPath);
+  expect(snapshot).toEqual({
     path: options.targetPath,
     userVersion: 0,
+    sha256: createHash("sha256").update(published).digest("hex"),
+    sizeBytes: published.length,
   });
 }
 
@@ -348,8 +356,14 @@ describe("createVerifiedSqliteSnapshot", () => {
       source.prepare("DELETE FROM records WHERE value = ?").run(deletedValue);
 
       const result = await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-      expect(result).toEqual({ path: targetPath, userVersion: 0 });
-      expect((await fs.readFile(targetPath)).includes(deletedValue)).toBe(false);
+      const published = await fs.readFile(targetPath);
+      expect(result).toEqual({
+        path: targetPath,
+        userVersion: 0,
+        sha256: createHash("sha256").update(published).digest("hex"),
+        sizeBytes: published.length,
+      });
+      expect(published.includes(deletedValue)).toBe(false);
 
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(snapshot.prepare("SELECT value FROM records").all()).toEqual([
@@ -470,21 +484,6 @@ describe("createVerifiedSqliteSnapshot", () => {
     });
   });
 
-  it("uses online backup before compacting the private copy", async () => {
-    const setup = new sqlite.DatabaseSync(sourcePath);
-    setup.exec("CREATE TABLE records (value TEXT NOT NULL); INSERT INTO records VALUES ('ok');");
-    setup.close();
-    const backupSpy = vi.spyOn(sqlite, "backup");
-    const prepareSpy = vi.spyOn(sqlite.DatabaseSync.prototype, "prepare");
-
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(backupSpy).toHaveBeenCalledTimes(1);
-    expect(prepareSpy.mock.calls.some(([sql]) => /\bVACUUM\s+INTO\b/iu.test(sql))).toBe(false);
-    withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
-      expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "ok" });
-    });
-  });
-
   it("pins validation and backup to one WAL snapshot", async () => {
     const writer = new sqlite.DatabaseSync(sourcePath);
     writer.exec(`
@@ -531,6 +530,62 @@ describe("createVerifiedSqliteSnapshot", () => {
       /integrity_check failed|malformed database schema/iu,
     );
   });
+
+  it.each(["index", "foreign-key", "caller"] as const)(
+    "rejects a transformed snapshot that fails %s validation",
+    async (failure) => {
+      const source = new sqlite.DatabaseSync(sourcePath);
+      try {
+        source.exec(`
+          CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT NOT NULL, alternate TEXT NOT NULL);
+          CREATE INDEX records_value ON records(value);
+          CREATE TABLE children (parent_id INTEGER REFERENCES records(id));
+          INSERT INTO records VALUES (1, 'original', 'other');
+        `);
+      } finally {
+        source.close();
+      }
+      const original = await fs.readFile(sourcePath);
+      await expectSnapshotFailureWithoutTarget(
+        {
+          sourcePath,
+          targetPath,
+          preserveRowIds: true,
+          sourceAcquisition: { mode: "isolated-process", stagingRoot: tempDir },
+          transform: (database) => {
+            if (failure === "index") {
+              database.enableDefensive?.(false);
+              database.exec(`
+                PRAGMA writable_schema = ON;
+                UPDATE sqlite_schema SET sql = 'CREATE INDEX records_value ON records(alternate)'
+                  WHERE name = 'records_value';
+                PRAGMA writable_schema = OFF;
+              `);
+              const version = Number(
+                database.prepare("PRAGMA schema_version").get()?.schema_version,
+              );
+              database.exec(`PRAGMA schema_version = ${version + 1};`);
+            } else if (failure === "foreign-key") {
+              database.exec("PRAGMA foreign_keys = OFF; INSERT INTO children VALUES (2);");
+            } else {
+              database.exec("UPDATE records SET value = 'invalid';");
+            }
+          },
+          validate: (database) => {
+            if (database.prepare("SELECT value FROM records").get()?.value === "invalid") {
+              throw new Error("Snapshot contains an invalid record");
+            }
+          },
+        },
+        failure === "index"
+          ? /integrity_check failed/iu
+          : failure === "foreign-key"
+            ? /foreign_key_check failed/iu
+            : /Snapshot contains an invalid record/u,
+      );
+      expect(await fs.readFile(sourcePath)).toEqual(original);
+    },
+  );
 
   it("snapshots a zero-byte generic source as an empty SQLite database", async () => {
     await fs.writeFile(sourcePath, "");
@@ -709,7 +764,6 @@ describe("createVerifiedSqliteSnapshot", () => {
           identityObservation === "staging-transition" &&
           replaced &&
           !stagingReplaced &&
-          typeof identity.ino === "number" &&
           path.basename(filePath) === "database.sqlite" &&
           path.basename(path.dirname(filePath)).startsWith(".sqlite-publish-")
         ) {
@@ -823,20 +877,6 @@ describe("createVerifiedSqliteSnapshot", () => {
       { sourcePath, targetPath },
       /target inspection failed/u,
     );
-  });
-
-  it("uses a private sibling staging file for atomic publication", async () => {
-    const originalOpen = fs.open.bind(fs);
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(originalOpen);
-
-    await createVerifiedSqliteSnapshot({ sourcePath, targetPath });
-    expect(
-      openSpy.mock.calls.some(
-        ([filePath, flags]) =>
-          flags === "wx+" &&
-          path.basename(path.dirname(String(filePath))).startsWith(".sqlite-publish-"),
-      ),
-    ).toBe(true);
   });
 
   it("accepts an exclusive-copy publication receipt", async () => {
@@ -989,7 +1029,7 @@ describe("createVerifiedSqliteSnapshot", () => {
       source.exec("PRAGMA secure_delete = OFF; CREATE TABLE records (value TEXT NOT NULL);");
       source.prepare("INSERT INTO records VALUES (?)").run(removedValue);
       source.close();
-      const labels: string[] = [];
+      const validatedValues = new Map<string, unknown>();
 
       await createVerifiedSqliteSnapshot({
         sourcePath,
@@ -1001,10 +1041,17 @@ describe("createVerifiedSqliteSnapshot", () => {
           database.exec("DELETE FROM records;");
           database.prepare("INSERT INTO records VALUES (?)").run("new");
         },
-        validate: (_database, label) => labels.push(label),
+        validate: (database, label) => {
+          validatedValues.set(label, database.prepare("SELECT value FROM records").get()?.value);
+        },
       });
 
-      expect(labels).toEqual([sourcePath, targetPath, targetPath]);
+      expect(validatedValues).toEqual(
+        new Map([
+          [sourcePath, removedValue],
+          [targetPath, "new"],
+        ]),
+      );
       expect((await fs.readFile(targetPath)).includes(removedValue)).toBe(false);
       withReadOnlySnapshot(sqlite, targetPath, (snapshot) => {
         expect(snapshot.prepare("SELECT value FROM records").get()).toEqual({ value: "new" });

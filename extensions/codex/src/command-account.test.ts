@@ -1,24 +1,17 @@
 import path from "node:path";
 import {
-  clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
-import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawStateDatabaseAsync,
-} from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
-import { resetCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
 import type { CodexCommandDepsOverride } from "./command-handlers.js";
 import { createCodexCommand } from "./commands.js";
 import {
   createContext,
   createDeps,
   supervisedTestBinding,
+  useCodexCommandTestState,
   writeTestBinding,
 } from "./commands.test-support.js";
 
@@ -26,21 +19,10 @@ type AccountRequest = NonNullable<CodexCommandDepsOverride["safeCodexControlRequ
 
 describe("Codex account workspace identity", () => {
   let tempDir: string;
-  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
-      await closeOpenClawAgentDatabasesAsync();
-      await closeOpenClawStateDatabaseAsync();
-      clearRuntimeAuthProfileStoreSnapshots();
-      clearSessionStoreCacheForTest();
-      vi.unstubAllEnvs();
-      cleanup();
-    }),
-  );
-
-  beforeEach(() => {
-    resetCodexTestBindingStore();
-    tempDir = tempDirs.make("openclaw-codex-account-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+  useCodexCommandTestState({
+    onSetup: (stateDir) => {
+      tempDir = stateDir;
+    },
   });
 
   function installStore(store: AuthProfileStore) {
@@ -104,11 +86,8 @@ describe("Codex account workspace identity", () => {
     });
   }
 
-  it.each([
-    { order: ["openai:personal", "openai:work"], label: "after another workspace" },
-    { order: ["openai:personal"], label: "outside the current auth order" },
-  ])("shows the bound workspace $label despite shared email and lastGood", async ({ order }) => {
-    installProfiles(order);
+  it("shows the bound workspace outside the auth order despite shared email and lastGood", async () => {
+    installProfiles(["openai:personal"]);
     await writeTestBinding(
       { kind: "session", agentId: "main", sessionId: "session-1" },
       { threadId: "thread-work", cwd: "/repo", authProfileId: "openai:work" },
@@ -130,7 +109,6 @@ describe("Codex account workspace identity", () => {
   });
 
   it.each([
-    { source: "supervision", email: "native@example.test" },
     { source: "supervision", email: "operator@example.test" },
     { source: "user home", email: "native@example.test" },
   ])("keeps $source account $email separate from saved profiles", async ({ source, email }) => {
@@ -194,22 +172,18 @@ describe("Codex account workspace identity", () => {
     const now = Date.now();
     installStore({
       version: 1,
-      profiles: {
-        "openai:fresh@example.com": {
-          type: "token",
-          provider: "openai",
-          token: "fresh-token",
-          expires: now - 1000,
-          email: "fresh@example.com",
-        },
-        "openai:stale@example.com": {
-          type: "token",
-          provider: "openai",
-          token: "stale-token",
-          expires: now - 2000,
-          email: "stale@example.com",
-        },
-      },
+      profiles: Object.fromEntries<AuthProfileStore["profiles"][string]>(
+        ["fresh", "stale"].map((name, index) => [
+          `openai:${name}@example.com`,
+          {
+            type: "token",
+            provider: "openai",
+            token: `${name}-token`,
+            expires: now - (index + 1) * 1000,
+            email: `${name}@example.com`,
+          },
+        ]),
+      ),
       order: {
         openai: ["openai:fresh@example.com", "openai:stale@example.com"],
       },

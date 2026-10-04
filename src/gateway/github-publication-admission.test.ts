@@ -85,18 +85,38 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(
-    ["options", "publish", "status", "confirm"].flatMap((method) =>
-      [
-        { sessionKey: "agent:main:main", agentId: "research" },
-        { sessionKey: "agent:main:main", agentId: "main" },
-        { sessionKey: "global", agentId: "---" },
-        { sessionKey: "global", agentId: "retired" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
-        { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
-      ].map(({ sessionKey, agentId, fixedOwner }) => ({ method, sessionKey, agentId, fixedOwner })),
-    ),
-  )(
+  it("rejects publisher revocation during the final worktree read before claim admission", async () => {
+    const fixture = await sharedAdmission("claim");
+    const identity = await mocks.prepareIdentity();
+    const findWorktree = mocks.findWorktree.getMockImplementation()!;
+    mocks.prepareIdentity.mockImplementationOnce(async () => {
+      mocks.findWorktree.mockImplementationOnce((...args) => {
+        mocks.matchesIdentity.mockReturnValue(false);
+        return findWorktree(...args);
+      });
+      return identity;
+    });
+    await expect(fixture.request(publisher)).rejects.toThrow("GitHub publication identity changed");
+    expect(fixture.read()).toBeUndefined();
+    expect(commands).toEqual([]);
+  });
+
+  it.each([
+    ...[
+      { sessionKey: "agent:main:main", agentId: "research" },
+      { sessionKey: "agent:main:main", agentId: "main" },
+      { sessionKey: "global", agentId: "---" },
+      { sessionKey: "global", agentId: "retired" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "ops" },
+      { sessionKey: "agent:research:main", agentId: "research", fixedOwner: "retired" },
+    ].map((owner) => Object.assign({}, owner, { method: "publish" })),
+    ...["options", "status", "confirm"].map((method) => ({
+      method,
+      sessionKey: "agent:main:main",
+      agentId: "research",
+      fixedOwner: undefined,
+    })),
+  ])(
     "rejects explicit publication owner $agentId for $sessionKey at $method admission (fixed owner: $fixedOwner)",
     async ({ method, sessionKey, agentId, fixedOwner }) => {
       const fixture = await createPersonalPublicationFixture();
@@ -332,7 +352,12 @@ describe("GitHub publication selection admission", () => {
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      fixture.coordinator.personalStatus(fixture.action, fixture.action, row!.request_id),
+      fixture.coordinator.personalStatus(
+        fixture.action,
+        fixture.action,
+        row!.request_id,
+        undefined,
+      ),
     ).toMatchObject({
       result: { status: "failed", code: "identity_changed" },
       confirmation: null,

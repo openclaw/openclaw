@@ -42,7 +42,7 @@ const runtime: OutputRuntimeEnv = {
 };
 let statusJsonCommand: typeof import("./status-json.js").statusJsonCommand;
 let sqliteOwner: typeof import("../infra/node-sqlite.js");
-let poolRun: Awaited<ReturnType<typeof observeWorkerPools>> | undefined;
+let poolRun: Awaited<ReturnType<typeof observeWorkerPools>>;
 
 async function observeWorkerPools() {
   const { resolveBundledPublicSurfaceLocation } = await import("../plugin-sdk/facade-loader.js");
@@ -118,10 +118,11 @@ beforeAll(async () => {
   vi.doMock("../state/backup-run-records.js", () => ({
     readBackupRunFreshness: async () => ({}),
   }));
-  vi.doMock("../infra/update-run-status.js", () => ({ readUpdateRunStatus: () => ({}) }));
+  vi.doMock("../infra/update-run-status.js", () => ({ readUpdateRunStatus: async () => ({}) }));
   vi.resetModules();
   ({ statusJsonCommand } = await import("./status-json.js"));
   sqliteOwner = await import("../infra/node-sqlite.js");
+  poolRun = await observeWorkerPools();
 });
 
 beforeEach(() => {
@@ -172,7 +173,7 @@ it.each(["populated", "empty", "unrelated", "missing", "unavailable"] as const)(
     }
     const before = kind === "missing" ? undefined : fs.readFileSync(databasePath);
     mocks.resolveMemorySearchConfig.mockReturnValue({ store: { databasePath } });
-    const observer = (poolRun ??= await observeWorkerPools());
+    const observer = poolRun;
     if (kind === "unavailable") {
       // Exercise dispatch rejection without creating a failed native worker.
       observer.rejectNextInspection(new Error("Synthetic inspection unavailable"));

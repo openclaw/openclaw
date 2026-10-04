@@ -10,7 +10,8 @@ import {
   type MemoryQueryFilter,
   type MemoryDB,
 } from "./lancedb-store.js";
-import { normalizeRecallQuery } from "./memory-policy.js";
+import { normalizeRecallQuery, projectMemorySearchResult } from "./memory-policy.js";
+import type { MemoryStatsSource } from "./memory-stats.js";
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
@@ -59,7 +60,7 @@ function parseMemoryCliOrder(value: unknown): {
   };
 }
 
-export function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | undefined {
+function parseMemoryCliFilter(rawValue: unknown): MemoryQueryFilter | undefined {
   if (rawValue === undefined) {
     return undefined;
   }
@@ -110,6 +111,7 @@ export function registerMemoryCli(
   embeddings: Embeddings,
   resolveCliAgentId: (rawAgentId: unknown) => string,
   resolveConfig: () => MemoryConfig,
+  statsSource: MemoryStatsSource,
 ): void {
   api.registerCli(
     ({ program }) => {
@@ -148,14 +150,7 @@ export function registerMemoryCli(
               config.embedding,
             );
             const results = await db.search(agentId, vector, limit, 0.3);
-            const output = results.map((r) => ({
-              id: r.entry.id,
-              text: r.entry.text,
-              category: r.entry.category,
-              importance: r.entry.importance,
-              score: r.score,
-            }));
-            defaultRuntime.writeJson(output);
+            defaultRuntime.writeJson(results.map(projectMemorySearchResult));
           } catch (error) {
             failure = { error };
           }
@@ -218,8 +213,9 @@ export function registerMemoryCli(
         .description("Show memory statistics")
         .option("--agent <id>", "Agent id (default: configured default agent)")
         .action(async (opts) => {
+          const { readMemoryStats } = await import("./memory-stats.js");
           const agentId = resolveCliAgentId(opts.agent);
-          const count = await db.count(agentId);
+          const count = await readMemoryStats(statsSource, agentId);
           console.log(`Total memories: ${count}`);
         });
     },

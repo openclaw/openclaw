@@ -10,13 +10,11 @@ import type {
 } from "./protocol.js";
 
 export {
-  CODEX_PLUGIN_MARKETPLACE_NAME_PATTERN,
   type CodexAppServerCommandSource,
   type CodexPluginDestructiveApprovalMode,
   type CodexPluginMarketplaceName,
   type OpenClawExecApprovalFloorsForCodexAppServer,
   type OpenClawExecMode,
-  type OpenClawExecPolicy,
   type OpenClawExecPolicyForCodexAppServer,
   type ResolvedCodexPluginPolicy,
   type ResolvedCodexPluginsPolicy,
@@ -47,23 +45,10 @@ export const CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME = "workspace-directory";
 
 export type CodexComputerUseConfig = NonNullable<CodexPluginConfig["computerUse"]>;
 
-export type ResolvedCodexComputerUseConfig = {
-  enabled: boolean;
-  autoInstall: boolean;
-  marketplaceDiscoveryTimeoutMs: number;
-  liveTestTimeoutMs: number;
-  toolCallTimeoutMs: number;
-  healthCheckEnabled: boolean;
-  healthCheckIntervalMinutes: 30 | 60 | 120 | 240;
-  pluginCacheMode: "shared" | "independent";
-  strictReadiness: boolean;
-  autoRepair: boolean;
-  pluginName: string;
-  mcpServerName: string;
-  marketplaceSource?: string;
-  marketplacePath?: string;
-  marketplaceName?: string;
-};
+export type ResolvedCodexComputerUseConfig = Required<
+  Omit<CodexComputerUseConfig, "marketplaceSource" | "marketplacePath" | "marketplaceName">
+> &
+  Pick<CodexComputerUseConfig, "marketplaceSource" | "marketplacePath" | "marketplaceName">;
 
 export type CodexSupervisionEndpoint = ParsedCodexSupervisionEndpoint;
 
@@ -114,6 +99,8 @@ export type CodexAppServerRuntimeOptions = {
   /** Prepared boundary for an explicit session permission mode. */
   sessionRoot?: string;
   serviceTier?: CodexServiceTier | null;
+  /** False disables Ultrafast; otherwise only an explicit shared selection can request it. */
+  enableUltrafast?: boolean;
   networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
 };
 

@@ -1,13 +1,9 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-// Outbound target helpers resolve direct send targets, heartbeat destinations,
-// sender context, and session-route aware heartbeat refinements.
 import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
-import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.core.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentDefaultsConfig } from "../../config/types.agent-defaults.js";
@@ -18,10 +14,7 @@ import { isSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js"
 import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
-import {
-  INTERNAL_MESSAGE_CHANNEL,
-  isDeliverableMessageChannel,
-} from "../../utils/message-channel.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   normalizeDeliverableOutboundChannel,
   resolveOutboundChannelPlugin,
@@ -38,6 +31,7 @@ import { resolveChannelTarget, type ResolvedMessagingTarget } from "./target-res
 import {
   resolveOutboundTargetWithPlugin,
   type OutboundTargetResolution,
+  type ResolveOutboundTargetParams,
 } from "./targets-resolve-shared.js";
 import { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
@@ -66,16 +60,9 @@ export type { OutboundTargetResolution } from "./targets-resolve-shared.js";
 export { resolveSessionDeliveryTarget, type SessionDeliveryTarget } from "./targets-session.js";
 
 /** Resolves a user-supplied outbound destination through the channel plugin. */
-export function resolveOutboundTarget(params: {
-  channel: string;
-  plugin?: ChannelPlugin;
-  to?: string;
-  allowFrom?: string[];
-  allowBootstrap?: boolean;
-  cfg?: OpenClawConfig;
-  accountId?: string | null;
-  mode?: ChannelOutboundTargetMode;
-}): OutboundTargetResolution {
+export function resolveOutboundTarget(
+  params: ResolveOutboundTargetParams & { plugin?: ChannelPlugin; allowBootstrap?: boolean },
+): OutboundTargetResolution {
   return (
     resolveOutboundTargetWithPlugin({
       plugin:
@@ -86,13 +73,6 @@ export function resolveOutboundTarget(params: {
           allowBootstrap: params.allowBootstrap,
         }),
       target: params,
-      onMissingPlugin: () =>
-        params.channel === INTERNAL_MESSAGE_CHANNEL
-          ? undefined
-          : {
-              ok: false,
-              error: new Error(`Unsupported channel: ${params.channel}`),
-            },
     }) ?? {
       ok: false,
       error: new Error(`Unsupported channel: ${params.channel}`),
@@ -710,5 +690,5 @@ export function resolveHeartbeatSenderContext(params: {
     provider,
   });
 
-  return { sender: expectDefined(sender, "resolved sender"), provider, allowFrom };
+  return { sender, provider, allowFrom };
 }

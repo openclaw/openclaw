@@ -159,23 +159,6 @@ function decodeBlobInfo<TMetadata>(
   };
 }
 
-function selectLiveBlob(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string; now: number },
-) {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "blob", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "=", params.key)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
-  );
-}
-
 function blobKeyExists(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string },
@@ -193,40 +176,13 @@ function blobKeyExists(
   );
 }
 
-function selectLiveInfo(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): PluginBlobStoredInfo[] {
-  return executeSqliteQuerySync(
-    db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)]))
-      .orderBy("created_at", "asc")
-      .orderBy("entry_key", "asc"),
-  ).rows;
-}
-
-function selectExpiredKeyInfo(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; key: string; now: number },
-): PluginBlobStoredInfo | undefined {
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("entry_key", "=", params.key)
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", params.now),
-  );
+function blobInfoQuery(db: DatabaseSync, params: { pluginId: string; namespace: string }) {
+  return kysely(db)
+    .selectFrom("plugin_blob_entries")
+    .select(["entry_key", "metadata_json", "created_at", "expires_at"])
+    .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
+    .where("plugin_id", "=", params.pluginId)
+    .where("namespace", "=", params.namespace);
 }
 
 function selectEvictionCandidates(
@@ -328,22 +284,6 @@ function deleteKeys(
         .where("entry_key", "in", keys),
     );
   }
-}
-
-function deleteExpiredNamespace(
-  db: DatabaseSync,
-  params: { pluginId: string; namespace: string; now: number },
-): number {
-  const result = executeSqliteQuerySync(
-    db,
-    kysely(db)
-      .deleteFrom("plugin_blob_entries")
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
-      .where("expires_at", "is not", null)
-      .where("expires_at", "<=", params.now),
-  );
-  return Number(result.numAffectedRows ?? 0);
 }
 
 function limitError(message: string, env?: NodeJS.ProcessEnv): PluginBlobStoreError {
@@ -525,7 +465,14 @@ export function pluginBlobLookupInDatabase<TMetadata>(
     "lookup",
     db,
     () => {
-      const row = selectLiveBlob(db, { ...params, now: Date.now() });
+      const now = Date.now();
+      const row = executeSqliteQueryTakeFirstSync(
+        db,
+        blobInfoQuery(db, params)
+          .select("blob")
+          .where("entry_key", "=", params.key)
+          .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)])),
+      );
       return row
         ? { ...decodeBlobInfo<TMetadata>(row, "lookup", params.env, params.path), bytes: row.blob }
         : undefined;
@@ -543,10 +490,16 @@ export function pluginBlobEntriesInDatabase<TMetadata>(
     readBlobInDatabase(
       "entries",
       db,
-      () =>
-        selectLiveInfo(db, { ...params, now: Date.now() }).map((row) =>
-          decodeBlobInfo<TMetadata>(row, "entries", params.env, params.path),
-        ),
+      () => {
+        const now = Date.now();
+        return executeSqliteQuerySync(
+          db,
+          blobInfoQuery(db, params)
+            .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", now)]))
+            .orderBy("created_at", "asc")
+            .orderBy("entry_key", "asc"),
+        ).rows.map((row) => decodeBlobInfo<TMetadata>(row, "entries", params.env, params.path));
+      },
       params.env,
       params.path,
     ) ?? []
@@ -564,7 +517,13 @@ export function pluginBlobDeleteExpiredKeyInDatabase<TMetadata>(
   db: DatabaseSync,
   params: { pluginId: string; namespace: string; key: string; env?: NodeJS.ProcessEnv },
 ): PluginBlobEntryInfo<TMetadata> | undefined {
-  const row = selectExpiredKeyInfo(db, { ...params, now: Date.now() });
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    blobInfoQuery(db, params)
+      .where("entry_key", "=", params.key)
+      .where("expires_at", "is not", null)
+      .where("expires_at", "<=", Date.now()),
+  );
   if (!row) {
     return undefined;
   }
@@ -581,12 +540,7 @@ export function pluginBlobDeleteExpiredInDatabase<TMetadata>(
   const now = Date.now();
   const rows = executeSqliteQuerySync(
     db,
-    kysely(db)
-      .selectFrom("plugin_blob_entries")
-      .select(["entry_key", "metadata_json", "created_at", "expires_at"])
-      .select((eb) => eb.fn<number | bigint>("length", ["blob"]).as("size_bytes"))
-      .where("plugin_id", "=", params.pluginId)
-      .where("namespace", "=", params.namespace)
+    blobInfoQuery(db, params)
       .where("expires_at", "is not", null)
       .where("expires_at", "<=", now)
       .orderBy("created_at", "asc")
@@ -594,7 +548,15 @@ export function pluginBlobDeleteExpiredInDatabase<TMetadata>(
   ).rows;
   // Decode every row before committing the cleanup claim.
   const entries = rows.map((row) => decodeBlobInfo<TMetadata>(row, "sweep", params.env));
-  deleteExpiredNamespace(db, { ...params, now });
+  executeSqliteQuerySync(
+    db,
+    kysely(db)
+      .deleteFrom("plugin_blob_entries")
+      .where("plugin_id", "=", params.pluginId)
+      .where("namespace", "=", params.namespace)
+      .where("expires_at", "is not", null)
+      .where("expires_at", "<=", now),
+  );
   return entries;
 }
 

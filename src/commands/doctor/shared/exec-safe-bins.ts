@@ -52,48 +52,37 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   const scopes: ExecSafeBinScopeRef[] = [];
   const globalExec = asNullableRecord(cfg.tools?.exec);
   const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
-  if (globalExec) {
-    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
-    if (safeBins.length > 0) {
-      scopes.push({
-        scopePath: "tools.exec",
-        safeBins,
-        exec: globalExec,
-        mergedProfiles:
-          resolveMergedSafeBinProfileFixtures({
-            global: globalExec,
-          }) ?? {},
-        trustedSafeBinDirs: getTrustedSafeBinDirs({
-          extraDirs: globalTrustedDirs,
-        }),
-      });
-    }
-  }
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
-    const agentExec = asNullableRecord(agent.tools?.exec);
-    if (!agentExec) {
+  const candidates = [
+    { exec: globalExec, scopePath: "tools.exec", local: undefined },
+    ...listAgentEntriesWithSource(cfg).map(({ entry: agent, source }) => {
+      const exec = asNullableRecord(agent.tools?.exec);
+      return {
+        exec,
+        local: exec,
+        scopePath:
+          source.kind === "entries"
+            ? `agents.entries.${source.key}.tools.exec`
+            : `agents.list.${source.index}.tools.exec`,
+      };
+    }),
+  ];
+  for (const { exec, scopePath, local } of candidates) {
+    if (!exec) {
       continue;
     }
-    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
+    const safeBins = normalizeConfiguredSafeBins(exec.safeBins);
     if (safeBins.length === 0) {
       continue;
     }
     scopes.push({
-      scopePath:
-        source.kind === "entries"
-          ? `agents.entries.${source.key}.tools.exec`
-          : `agents.list.${source.index}.tools.exec`,
+      scopePath,
       safeBins,
-      exec: agentExec,
-      mergedProfiles:
-        resolveMergedSafeBinProfileFixtures({
-          global: globalExec,
-          local: agentExec,
-        }) ?? {},
+      exec,
+      mergedProfiles: resolveMergedSafeBinProfileFixtures({ global: globalExec, local }) ?? {},
       trustedSafeBinDirs: getTrustedSafeBinDirs({
         extraDirs: [
           ...globalTrustedDirs,
-          ...normalizeConfiguredTrustedSafeBinDirs(agentExec.safeBinTrustedDirs),
+          ...normalizeConfiguredTrustedSafeBinDirs(local?.safeBinTrustedDirs),
         ],
       }),
     });
@@ -168,9 +157,6 @@ export function collectExecSafeBinCoverageWarnings(params: {
   hits: ExecSafeBinCoverageHit[];
   doctorFixCommand: string;
 }): string[] {
-  if (params.hits.length === 0) {
-    return [];
-  }
   const interpreterHits = params.hits.filter(
     (hit) => hit.kind === "missingProfile" && hit.isInterpreter,
   );
@@ -179,40 +165,34 @@ export function collectExecSafeBinCoverageWarnings(params: {
   );
   const riskyHits = params.hits.filter((hit) => hit.kind === "riskySemantics");
   const lines: string[] = [];
-  if (interpreterHits.length > 0) {
-    for (const hit of interpreterHits.slice(0, 5)) {
-      lines.push(
-        `- ${sanitizeForLog(hit.scopePath)}.safeBins includes interpreter/runtime '${sanitizeForLog(hit.bin)}' without profile.`,
-      );
+  const appendWarnings = (
+    hits: ExecSafeBinCoverageHit[],
+    format: (hit: ExecSafeBinCoverageHit) => string,
+    remainder: string,
+  ) => {
+    lines.push(...hits.slice(0, 5).map(format));
+    if (hits.length > 5) {
+      lines.push(`- ${hits.length - 5} more ${remainder}`);
     }
-    if (interpreterHits.length > 5) {
-      lines.push(
-        `- ${interpreterHits.length - 5} more interpreter/runtime safeBins entries are missing profiles.`,
-      );
-    }
-  }
-  if (customHits.length > 0) {
-    for (const hit of customHits.slice(0, 5)) {
-      lines.push(
-        `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' is missing safeBinProfiles.${sanitizeForLog(hit.bin)}.`,
-      );
-    }
-    if (customHits.length > 5) {
-      lines.push(`- ${customHits.length - 5} more custom safeBins entries are missing profiles.`);
-    }
-  }
-  if (riskyHits.length > 0) {
-    for (const hit of riskyHits.slice(0, 5)) {
-      lines.push(
-        `- ${sanitizeForLog(hit.scopePath)}.safeBins includes '${sanitizeForLog(hit.bin)}': ${sanitizeForLog(hit.warning ?? "prefer explicit allowlist entries or approval-gated runs.")}`,
-      );
-    }
-    if (riskyHits.length > 5) {
-      lines.push(
-        `- ${riskyHits.length - 5} more safeBins entries should not use the low-risk safeBins fast path.`,
-      );
-    }
-  }
+  };
+  appendWarnings(
+    interpreterHits,
+    (hit) =>
+      `- ${sanitizeForLog(hit.scopePath)}.safeBins includes interpreter/runtime '${sanitizeForLog(hit.bin)}' without profile.`,
+    "interpreter/runtime safeBins entries are missing profiles.",
+  );
+  appendWarnings(
+    customHits,
+    (hit) =>
+      `- ${sanitizeForLog(hit.scopePath)}.safeBins entry '${sanitizeForLog(hit.bin)}' is missing safeBinProfiles.${sanitizeForLog(hit.bin)}.`,
+    "custom safeBins entries are missing profiles.",
+  );
+  appendWarnings(
+    riskyHits,
+    (hit) =>
+      `- ${sanitizeForLog(hit.scopePath)}.safeBins includes '${sanitizeForLog(hit.bin)}': ${sanitizeForLog(hit.warning ?? "prefer explicit allowlist entries or approval-gated runs.")}`,
+    "safeBins entries should not use the low-risk safeBins fast path.",
+  );
   if (customHits.length > 0) {
     lines.push(
       `- Run "${params.doctorFixCommand}" to scaffold missing custom safeBinProfiles entries.`,

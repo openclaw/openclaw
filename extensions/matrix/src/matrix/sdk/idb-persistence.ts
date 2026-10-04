@@ -5,11 +5,11 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { withFileLock } from "openclaw/plugin-sdk/file-lock";
 import { getMatrixRuntime } from "../../runtime.js";
 import {
-  MATRIX_IDB_SNAPSHOT_FILENAME,
   readMatrixIdbSnapshotJson,
   type MatrixSnapshotStateRuntime,
   writeMatrixIdbSnapshotJson,
 } from "../crypto-state-store.js";
+import { RETIRED_MATRIX_STATE_REMEDIATION } from "../retired-state.js";
 import { MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS } from "./idb-persistence-lock.js";
 import { LogService } from "./logger.js";
 
@@ -30,7 +30,7 @@ type IdbDatabaseSnapshot = {
 const LEGACY_SNAPSHOT_DIAGNOSTIC = {
   code: "matrix-idb-snapshot-requires-doctor",
   message: "Matrix IndexedDB snapshot exists outside canonical SQLite state",
-  remediation: "openclaw doctor --fix",
+  remediation: RETIRED_MATRIX_STATE_REMEDIATION,
 } as const;
 
 class MatrixIdbSnapshotMigrationRequiredError extends Error {
@@ -38,7 +38,7 @@ class MatrixIdbSnapshotMigrationRequiredError extends Error {
   readonly remediation = LEGACY_SNAPSHOT_DIAGNOSTIC.remediation;
 
   constructor() {
-    super(`${LEGACY_SNAPSHOT_DIAGNOSTIC.message}; run ${LEGACY_SNAPSHOT_DIAGNOSTIC.remediation}`);
+    super(`${LEGACY_SNAPSHOT_DIAGNOSTIC.message}; ${LEGACY_SNAPSHOT_DIAGNOSTIC.remediation}`);
     this.name = "MatrixIdbSnapshotMigrationRequiredError";
   }
 }
@@ -110,14 +110,6 @@ function parseSnapshotPayload(data: string): IdbDatabaseSnapshot[] | null {
     throw new Error("Malformed IndexedDB snapshot payload");
   }
   return parsed;
-}
-
-export function isValidMatrixIdbSnapshotJson(data: string): boolean {
-  try {
-    return parseSnapshotPayload(data) !== null;
-  } catch {
-    return false;
-  }
 }
 
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
@@ -199,24 +191,33 @@ async function restoreIndexedDatabases(snapshot: IdbDatabaseSnapshot[]): Promise
       }
     });
     const db = await idbReq(request);
-    for (const storeSnap of dbSnap.stores) {
-      if (storeSnap.records.length === 0) {
-        continue;
-      }
-      const tx = db.transaction(storeSnap.name, "readwrite");
-      const store = tx.objectStore(storeSnap.name);
-      for (const rec of storeSnap.records) {
-        if (storeSnap.keyPath !== null) {
-          store.put(rec.value);
-        } else {
-          store.put(rec.value, rec.key);
+    try {
+      for (const storeSnap of dbSnap.stores) {
+        if (storeSnap.records.length === 0) {
+          continue;
         }
+        const tx = db.transaction(storeSnap.name, "readwrite");
+        const store = tx.objectStore(storeSnap.name);
+        for (const rec of storeSnap.records) {
+          if (storeSnap.keyPath !== null) {
+            store.put(rec.value);
+          } else {
+            store.put(rec.value, rec.key);
+          }
+        }
+        await new Promise<void>((resolve, reject) => {
+          tx.addEventListener("complete", () => resolve(), { once: true });
+          // Failed requests abort the transaction instead of emitting complete.
+          tx.addEventListener(
+            "abort",
+            () => reject(toErrorObject(tx.error, "IndexedDB restore transaction aborted")),
+            { once: true },
+          );
+        });
       }
-      await new Promise<void>((resolve) => {
-        tx.addEventListener("complete", () => resolve(), { once: true });
-      });
+    } finally {
+      db.close();
     }
-    db.close();
   }
 }
 
@@ -226,29 +227,30 @@ function resolveDefaultIdbSnapshotPath(): string {
   return path.join(stateDir, "matrix", "crypto-idb-snapshot.json");
 }
 
+async function readCanonicalSnapshotJson(
+  snapshotPath: string,
+  stateRuntime: MatrixSnapshotStateRuntime,
+): Promise<string | null> {
+  throwIfLegacySnapshotNeedsDoctor(snapshotPath);
+  return await readMatrixIdbSnapshotJson(path.dirname(snapshotPath), stateRuntime);
+}
+
 // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
 export async function restoreIdbFromDisk(
   snapshotPath?: string,
   stateRuntime?: MatrixSnapshotStateRuntime,
 ): Promise<boolean> {
   const resolvedPath = snapshotPath ?? resolveDefaultIdbSnapshotPath();
-  const storageRootDir = path.dirname(resolvedPath);
   let callbackStarted = false;
   try {
     const snapshotStateRuntime = stateRuntime ?? getMatrixRuntime().state;
     // withFileLock is acquire-or-throw; it never skips the callback on contention.
     return await withFileLock(resolvedPath, MATRIX_IDB_SNAPSHOT_LOCK_OPTIONS, async () => {
       callbackStarted = true;
-      let storedSnapshotJson: string | null;
-      try {
-        storedSnapshotJson = await readMatrixIdbSnapshotJson(storageRootDir, snapshotStateRuntime);
-      } catch (err) {
-        if (fs.existsSync(resolvedPath)) {
-          throwLegacySnapshotMigrationRequired();
-        }
-        throw err;
-      }
-      throwIfLegacySnapshotNeedsDoctor(resolvedPath, storedSnapshotJson);
+      const storedSnapshotJson = await readCanonicalSnapshotJson(
+        resolvedPath,
+        snapshotStateRuntime,
+      );
       if (!storedSnapshotJson) {
         return false;
       }
@@ -295,16 +297,7 @@ export async function persistIdbToDisk(params?: {
       async () => {
         callbackStarted = true;
         const storageRootDir = path.dirname(snapshotPath);
-        let storedSnapshotJson: string | null;
-        try {
-          storedSnapshotJson = await readMatrixIdbSnapshotJson(storageRootDir, stateRuntime);
-        } catch (err) {
-          if (fs.existsSync(snapshotPath)) {
-            throwLegacySnapshotMigrationRequired();
-          }
-          throw err;
-        }
-        throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
+        await readCanonicalSnapshotJson(snapshotPath, stateRuntime);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
         if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;
@@ -340,29 +333,8 @@ export async function persistIdbToDisk(params?: {
   }
 }
 
-export function readLegacyMatrixIdbSnapshotStateUnlocked(
-  storageRootDir: string,
-): IdbDatabaseSnapshot[] | null {
-  const snapshotPath = path.join(storageRootDir, MATRIX_IDB_SNAPSHOT_FILENAME);
-  if (!fs.existsSync(snapshotPath)) {
-    return null;
-  }
-  const data = fs.readFileSync(snapshotPath, "utf8");
-  try {
-    return parseSnapshotPayload(data);
-  } catch {
-    return null;
-  }
-}
-
-function throwIfLegacySnapshotNeedsDoctor(
-  snapshotPath: string,
-  storedSnapshotJson: string | null,
-): void {
-  if (
-    fs.existsSync(snapshotPath) &&
-    (!storedSnapshotJson || !isValidMatrixIdbSnapshotJson(storedSnapshotJson))
-  ) {
+function throwIfLegacySnapshotNeedsDoctor(snapshotPath: string): void {
+  if (fs.existsSync(snapshotPath)) {
     throwLegacySnapshotMigrationRequired();
   }
 }

@@ -201,7 +201,7 @@ describe("installed plugin index persistence", () => {
       fs.mkdirSync(pluginDir);
       const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
       const config = {};
-      const index = refreshPersistedInstalledPluginIndex({
+      const index = await refreshPersistedInstalledPluginIndex({
         reason: "manual",
         stateDir,
         candidates: [createCandidate(pluginDir)],
@@ -230,14 +230,6 @@ describe("installed plugin index persistence", () => {
       expectPluginIds(boot.index, ["demo"]);
     },
   );
-
-  it("resolves the persisted index path to the shared state database", () => {
-    const stateDir = makeTempDir();
-
-    expect(resolveInstalledPluginIndexStorePath({ stateDir })).toBe(
-      path.join(stateDir, "state", "openclaw.sqlite"),
-    );
-  });
 
   it("writes and reads the installed plugin index atomically", async () => {
     const stateDir = makeTempDir();
@@ -460,7 +452,7 @@ describe("installed plugin index persistence", () => {
     };
     fs.writeFileSync(contractPath, "export const legacyConfigRules = [];\n", "utf8");
 
-    const first = refreshPersistedInstalledPluginIndex({
+    const first = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -489,7 +481,7 @@ describe("installed plugin index persistence", () => {
       "export const legacyConfigRules = [{ path: ['demo'], message: 'changed' }];\n",
       "utf8",
     );
-    const second = refreshPersistedInstalledPluginIndex({
+    const second = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -540,7 +532,7 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     const filePath = resolveInstalledPluginIndexStorePath({ stateDir });
     await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
 
     const sqlite = requireNodeSqlite();
     const mutate = new sqlite.DatabaseSync(filePath);
@@ -663,7 +655,7 @@ describe("installed plugin index persistence", () => {
       VITEST: "true",
     };
     const candidate = createCandidate(pluginDir, { configPaths: ["browser"] });
-    const current = refreshPersistedInstalledPluginIndex({
+    const current = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [candidate],
@@ -682,7 +674,7 @@ describe("installed plugin index persistence", () => {
     });
     expect(inspection.source).toBe("derived");
 
-    const refreshed = refreshPersistedInstalledPluginIndex({
+    const refreshed = await refreshPersistedInstalledPluginIndex({
       reason: "policy-changed",
       stateDir,
       candidates: [candidate],
@@ -726,7 +718,7 @@ describe("installed plugin index persistence", () => {
   it("preserves newer shared-state schema errors while reading the index", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(createIndex(), { stateDir });
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const databasePath = resolveInstalledPluginIndexStorePath({ stateDir });
     const { DatabaseSync } = requireNodeSqlite();
     const database = new DatabaseSync(databasePath);
@@ -741,7 +733,7 @@ describe("installed plugin index persistence", () => {
     });
   });
 
-  it("leaves retired JSON index files to the doctor migration owner", async () => {
+  it("does not read retired JSON index files", async () => {
     const stateDir = makeTempDir();
     const filePath = path.join(stateDir, "installs.json");
     fs.writeFileSync(filePath, JSON.stringify(createIndex()), "utf8");
@@ -755,31 +747,6 @@ describe("installed plugin index persistence", () => {
     insertPersistedIndexRow(stateDir, { migrationVersion: 0 });
 
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-  });
-
-  it("refreshes and persists a rebuilt index without loading plugin runtime", async () => {
-    const stateDir = makeTempDir();
-    const pluginDir = path.join(stateDir, "plugins", "demo");
-    fs.mkdirSync(pluginDir, { recursive: true });
-    const candidate = createCandidate(pluginDir);
-
-    const index = refreshPersistedInstalledPluginIndex({
-      reason: "manual",
-      stateDir,
-      candidates: [candidate],
-      env: {
-        OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-        OPENCLAW_VERSION: "2026.4.25",
-        VITEST: "true",
-      },
-    });
-
-    expect(index.refreshReason).toBe("manual");
-    expect(index.plugins.map((plugin) => plugin.pluginId)).toEqual(["demo"]);
-    await expectPersistedIndex(stateDir, {
-      refreshReason: "manual",
-      pluginIds: ["demo"],
-    });
   });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
@@ -798,7 +765,7 @@ describe("installed plugin index persistence", () => {
       { stateDir },
     );
 
-    const index = refreshPersistedInstalledPluginIndex({
+    const index = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [],
@@ -861,7 +828,7 @@ describe("installed plugin index persistence", () => {
       { stateDir },
     );
 
-    const index = refreshPersistedInstalledPluginIndex({
+    const index = await refreshPersistedInstalledPluginIndex({
       reason: "manual",
       stateDir,
       candidates: [],

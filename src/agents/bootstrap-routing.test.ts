@@ -16,23 +16,38 @@ describe("isPrimaryBootstrapRun", () => {
 });
 
 describe("resolveWorkspaceBootstrapRouting", () => {
+  const workspace = "/tmp/openclaw-workspace";
+  const bootstrapFile = {
+    name: "BOOTSTRAP.md" as const,
+    path: `${workspace}/BOOTSTRAP.md`,
+    content: "Ask who I am before continuing.",
+    missing: false,
+  };
+  const resolveRouting = (
+    overrides: Partial<Parameters<typeof resolveWorkspaceBootstrapRouting>[0]>,
+  ) =>
+    resolveWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: vi.fn(async () => false),
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: workspace,
+      resolvedWorkspace: workspace,
+      hasBootstrapFileAccess: true,
+      ...overrides,
+    });
+
   it("resolves bootstrap pending from the canonical workspace instead of a copied sandbox", async () => {
-    // Sandbox copies are execution roots; bootstrap state belongs to the
-    // canonical workspace.
     const sandboxWorkspace = "/tmp/openclaw-sandbox-copy";
     const canonicalWorkspace = "/tmp/openclaw-canonical-workspace";
     const isWorkspaceBootstrapPending = vi.fn(async (workspaceDir: string) => {
       return workspaceDir === sandboxWorkspace;
     });
 
-    const routing = await resolveWorkspaceBootstrapRouting({
+    const routing = await resolveRouting({
       isWorkspaceBootstrapPending,
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
       effectiveWorkspace: sandboxWorkspace,
       resolvedWorkspace: canonicalWorkspace,
-      hasBootstrapFileAccess: true,
     });
 
     expect(isWorkspaceBootstrapPending).toHaveBeenCalledOnce();
@@ -44,13 +59,8 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   });
 
   it("falls back to limited bootstrap wording when a primary run cannot read files", async () => {
-    const routing = await resolveWorkspaceBootstrapRouting({
+    const routing = await resolveRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => true),
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: "/tmp/openclaw-workspace",
-      resolvedWorkspace: "/tmp/openclaw-workspace",
       hasBootstrapFileAccess: false,
     });
 
@@ -60,25 +70,7 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   });
 
   it("treats hook-provided BOOTSTRAP.md content as pending bootstrap context", async () => {
-    // Hook-provided bootstrap files can replace filesystem reads and still drive
-    // a full bootstrap turn.
-    const routing = await resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      bootstrapFiles: [
-        {
-          name: "BOOTSTRAP.md",
-          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
-          content: "Ask who I am before continuing.",
-          missing: false,
-        },
-      ],
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: "/tmp/openclaw-workspace",
-      resolvedWorkspace: "/tmp/openclaw-workspace",
-      hasBootstrapFileAccess: true,
-    });
+    const routing = await resolveRouting({ bootstrapFiles: [bootstrapFile] });
 
     expect(routing.bootstrapMode).toBe("full");
     expect(routing.includeBootstrapInSystemContext).toBe(true);
@@ -86,21 +78,8 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   });
 
   it("uses hook-provided BOOTSTRAP.md content even when normal file reads are unavailable", async () => {
-    const routing = await resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      bootstrapFiles: [
-        {
-          name: "BOOTSTRAP.md",
-          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
-          content: "Ask who I am before continuing.",
-          missing: false,
-        },
-      ],
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: "/tmp/openclaw-workspace",
-      resolvedWorkspace: "/tmp/openclaw-workspace",
+    const routing = await resolveRouting({
+      bootstrapFiles: [bootstrapFile],
       hasBootstrapFileAccess: false,
     });
 
@@ -110,22 +89,9 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   });
 
   it("does not infer file access from loaded bootstrap content when the caller opts out", async () => {
-    const routing = await resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      bootstrapFiles: [
-        {
-          name: "BOOTSTRAP.md",
-          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
-          content: "Ask who I am before continuing.",
-          missing: false,
-        },
-      ],
+    const routing = await resolveRouting({
+      bootstrapFiles: [bootstrapFile],
       bootstrapFilesProvideAccess: false,
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: "/tmp/openclaw-workspace",
-      resolvedWorkspace: "/tmp/openclaw-workspace",
       hasBootstrapFileAccess: false,
     });
 
@@ -135,22 +101,8 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   });
 
   it("does not treat empty hook-provided BOOTSTRAP.md as pending bootstrap context", async () => {
-    const routing = await resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      bootstrapFiles: [
-        {
-          name: "BOOTSTRAP.md",
-          path: "/tmp/openclaw-workspace/BOOTSTRAP.md",
-          content: "   ",
-          missing: false,
-        },
-      ],
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: "/tmp/openclaw-workspace",
-      resolvedWorkspace: "/tmp/openclaw-workspace",
-      hasBootstrapFileAccess: true,
+    const routing = await resolveRouting({
+      bootstrapFiles: [{ ...bootstrapFile, content: "   " }],
     });
 
     expect(routing.bootstrapMode).toBe("none");

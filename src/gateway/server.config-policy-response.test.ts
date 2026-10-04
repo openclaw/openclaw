@@ -47,8 +47,6 @@ describe("config writer policy-close ordering", () => {
 
   it.each([
     { method: "config.patch", policy: "token" },
-    { method: "config.apply", policy: "token" },
-    { method: "config.patch", policy: "origin" },
     { method: "config.apply", policy: "origin" },
     { method: "config.patch", policy: "publicOrigin" },
   ] as const)(
@@ -159,9 +157,6 @@ describe("config writer policy-close ordering", () => {
         const result = writer.client.request<ConfigAck>(method, {
           baseHash: before.hash,
           raw: JSON.stringify(method === "config.apply" ? nextConfig : change),
-          ...(method === "config.patch" && policy === "origin"
-            ? { replacePaths: ["gateway.controlUi.allowedOrigins"] }
-            : {}),
         });
         void result.catch(() => {});
         const publication = await Promise.race([

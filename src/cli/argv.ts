@@ -430,14 +430,8 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
   return value;
 }
 
-export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
-  if (hasFlag(argv, "--verbose")) {
-    return true;
-  }
-  if (options?.includeDebug && hasFlag(argv, "--debug")) {
-    return true;
-  }
-  return false;
+export function getVerboseFlag(argv: string[]): boolean {
+  return hasFlag(argv, "--verbose") || hasFlag(argv, "--debug");
 }
 
 export function getPositiveIntFlagValue(argv: string[], name: string): number | null | undefined {
@@ -463,11 +457,7 @@ export { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.
 
 export function buildParseArgv(rawArgs: string[], programName = "openclaw"): string[] {
   const normalizedArgv =
-    rawArgs[0] === programName
-      ? rawArgs.slice(1)
-      : rawArgs[0]?.endsWith("openclaw")
-        ? rawArgs.slice(1)
-        : rawArgs;
+    rawArgs[0] === programName || rawArgs[0]?.endsWith("openclaw") ? rawArgs.slice(1) : rawArgs;
   const looksLikeNode =
     normalizedArgv.length >= 2 &&
     (isNodeRuntime(normalizedArgv[0] ?? "") || isBunRuntime(normalizedArgv[0] ?? ""));

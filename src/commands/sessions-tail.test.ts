@@ -1,8 +1,7 @@
 // Sessions tail tests cover transcript tailing, filtering, and session-store setup.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
@@ -14,7 +13,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { sessionsTailCommand } from "./sessions-tail.js";
@@ -52,6 +51,8 @@ function runtimeOutput(runtime: RuntimeEnv): string {
     .join("\n");
 }
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-tail-");
+
 describe("sessionsTailCommand", () => {
   let tmpDir: string;
   let storePath: string;
@@ -59,11 +60,11 @@ describe("sessionsTailCommand", () => {
 
   beforeEach(() => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-tail-"));
+    tmpDir = sessionDirs.make();
     process.env.OPENCLAW_STATE_DIR = path.join(tmpDir, "state");
     mocks.getRuntimeConfig.mockReturnValue({
       agents: {
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     });
     storePath = path.join(tmpDir, "sessions.sqlite");
@@ -76,9 +77,6 @@ describe("sessionsTailCommand", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   async function writeSessionEntry(
@@ -280,6 +278,45 @@ describe("sessionsTailCommand", () => {
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])("rejects a missing explicit session with follow=%s", async (follow) => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+
+    await sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey: "agent:main:missing", follow },
+      runtime,
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Session not found: agent:main:missing. Run openclaw sessions list --all-agents --json to choose a valid key.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "   "])("rejects a blank explicit session key %j", async (blankKey) => {
+    const runtime = createTestRuntime();
+    await writeSessionEntry();
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: blankKey }, runtime);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "--session-key must not be empty. Omit it to tail active sessions.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("reports an empty default selection without failing or following", async () => {
+    const runtime = createTestRuntime();
+
+    await sessionsTailCommand({ agent: "main", follow: true }, runtime);
+
+    expect(runtimeOutput(runtime)).toBe("No sessions found.");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each(["explicit", "running", "latest", "acp"])(

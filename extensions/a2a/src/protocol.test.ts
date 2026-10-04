@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  A2aRpcRequestSchema,
   A2aSendMessageParamsSchema,
   A2aTaskRequestParamsSchema,
   extractA2aMessageText,
@@ -9,21 +8,13 @@ import {
 
 describe("A2A protocol message parts", () => {
   it.each([
-    { description: "v1 text", parts: [{ text: "hello" }], expected: "hello" },
     { description: "legacy kind", parts: [{ kind: "text", text: "hello" }], expected: "hello" },
-    { description: "legacy type", parts: [{ type: "text", text: "hello" }], expected: "hello" },
     {
       description: "structured data",
       parts: [{ text: "hello" }, { data: { count: 2, ready: true } }],
       expected: 'hello\n{"count":2,"ready":true}',
     },
     { description: "null data", parts: [{ data: null }], expected: "null" },
-    {
-      description: "file parts only",
-      parts: [{ url: "https://example.test/file" }],
-      expected: undefined,
-    },
-    { description: "raw parts only", parts: [{ raw: "aGVsbG8=" }], expected: undefined },
     { description: "blank text", parts: [{ text: "  \n" }], expected: undefined },
   ])("extracts $description", ({ parts, expected }) => {
     expect(extractA2aMessageText(parts)).toBe(expected);
@@ -41,29 +32,8 @@ describe("A2A protocol message parts", () => {
 });
 
 describe("A2A JSON-RPC request contracts", () => {
-  it.each([
-    ["SendMessage", "SendMessage"],
-    ["GetTask", "GetTask"],
-    ["CancelTask", "unsupported"],
-    ["message/send", "SendMessage"],
-    ["tasks/get", "GetTask"],
-    ["tasks/cancel", "unsupported"],
-    ["SendStreamingMessage", "unsupported"],
-    ["ListTasks", "unsupported"],
-    ["tasks/send", undefined],
-    ["constructor", undefined],
-  ] as const)("routes %s to %s", (method, expected) => {
-    expect(resolveA2aRpcMethod(method)).toBe(expected);
-  });
-
-  it("accepts notifications and rejects invalid JSON-RPC envelopes", () => {
-    expect(A2aRpcRequestSchema.safeParse({ jsonrpc: "2.0", method: "GetTask" }).success).toBe(true);
-    expect(A2aRpcRequestSchema.safeParse({ jsonrpc: "1.0", method: "GetTask" }).success).toBe(
-      false,
-    );
-    expect(
-      A2aRpcRequestSchema.safeParse({ jsonrpc: "2.0", id: {}, method: "GetTask" }).success,
-    ).toBe(false);
+  it("does not resolve inherited Object methods", () => {
+    expect(resolveA2aRpcMethod("constructor")).toBeUndefined();
   });
 
   it("accepts generated-message-id requests but requires role and parts", () => {

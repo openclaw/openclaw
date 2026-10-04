@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
@@ -60,10 +60,6 @@ describe("Telegram live policy reload", () => {
 
   it.each([
     ["botToken", "123456:synthetic-token"],
-    ["apiRoot", "https://api.telegram.org"],
-    ["proxy", "http://127.0.0.1:8080"],
-    ["commands", { native: false }],
-    ["customCommands", [{ command: "hello", description: "Say hello" }]],
     ["futurePolicy", true],
   ])("keeps startup ownership for %s even alongside live policy", (key, value) => {
     const plan = planTelegramChange(

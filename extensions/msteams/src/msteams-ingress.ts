@@ -9,6 +9,7 @@ import {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
 import { getMSTeamsRuntime } from "./runtime.js";
@@ -245,17 +246,18 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
     stop: () => {
       stopTask ??= (async () => {
         await monitor.pause();
-        let graceTimer: ReturnType<typeof setTimeout> | undefined;
-        const graceElapsed = new Promise<void>((resolve) => {
-          graceTimer = setTimeout(resolve, MSTEAMS_REQUEST_TIMEOUT_MS);
-          graceTimer.unref?.();
-        });
         try {
           // Preserve completed side effects when possible, but retain an abort path for
           // deliveries that themselves wait on the lifecycle signal.
-          await Promise.race([monitor.waitForIdle(), graceElapsed]);
+          await raceWithTimeout(
+            () => monitor.waitForIdle(),
+            MSTEAMS_REQUEST_TIMEOUT_MS,
+            () => undefined,
+            {
+              ref: false,
+            },
+          );
         } finally {
-          clearTimeout(graceTimer);
           await monitor.stop();
           liveContexts.clear();
         }

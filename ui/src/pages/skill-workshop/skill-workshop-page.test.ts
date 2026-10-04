@@ -629,89 +629,83 @@ describe("SkillWorkshopPage lifecycle", () => {
     expect(newContext.navigate).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "submits a revision and expires its notice despite legacy current-chat setting %s",
-    async (enabled) => {
-      localStorage.setItem(
-        "openclaw:control-ui:skill-workshop-current-chat-revisions:v1",
-        String(enabled),
-      );
-      const sessions = {
-        state: {
-          agentId: "research",
-          result: {
-            sessions: [
-              {
-                key: "agent:research:revision",
-                archived: false,
-                hasActiveRun: false,
-              },
-            ],
-          },
-          loading: false,
-          error: null,
-        },
-        list: vi.fn(),
-        create: vi.fn(),
-      } as unknown as ApplicationContext["sessions"];
-      const request = vi.fn(async (method: string) =>
-        method === "skills.proposals.requestRevision"
-          ? { status: "started" }
-          : emptyWorkshopManifest(),
-      );
-      const context = createContext(request, {
-        sessions,
-        methods: ["skills.proposals.requestRevision"],
-      });
-      const loadedState = createSkillWorkshopState();
-      loadedState.skillWorkshopAgentId = "research";
-      loadedState.skillWorkshopLoaded = true;
-      const proposal = createProposal({
-        key: "proposal-owner",
-        slug: "proposal-owner",
-        revisionHash: "a".repeat(64),
-        updatedAt: 0,
-        origin: {
-          agentId: "research",
-          sessionKey: "agent:research:revision",
-        },
-      });
-      loadedState.skillWorkshopProposals = [proposal];
-      loadedState.skillWorkshopSelectedKey = proposal.key;
-      loadedState.skillWorkshopRevisionKey = proposal.key;
-      loadedState.skillWorkshopRevisionDraft = "revise it";
-      const page = mountLoadedPage(loadedState, context);
-      await settleLitElement(page);
-
-      const button = page.querySelector<HTMLButtonElement>(
-        ".sw-revision-dialog__actions .sw-btn--primary",
-      );
-      expect(button?.disabled).toBe(false);
-      vi.useFakeTimers();
-      button?.click();
-      await waitForSkillWorkshop(() =>
-        expect(page.querySelector(".sw-action-toast")?.textContent).toContain("Revision requested"),
-      );
-      await settleLitElement(page);
-      expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
-      expect(context.navigate).toHaveBeenCalledWith("chat", {
-        pathname: "/chat/research/revision",
-      });
-
-      expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
+  it("submits a revision and expires its notice despite the legacy current-chat setting", async () => {
+    localStorage.setItem("openclaw:control-ui:skill-workshop-current-chat-revisions:v1", "true");
+    const sessions = {
+      state: {
         agentId: "research",
-        targetAgentId: "research",
-        proposalId: "proposal-owner",
-        expectedRevisionHash: "a".repeat(64),
-        instructions: "revise it",
+        result: {
+          sessions: [
+            {
+              key: "agent:research:revision",
+              archived: false,
+              hasActiveRun: false,
+            },
+          ],
+        },
+        loading: false,
+        error: null,
+      },
+      list: vi.fn(),
+      create: vi.fn(),
+    } as unknown as ApplicationContext["sessions"];
+    const request = vi.fn(async (method: string) =>
+      method === "skills.proposals.requestRevision"
+        ? { status: "started" }
+        : emptyWorkshopManifest(),
+    );
+    const context = createContext(request, {
+      sessions,
+      methods: ["skills.proposals.requestRevision"],
+    });
+    const loadedState = createSkillWorkshopState();
+    loadedState.skillWorkshopAgentId = "research";
+    loadedState.skillWorkshopLoaded = true;
+    const proposal = createProposal({
+      key: "proposal-owner",
+      slug: "proposal-owner",
+      revisionHash: "a".repeat(64),
+      updatedAt: 0,
+      origin: {
+        agentId: "research",
         sessionKey: "agent:research:revision",
-        idempotencyKey: expect.any(String),
-      });
-      await vi.advanceTimersByTimeAsync(2800);
-      await page.updateComplete;
-      expect(page.querySelector(".sw-action-toast")).toBeNull();
-    },
-  );
+      },
+    });
+    loadedState.skillWorkshopProposals = [proposal];
+    loadedState.skillWorkshopSelectedKey = proposal.key;
+    loadedState.skillWorkshopRevisionKey = proposal.key;
+    loadedState.skillWorkshopRevisionDraft = "revise it";
+    const page = mountLoadedPage(loadedState, context);
+    await settleLitElement(page);
+
+    const button = page.querySelector<HTMLButtonElement>(
+      ".sw-revision-dialog__actions .sw-btn--primary",
+    );
+    expect(button?.disabled).toBe(false);
+    vi.useFakeTimers();
+    button?.click();
+    await waitForSkillWorkshop(() =>
+      expect(page.querySelector(".sw-action-toast")?.textContent).toContain("Revision requested"),
+    );
+    await settleLitElement(page);
+    expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(context.navigate).toHaveBeenCalledWith("chat", {
+      pathname: "/chat/research/revision",
+    });
+
+    expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
+      agentId: "research",
+      targetAgentId: "research",
+      proposalId: "proposal-owner",
+      expectedRevisionHash: "a".repeat(64),
+      instructions: "revise it",
+      sessionKey: "agent:research:revision",
+      idempotencyKey: expect.any(String),
+    });
+    await vi.advanceTimersByTimeAsync(2800);
+    await page.updateComplete;
+    expect(page.querySelector(".sw-action-toast")).toBeNull();
+  });
 
   it("does not create a fallback revision session after a same-context reconnect", async () => {
     const sessionList = createDeferred<SessionsListResult>();

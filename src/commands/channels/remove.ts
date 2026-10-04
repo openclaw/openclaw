@@ -1,4 +1,3 @@
-// Implements guided and non-interactive disable/delete for channel accounts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { applyChannelAccountRemoval } from "../../channels/plugins/account-config-mutation.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
@@ -21,7 +20,7 @@ import { persistChannelPluginConfig } from "./plugin-config-persistence.js";
 import { channelLabel } from "./runtime-label.js";
 import { type ChatChannel, requireValidConfigForWrite } from "./shared.js";
 
-export type ChannelsRemoveOptions = {
+type ChannelsRemoveOptions = {
   agent?: string;
   channel?: string;
   account?: string;

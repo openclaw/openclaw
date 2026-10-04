@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ApiError } from "grammy/types";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
@@ -351,10 +352,6 @@ class GroupRequestScheduler {
 
 const TELEGRAM_ACCOUNT_THROTTLERS_KEY = Symbol.for("openclaw.telegram.accountThrottlers");
 
-function getAccountThrottlers(): Map<string, TelegramAccountThrottler> {
-  return resolveGlobalMap(TELEGRAM_ACCOUNT_THROTTLERS_KEY);
-}
-
 function readPayload(payload: unknown): TelegramApiPayload | undefined {
   return payload && typeof payload === "object" ? (payload as TelegramApiPayload) : undefined;
 }
@@ -435,10 +432,11 @@ function createTelegramAccountThrottler(
   const transformer: ApiThrottlerTransformer = (prev, method, payload, signal) => {
     // Classify at the call site: queued work later runs in the drain's async context.
     const callerScope = requestScopes.getStore();
+    const effect = captureEffectAuthority();
     const replaceable = method === "sendChatAction" || callerScope?.replaceable === true;
     const scope = replaceable ? { ...callerScope, replaceable: true as const } : callerScope;
     // Waiting and retry policy runs outside the queues; admission runs at the network edge.
-    const admitted = admitAtNetwork(floodGate, scope, prev);
+    const admitted = admitAtNetwork(floodGate, scope, (...args) => effect.run(() => prev(...args)));
     const send = callThroughFloodGate(
       floodGate,
       scope,
@@ -458,7 +456,9 @@ export function getOrCreateAccountThrottler(
   token: string,
   createThrottler: () => ApiThrottlerTransformer = apiThrottler,
 ): TelegramAccountThrottler {
-  const throttlerByToken = getAccountThrottlers();
+  const throttlerByToken = resolveGlobalMap<string, TelegramAccountThrottler>(
+    TELEGRAM_ACCOUNT_THROTTLERS_KEY,
+  );
   let throttler = throttlerByToken.get(token);
   if (!throttler) {
     throttler = createTelegramAccountThrottler(createThrottler);

@@ -13,6 +13,27 @@ import {
   getFeishuSendRateLimitCodeFromResponse,
 } from "./send-rate-limit.js";
 
+export type FeishuDriveCommentReply = {
+  reply_id?: string;
+  user_id?: string;
+  create_time?: number;
+  update_time?: number;
+  content?: { elements?: unknown[] };
+};
+
+export type FeishuDriveCommentCard = {
+  comment_id?: string;
+  user_id?: string;
+  create_time?: number;
+  update_time?: number;
+  is_solved?: boolean;
+  is_whole?: boolean;
+  has_more?: boolean;
+  page_token?: string;
+  quote?: string;
+  reply_list?: { replies?: FeishuDriveCommentReply[] };
+};
+
 export class FeishuReplyCommentError extends Error {
   httpStatus?: number;
   feishuCode?: number | string;
@@ -269,31 +290,27 @@ function resolveCommentLinkedDocumentFromUrl(params: {
     rawUrl: params.rawUrl,
     urlKind: "unknown",
   };
-  try {
-    const parsed = new URL(params.rawUrl);
-    const parsedPath = parseCommentLinkedDocumentPath(parsed.pathname);
-    if (!parsedPath) {
-      return link;
-    }
-    const { urlKind, token } = parsedPath;
-    link.urlKind = urlKind;
-    if (urlKind === "wiki") {
-      link.wikiNodeToken = token;
-    } else {
-      link.resolvedObjType = urlKind;
-      link.resolvedObjToken = token;
-    }
-    if (
-      link.resolvedObjType &&
-      link.resolvedObjToken &&
-      normalizeCommentFileType(link.resolvedObjType)
-    ) {
-      link.isCurrentDocument =
-        params.currentDocument?.fileType === link.resolvedObjType &&
-        params.currentDocument.fileToken === link.resolvedObjToken;
-    }
-  } catch {
+  const parsed = URL.parse(params.rawUrl);
+  const parsedPath = parsed && parseCommentLinkedDocumentPath(parsed.pathname);
+  if (!parsedPath) {
     return link;
+  }
+  const { urlKind, token } = parsedPath;
+  link.urlKind = urlKind;
+  if (urlKind === "wiki") {
+    link.wikiNodeToken = token;
+  } else {
+    link.resolvedObjType = urlKind;
+    link.resolvedObjToken = token;
+  }
+  if (
+    link.resolvedObjType &&
+    link.resolvedObjToken &&
+    normalizeCommentFileType(link.resolvedObjType)
+  ) {
+    link.isCurrentDocument =
+      params.currentDocument?.fileType === link.resolvedObjType &&
+      params.currentDocument.fileToken === link.resolvedObjToken;
   }
   return link;
 }

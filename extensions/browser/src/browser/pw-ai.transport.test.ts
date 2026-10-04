@@ -3,6 +3,9 @@ import { createServer } from "node:http";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { closePlaywrightBrowserConnection } from "./pw-session.js";
+import { clickViaPlaywright } from "./pw-tools-core.interactions.js";
+import { snapshotRoleViaPlaywright } from "./pw-tools-core.snapshot.js";
 
 const { connectOverCdpMock } = vi.hoisted(() => ({
   connectOverCdpMock: vi.fn<(transport: ConnectOverCDPTransport) => Promise<Browser>>(),
@@ -91,17 +94,10 @@ function createBrowser(pages: unknown[]) {
   });
 }
 
-let snapshotRoleViaPlaywright: typeof import("./pw-tools-core.snapshot.js").snapshotRoleViaPlaywright;
-let clickViaPlaywright: typeof import("./pw-tools-core.interactions.js").clickViaPlaywright;
-let closePlaywrightBrowserConnection: typeof import("./pw-session.js").closePlaywrightBrowserConnection;
-
 beforeAll(async () => {
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   cdpUrl = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
-  ({ snapshotRoleViaPlaywright } = await import("./pw-tools-core.snapshot.js"));
-  ({ clickViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  ({ closePlaywrightBrowserConnection } = await import("./pw-session.js"));
 });
 
 afterEach(async () => {
@@ -122,47 +118,48 @@ afterAll(async () => {
 });
 
 describe("pw-ai", () => {
-  it("captures an ai snapshot via Playwright for a specific target", async () => {
-    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
-    const p2 = createPage({ targetId: "T2", snapshotFull: "TWO" });
-    createBrowser([p1.page, p2.page]);
+  it.each([
+    ["e1", "e2"],
+    ["1", "2"],
+  ])(
+    "acts on the selected target's snapshot ref %s over one connection",
+    async (buttonRef, linkRef) => {
+      const snapshot = `- button "OK" [ref=${buttonRef}]\n- link "Docs" [ref=${linkRef}]`;
+      const p1 = createPage({ targetId: "T1", snapshotFull: "OTHER PAGE" });
+      const p2 = createPage({ targetId: "T2", snapshotFull: snapshot });
+      createBrowser([p1.page, p2.page]);
 
-    const res = await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T2",
-    });
+      const res = await snapshotRoleViaPlaywright({
+        refsMode: "aria",
+        cdpUrl,
+        targetId: "T2",
+      });
 
-    expect(res.snapshot).toBe("TWO");
-    expect(p1.session.detach).toHaveBeenCalled();
-    expect(p2.session.detach).toHaveBeenCalled();
-    expect(p2.page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
-    expect(p2.page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
-  });
+      expect(res.snapshot).toBe(snapshot);
+      expect(res.refs).toEqual({
+        [buttonRef]: { role: "button", name: "OK" },
+        [linkRef]: { role: "link", name: "Docs" },
+      });
+      expect(p1.session.detach).toHaveBeenCalled();
+      expect(p2.session.detach).toHaveBeenCalled();
+      expect(p2.page.off).toHaveBeenCalledWith("framenavigated", expect.any(Function));
+      expect(p2.page.off).toHaveBeenCalledWith("framedetached", expect.any(Function));
 
-  it("registers aria refs from ai snapshots for act commands", async () => {
-    const snapshot = ['- button "OK" [ref=e1]', '- link "Docs" [ref=e2]'].join("\n");
-    const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
-    createBrowser([p1.page]);
+      await clickViaPlaywright({
+        cdpUrl,
+        targetId: "T2",
+        ref: buttonRef,
+      });
 
-    const res = await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T1",
-    });
-
-    expect(res.refs.e1).toEqual({ role: "button", name: "OK" });
-    expect(res.refs.e2).toEqual({ role: "link", name: "Docs" });
-
-    await clickViaPlaywright({
-      cdpUrl,
-      targetId: "T1",
-      ref: "e1",
-    });
-
-    expect(p1.locator).toHaveBeenCalledWith("aria-ref=e1");
-    expect(p1.click).toHaveBeenCalledTimes(1);
-  });
+      expect(p2.locator).toHaveBeenCalledWith(`aria-ref=${buttonRef}`);
+      expect(p2.click).toHaveBeenCalledTimes(1);
+      expect(p1.click).not.toHaveBeenCalled();
+      expect(connectOverCdpMock).toHaveBeenCalledTimes(1);
+      expect(discoveryRequests).toHaveBeenCalledExactlyOnceWith("/json/version");
+      expect(socketConnections).toHaveBeenCalledTimes(1);
+      expect(socketServer.clients.size).toBe(1);
+    },
+  );
 
   it("truncates oversized snapshots", async () => {
     const firstLine = "VISIBLE";
@@ -180,83 +177,5 @@ describe("pw-ai", () => {
 
     expect(res.truncated).toBe(true);
     expect(res.snapshot).toBe(`${firstLine}\n\n${marker}`);
-  });
-
-  it("returns numeric ai snapshot refs in the public snapshot output", async () => {
-    const snapshot = ['- button "OK" [ref=1]', '- link "Docs" [ref=2]'].join("\n");
-    const p1 = createPage({ targetId: "T1", snapshotFull: snapshot });
-    createBrowser([p1.page]);
-
-    const res = await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T1",
-    });
-
-    expect(res.snapshot).toContain("[ref=1]");
-    expect(res.snapshot).toContain("[ref=2]");
-    expect(res.refs["1"]).toEqual({ role: "button", name: "OK" });
-    expect(res.refs["2"]).toEqual({ role: "link", name: "Docs" });
-
-    await clickViaPlaywright({
-      cdpUrl,
-      targetId: "T1",
-      ref: "1",
-    });
-
-    expect(p1.locator).toHaveBeenCalledWith("aria-ref=1");
-    expect(p1.click).toHaveBeenCalledTimes(1);
-  });
-
-  it("clicks a ref using aria-ref locator", async () => {
-    const p1 = createPage({ targetId: "T1" });
-    createBrowser([p1.page]);
-
-    await clickViaPlaywright({
-      cdpUrl,
-      targetId: "T1",
-      ref: "76",
-    });
-
-    expect(p1.locator).toHaveBeenCalledWith("aria-ref=76");
-    expect(p1.click).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses Playwright's public AI aria snapshot API", async () => {
-    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
-    createBrowser([p1.page]);
-
-    await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T1",
-      timeoutMs: 1234,
-    });
-
-    expect(p1.page.ariaSnapshot).toHaveBeenCalledWith({
-      mode: "ai",
-      timeout: 1234,
-    });
-  });
-
-  it("reuses the CDP connection for repeated calls", async () => {
-    const p1 = createPage({ targetId: "T1", snapshotFull: "ONE" });
-    createBrowser([p1.page]);
-
-    await snapshotRoleViaPlaywright({
-      refsMode: "aria",
-      cdpUrl,
-      targetId: "T1",
-    });
-    await clickViaPlaywright({
-      cdpUrl,
-      targetId: "T1",
-      ref: "1",
-    });
-
-    expect(connectOverCdpMock).toHaveBeenCalledTimes(1);
-    expect(discoveryRequests).toHaveBeenCalledExactlyOnceWith("/json/version");
-    expect(socketConnections).toHaveBeenCalledTimes(1);
-    expect(socketServer.clients.size).toBe(1);
   });
 });

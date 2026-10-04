@@ -36,6 +36,9 @@ const CELL_CONFIG_FILENAME = "openclaw.json";
 const HEALTH_TIMEOUT_MS = 1_000;
 const CELL_CONFIG_MAX_BYTES = 4 * 1024 * 1024;
 const FLEET_OPERATION_HEARTBEAT_MS = 60_000;
+// Match the compose healthcheck while allowing slow-starting cells a full minute.
+const CELL_VERIFY_TIMEOUT_MS = 60_000;
+const CELL_VERIFY_POLL_MS = 1_000;
 
 export type FleetHealthResult =
   | { status: "ok"; url: string; httpStatus: number }
@@ -80,15 +83,10 @@ export async function prepareCellDirectories(
   authSecretDir: string,
   owner?: { uid: number; gid: number },
 ): Promise<void> {
-  await Promise.all([
-    ensurePrivateDirectory(record.dataDir),
-    ensurePrivateDirectory(authSecretDir),
-  ]);
+  const directories = [record.dataDir, authSecretDir];
+  await Promise.all(directories.map(ensurePrivateDirectory));
   if (owner) {
-    await Promise.all([
-      fs.chown(record.dataDir, owner.uid, owner.gid),
-      fs.chown(authSecretDir, owner.uid, owner.gid),
-    ]);
+    await Promise.all(directories.map((directory) => fs.chown(directory, owner.uid, owner.gid)));
   }
 }
 
@@ -101,7 +99,6 @@ export async function prepareCellConfig(
   const cellRoot = await fsSafeRoot(record.dataDir, {
     hardlinks: "reject",
     maxBytes: CELL_CONFIG_MAX_BYTES,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   try {
@@ -497,11 +494,9 @@ export async function verifyReplacementHealthy(params: {
   now: () => number;
   sleep: (ms: number) => Promise<void>;
   checkpoint: () => Promise<void>;
-  timeoutMs: number;
-  pollMs: number;
   context: "upgrade" | "restore" | "create";
 }): Promise<void> {
-  const deadline = params.now() + params.timeoutMs;
+  const deadline = params.now() + CELL_VERIFY_TIMEOUT_MS;
   for (;;) {
     const replacement = await params.containers.inspect(
       params.record.runtime,
@@ -529,7 +524,7 @@ export async function verifyReplacementHealthy(params: {
       throw new Error(`Replacement cell container did not become healthy after ${params.context}.`);
     }
     await params.checkpoint();
-    await params.sleep(params.pollMs);
+    await params.sleep(CELL_VERIFY_POLL_MS);
   }
 }
 

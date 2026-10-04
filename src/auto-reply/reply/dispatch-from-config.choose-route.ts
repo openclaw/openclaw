@@ -42,7 +42,6 @@ import { createSessionMetadataChangeNotifier } from "./dispatch-from-config.sess
 import {
   captureDeliveredTranscriptMirror,
   mirrorDeliveredReplyToTranscript,
-  mirrorTranscriptAfterDispatcherSettled,
   transcriptMirrorForDeliveredPayload,
 } from "./dispatch-from-config.transcript.js";
 import type { NormalizeReplySkipReason } from "./normalize-reply.js";
@@ -96,9 +95,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const shouldSuppressProgressDelivery = () =>
     state.sendPolicyDenied ||
     (state.suppressDelivery && !shouldDeliverVerboseProgressDespiteSourceSuppression());
-  const shouldSuppressDefaultToolProgressMessages = () =>
-    params.replyOptions?.suppressToolProgressMessages === true || !shouldEmitVerboseProgress();
-  const shouldSendToolSummaries = () => !shouldSuppressDefaultToolProgressMessages();
+  const shouldSendToolSummaries = () =>
+    params.replyOptions?.suppressToolProgressMessages !== true && shouldEmitVerboseProgress();
   const { notifySessionMetadataChanges, routeState } = createSessionMetadataChangeNotifier(
     params.onSessionMetadataChanges,
   );
@@ -118,12 +116,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   let finalReplyDeliveryStarted = false;
   const isSessionWriterDeliveryAuthorized = (payload: ReplyPayload) =>
     isDispatchFinalReplySessionWriterAuthorized(payload, sessionStoreEntry.storePath, sessionKey);
-  const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) => {
-    if (!finalReplyDeliveryStarted) {
-      return false;
-    }
-    return !requiresDurableToolResultDelivery(payload);
-  };
+  const shouldSuppressLateTextOnlyToolProgress = (payload: ReplyPayload) =>
+    finalReplyDeliveryStarted && !requiresDurableToolResultDelivery(payload);
   // Durable inter-tool commentary lane: with verbose progress on, preamble
   // items become standalone progress messages like tool summaries. The latest
   // text per item id is buffered (snapshot producers re-emit the same item)
@@ -189,6 +183,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   };
   const captionedFinalTtsContext = {
     cfg,
+    preparedTtsPreferences: state.preparedTtsPreferences,
     ttsAuto: sessionTtsAuto,
     agentId: sessionAgentId,
     channelId: deliveryChannel,
@@ -201,6 +196,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   const blockDeliveryOutcomes = new Map<string, Array<Promise<BlockDelivery>>>();
   const recordBlockOutcome = (payload: ReplyPayload, outcome: Promise<BlockDelivery>) => {
     setBlockReplyDelivery(outcome, payload);
+    if (getReplyPayloadMetadata(payload)?.independentDeliveryIntentId !== undefined) {
+      return;
+    }
     const key = createBlockReplyContentKey(payload);
     const outcomes = blockDeliveryOutcomes.get(key) ?? [];
     outcomes.push(outcome);
@@ -540,13 +538,11 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       // The common settle owner runs this after successful delivery or
       // cancellation. Keeping reconciliation out of the reply operation avoids
       // creating another operation/idle cycle during delivery settlement.
-      registerReplyDispatcherSettledTask(dispatcher, () =>
-        mirrorTranscriptAfterDispatcherSettled({
-          outcome: dispatcherOutcome,
-          metadata: deliveredTranscriptMirror,
-          cfg,
-        }),
-      );
+      registerReplyDispatcherSettledTask(dispatcher, async () => {
+        if ((await dispatcherOutcome) === "delivered") {
+          await mirrorDeliveredReplyToTranscript({ metadata: deliveredTranscriptMirror(), cfg });
+        }
+      });
     }
     return {
       blockDeliveryOutcome: sourceRecovery ? blockDeliveryOutcome : undefined,
@@ -557,7 +553,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   };
 
-  // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
   if (
     state.allowInboundHandlers &&
     !admittedSessionSettingsRestrictRuntime(params.replyOptions?.admittedSessionSettings) &&
@@ -610,7 +605,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
                   replyToSender: state.hookState.hookContext.replyToSender,
                   replyToIsQuote: state.hookState.hookContext.replyToIsQuote,
                 },
-                state.assertCurrentBindingRoute,
+                { prepare: state.assertCurrentBindingRoute },
               ),
               pluginSubagentRequester,
             ),
@@ -662,8 +657,9 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     return replyDispatchTakeover;
   }
 
-  const dispatchAcquisition = await state.ensureDispatchReplyOperation(
-    state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch",
+  const dispatchPhase = state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch";
+  const dispatchAcquisition = await traceReplyPhase(`reply.admit_${dispatchPhase}`, () =>
+    state.ensureDispatchReplyOperation(dispatchPhase),
   );
   if (dispatchAcquisition.status === "aborted") {
     return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
@@ -676,7 +672,6 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
   }
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,
-    shouldSuppressDefaultToolProgressMessages,
     shouldSendToolSummaries,
     notifySessionMetadataChanges,
     shouldDeliverVerboseProgressDespiteSourceSuppression,

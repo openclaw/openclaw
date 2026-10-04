@@ -153,43 +153,35 @@ final class ShareViewController: UIViewController {
         defer {
             Task { await gateway.disconnect() }
         }
-        func connect(clientId: String) async throws {
-            try await gateway.connect(
-                url: url,
-                credentials: GatewayNodeSessionCredentials(
-                    token: config.token,
-                    password: config.password),
-                connectOptions: GatewayConnectOptions(
-                    role: "node",
-                    scopes: [],
-                    caps: [],
-                    commands: [],
-                    permissions: [:],
-                    clientId: clientId,
-                    clientMode: "node",
-                    clientDisplayName: "OpenClaw Share",
-                    deviceIdentityProfile: .shareExtension,
-                    includeDeviceIdentity: true,
-                    allowStoredDeviceAuth: config.gatewayStableID != nil,
-                    deviceAuthGatewayID: config.gatewayStableID),
-                sessionBox: nil,
-                onConnected: {},
-                onDisconnected: { _ in },
-                onInvoke: { req in
-                    BridgeInvokeResponse(
-                        id: req.id,
-                        ok: false,
-                        error: OpenClawNodeError(
-                            code: .invalidRequest,
-                            message: "share extension does not support node invoke"))
-                })
-        }
-        do {
-            try await connect(clientId: "openclaw-ios")
-        } catch {
-            guard self.shouldRetryWithLegacyClientId(error) else { throw error }
-            try await connect(clientId: "moltbot-ios")
-        }
+        try await gateway.connect(
+            url: url,
+            credentials: GatewayNodeSessionCredentials(
+                token: config.token,
+                password: config.password),
+            connectOptions: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-ios",
+                clientMode: "node",
+                clientDisplayName: "OpenClaw Share",
+                deviceIdentityProfile: .shareExtension,
+                includeDeviceIdentity: true,
+                allowStoredDeviceAuth: config.gatewayStableID != nil,
+                deviceAuthGatewayID: config.gatewayStableID),
+            sessionBox: nil,
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { req in
+                BridgeInvokeResponse(
+                    id: req.id,
+                    ok: false,
+                    error: OpenClawNodeError(
+                        code: .invalidRequest,
+                        message: "share extension does not support node invoke"))
+            })
 
         struct AgentRequestPayload: Codable {
             var message: String
@@ -222,41 +214,10 @@ final class ShareViewController: UIViewController {
             timeoutSeconds: nil,
             key: UUID().uuidString)
         let data = try JSONEncoder().encode(params)
-        guard let json = String(data: data, encoding: .utf8) else {
-            throw NSError(
-                domain: "OpenClawShare",
-                code: 12,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload."])
-        }
+        let json = String(bytes: data, encoding: .utf8)!
         let eventData = try JSONEncoder().encode(NodeEventParams(event: "agent.request", payloadjson: json))
-        guard let nodeEventParams = String(data: eventData, encoding: .utf8) else {
-            throw NSError(
-                domain: "OpenClawShare",
-                code: 13,
-                userInfo: [NSLocalizedDescriptionKey: "Failed to encode node event payload."])
-        }
+        let nodeEventParams = String(bytes: eventData, encoding: .utf8)!
         _ = try await gateway.request(method: "node.event", paramsJSON: nodeEventParams, timeoutSeconds: 25)
-    }
-
-    private func shouldRetryWithLegacyClientId(_ error: Error) -> Bool {
-        if let gatewayError = error as? GatewayResponseError {
-            let code = gatewayError.code.lowercased()
-            let message = gatewayError.message.lowercased()
-            let pathValue = (gatewayError.details["path"]?.value as? String)?.lowercased() ?? ""
-            let mentionsClientIdPath =
-                message.contains("/client/id") || message.contains("client id")
-                || pathValue.contains("/client/id")
-            let isInvalidConnectParams =
-                (code.contains("invalid") && code.contains("connect"))
-                || message.contains("invalid connect params")
-            if isInvalidConnectParams, mentionsClientIdPath {
-                return true
-            }
-        }
-
-        let text = error.localizedDescription.lowercased()
-        return text.contains("invalid connect params")
-            && (text.contains("/client/id") || text.contains("client id"))
     }
 
     private func extractSharedContent() async -> ExtractedShareContent {
@@ -296,7 +257,9 @@ final class ShareViewController: UIViewController {
     }
 
     private func loadImageAttachment(from provider: NSItemProvider, index: Int) async throws -> LoadedAttachment {
-        let imageUTI = self.preferredImageTypeIdentifier(from: provider) ?? UTType.image.identifier
+        let imageUTI = provider.registeredTypeIdentifiers.first {
+            UTType($0)?.conforms(to: .image) == true
+        } ?? UTType.image.identifier
         guard let rawData = await self.loadDataValue(from: provider, typeIdentifier: imageUTI) else {
             throw ShareImageProcessor.ProcessError.invalidImage
         }
@@ -317,17 +280,13 @@ final class ShareViewController: UIViewController {
             preview: self.boundedPreview(from: image))
     }
 
-    private func imageProcessingErrorMessage() -> String {
-        NSLocalizedString(
-            "The shared image could not be prepared.",
-            comment: "Share extension image processing failure")
-    }
-
     private func applyAttachmentBlockReason(_ blockReason: ShareAttachmentBlockReason) {
         switch blockReason {
         case .imageProcessingFailed:
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: image processing failed.")
-            self.composeView.apply(.blocked(self.imageProcessingErrorMessage()))
+            self.composeView.apply(.blocked(NSLocalizedString(
+                "The shared image could not be prepared.",
+                comment: "Share extension image processing failure")))
         case let .omitted(message):
             ShareGatewayRelaySettings.saveLastEvent("Share blocked: attachment(s) omitted.")
             self.composeView.apply(.blocked(message))
@@ -352,16 +311,6 @@ final class ShareViewController: UIViewController {
         return UIGraphicsImageRenderer(size: target, format: format).image { _ in
             image.draw(in: CGRect(origin: .zero, size: target))
         }
-    }
-
-    private func preferredImageTypeIdentifier(from provider: NSItemProvider) -> String? {
-        for identifier in provider.registeredTypeIdentifiers {
-            guard let utType = UTType(identifier) else { continue }
-            if utType.conforms(to: .image) {
-                return identifier
-            }
-        }
-        return nil
     }
 
     private func loadDataValue(from provider: NSItemProvider, typeIdentifier: String) async -> Data? {

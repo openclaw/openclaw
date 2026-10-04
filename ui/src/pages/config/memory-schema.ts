@@ -118,53 +118,32 @@ export function resolveMemoryEngineSelection(
   }
 }
 
-type JsonRecord = Record<string, unknown>;
+export const MEMORY_SETTINGS_KEYS = ["citations", "search"] as const;
 
-// One narrowed schema object per (source schema, key set): the config view caches
-// its schema analysis by object identity, so a fresh clone per render would
-// re-analyze the whole tree on every update.
-const narrowedMemorySchemas = new WeakMap<JsonRecord, Map<string, unknown>>();
+// Stable schema identity keeps the config view's analysis cached across renders.
+const memorySettingsSchemas = new WeakMap<Record<string, unknown>, unknown>();
 
-/**
- * Restrict the root config schema to `memory` with only `keys` retained, so one
- * page can host several tabs over disjoint slices of the same schema section.
- */
-export function narrowMemorySchema(schema: unknown, keys: readonly string[]): unknown {
+export function memorySettingsSchema(schema: unknown): unknown {
   const root = asConfigRecord(schema);
   const memorySchema = asConfigRecord(asConfigRecord(root?.properties)?.memory);
   const memoryProperties = asConfigRecord(memorySchema?.properties);
   if (!root || !memorySchema || !memoryProperties) {
     return schema;
   }
-  const cacheKey = keys.join("");
-  const bucket = narrowedMemorySchemas.get(root) ?? new Map<string, unknown>();
-  const hit = bucket.get(cacheKey);
+  const hit = memorySettingsSchemas.get(root);
   if (hit !== undefined) {
     return hit;
   }
   const retained = Object.fromEntries(
-    keys.filter((key) => key in memoryProperties).map((key) => [key, memoryProperties[key]]),
+    MEMORY_SETTINGS_KEYS.filter((key) => key in memoryProperties).map((key) => [
+      key,
+      memoryProperties[key],
+    ]),
   );
   const narrowed = {
     ...root,
     properties: { memory: { ...memorySchema, properties: retained } },
   };
-  bucket.set(cacheKey, narrowed);
-  narrowedMemorySchemas.set(root, bucket);
+  memorySettingsSchemas.set(root, narrowed);
   return narrowed;
-}
-
-/** Which `memory.*` children the embedded editor shows for a tab. */
-export function memorySchemaKeysForTab(tab: MemoryTab): readonly string[] {
-  if (tab !== "settings") {
-    return [];
-  }
-  // Keep the old Overview fields before the old Search slice while rendering
-  // one editor, which in turn keeps one autosave status and apply banner.
-  return ["citations", "search"];
-}
-
-/** Every `memory.*` child the Settings editor surfaces. */
-export function memoryVisibleSchemaKeys(): readonly string[] {
-  return memorySchemaKeysForTab("settings");
 }

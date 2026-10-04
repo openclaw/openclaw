@@ -1,3 +1,5 @@
+import { hasExactKeys } from "../../../chrome-extension/modules/strict-json.js";
+
 /**
  * Wire protocol between the extension relay server and the OpenClaw Chrome
  * extension. The extension owns tab eligibility/access, attaches chrome.debugger,
@@ -65,22 +67,12 @@ export type RelayToExtensionMessage =
   /** Keepalive probe; the extension answers with pong. */
   | { type: "ping" };
 
-function hasExactOwnKeys(value: object, keys: readonly string[]): boolean {
-  const actual = Object.keys(value);
-  return actual.length === keys.length && keys.every((key) => Object.hasOwn(value, key));
-}
-
-function isRelayTabInfo(value: unknown): value is RelayTabInfo {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+function isRelayTabInfo(tab: unknown): tab is RelayTabInfo {
+  if (!hasExactKeys(tab, ["tabId", "url", "title", "active"])) {
     return false;
   }
-  if (!hasExactOwnKeys(value, ["tabId", "url", "title", "active"])) {
-    return false;
-  }
-  const tab = value as Record<string, unknown>;
   return (
-    Number.isSafeInteger(tab.tabId) &&
-    (tab.tabId as number) >= 0 &&
+    isNonNegativeSafeInteger(tab.tabId) &&
     typeof tab.url === "string" &&
     tab.url.length <= 16_384 &&
     typeof tab.title === "string" &&
@@ -110,7 +102,7 @@ function isExtensionMessage(value: unknown): value is ExtensionToRelayMessage {
   switch (msg.type) {
     case "hello":
       return (
-        hasExactOwnKeys(msg, ["type", "userAgent", "browserVersion", "extensionVersion", "tabs"]) &&
+        hasExactKeys(msg, ["type", "userAgent", "browserVersion", "extensionVersion", "tabs"]) &&
         typeof msg.userAgent === "string" &&
         msg.userAgent.length > 0 &&
         msg.userAgent.length <= 2_048 &&

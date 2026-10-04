@@ -10,15 +10,10 @@ import {
 } from "../../../infra/update-channels.js";
 import { isBundledPluginInsideDevSourceRoot } from "../../../plugins/dev-source-root.js";
 import {
-  resolveDefaultPluginExtensionsDir,
-  resolvePluginInstallDir,
-} from "../../../plugins/install-paths.js";
-import {
   loadInstalledPluginIndexInstallRecords,
   removePluginInstallRecordFromRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
 import { createInstalledPluginOwnershipResolver } from "../../../plugins/installed-plugin-package-ownership.js";
-import { readLegacyNpmPluginDeclaration } from "../../../plugins/legacy-npm-declaration.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import type { PluginPackageInstall } from "../../../plugins/manifest.js";
@@ -94,6 +89,10 @@ export async function resolveConfiguredPluginInstallContext(params: {
     snapshot,
     configuredChannelIds: params.configuredChannelIds,
   });
+  const isRepairTarget = (pluginId: string) =>
+    params.configuredPluginIds.has(pluginId) ||
+    params.configuredChannelIds.has(pluginId) ||
+    [...configuredChannelOwnerPluginIds.values()].some((ownerIds) => ownerIds.has(pluginId));
   const bundledPluginsById = new Map<string, BundledPluginPackageDescriptor>(
     currentBundledPlugins.flatMap((plugin) => {
       const external = isExternallyDistributedPlugin({
@@ -163,13 +162,7 @@ export async function resolveConfiguredPluginInstallContext(params: {
   const installedPluginMissingRequiredDependencies =
     await collectInstalledPluginMissingRequiredDependencies({
       cfg: params.cfg,
-      isRepairTarget: (pluginId) =>
-        isConfiguredPluginRepairTarget({
-          pluginId,
-          configuredPluginIds: params.configuredPluginIds,
-          configuredChannelIds: params.configuredChannelIds,
-          configuredChannelOwnerPluginIds,
-        }),
+      isRepairTarget,
       snapshot,
       installRecords: records,
       blockedPluginIds: params.blockedPluginIds,
@@ -180,21 +173,27 @@ export async function resolveConfiguredPluginInstallContext(params: {
     ...installedPluginIdsWithStaleVersionBoundRuntimePackages,
     ...installedPluginMissingRequiredDependencies.keys(),
   ]);
+  // Hollow packages need the recorded updater's fresh-generation path, not direct replacement.
+  const repairableConfiguredPluginIds = new Set(
+    [...installedPluginIdsWithRepairablePackages].filter(
+      (pluginId) =>
+        !installedPluginMissingRequiredDependencies.has(pluginId) && isRepairTarget(pluginId),
+    ),
+  );
   const officialReplacementPluginIds = new Set(
-    collectOfficialReplacementInstallCandidates({
-      cfg: params.cfg,
-      env: params.env,
-      // Hollow packages need the recorded updater's fresh-generation path, not direct replacement.
-      repairablePluginIds: new Set(
-        [...installedPluginIdsWithRepairablePackages].filter(
-          (pluginId) => !installedPluginMissingRequiredDependencies.has(pluginId),
-        ),
-      ),
-      configuredPluginIds: params.configuredPluginIds,
-      configuredChannelIds: params.configuredChannelIds,
-      configuredChannelOwnerPluginIds,
-      blockedPluginIds: params.blockedPluginIds,
-    }).keys(),
+    repairableConfiguredPluginIds.size === 0
+      ? []
+      : collectDownloadableInstallCandidates({
+          ...params,
+          configuredChannelOwnerPluginIds,
+          missingPluginIds: repairableConfiguredPluginIds,
+        })
+          .filter(
+            (candidate) =>
+              repairableConfiguredPluginIds.has(candidate.pluginId) &&
+              candidate.trustedSourceLinkedOfficialInstall,
+          )
+          .map((candidate) => candidate.pluginId),
   );
   const configuredLoadPathIdentities = new Set(
     snapshot.discovery?.candidates
@@ -412,93 +411,6 @@ export function collectDownloadableInstallCandidates(params: {
     }
   }
 
-  for (const candidate of collectLegacyNpmDeclarationInstallCandidates({
-    cfg: params.cfg,
-    env: params.env,
-    configuredPluginIds,
-    missingPluginIds: params.missingPluginIds,
-    blockedPluginIds: params.blockedPluginIds,
-  })) {
-    if (!candidates.has(candidate.pluginId)) {
-      candidates.set(candidate.pluginId, candidate);
-    }
-  }
-
-  return [...candidates.values()].toSorted((left, right) =>
-    left.pluginId.localeCompare(right.pluginId),
-  );
-}
-
-function addLegacyNpmDeclarationInstallCandidate(params: {
-  candidates: Map<string, DownloadableInstallCandidate>;
-  pluginDir: string;
-  configuredPluginIds: ReadonlySet<string>;
-  missingPluginIds: ReadonlySet<string>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): void {
-  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
-  if (!declaration) {
-    return;
-  }
-  if (
-    params.blockedPluginIds?.has(declaration.pluginId) ||
-    (!params.configuredPluginIds.has(declaration.pluginId) &&
-      !params.missingPluginIds.has(declaration.pluginId))
-  ) {
-    return;
-  }
-  params.candidates.set(declaration.pluginId, {
-    pluginId: declaration.pluginId,
-    label: declaration.pluginId,
-    npmSpec: declaration.npmSpec,
-    defaultChoice: "npm",
-  });
-}
-
-function collectLegacyNpmDeclarationInstallCandidates(params: {
-  cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  configuredPluginIds: ReadonlySet<string>;
-  missingPluginIds: ReadonlySet<string>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): DownloadableInstallCandidate[] {
-  const candidates = new Map<string, DownloadableInstallCandidate>();
-  const env = params.env ?? process.env;
-  const loadPaths = params.cfg.plugins?.load?.paths;
-  if (Array.isArray(loadPaths)) {
-    for (const rawPath of loadPaths) {
-      if (typeof rawPath !== "string" || !rawPath.trim()) {
-        continue;
-      }
-      addLegacyNpmDeclarationInstallCandidate({
-        candidates,
-        pluginDir: resolveUserPath(rawPath, env),
-        configuredPluginIds: params.configuredPluginIds,
-        missingPluginIds: params.missingPluginIds,
-        blockedPluginIds: params.blockedPluginIds,
-      });
-    }
-  }
-
-  const extensionsDir = resolveDefaultPluginExtensionsDir(env);
-  const configuredOrMissingPluginIds = new Set([
-    ...params.configuredPluginIds,
-    ...params.missingPluginIds,
-  ]);
-  for (const pluginId of configuredOrMissingPluginIds) {
-    try {
-      addLegacyNpmDeclarationInstallCandidate({
-        candidates,
-        pluginDir: resolvePluginInstallDir(pluginId, extensionsDir),
-        configuredPluginIds: params.configuredPluginIds,
-        missingPluginIds: params.missingPluginIds,
-        blockedPluginIds: params.blockedPluginIds,
-      });
-    } catch {
-      continue;
-    }
-  }
-
   return [...candidates.values()].toSorted((left, right) =>
     left.pluginId.localeCompare(right.pluginId),
   );
@@ -514,13 +426,8 @@ export function collectUpdateDeferredPluginIds(params: {
 }): Set<string> {
   const pluginIds = new Set(params.configuredPluginIds);
   for (const candidate of collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env: params.env,
+    ...params,
     missingPluginIds: new Set(),
-    configuredPluginIds: params.configuredPluginIds,
-    configuredChannelIds: params.configuredChannelIds,
-    configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
-    blockedPluginIds: params.blockedPluginIds,
   })) {
     pluginIds.add(candidate.pluginId);
   }
@@ -577,33 +484,6 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   return pluginIds;
 }
 
-function resolveInstalledRuntimePackageVersion(params: {
-  pluginId: string;
-  snapshot: PluginMetadataSnapshot;
-  record: PluginInstallRecord;
-}): string | undefined {
-  const plugin =
-    params.snapshot.byPluginId?.get(params.pluginId) ??
-    params.snapshot.plugins.find((entry) => entry.id === params.pluginId);
-  return normalizeOptionalLowercaseString(
-    params.record.resolvedVersion ??
-      params.record.version ??
-      plugin?.packageVersion ??
-      plugin?.version,
-  );
-}
-
-function installedRuntimePackageVersionIsStale(params: {
-  installedVersion: string | undefined;
-  currentVersion: string;
-}): boolean {
-  if (!params.installedVersion) {
-    return false;
-  }
-  const comparison = compareOpenClawReleaseVersions(params.installedVersion, params.currentVersion);
-  return comparison === null ? params.installedVersion !== params.currentVersion : comparison < 0;
-}
-
 function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
   snapshot: PluginMetadataSnapshot;
   installRecords: Record<string, PluginInstallRecord>;
@@ -626,81 +506,19 @@ function collectInstalledPluginIdsWithStaleVersionBoundRuntimePackages(params: {
     if (!record) {
       continue;
     }
-    const installedVersion = resolveInstalledRuntimePackageVersion({
-      pluginId: candidate.pluginId,
-      snapshot: params.snapshot,
-      record,
-    });
-    if (
-      installedRuntimePackageVersionIsStale({
-        installedVersion,
-        currentVersion,
-      })
-    ) {
+    const plugin =
+      params.snapshot.byPluginId?.get(candidate.pluginId) ??
+      params.snapshot.plugins.find((entry) => entry.id === candidate.pluginId);
+    const installedVersion = normalizeOptionalLowercaseString(
+      record.resolvedVersion ?? record.version ?? plugin?.packageVersion ?? plugin?.version,
+    );
+    if (!installedVersion) {
+      continue;
+    }
+    const comparison = compareOpenClawReleaseVersions(installedVersion, currentVersion);
+    if (comparison === null ? installedVersion !== currentVersion : comparison < 0) {
       pluginIds.add(candidate.pluginId);
     }
   }
   return pluginIds;
-}
-
-function isConfiguredPluginRepairTarget(params: {
-  pluginId: string;
-  configuredPluginIds: ReadonlySet<string>;
-  configuredChannelIds: ReadonlySet<string>;
-  configuredChannelOwnerPluginIds: ReadonlyMap<string, ReadonlySet<string>>;
-}): boolean {
-  if (params.configuredPluginIds.has(params.pluginId)) {
-    return true;
-  }
-  if (params.configuredChannelIds.has(params.pluginId)) {
-    return true;
-  }
-  for (const ownerIds of params.configuredChannelOwnerPluginIds.values()) {
-    if (ownerIds.has(params.pluginId)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function collectOfficialReplacementInstallCandidates(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  repairablePluginIds: ReadonlySet<string>;
-  configuredPluginIds: ReadonlySet<string>;
-  configuredChannelIds: ReadonlySet<string>;
-  configuredChannelOwnerPluginIds: ReadonlyMap<string, ReadonlySet<string>>;
-  blockedPluginIds?: ReadonlySet<string>;
-}): Map<string, DownloadableInstallCandidate> {
-  const repairableConfiguredPluginIds = new Set(
-    [...params.repairablePluginIds].filter((pluginId) =>
-      isConfiguredPluginRepairTarget({
-        pluginId,
-        configuredPluginIds: params.configuredPluginIds,
-        configuredChannelIds: params.configuredChannelIds,
-        configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
-      }),
-    ),
-  );
-  if (repairableConfiguredPluginIds.size === 0) {
-    return new Map();
-  }
-  const candidates = collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env: params.env,
-    missingPluginIds: repairableConfiguredPluginIds,
-    configuredPluginIds: params.configuredPluginIds,
-    configuredChannelIds: params.configuredChannelIds,
-    configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
-    blockedPluginIds: params.blockedPluginIds,
-  });
-  return new Map(
-    candidates
-      .filter(
-        (candidate) =>
-          repairableConfiguredPluginIds.has(candidate.pluginId) &&
-          candidate.trustedSourceLinkedOfficialInstall,
-      )
-      .map((candidate) => [candidate.pluginId, candidate] as const),
-  );
 }

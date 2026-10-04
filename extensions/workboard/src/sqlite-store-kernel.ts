@@ -1,19 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
-import type {
-  WorkboardCard,
-  WorkboardMetadata,
-  WorkboardExecution,
+import {
+  normalizeWorkboardSessionsBoardSpec,
+  type WorkboardCard,
+  type WorkboardMetadata,
+  type WorkboardExecution,
 } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
   executeSqliteQueryTakeFirstSync,
+  executeSqliteQuerySync,
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
   runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   PersistedWorkboardAttachment,
   PersistedWorkboardBoard,
@@ -24,11 +25,12 @@ import type {
   WorkboardCardStatsAggregate,
   WorkboardKeyedStore,
   WorkboardOwnerClaimResult,
+  WorkboardSessionsBoardStore,
   WorkboardSubscriptionStore,
 } from "./persistence-types.js";
 import {
-  asBlobContent,
   blobToBase64,
+  definedFields,
   jsonValue,
   loadCardChildRows,
   numberValue,
@@ -42,6 +44,7 @@ import {
   type WorkboardCardDatabase,
 } from "./sqlite-store-records.js";
 import { createWorkboardDatabase } from "./sqlite-store-schema.js";
+import { WorkboardSqliteSessionsBoardStore } from "./sqlite-store-sessions-board.js";
 import { bindNull, insertCard } from "./sqlite-store-write.js";
 import {
   MAX_WORKER_CONTEXT_PARENTS,
@@ -56,6 +59,7 @@ type SyncStore<T> = {
 export type WorkboardSqliteKernel = {
   cards: SyncStore<WorkboardCardStore>;
   boards: SyncStore<WorkboardKeyedStore<PersistedWorkboardBoard>>;
+  sessionsBoard: SyncStore<WorkboardSessionsBoardStore>;
   subscriptions: SyncStore<WorkboardSubscriptionStore>;
   attachments: SyncStore<WorkboardKeyedStore<PersistedWorkboardAttachment>>;
   dataVersion(this: void): number;
@@ -66,18 +70,14 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
   constructor(private readonly db: DatabaseSync) {}
 
   private matchesUpdatedAt(key: string, expectedUpdatedAt: number): boolean {
-    const { compiled, bind } = compileSqliteQueryBindings<string>((parameter) =>
+    const current = executeSqliteQueryTakeFirstSync(
+      this.db,
       getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
         .selectFrom("workboard_cards")
         .select("updated_at")
-        .where(
-          "id",
-          "=",
-          parameter((value) => value),
-        ),
+        .where("id", "=", key),
     );
-    const current = this.db.prepare(compiled.sql).get(...bind(key));
-    return isRecord(current) && numberValue(current, "updated_at") === expectedUpdatedAt;
+    return current !== undefined && numberValue(current, "updated_at") === expectedUpdatedAt;
   }
 
   private validatePayload(key: string, value: PersistedWorkboardCard): void {
@@ -413,6 +413,10 @@ class WorkboardSqliteCardStore implements SyncStore<WorkboardCardStore> {
 }
 
 function readBoard(row: Row): PersistedWorkboardBoard {
+  const kind = stringValue(row, "kind");
+  if (kind !== undefined && kind !== "cards" && kind !== "sessions") {
+    throw new Error("invalid workboard board kind");
+  }
   // SAFETY: Board registration serializes defaultWorkspace unchanged.
   const defaultWorkspace = parseJson(row.default_workspace_json) as
     | PersistedWorkboardBoard["board"]["defaultWorkspace"]
@@ -423,23 +427,23 @@ function readBoard(row: Row): PersistedWorkboardBoard {
     | undefined;
   return {
     version: 1,
-    board: {
+    board: definedFields({
       id: requiredString(row, "id"),
-      ...(stringValue(row, "name") ? { name: stringValue(row, "name") } : {}),
-      ...(stringValue(row, "description") ? { description: stringValue(row, "description") } : {}),
-      ...(stringValue(row, "icon") ? { icon: stringValue(row, "icon") } : {}),
-      ...(stringValue(row, "color") ? { color: stringValue(row, "color") } : {}),
-      ...(stringValue(row, "automation_job_id")
-        ? { automationJobId: stringValue(row, "automation_job_id") }
+      ...(kind ? { kind } : {}),
+      ...(kind === "sessions"
+        ? { sessions: normalizeWorkboardSessionsBoardSpec(parseJson(row.sessions_spec)) }
         : {}),
+      name: stringValue(row, "name"),
+      description: stringValue(row, "description"),
+      icon: stringValue(row, "icon"),
+      color: stringValue(row, "color"),
+      automationJobId: stringValue(row, "automation_job_id"),
       ...(defaultWorkspace ? { defaultWorkspace } : {}),
       ...(orchestration ? { orchestration } : {}),
       createdAt: requiredNumber(row, "created_at"),
       updatedAt: requiredNumber(row, "updated_at"),
-      ...(numberValue(row, "archived_at") !== undefined
-        ? { archivedAt: numberValue(row, "archived_at") }
-        : {}),
-    },
+      archivedAt: numberValue(row, "archived_at"),
+    }),
   };
 }
 
@@ -467,6 +471,12 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
           description: parameter(() => bindNull(board.description)),
           icon: parameter(() => bindNull(board.icon)),
           color: parameter(() => bindNull(board.color)),
+          kind: parameter(() => bindNull(board.kind)),
+          sessions_spec: parameter(() =>
+            board.kind === "sessions"
+              ? jsonValue(normalizeWorkboardSessionsBoardSpec(board.sessions))
+              : null,
+          ),
           automation_job_id: parameter(() => bindNull(board.automationJobId)),
           default_workspace_json: parameter(() => jsonValue(board.defaultWorkspace)),
           orchestration_json: parameter(() => jsonValue(board.orchestration)),
@@ -489,7 +499,28 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
           })),
         ),
     );
-    this.db.prepare(compiled.sql).run(...bind());
+    const statement = this.db.prepare(compiled.sql);
+    runSqliteImmediateTransactionSync(this.db, () => {
+      const existing = this.lookup(key)?.board;
+      if (existing && (existing.kind ?? "cards") !== (board.kind ?? "cards")) {
+        throw new Error("board kind cannot be changed after creation.");
+      }
+      if (board.kind === "sessions" && !existing) {
+        const card = executeSqliteQueryTakeFirstSync(
+          this.db,
+          getNodeSqliteKysely<WorkboardCardDatabase>(this.db)
+            .selectFrom("workboard_cards")
+            .select("id")
+            .where("board_id", "=", key)
+            .limit(1),
+        );
+        if (key === "default" || card) {
+          throw new Error("board kind cannot be changed after creation.");
+        }
+      }
+      // Existing session specs are changed only by sessionsBoard.update, never an appearance upsert.
+      statement.run(...bind());
+    });
   }
 
   lookup(key: string): PersistedWorkboardBoard | undefined {
@@ -498,8 +529,13 @@ class WorkboardSqliteBoardStore implements SyncStore<WorkboardKeyedStore<Persist
   }
 
   delete(key: string): boolean {
-    const result = this.db.prepare("DELETE FROM workboard_boards WHERE id = ?").run(key);
-    return result.changes > 0;
+    const result = executeSqliteQuerySync(
+      this.db,
+      getNodeSqliteKysely<{ workboard_boards: Row }>(this.db)
+        .deleteFrom("workboard_boards")
+        .where("id", "=", key),
+    );
+    return (result.numAffectedRows ?? 0n) > 0n;
   }
 
   entries(): Array<{ key: string; value: PersistedWorkboardBoard }> {
@@ -524,27 +560,21 @@ function readSubscription(row: Row): PersistedWorkboardNotificationSubscription 
     | undefined;
   return {
     version: 1,
-    subscription: {
+    subscription: definedFields({
       id: requiredString(row, "id"),
       boardId: requiredString(row, "board_id"),
-      ...(stringValue(row, "card_id") ? { cardId: stringValue(row, "card_id") } : {}),
-      ...(stringValue(row, "session_key") ? { sessionKey: stringValue(row, "session_key") } : {}),
-      ...(stringValue(row, "run_id") ? { runId: stringValue(row, "run_id") } : {}),
-      ...(stringValue(row, "target") ? { target: stringValue(row, "target") } : {}),
+      cardId: stringValue(row, "card_id"),
+      sessionKey: stringValue(row, "session_key"),
+      runId: stringValue(row, "run_id"),
+      target: stringValue(row, "target"),
       ...(eventKinds ? { eventKinds } : {}),
-      ...(numberValue(row, "last_event_at") !== undefined
-        ? { lastEventAt: numberValue(row, "last_event_at") }
-        : {}),
-      ...(stringValue(row, "last_event_id")
-        ? { lastEventId: stringValue(row, "last_event_id") }
-        : {}),
-      ...(numberValue(row, "last_event_sequence") !== undefined
-        ? { lastEventSequence: numberValue(row, "last_event_sequence") }
-        : {}),
+      lastEventAt: numberValue(row, "last_event_at"),
+      lastEventId: stringValue(row, "last_event_id"),
+      lastEventSequence: numberValue(row, "last_event_sequence"),
       ...(deliveredEventIds ? { deliveredEventIds } : {}),
       createdAt: requiredNumber(row, "created_at"),
       updatedAt: requiredNumber(row, "updated_at"),
-    },
+    }),
   };
 }
 
@@ -670,7 +700,7 @@ class WorkboardSqliteAttachmentStore implements SyncStore<
           ON CONFLICT(attachment_id) DO UPDATE SET content = excluded.content
         `,
       )
-      .run(attachment.id, asBlobContent(value.contentBase64));
+      .run(attachment.id, Buffer.from(value.contentBase64, "base64"));
   }
 
   lookup(key: string): PersistedWorkboardAttachment | undefined {
@@ -706,9 +736,11 @@ export function createWorkboardSqliteKernel(
   retainClose?: (close: () => void) => void,
 ): WorkboardSqliteKernel {
   const { db, close } = createWorkboardDatabase(dbPath, retainClose);
+  const boards = new WorkboardSqliteBoardStore(db);
   return {
     cards: new WorkboardSqliteCardStore(db),
-    boards: new WorkboardSqliteBoardStore(db),
+    boards,
+    sessionsBoard: new WorkboardSqliteSessionsBoardStore(db, boards),
     subscriptions: new WorkboardSqliteSubscriptionStore(db),
     attachments: new WorkboardSqliteAttachmentStore(db),
     // This connection-local primitive changes only after another connection commits.

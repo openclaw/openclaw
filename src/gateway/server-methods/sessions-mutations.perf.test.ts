@@ -1,9 +1,14 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { upsertAcpSessionMeta } from "../../acp/runtime/session-meta.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { CronJob } from "../../cron/types.js";
@@ -71,7 +76,7 @@ function isWholeSessionStoreProjection(normalizedSql: string): boolean {
 }
 
 test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
-  "sessions.patch %j avoids hydrating unrelated sessions",
+  "sessions.patch %j avoids unrelated hydration and host ACP reads",
   async (patch) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const targetKey = "agent:main:single-patch-target";
@@ -79,6 +84,19 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         { agentId: "main", sessionKey: targetKey },
         { sessionId: "session-single-patch-target", updatedAt: 1 },
       );
+      await upsertAcpSessionMeta({
+        cfg: {},
+        agentId: "main",
+        sessionKey: targetKey,
+        mutate: () => ({
+          backend: "acpx",
+          agent: "main",
+          runtimeSessionName: "single-patch-target",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        }),
+      });
       for (let index = 0; index < 20; index += 1) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:single-patch-unrelated-${index}` },
@@ -100,6 +118,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
         },
       );
       const respond = vi.fn();
+      const hostSql = observeHostDataSql();
       try {
         await sessionMutationHandlers["sessions.patch"]!({
           params: { key: targetKey, ...patch },
@@ -119,17 +138,22 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           client: humanClient(),
         } as never);
       } finally {
+        hostSql.restore();
         statements.restore();
       }
 
       const labelConflict = patch.label?.trim() === "Taken";
       expect(respond.mock.calls[0]?.[0]).toBe(!labelConflict);
       expect(statements.counts["whole-store-projection"]).toBe(0);
+      expect(hostSql.queries.filter((sql) => /\bacp_sessions\b/i.test(sql))).toEqual([]);
       const target = loadSessionEntry({ agentId: "main", sessionKey: targetKey });
       if (labelConflict) {
         expect(respond.mock.calls[0]?.[2]).toHaveProperty("message", "label already in use: Taken");
         expect(target?.label).toBeUndefined();
       } else {
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({
+          resolved: { runtimeSelectionLocked: true, agentRuntime: { id: "acpx" } },
+        });
         expect(target).toHaveProperty("label" in patch ? "label" : "pinnedAt");
       }
       expect(
@@ -198,7 +222,8 @@ test("sessions.patchMany archives 30 human sessions without transcript hydration
         return readsTranscriptPayload && !boundedPayloadLookup ? "transcript-full-hydration" : null;
       },
     );
-    await loadTranscriptEvents({
+    // Calibrate the host SQL observer through the synchronous compatibility reader.
+    loadTranscriptEventsSync({
       agentId: "main",
       sessionId: "session-archive-perf-0",
       sessionKey: targets[0]!.key,

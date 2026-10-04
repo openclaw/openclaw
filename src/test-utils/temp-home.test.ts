@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runExclusiveSessionStoreWrite } from "../config/sessions/store-writer.js";
 import { resolveEffectiveHomeDir } from "../infra/home-dir.js";
 import { withTempHomeCore } from "../plugin-sdk/test-helpers/temp-home.js";
@@ -25,14 +26,10 @@ import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths
 import { captureEnv, captureFullEnv, withEnvAsync } from "./env.js";
 import { createTempHomeEnv } from "./temp-home.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
 async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected ${targetPath} to be removed`);
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("createTempHomeEnv", () => {
@@ -98,7 +95,8 @@ describe("createTempHomeEnv", () => {
     ];
     const environment = captureEnv(envKeys);
     const previous = Object.fromEntries(envKeys.map((key) => [key, process.env[key]]));
-    const temporary = await createTempHomeEnv("openclaw-temp-home-drain-");
+    const sandbox = tempDirs.make("openclaw-temp-home-drain-");
+    const temporary = await createTempHomeEnv(path.join(path.basename(sandbox), "home-"));
     const stateDir = path.join(temporary.home, ".openclaw");
     const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: stateDir });
     const admission = captureOpenClawStateDatabaseReadAdmission(databasePath);
@@ -123,17 +121,18 @@ describe("createTempHomeEnv", () => {
       await closeOpenClawStateDatabaseByPathAsync(databasePath);
       unregister();
       environment.restore();
-      await fs.rm(temporary.home, { recursive: true, force: true });
+      await temporary.restore();
     }
+    expect(await fs.readdir(sandbox)).toEqual([]);
   });
 
   it.each(["directory", "environment"])(
     "rolls back failed %s acquisition without removing a sibling home",
     async (stage) => {
-      const parent = await fs.mkdtemp(path.join(os.tmpdir(), "temp-home-acquisition-"));
+      const parent = tempDirs.make("temp-home-acquisition-");
       const prefix = path.join(path.basename(parent), "shared-");
       const sibling = await createTempHomeEnv(prefix);
-      const sharedRoot = path.dirname(sibling.home);
+      const siblingEntries = await fs.readdir(parent);
       const marker = path.join(sibling.home, "keep.txt");
       await fs.writeFile(marker, "sibling");
       try {
@@ -164,14 +163,13 @@ describe("createTempHomeEnv", () => {
             expect(Object.fromEntries(keys.map((key) => [key, process.env[key]]))).toEqual(
               previous,
             );
-            expect(await fs.readdir(sharedRoot)).toEqual([path.basename(sibling.home)]);
+            expect(await fs.readdir(parent)).toEqual(siblingEntries);
             expect(await fs.readFile(marker, "utf8")).toBe("sibling");
             faultSpy.mockRestore();
             const recovered = await createTempHomeEnv(prefix);
-            expect(path.dirname(recovered.home)).toBe(sharedRoot);
             expect(recovered.home).not.toBe(sibling.home);
             await recovered.restore();
-            expect(await fs.readdir(sharedRoot)).toEqual([path.basename(sibling.home)]);
+            expect(await fs.readdir(parent)).toEqual(siblingEntries);
           } finally {
             faultSpy.mockRestore();
             snapshot.restore();
@@ -179,45 +177,44 @@ describe("createTempHomeEnv", () => {
         });
       } finally {
         await sibling.restore();
-        await fs.rm(parent, { recursive: true, force: true });
       }
+      expect(await fs.readdir(parent)).toEqual([]);
     },
   );
 
-  it.each([false, true])(
-    "sets home env vars and restores them on cleanup (inherited home override=%s)",
-    async (inheritedOverride) => {
-      const callerHome = inheritedOverride ? path.join(os.tmpdir(), "caller-home") : undefined;
-      await withEnvAsync({ OPENCLAW_HOME: callerHome }, async () => {
-        const previousHome = process.env.HOME;
-        const previousUserProfile = process.env.USERPROFILE;
-        const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-        const previousEffectiveHome = resolveEffectiveHomeDir();
-        const tempHome = await createTempHomeEnv("openclaw-temp-home-");
-        try {
-          expect(process.env.HOME).toBe(tempHome.home);
-          expect(process.env.USERPROFILE).toBe(tempHome.home);
-          expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(tempHome.home, ".openclaw"));
-          expect(resolveEffectiveHomeDir()).toBe(tempHome.home);
-          const homeStat = await fs.stat(tempHome.home);
-          expect(homeStat.isDirectory()).toBe(true);
-          if (process.platform !== "win32") {
-            const stateStat = await fs.stat(path.join(tempHome.home, ".openclaw"));
-            expect(homeStat.mode & 0o777).toBe(0o700);
-            expect(stateStat.mode & 0o777).toBe(0o700);
-          }
-        } finally {
-          await tempHome.restore();
+  it("isolates home env vars from an inherited override and restores them on cleanup", async () => {
+    const sandbox = tempDirs.make("openclaw-temp-home-");
+    const callerHome = path.join(os.tmpdir(), "caller-home");
+    await withEnvAsync({ OPENCLAW_HOME: callerHome }, async () => {
+      const previousHome = process.env.HOME;
+      const previousUserProfile = process.env.USERPROFILE;
+      const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+      const previousEffectiveHome = resolveEffectiveHomeDir();
+      const tempHome = await createTempHomeEnv(path.join(path.basename(sandbox), "home-"));
+      try {
+        expect(process.env.HOME).toBe(tempHome.home);
+        expect(process.env.USERPROFILE).toBe(tempHome.home);
+        expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(tempHome.home, ".openclaw"));
+        expect(resolveEffectiveHomeDir()).toBe(tempHome.home);
+        const homeStat = await fs.stat(tempHome.home);
+        expect(homeStat.isDirectory()).toBe(true);
+        if (process.platform !== "win32") {
+          const stateStat = await fs.stat(path.join(tempHome.home, ".openclaw"));
+          expect(homeStat.mode & 0o777).toBe(0o700);
+          expect(stateStat.mode & 0o777).toBe(0o700);
         }
-        expect(process.env.HOME).toBe(previousHome);
-        expect(process.env.USERPROFILE).toBe(previousUserProfile);
-        expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
-        expect(process.env.OPENCLAW_HOME).toBe(callerHome);
-        expect(resolveEffectiveHomeDir()).toBe(previousEffectiveHome);
-        await expectPathMissing(tempHome.home);
-      });
-    },
-  );
+      } finally {
+        await tempHome.restore();
+      }
+      expect(process.env.HOME).toBe(previousHome);
+      expect(process.env.USERPROFILE).toBe(previousUserProfile);
+      expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
+      expect(process.env.OPENCLAW_HOME).toBe(callerHome);
+      expect(resolveEffectiveHomeDir()).toBe(previousEffectiveHome);
+      await expectPathMissing(tempHome.home);
+      expect(await fs.readdir(sandbox)).toEqual([]);
+    });
+  });
 });
 
 describe("withTempHome acquisition", () => {
@@ -250,108 +247,99 @@ describe("withTempHome acquisition", () => {
     },
   );
 
-  it.each([false, true])(
-    "rolls back a throwing env callback before reuse (skipHomeCleanup=%s)",
-    async (skipHomeCleanup) => {
-      const callerHome = path.join(sandbox, "caller");
-      await fs.mkdir(callerHome);
-      await fs.writeFile(path.join(callerHome, "keep"), "caller-owned");
-      await withEnvAsync(
-        {
-          OPENCLAW_HOME: callerHome,
-          OPENCLAW_STATE_DIR: path.join(callerHome, ".openclaw"),
-          ACQUISITION_ADDED: undefined,
-          ACQUISITION_CHANGED: "",
-          ACQUISITION_DELETED: "caller",
-        },
-        async () => {
-          const callerEnv = { ...process.env };
-          const failure = new Error("env acquisition failed");
-          const body = vi.fn(async () => undefined);
-          let failedHome = "";
-          const started = createDeferred();
-          const release = createDeferred();
-          const envReached = createDeferred();
-          const writes: string[] = [];
-          const storePath = path.join(callerHome, "sessions.json");
-          const active = runExclusiveSessionStoreWrite(storePath, async () => {
-            started.resolve();
-            await release.promise;
-            writes.push("active");
-          });
-          await started.promise;
-          const pending = runExclusiveSessionStoreWrite(storePath, async () => {
-            writes.push("pending");
-          });
-          const writers = Promise.allSettled([active, pending]);
-          const acquisition = expect(
-            withTempHomeCore(body, {
-              prefix,
-              skipHomeCleanup,
-              env: {
-                ACQUISITION_ADDED: "temporary",
-                ACQUISITION_CHANGED: "temporary",
-                ACQUISITION_DELETED: undefined,
-                ACQUISITION_THROW: (home) => {
-                  failedHome = home;
-                  envReached.resolve();
-                  throw failure;
-                },
+  it("rolls back a throwing env callback before reuse even when home retention is requested", async () => {
+    const callerHome = path.join(sandbox, "caller");
+    await fs.mkdir(callerHome);
+    await fs.writeFile(path.join(callerHome, "keep"), "caller-owned");
+    await withEnvAsync(
+      {
+        OPENCLAW_HOME: callerHome,
+        OPENCLAW_STATE_DIR: path.join(callerHome, ".openclaw"),
+        ACQUISITION_ADDED: undefined,
+        ACQUISITION_CHANGED: "",
+        ACQUISITION_DELETED: "caller",
+      },
+      async () => {
+        const callerEnv = { ...process.env };
+        const failure = new Error("env acquisition failed");
+        const body = vi.fn(async () => undefined);
+        let failedHome = "";
+        const started = createDeferred();
+        const release = createDeferred();
+        const envReached = createDeferred();
+        const writes: string[] = [];
+        const storePath = path.join(callerHome, "sessions.json");
+        const active = runExclusiveSessionStoreWrite(storePath, async () => {
+          started.resolve();
+          await release.promise;
+          writes.push("active");
+        });
+        await started.promise;
+        const pending = runExclusiveSessionStoreWrite(storePath, async () => {
+          writes.push("pending");
+        });
+        const writers = Promise.allSettled([active, pending]);
+        const acquisition = expect(
+          withTempHomeCore(body, {
+            prefix,
+            skipHomeCleanup: true,
+            env: {
+              ACQUISITION_ADDED: "temporary",
+              ACQUISITION_CHANGED: "temporary",
+              ACQUISITION_DELETED: undefined,
+              ACQUISITION_THROW: (home) => {
+                failedHome = home;
+                envReached.resolve();
+                throw failure;
               },
-            }),
-          ).rejects.toBe(failure);
-          try {
-            await Promise.race([envReached.promise, acquisition]);
-          } finally {
-            release.resolve();
-            await writers;
-            await acquisition;
-          }
-          expect(await writers).toEqual([
-            { status: "fulfilled", value: undefined },
-            { status: "fulfilled", value: undefined },
-          ]);
-          expect(writes).toEqual(["active", "pending"]);
-          expect(body).not.toHaveBeenCalled();
-          const changedKeys = [
-            ...new Set([...Object.keys(callerEnv), ...Object.keys(process.env)]),
-          ].filter((key) => callerEnv[key] !== process.env[key]);
-          expect.soft(changedKeys).toEqual([]);
-          await expectPathMissing(failedHome);
-          const root = path.dirname(failedHome);
-          expect(await fs.readdir(root)).toEqual([]);
-          const result = await withTempHomeCore(
-            async (home) => {
-              expect(home).not.toBe(failedHome);
-              expect(path.dirname(home)).toBe(root);
-              expect(process.env.HOME).toBe(home);
-              return "recovered";
             },
-            { prefix },
-          );
-          expect(result).toBe("recovered");
-          expect(process.env.HOME).toBe(callerEnv.HOME);
-          expect(await fs.readFile(path.join(callerHome, "keep"), "utf8")).toBe("caller-owned");
-          expect(await fs.readdir(root)).toEqual([]);
-        },
-      );
-    },
-  );
+          }),
+        ).rejects.toBe(failure);
+        try {
+          await Promise.race([envReached.promise, acquisition]);
+        } finally {
+          release.resolve();
+          await writers;
+          await acquisition;
+        }
+        expect(await writers).toEqual([
+          { status: "fulfilled", value: undefined },
+          { status: "fulfilled", value: undefined },
+        ]);
+        expect(writes).toEqual(["active", "pending"]);
+        expect(body).not.toHaveBeenCalled();
+        const changedKeys = [
+          ...new Set([...Object.keys(callerEnv), ...Object.keys(process.env)]),
+        ].filter((key) => callerEnv[key] !== process.env[key]);
+        expect.soft(changedKeys).toEqual([]);
+        await expectPathMissing(failedHome);
+        expect(await fs.readdir(sandbox)).toEqual([path.basename(callerHome)]);
+        const result = await withTempHomeCore(
+          async (home) => {
+            expect(home).not.toBe(failedHome);
+            expect(process.env.HOME).toBe(home);
+            return "recovered";
+          },
+          { prefix },
+        );
+        expect(result).toBe("recovered");
+        expect(process.env.HOME).toBe(callerEnv.HOME);
+        expect(await fs.readFile(path.join(callerHome, "keep"), "utf8")).toBe("caller-owned");
+        expect(await fs.readdir(sandbox)).toEqual([path.basename(callerHome)]);
+      },
+    );
+  });
 
-  it.each(["case", "sessions"])("rolls back partial %s directory creation", async (stage) => {
+  it("rolls back partial session directory creation", async () => {
     const callerEnv = { ...process.env };
-    const failure = new Error(`${stage} directory failed`);
+    const failure = new Error("sessions directory failed");
     const mkdir = fs.mkdir;
     let failedHome = "";
     const fault = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
       const result = await mkdir(target, options);
       const targetPath = String(target);
-      const isCase = path.basename(targetPath).startsWith("case-");
-      if (
-        (stage === "case" && isCase) ||
-        (stage === "sessions" && path.basename(targetPath) === "sessions")
-      ) {
-        failedHome = isCase ? targetPath : path.resolve(targetPath, "../../../..");
+      if (path.basename(targetPath) === "sessions") {
+        failedHome = path.resolve(targetPath, "../../../..");
         throw failure;
       }
       return result;
@@ -368,6 +356,7 @@ describe("withTempHome acquisition", () => {
     ].filter((key) => callerEnv[key] !== process.env[key]);
     expect.soft(changedKeys).toEqual([]);
     await expectPathMissing(failedHome);
+    expect(await fs.readdir(sandbox)).toEqual([]);
   });
 
   it.each([false, true])(
