@@ -33,7 +33,7 @@ export async function runAbortableTimeout<T>(
         const operation = typeof label === "function" ? label() : (label ?? "request");
         abortCtrl.abort(new Error(`${operation} timed out`));
       },
-      Math.min(resolved, remainingMs),
+      Math.max(0, Math.min(resolved, remainingMs)),
     );
     timer.unref?.();
   };
