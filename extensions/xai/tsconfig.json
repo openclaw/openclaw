@@ -959,6 +959,9 @@
       ],
       "openclaw/plugin-sdk/memory-host-search": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/memory-host-search.d.ts"
+      ],
+      "openclaw/plugin-sdk/github-worker-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/github-worker-runtime.d.ts"
       ]
     }
   }

@@ -152,7 +152,7 @@ describe("GitHub tool identity", () => {
   it.each([
     { identity: "native", managed: false },
     { identity: "managed", managed: true },
-  ])("prepares exact preview-credential scrubs for $identity identity", ({ managed }) => {
+  ])("prepares exact secret scrubs for $identity identity", ({ managed }) => {
     const identityConfig = managed
       ? { tools: { github: { profileId: "ghp_99999999999999999999999999999999" } } }
       : {};
@@ -170,6 +170,7 @@ describe("GitHub tool identity", () => {
       agentId: "main",
     });
     expect(envScrub.credentialScrubEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
       ...(managed
         ? {
             GH_TOKEN: "",
@@ -197,6 +198,7 @@ describe("GitHub tool identity", () => {
       agentId: "main",
     });
     expect(storeScrub.credentialScrubEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
       ...(managed
         ? {
             GH_TOKEN: "",
@@ -246,24 +248,27 @@ describe("GitHub tool identity", () => {
   it.each([
     { source: "env", id: "GH_TOKEN", expected: { GH_TOKEN: "" } },
     { source: "store", id: "GITHUB_TOKEN", expected: { GITHUB_TOKEN: "" } },
-  ] as const)("scrubs only the explicit $source preview ref $id", ({ source, id, expected }) => {
-    const prepared = prepareGitHubToolEnvironment({
-      config: {},
-      sourceConfig: {
-        gateway: {
-          controlUi: {
-            github: {
-              token: { source, provider: "default", id },
+  ] as const)(
+    "scrubs the App key and explicit $source preview ref $id",
+    ({ source, id, expected }) => {
+      const prepared = prepareGitHubToolEnvironment({
+        config: {},
+        sourceConfig: {
+          gateway: {
+            controlUi: {
+              github: {
+                token: { source, provider: "default", id },
+              },
             },
           },
         },
-      },
-      agentId: "main",
-      env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
-    });
-    expect(prepared.credentialScrubEnv).toEqual(expected);
-    expect(prepared.excludedStoreNames).toEqual(source === "store" ? [id] : []);
-  });
+        agentId: "main",
+        env: { GH_TOKEN: "test-token", GITHUB_TOKEN: "fallback-token" },
+      });
+      expect(prepared.credentialScrubEnv).toEqual({ GITHUB_APP_PRIVATE_KEY: "", ...expected });
+      expect(prepared.excludedStoreNames).toEqual(source === "store" ? [id] : []);
+    },
+  );
 
   it("fails closed when a configured managed profile is absent", async () => {
     processMocks.runCommandBuffered.mockImplementation(async (argv: string[]) => {
@@ -802,6 +807,8 @@ describe("GitHub tool identity", () => {
   });
 
   it("atomically refreshes the credential seen by an already-prepared stable profile", async () => {
+    vi.stubEnv("GITHUB_HOST", "fixture.ghe.com");
+    vi.stubEnv("GITHUB_API_BASE_URL", "https://api.fixture.ghe.com");
     const root = tempDirs.make("openclaw-github-stable-refresh-");
     const env = { OPENCLAW_STATE_DIR: root };
     const profileId = "ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -812,8 +819,7 @@ describe("GitHub tool identity", () => {
       profileId,
       env,
     });
-    await fs.mkdir(profileDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(path.join(profileDir, "hosts.yml"), "old-credential\n", { mode: 0o600 });
+    await writeProfile(profileDir, "old-credential");
     const admitted = prepareGitHubToolEnvironment({ config, agentId: "main", env });
     vi.mocked(fetch).mockImplementation(
       async () => new Response(JSON.stringify({ id: 202, login: "renamed-user" })),
@@ -828,6 +834,19 @@ describe("GitHub tool identity", () => {
     });
 
     expect(account.login).toBe("renamed-user");
+    expect(parseYaml(await fs.readFile(path.join(profileDir, "hosts.yml"), "utf8"))).toEqual({
+      "github.com": {
+        user: "renamed-user",
+        oauth_token: "rotated-access-token",
+        users: { "renamed-user": { oauth_token: "rotated-access-token" } },
+      },
+    });
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).toContain(
+      "https://api.github.com/user",
+    );
+    expect(vi.mocked(fetch).mock.calls.map(([url]) => url)).not.toContain(
+      "https://api.fixture.ghe.com/user",
+    );
     expect(admitted.localIdentityEnv.GH_CONFIG_DIR).toBe(profileDir);
     await expect(
       fs.readFile(path.join(String(admitted.localIdentityEnv.GH_CONFIG_DIR), "hosts.yml"), "utf8"),

@@ -264,7 +264,6 @@ export default {
             ),
           );
           if (!current.issued) {
-            current.issued = true;
             const native = tools.find(({ tool }) =>
               ["exec_command", "shell_command", "shell"].includes(tool.name ?? ""),
             );
@@ -274,19 +273,17 @@ export default {
               );
             }
             const properties = native.tool.parameters?.properties ?? {};
-            expect(Object.hasOwn(properties, "login")).toBe(true);
             for (let i = 0; i < current.count; i++) {
               const command =
                 current.mode === "deny"
                   ? "printf PRESSURE_DENIED > pressure-denied.txt"
                   : `printf PRESSURE_ALLOW_${current.id}_${i}_END; printf PRESSURE_ALLOW_${current.id}_${i}_END > pressure-${current.id}-${i}.txt`;
-              // Host login profiles can leave the granted workspace before the command runs.
-              // Use the advertised non-login option equally for every measured scenario.
+              // Codex omits login when the host already enforces non-login shells.
               const args = {
                 ...(Object.hasOwn(properties, "cmd")
                   ? { cmd: command }
                   : { command: native.tool.name === "shell" ? ["sh", "-c", command] : command }),
-                login: false,
+                ...(Object.hasOwn(properties, "login") ? { login: false } : {}),
               };
               stream.tool({
                 type: "function_call",
@@ -297,6 +294,7 @@ export default {
                 arguments: JSON.stringify(args),
               });
             }
+            current.issued = true;
           } else {
             stream.message({ id: `msg_${current.id}`, text: `PRESSURE_DONE_${current.id}` });
           }

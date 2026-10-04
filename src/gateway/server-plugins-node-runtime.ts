@@ -86,6 +86,9 @@ export async function openOwnedGatewayNodeDuplex(options: {
   assertCurrent: () => void;
 }): ReturnType<PluginRuntime["nodes"]["openDuplex"]> {
   const { params, invokeNode, context } = options;
+  const featureNode = params.requiredCommandFeatures?.length
+    ? context.nodeRegistry.get(params.nodeId)
+    : undefined;
   const controller = new AbortController();
   const signal = AbortSignal.any([controller.signal, options.signal]);
   let invokeId: string | undefined;
@@ -95,6 +98,19 @@ export async function openOwnedGatewayNodeDuplex(options: {
     try {
       signal.throwIfAborted();
       options.assertCurrent();
+      params.assertCurrent?.();
+      if (params.requiredCommandFeatures?.length) {
+        const current = context.nodeRegistry.get(params.nodeId);
+        if (
+          !featureNode ||
+          current !== featureNode ||
+          !params.requiredCommandFeatures.every((feature) =>
+            current.commandFeatures?.[params.command]?.includes(feature),
+          )
+        ) {
+          throw new Error("Node command features are no longer available for this connection");
+        }
+      }
     } catch (error) {
       controller.abort(error);
       throw error;
@@ -131,8 +147,13 @@ export async function openOwnedGatewayNodeDuplex(options: {
   });
   const onAbort = () => endpoint.close();
   signal.addEventListener("abort", onAbort, { once: true });
+  const {
+    requiredCommandFeatures: _features,
+    assertCurrent: _assertCurrent,
+    ...invokeParams
+  } = params;
   const closed = invokeNode(
-    params,
+    invokeParams,
     {
       onProgress: (chunk) => {
         assertRuntimeCurrent();
@@ -204,6 +225,17 @@ export function projectGatewayRuntimeNodes(
           allowlist,
         }).ok,
     );
-    return Object.assign({}, nodeRecord, { invocableCommands });
+    return Object.assign({}, nodeRecord, {
+      invocableCommands,
+      ...(liveNode.commandFeatures
+        ? {
+            commandFeatures: Object.fromEntries(
+              Object.entries(liveNode.commandFeatures)
+                .filter(([command]) => invocableCommands.includes(command))
+                .map(([command, features]) => [command, [...features]]),
+            ),
+          }
+        : {}),
+    });
   });
 }

@@ -729,10 +729,14 @@ describe.skipIf(process.platform === "win32")(
               clientFactory: shared.factory,
               nativeHookRelay: { enabled: false },
             };
+            // Both turns need the production host environment to retain one native writer.
+            const closeInitialHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+            cleanups.push(async () => closeInitialHost());
             const initialized = await runCodexAppServerAttempt(
               { ...params, prompt: "Initialize the source." },
               runOptions,
             );
+            closeInitialHost();
             expect(initialized.terminal).toEqual({ kind: "ok" });
             const initialBinding = await readCodexAppServerBinding(params.sessionFile);
             if (!initialBinding) {

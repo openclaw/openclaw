@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
@@ -88,7 +89,33 @@ export async function readCachedNativeGitHubToken(
   );
 }
 
-export async function runGitHubIdentityCommand(
+export async function readGitAuthor(env: NodeJS.ProcessEnv, cwd: string) {
+  const result = await runGitHubIdentityCommand(
+    ["git", "config", "--null", "--get-regexp", "^user\\.(name|email)$"],
+    env,
+    cwd,
+  );
+  const author: { name: string | null; email: string | null } = { name: null, email: null };
+  if (result.code !== 0) {
+    return author;
+  }
+  for (const entry of result.stdout.toString("utf8").split("\0")) {
+    const separator = entry.indexOf("\n");
+    if (separator < 0) {
+      continue;
+    }
+    const key = entry.slice(0, separator);
+    const value = readNonBlankString(entry.slice(separator + 1))?.trim() ?? null;
+    if (key === "user.name") {
+      author.name = value;
+    } else if (key === "user.email") {
+      author.email = value;
+    }
+  }
+  return author;
+}
+
+async function runGitHubIdentityCommand(
   argv: string[],
   env?: NodeJS.ProcessEnv,
   cwd?: string,

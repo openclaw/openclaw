@@ -456,7 +456,8 @@
     "!dist/plugin-sdk/secret-egress-runtime.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.d.ts",
     "!dist/plugin-sdk/compiled-subprocess-testing.js",
-    "!dist/plugin-sdk/memory-host-search.d.ts"
+    "!dist/plugin-sdk/memory-host-search.d.ts",
+    "!dist/plugin-sdk/github-worker-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -873,6 +874,9 @@
     "./plugin-sdk/gateway-runtime": {
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
       "default": "./dist/plugin-sdk/gateway-runtime.js"
+    },
+    "./plugin-sdk/github-worker-runtime": {
+      "default": "./dist/plugin-sdk/github-worker-runtime.js"
     },
     "./plugin-sdk/websocket-runtime": {
       "types": "./dist/plugin-sdk/websocket-runtime.d.ts",

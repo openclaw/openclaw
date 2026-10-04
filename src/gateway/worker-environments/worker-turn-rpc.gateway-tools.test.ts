@@ -157,6 +157,115 @@ describe("worker Gateway tool RPC authority", () => {
     },
   );
 
+  it("keeps credential heartbeats independent of an optional tool catalog", async () => {
+    const h = await support.placementHarness("worker-github-no-tools", "session-github-no-tools");
+    const absent = await h.workerService.refreshGitHubBinding(h.identity, 0);
+    expect(absent).toMatchObject({ ok: true, result: undefined });
+    const snapshot = {
+      generation: 1,
+      token: "synthetic-no-tools",
+      expiresAtMs: Date.now() + 3_600_000,
+    };
+    h.bindGitHubGrant({
+      binding: { token: "synthetic-initial", login: "x-access-token", branch: "test" },
+      refresh: async () => snapshot,
+      revoke: async () => {},
+      assertCurrent: () => {},
+    });
+    expect(await h.workerService.refreshGitHubBinding(h.identity, 0)).toMatchObject({
+      ok: true,
+      result: snapshot,
+    });
+    h.releaseSource();
+    expect(await h.workerService.refreshGitHubBinding(h.identity, 1)).toMatchObject({ ok: false });
+  });
+
+  it("refreshes only the exact admitted GitHub grant and refuses it after source closure", async () => {
+    const h = await toolHarness("github-refresh");
+    const snapshot = {
+      generation: 1,
+      token: "synthetic-rpc-token",
+      expiresAtMs: Date.now() + 3_600_000,
+    };
+    const revoke = vi.fn(async () => {});
+    const assertCurrent = vi.fn();
+    h.bindGitHubGrant({
+      binding: { token: "synthetic-initial", login: "x-access-token", branch: "test" },
+      assertCurrent,
+      refresh: async () => snapshot,
+      revoke,
+    });
+    const prepared = await h.workerService.refreshGitHubBinding(h.identity, 0);
+    expect(prepared).toMatchObject({ ok: true, result: snapshot });
+    if (!prepared.ok) {
+      throw new Error("Expected an admitted refresh");
+    }
+    prepared.assertCurrent();
+    expect(assertCurrent).toHaveBeenCalledOnce();
+    h.releaseSource();
+    expect(revoke).toHaveBeenCalledOnce();
+    expect(() => prepared.assertCurrent()).toThrow("grant owner changed");
+    await expect(h.workerService.refreshGitHubBinding(h.identity, 1)).resolves.toMatchObject({
+      ok: false,
+    });
+  });
+
+  it.each(["before", "during", "after"] as const)(
+    "keeps heartbeats usable when terminal acknowledgement arrives %s credential renewal",
+    async (timing) => {
+      const { liveEvents } = support.sequencedLiveEvents();
+      const h = await support.placementHarness(
+        `worker-github-terminal-${timing}`,
+        `session-${timing}`,
+        {
+          liveEvents,
+        },
+      );
+      const entered = createDeferred();
+      const release = createDeferred();
+      const refresh = vi.fn(async () => {
+        entered.resolve();
+        await release.promise;
+        return {
+          generation: 1,
+          token: "synthetic-terminal-token",
+          expiresAtMs: Date.now() + 3_600_000,
+        };
+      });
+      h.bindGitHubGrant({
+        binding: { token: "synthetic-initial", login: "x-access-token", branch: "test" },
+        refresh,
+        revoke: async () => {},
+        assertCurrent: () => {},
+      });
+      const pending =
+        timing !== "before" ? h.workerService.refreshGitHubBinding(h.identity, 0) : undefined;
+      if (pending) {
+        await entered.promise;
+      }
+      if (timing === "after") {
+        release.resolve();
+      }
+      const prepared = timing === "after" ? await pending : undefined;
+      await expect(
+        h.workerService.pushLiveEvent(h.identity, support.terminalEvent(h.identity)),
+      ).resolves.toEqual({
+        ok: true,
+        result: { ackedSeq: 1 },
+      });
+      release.resolve();
+      const heartbeat =
+        prepared ?? (await (pending ?? h.workerService.refreshGitHubBinding(h.identity, 0)));
+      expect(heartbeat).toMatchObject({ ok: true, result: undefined });
+      expect(refresh).toHaveBeenCalledTimes(timing === "before" ? 0 : 1);
+      expect(h.workerService.validateWorkerConnection(h.identity)).toBeNull();
+      h.releaseSource();
+      await expect(h.workerService.refreshGitHubBinding(h.identity, 0)).resolves.toMatchObject({
+        ok: false,
+      });
+    },
+  );
+
   it.each([
     { sourceStale: true, error: "Source transcript writer changed" },
     { sourceStale: false, error: "portal port required" },

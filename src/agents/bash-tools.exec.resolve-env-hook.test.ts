@@ -440,6 +440,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
     expect(hooks.runResolveExecEnv).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
       LAZY_PLUGIN_SAFE: "yes",
       REQUEST_SAFE: "request",
     });
@@ -539,6 +540,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
 
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
       REQUEST_SAFE: "request",
     });
   });
@@ -567,6 +569,7 @@ describe("exec resolve_exec_env hook wiring", () => {
     });
     expect(hooks.runResolveExecEnv).toHaveBeenCalledTimes(1);
     expect(mocks.gatewayParams[0]?.requestedEnv).toEqual({
+      GITHUB_APP_PRIVATE_KEY: "",
       PLUGIN_SAFE: "yes",
       REQUEST_SAFE: "request",
     });

@@ -18,6 +18,7 @@ import {
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { redactSensitiveText } from "../logging/redact.js";
+import { NODE_COMMAND_FEATURES_EVENT } from "../shared/node-command-features.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import type { NodeHostClient } from "./client.js";
 import { sampleNodeHostStats } from "./host-stats.js";
@@ -59,7 +60,8 @@ function classifyNodeMethodFailure(
 type NodeOptionalPublicationMethod =
   | typeof NODE_RUNNER_INVENTORY_UPDATE_METHOD
   | typeof NODE_PLUGIN_TOOLS_UPDATE_METHOD
-  | typeof NODE_SKILLS_UPDATE_METHOD;
+  | typeof NODE_SKILLS_UPDATE_METHOD
+  | "node.event";
 
 type NodeOptionalPublicationState = {
   unsupported: boolean;
@@ -307,6 +309,15 @@ export function startNodeHostConnection({
   const publishInventory = () => {
     if (!gatewayHelloReceived) {
       return;
+    }
+    if (gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_COMMAND_FEATURES)) {
+      queueOptionalPublication(
+        "node.event",
+        buildNodeEventParams(NODE_COMMAND_FEATURES_EVENT, {
+          features: prepared.manifest.commandFeatures ?? {},
+        }),
+        "command features",
+      );
     }
     if (inventory.skills) {
       queueOptionalPublication(NODE_SKILLS_UPDATE_METHOD, { skills: inventory.skills }, "skill");

@@ -1,5 +1,5 @@
 import { stringify as stringifyYaml } from "yaml";
-import { resolveConfiguredGitHubHost } from "./github-host.js";
+import { GITHUB_PUBLIC_HOST } from "./github-host.js";
 
 export type GitHubToolAccount = {
   accountId: number;
@@ -7,9 +7,13 @@ export type GitHubToolAccount = {
   avatarUrl: string | null;
 };
 
-export function managedGitHubHosts(identity: { login: string; token: string }): string {
+export function managedGitHubHosts(identity: {
+  login: string;
+  token: string;
+  host?: string;
+}): string {
   return stringifyYaml({
-    [resolveConfiguredGitHubHost()]: {
+    [identity.host ?? GITHUB_PUBLIC_HOST]: {
       user: identity.login,
       oauth_token: identity.token,
       users: { [identity.login]: { oauth_token: identity.token } },

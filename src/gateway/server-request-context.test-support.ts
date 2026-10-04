@@ -5,6 +5,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { createGatewayRequestContext } from "./server-request-context.js";
@@ -44,7 +45,7 @@ export function makeContextParams(
         configReloader: { isConfigReloadSettled: vi.fn(() => true) },
       },
       lifecycle: { closePreludeStarted: false },
-      getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),
+      getAttachedGatewayMethodRegistry: vi.fn(() => createGatewayMethodRegistry([])),
       gatewayTls: { enabled: false },
       sessionCompanion: {} as never,
       sessionObserver: { removeConnection: vi.fn() } as never,

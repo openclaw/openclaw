@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Value } from "typebox/value";
+import type { WorkerProtocolCloseReason } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   isWorkerGatewayToolFrameWithinBudget,
   WorkerToolSurfaceSchema,
   type WorkerGatewayToolResult,
+  type WorkerGatewayToolInvokeParams,
+  type WorkerGatewayToolCancelParams,
   type WorkerGatewayToolUpdateFrame,
   type WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
@@ -15,6 +18,7 @@ import { projectAgentToolDefinition } from "../../agents/prepared-tool-surface.j
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import type {
   WorkerGatewayToolRuntime,
   WorkerGatewayToolSink,
@@ -265,4 +269,75 @@ export function createWorkerGatewayToolRuntime(params: {
       await Promise.allSettled([...calls.values()].map((call) => call.result));
     },
   };
+}
+
+/** Tool RPC adapters retain the policy owner's gate across asynchronous dispatch. */
+export function createWorkerGatewayToolRpc(
+  validate: (
+    identity: WorkerConnectionIdentity,
+    runtime: WorkerGatewayToolRuntime | undefined,
+  ) =>
+    | { ok: true }
+    | { ok: false; closeReason: WorkerProtocolCloseReason }
+    | { ok: false; reason: "epoch-mismatch" | "session-not-attached" },
+) {
+  const withToolSurface = async <T>(
+    identity: WorkerConnectionIdentity,
+    run: (runtime: WorkerGatewayToolRuntime) => Promise<T> | T,
+  ) => {
+    const runtime = getWorkerTurnToolSurface(identity);
+    if (!runtime) {
+      const admitted = validate(identity, runtime);
+      if (!admitted.ok) {
+        return "closeReason" in admitted
+          ? admitted
+          : { ok: false as const, closeReason: "placement-mismatch" as const };
+      }
+      return { ok: false as const, closeReason: "method-not-allowed" as const };
+    }
+    return runWorkerTurnRequestOperation({
+      validate: () => validate(identity, runtime),
+      run: () => run(runtime),
+    });
+  };
+  return {
+    getToolSurface: (identity: WorkerConnectionIdentity) =>
+      withToolSurface(identity, (runtime) => runtime.getSurface(identity)),
+    invokeGatewayTool: (
+      identity: WorkerConnectionIdentity,
+      request: WorkerGatewayToolInvokeParams,
+      sink: WorkerGatewayToolSink,
+      signal?: AbortSignal,
+    ) =>
+      withToolSurface(identity, (runtime) =>
+        runtime.invoke(identity, request, sink, signal).catch(workerSessionToolErrorResult),
+      ),
+    cancelGatewayTool: (
+      identity: WorkerConnectionIdentity,
+      request: WorkerGatewayToolCancelParams,
+    ) => withToolSurface(identity, (runtime) => runtime.cancel(request)),
+  };
+}
+
+/** Resource work uses the same request gate without requiring a model-facing tool catalog. */
+export async function runWorkerTurnRequestOperation<T>(params: {
+  validate: () =>
+    | { ok: true }
+    | { ok: false; closeReason: WorkerProtocolCloseReason }
+    | { ok: false; reason: "epoch-mismatch" | "session-not-attached" };
+  run: () => Promise<T> | T;
+}) {
+  const admitted = params.validate();
+  if (!admitted.ok) {
+    return "closeReason" in admitted
+      ? admitted
+      : { ok: false as const, closeReason: "placement-mismatch" as const };
+  }
+  const result = await params.run();
+  const current = params.validate();
+  return current.ok
+    ? { ok: true as const, result }
+    : "closeReason" in current
+      ? current
+      : { ok: false as const, closeReason: "placement-mismatch" as const };
 }

@@ -15,6 +15,7 @@ import {
   validateWorkerLiveEventParams,
   validateWorkerTranscriptCommitParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,
@@ -54,7 +55,11 @@ export type WorkerConnectionService = Pick<
   Partial<
     Pick<
       WorkerTurnRpc,
-      "executeComputer" | "getToolSurface" | "invokeGatewayTool" | "cancelGatewayTool"
+      | "executeComputer"
+      | "getToolSurface"
+      | "invokeGatewayTool"
+      | "cancelGatewayTool"
+      | "refreshGitHubBinding"
     >
   > & {
     admitWorker: (
@@ -237,10 +242,38 @@ export async function dispatchWorkerRequest(params: {
     rejectWorkerRequest({ ...params, reason: "invalid-heartbeat" });
     return;
   }
+  let github: WorkerHeartbeatResult["github"];
+  if (
+    params.request.params.githubGeneration !== undefined &&
+    params.identity.protocolFeatures.includes(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE) &&
+    service.refreshGitHubBinding
+  ) {
+    const refreshed = await service.refreshGitHubBinding(
+      params.identity,
+      params.request.params.githubGeneration,
+    );
+    if (!refreshed.ok) {
+      rejectWorkerRequest({ ...params, reason: refreshed.closeReason });
+      return;
+    }
+    const currentFailure = service.validateWorkerConnection(params.identity);
+    if (params.signal?.aborted || currentFailure) {
+      rejectWorkerRequest({ ...params, reason: currentFailure ?? "placement-mismatch" });
+      return;
+    }
+    if (refreshed.result) {
+      refreshed.assertCurrent();
+    }
+    github = refreshed.result;
+  } else if (params.request.params.githubGeneration !== undefined) {
+    rejectWorkerRequest({ ...params, reason: "invalid-heartbeat" });
+    return;
+  }
   const result: WorkerHeartbeatResult = {
     receivedAtMs: Date.now(),
     status: "ok",
     ownerEpoch: params.identity.ownerEpoch,
+    ...(github ? { github } : {}),
   };
   params.respond(true, result);
 }

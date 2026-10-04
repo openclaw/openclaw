@@ -669,6 +669,7 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     commitTranscript: turnRpc.commitTranscript,
     pushLiveEvent: turnRpc.pushLiveEvent,
     getToolSurface: turnRpc.getToolSurface,
+    refreshGitHubBinding: turnRpc.refreshGitHubBinding,
     invokeGatewayTool: turnRpc.invokeGatewayTool,
     cancelGatewayTool: turnRpc.cancelGatewayTool,
     createGatewayTools: options.createGatewayTools,

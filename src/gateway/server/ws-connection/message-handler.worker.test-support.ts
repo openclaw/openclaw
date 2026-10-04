@@ -230,6 +230,9 @@ export function attachHarness(
         },
       },
     })),
+    refreshGitHubBinding: vi.fn<NonNullable<WorkerConnectionService["refreshGitHubBinding"]>>(
+      async () => ({ ok: true, result: undefined, assertCurrent: () => {} }),
+    ),
     invokeGatewayTool: vi.fn<NonNullable<WorkerConnectionService["invokeGatewayTool"]>>(
       async () => ({ ok: true, result: { content: [] } }),
     ),

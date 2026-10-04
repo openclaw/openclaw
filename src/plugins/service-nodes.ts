@@ -144,7 +144,6 @@ export function createPluginServiceNodeInvoker(options: {
         signal: authority.signal,
         assertCurrent() {
           authority.assertCurrent();
-          request.assertCurrent?.();
           if (resolver() !== context) {
             throw new Error("Plugin service Gateway changed during node invocation");
           }

@@ -8,10 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { Value } from "typebox/value";
-import {
-  validateNodeHostStatsPayload,
-  validateNodePresenceActivityPayload,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateNodePresenceActivityPayload } from "../../packages/gateway-protocol/src/index.js";
 import { DesktopAvailabilitySchema } from "../../packages/gateway-protocol/src/schema/environments.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
@@ -42,6 +39,7 @@ import { isUnscopedSessionKeySentinel, normalizeMainKey } from "../routing/sessi
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { NODE_COMMAND_FEATURES_EVENT } from "../shared/node-command-features.js";
 import { NODE_HOST_STATS_EVENT } from "../shared/node-host-stats.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
@@ -58,7 +56,12 @@ import {
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
-import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
+import { publishNodeConnectionFacts } from "./server-node-events-publications.js";
+import type {
+  NodeEvent,
+  NodeEventContext,
+  NodeEventHandleResult,
+} from "./server-node-events-types.js";
 import {
   loadSessionEntry,
   resolveGatewayModelSupportsImages,
@@ -90,13 +93,6 @@ type VoiceTranscriptReservation = {
 const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
-
-type NodeEventHandleResult = {
-  ok: true;
-  event: string;
-  handled: boolean;
-  reason?: string;
-};
 
 type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
 
@@ -1005,18 +1001,15 @@ export const handleNodeEvent = async (
       const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts);
       return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
     }
-    case NODE_HOST_STATS_EVENT: {
-      const obj = parsePayloadObject(evt.payloadJSON);
-      if (!obj || !validateNodeHostStatsPayload(obj)) {
-        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
-      }
-      const hostStats = ctx.updateNodeHostStats?.({ nodeId, connId: opts?.connId, stats: obj });
-      if (!hostStats) {
-        return { ok: true, event: evt.event, handled: false, reason: "stale_connection" };
-      }
-      ctx.broadcast("node.hostStats", { nodeId, hostStats }, { dropIfSlow: true });
-      return { ok: true, event: evt.event, handled: true, reason: "updated" };
-    }
+    case NODE_COMMAND_FEATURES_EVENT:
+    case NODE_HOST_STATS_EVENT:
+      return publishNodeConnectionFacts(
+        ctx,
+        nodeId,
+        evt.event,
+        parsePayloadObject(evt.payloadJSON),
+        opts?.connId,
+      );
     case NODE_PRESENCE_ACTIVITY_EVENT: {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj || !validateNodePresenceActivityPayload(obj)) {
