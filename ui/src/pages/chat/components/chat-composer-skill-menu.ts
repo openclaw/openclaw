@@ -11,6 +11,7 @@ import {
   getSkillDisplayName,
   getSlashCommandDescription,
   type SlashCommandDef,
+  type SlashCommandCatalog,
 } from "../../../lib/chat/commands.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { renderSlashMatchedName } from "./chat-composer-slash-menu-dom.ts";
@@ -39,6 +40,7 @@ export type SkillMenuHost = {
   commitDraft: (next: string) => void;
   getTextarea: () => HTMLTextAreaElement | null;
   refreshCommands?: () => void | Promise<void>;
+  getCommandCatalog?: () => SlashCommandCatalog | null;
 };
 
 export function createSkillMenuState(): SkillMenuState {
@@ -123,13 +125,17 @@ function requestSkillCommandRefresh(
   if (!refresh) {
     return;
   }
+  const owner = host.getCommandCatalog?.()?.owner;
   const generation = state.skillCommandRefreshGeneration + 1;
   state.skillCommandRefreshGeneration = generation;
   state.skillCommandRefreshPending = true;
   void refresh
     .catch(() => undefined)
     .finally(() => {
-      if (state.skillCommandRefreshGeneration !== generation) {
+      if (
+        state.skillCommandRefreshGeneration !== generation ||
+        host.getCommandCatalog?.()?.owner !== owner
+      ) {
         return;
       }
       state.skillCommandRefreshPending = false;
@@ -160,7 +166,7 @@ export function updateSkillMenu(
     state.skillCommandRefreshTargetStart = target.start;
     requestSkillCommandRefresh(state, host, requestUpdate);
   }
-  const items = getSkillCommandCompletions(target.query);
+  const items = getSkillCommandCompletions(target.query, host.getCommandCatalog?.()?.commands);
   state.skillMenuTarget = target;
   state.skillMenuItems = items;
   state.skillMenuIndex = Math.min(state.skillMenuIndex, Math.max(0, items.length - 1));

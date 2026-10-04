@@ -53,7 +53,7 @@ import { createChatQuestionActions } from "./chat-question-actions.ts";
 import { dismissRealtimeTalkError } from "./chat-realtime.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
 import { chatSendPendingReason } from "./chat-send-support.ts";
-import { refreshChatCommands } from "./chat-state-refresh.ts";
+import { getChatCommandCatalog, refreshChatCommands } from "./chat-state-refresh.ts";
 import {
   resolveChatAgentId,
   resolveChatAvatarUrl,
@@ -585,6 +585,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       onRequestUpdate: state.requestUpdate,
       onHistoryKeydown: state.handleChatInputHistoryKey,
       onSlashIntent: () => refreshChatCommands(state),
+      getCommandCatalog: () => getChatCommandCatalog(state),
       onSlashCommand:
         suggestionViewer || catalogKey
           ? undefined

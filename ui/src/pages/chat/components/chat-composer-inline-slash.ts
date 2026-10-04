@@ -116,6 +116,7 @@ export function hasActiveInlineSlashArgumentPrefix(
 export function findDirectInlineSlashArgumentInvocation(
   text: string,
   caret = text.length,
+  commands?: readonly SlashCommandDef[],
 ): InlineSlashArgumentInvocation | null {
   const boundedCaret = Math.max(0, Math.min(caret, text.length));
   const prefix = text.slice(0, boundedCaret);
@@ -129,6 +130,7 @@ export function findDirectInlineSlashArgumentInvocation(
     }
     const command = getSlashCommandCompletions(typedName, {
       showAll: true,
+      commands,
       inlineOnly: true,
     }).find(
       (entry) =>

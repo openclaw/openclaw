@@ -105,10 +105,14 @@ function requestSlashCommandRefresh(
   if (!refresh) {
     return;
   }
+  const owner = host.getCommandCatalog?.()?.owner;
   state.slashCommandRefreshPending = true;
   void refresh
     .catch(() => undefined)
     .finally(() => {
+      if (host.getCommandCatalog?.()?.owner !== owner) {
+        return;
+      }
       state.slashCommandRefreshPending = false;
       // Dismissal clears both the menu and completion intent while refresh is pending.
       if (!state.slashMenuOpen && !state.slashMenuCompletion) {
@@ -156,7 +160,7 @@ export function updateSlashMenu(
       closeSlashMenuIfNeeded(state, requestUpdate);
       return;
     }
-    const cmd = SLASH_COMMANDS.find(
+    const cmd = (host.getCommandCatalog?.()?.commands ?? SLASH_COMMANDS).find(
       (entry) => entry.name === cmdName && (host.commandFilter?.(entry) ?? true),
     );
     const argOptions = cmd ? host.resolveArgOptions(cmd) : [];
@@ -191,6 +195,7 @@ export function updateSlashMenu(
   }
   const items = getSlashCommandCompletions(completion.query, {
     showAll: true,
+    commands: host.getCommandCatalog?.()?.commands,
     inlineOnly: completion.inline,
     allowImmediateInlineCommands: !completion.skillOnly,
   }).filter(
@@ -399,7 +404,11 @@ function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHo
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
   const caret = host.getTextarea()?.selectionStart ?? current.length;
-  const invocation = findDirectInlineSlashArgumentInvocation(current, caret);
+  const invocation = findDirectInlineSlashArgumentInvocation(
+    current,
+    caret,
+    host.getCommandCatalog?.()?.commands,
+  );
   if (!invocation) {
     return false;
   }

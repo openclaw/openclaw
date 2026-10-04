@@ -9,6 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../../i18n/locales/en-chat-goals.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
+  buildFallbackSlashCommands,
   canSubmitBeforeChatHistory,
   isChatControlCommand,
   isModelIndependentChatCommand,
@@ -61,10 +62,13 @@ import { renderChatComposerView } from "./chat-composer-view.ts";
 
 registerChatGoalsEnglish();
 
+const unavailableCommandCatalog = { owner: {}, commands: buildFallbackSlashCommands() };
+
 export { isChatRunWorking, resetChatComposerState } from "./chat-composer-state.ts";
 
 export function renderChatComposer(props: ChatComposerProps) {
   const state = getChatComposerState(props.paneId);
+  const commandCatalog = props.getCommandCatalog?.() ?? null;
   state.slashCommandDispatchConnected = props.connected;
   const canCompose = props.canCompose ?? props.canSend;
   const isBusy = props.sending || props.stream !== null;
@@ -160,6 +164,9 @@ export function renderChatComposer(props: ChatComposerProps) {
     commitDraft: commitMenuDraft,
     getTextarea: () => state.composerTextarea,
     refreshCommands: props.onSlashIntent,
+    ...(props.getCommandCatalog
+      ? { getCommandCatalog: () => props.getCommandCatalog?.() ?? unavailableCommandCatalog }
+      : {}),
   };
   const slashMenuHost: SlashMenuHost = {
     ...skillMenuHost,
@@ -178,6 +185,43 @@ export function renderChatComposer(props: ChatComposerProps) {
     runInlineCommand: props.connected ? props.onSlashCommand : undefined,
     activateComposerMode: goalComposer.activateCommand,
   };
+  if (props.getCommandCatalog && state.commandCatalog !== commandCatalog) {
+    const previous = state.commandCatalog;
+    state.commandCatalog = commandCatalog;
+    if (previous && previous.owner !== commandCatalog?.owner) {
+      // A retired context cannot leave invocations or pending writers in its successor.
+      resetSlashMenuState(state);
+      state.slashCommandRefreshPending = false;
+      resetSkillMenuState(state);
+    } else {
+      // Reconcile accepted rows only. Draft, caret, dismissal, and argument modes stay owned
+      // by the composer; publication must not hydrate again or reopen an invocation.
+      const draft = skillMenuHost.getDraft();
+      if (state.slashMenuOpen && state.slashMenuMode === "command") {
+        const selected = state.slashMenuItems[state.slashMenuIndex]?.key;
+        const index = state.slashMenuIndex;
+        updateSlashMenu(draft, state, slashMenuHost, () => {}, { skipSlashIntent: true });
+        const retained = state.slashMenuItems.findIndex((item) => item.key === selected);
+        state.slashMenuIndex =
+          retained >= 0 ? retained : Math.min(index, Math.max(0, state.slashMenuItems.length - 1));
+      }
+      if (state.skillMenuOpen) {
+        const selected = state.skillMenuItems[state.skillMenuIndex]?.key;
+        updateSkillMenu(
+          draft,
+          state.composerTextarea?.selectionStart ?? draft.length,
+          state,
+          skillMenuHost,
+          () => {},
+          { skipRefresh: true },
+        );
+        const retained = state.skillMenuItems.findIndex((item) => item.key === selected);
+        if (retained >= 0) {
+          state.skillMenuIndex = retained;
+        }
+      }
+    }
+  }
   const mentionMenuHost: HumanMentionMenuHost = {
     paneId: props.paneId,
     getDraft: skillMenuHost.getDraft,

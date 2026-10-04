@@ -472,23 +472,31 @@ function getSlashCommandRelevance(command: SlashCommandDef, filter: string): num
     : NON_MATCHING_COMMAND_RANK;
 }
 
+/** Accepted rows and their live connection/agent/session owner. */
+export type SlashCommandCatalog = {
+  readonly owner: object;
+  readonly commands: readonly SlashCommandDef[];
+};
+
 export function getSlashCommandCompletions(
   filter: string,
   options?: {
     showAll?: boolean;
+    commands?: readonly SlashCommandDef[];
     inlineOnly?: boolean;
     allowImmediateInlineCommands?: boolean;
   },
 ): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
   const showAll = options?.showAll ?? false;
+  const catalog = options?.commands ?? SLASH_COMMANDS;
   let commands = options?.inlineOnly
-    ? SLASH_COMMANDS.filter(
+    ? catalog.filter(
         (command) =>
           (command.source === "skill" && command.skillModelVisible === true) ||
           (executesInlineImmediately(command) && options.allowImmediateInlineCommands !== false),
       )
-    : SLASH_COMMANDS;
+    : catalog;
   commands = lower
     ? commands.filter(
         (command) => getSlashCommandRelevance(command, lower) < NON_MATCHING_COMMAND_RANK,
@@ -554,12 +562,14 @@ export function getSkillDisplayName(command: SlashCommandDef): string {
   return command.skillDisplayName?.trim() || command.name;
 }
 
-export function getSkillCommandCompletions(filter: string): SlashCommandDef[] {
+export function getSkillCommandCompletions(
+  filter: string,
+  commands: readonly SlashCommandDef[] = SLASH_COMMANDS,
+): SlashCommandDef[] {
   const lower = normalizeLowercaseStringOrEmpty(filter);
   const normalized = lower.replace(/[\s_]+/gu, "-");
-  return SLASH_COMMANDS.filter(
-    (command) => command.source === "skill" && command.skillModelVisible === true,
-  )
+  return commands
+    .filter((command) => command.source === "skill" && command.skillModelVisible === true)
     .filter((command) => {
       const displayName = normalizeLowercaseStringOrEmpty(getSkillDisplayName(command));
       const displayLookup = displayName.replace(/[\s_]+/gu, "-");

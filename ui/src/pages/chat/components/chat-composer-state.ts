@@ -15,6 +15,7 @@ function createChatComposerState(): ChatComposerState {
   return {
     ...createSlashMenuState(),
     ...createSkillMenuState(),
+    commandCatalog: null,
     composerComposing: false,
     editRevision: 0,
     mentionMenu: new HumanMentionMenu(),

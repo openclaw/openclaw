@@ -12,6 +12,7 @@ import {
   loadChatMetadataRefresh,
   retireChatMetadataRefresh,
 } from "../../lib/chat/chat-metadata-store.ts";
+import { buildFallbackSlashCommands, type SlashCommandCatalog } from "../../lib/chat/commands.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import {
@@ -57,6 +58,8 @@ type ChatStartupMetadataHandler = (
 ) => void | Promise<void>;
 
 type ChatMetadataBinding = {
+  commandCatalog: SlashCommandCatalog;
+  applyCommands: (commands: SlashCommandCatalog["commands"] | undefined) => void;
   client: GatewayBrowserClient;
   sessions: ChatPageHost["sessions"];
   scope: { agentId?: string; sessionKey: string };
@@ -90,11 +93,22 @@ function scheduleChatMetadataRefresh(callback: () => void) {
   globalThis.setTimeout(callback, 50);
 }
 
+export function getChatCommandCatalog(host: ChatPageHost): SlashCommandCatalog | null {
+  const binding = metadataBindings.get(host);
+  return binding?.isCurrent() ? binding.commandCatalog : null;
+}
+
 export async function refreshChatCommands(host: ChatPageHost) {
+  const binding = bindChatMetadata(host);
   await refreshSlashCommands({
     client: host.client,
     agentId: resolveChatAgentId(host),
     sessionKey: host.sessionKey,
+    shouldApply: () => binding?.isCurrent() === true,
+    onApplied: (commands) => {
+      binding?.applyCommands(commands);
+      host.requestUpdate?.();
+    },
   });
 }
 
@@ -158,6 +172,12 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   const scope = { agentId: resolveChatAgentId(host) ?? undefined, sessionKey: host.sessionKey };
   const epoch = host.connectionEpoch;
   const binding: ChatMetadataBinding = {
+    commandCatalog: { owner: {}, commands: buildFallbackSlashCommands() },
+    applyCommands: (commands) => {
+      if (commands && binding.isCurrent()) {
+        binding.commandCatalog = { ...binding.commandCatalog, commands };
+      }
+    },
     client,
     sessions: host.sessions,
     scope,
@@ -200,7 +220,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         }
         if (update.type !== "loading") {
           if (update.type === "result") {
-            applyRemoteSlashCommandsResult(update.result);
+            binding.applyCommands(applyRemoteSlashCommandsResult(update.result));
             if (update.catalogChanged) {
               binding.sessionFactsInvalidated = true;
               void refreshChatMetadata(host, { automatic: true });
@@ -220,7 +240,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   host.chatModelCatalogInitialized = hasUnrestrictedModelCatalogSnapshot(client);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyRemoteSlashCommandsResult(cached);
+    binding.applyCommands(applyRemoteSlashCommandsResult(cached));
   }
   return binding;
 }

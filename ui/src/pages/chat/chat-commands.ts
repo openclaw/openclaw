@@ -274,14 +274,14 @@ export function invalidateSessionSlashCommands(
 
 export function applyRemoteSlashCommandsResult(
   result: CommandsListResult | null | undefined,
-): boolean {
+): SlashCommandDef[] | undefined {
   if (!Array.isArray(result?.commands)) {
-    return false;
+    return undefined;
   }
   const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
   refreshSeq += 1;
   replaceSlashCommands(commands);
-  return true;
+  return commands;
 }
 
 export async function refreshSlashCommands(params: {
@@ -289,6 +289,7 @@ export async function refreshSlashCommands(params: {
   agentId?: string | null;
   sessionKey?: string;
   shouldApply?: () => boolean;
+  onApplied?: (commands: readonly SlashCommandDef[]) => void;
 }): Promise<void> {
   const seq = ++refreshSeq;
   const agentId = params.agentId?.trim();
@@ -298,7 +299,9 @@ export async function refreshSlashCommands(params: {
   if (seq !== refreshSeq || params.shouldApply?.() === false) {
     return;
   }
-  replaceSlashCommands(commands ?? buildFallbackSlashCommands());
+  const accepted = commands ?? buildFallbackSlashCommands();
+  replaceSlashCommands(accepted);
+  params.onApplied?.(accepted);
 }
 
 export function shouldQueueLocalSlashCommand(name: string): boolean {

@@ -19,6 +19,7 @@ import type {
   ChatReplyTarget,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
+import type { SlashCommandCatalog } from "../../../lib/chat/commands.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
@@ -159,6 +160,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
+  getCommandCatalog?: () => SlashCommandCatalog | null;
   onSlashCommand?: (command: string) => void;
   onSend: (
     followUpModeOverride?: ChatFollowUpMode,
@@ -196,6 +198,7 @@ type ScopedComposerDraft = {
 
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
+    commandCatalog: SlashCommandCatalog | null;
     composerComposing: boolean;
     editRevision: number;
     mentionMenu: HumanMentionMenu;
