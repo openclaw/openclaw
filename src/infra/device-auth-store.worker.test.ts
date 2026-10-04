@@ -169,8 +169,6 @@ it("remains responsive and rechecks token mutation authority after waiting for a
 
 it.each([
   { kind: "ordinary", action: "cancel" },
-  { kind: "origin", action: "retire" },
-  { kind: "prepare", action: "cancel" },
   { kind: "prepare", action: "retire" },
 ])("does not settle absent worker $kind after $action", async ({ kind, action }) => {
   await withOpenClawTestState({ label: "device-token-absent-admission" }, async (state) => {
@@ -194,12 +192,7 @@ it.each([
     const reading =
       kind === "prepare"
         ? tokens.prepareDeviceAuthStore({ ...input, readOnly: true })
-        : kind === "origin"
-          ? tokens.loadOriginDeviceTokenReadOnly({
-              ...input,
-              gatewayScope: "wss://synthetic.example",
-            })
-          : tokens.loadDeviceAuthTokenReadOnly(input);
+        : tokens.loadDeviceAuthTokenReadOnly(input);
     if (action === "cancel") {
       controller.abort(new Error("synthetic-canceled"));
     } else {

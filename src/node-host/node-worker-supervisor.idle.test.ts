@@ -254,6 +254,50 @@ function fixture(capacity = 1, container = false) {
 }
 
 describe("node worker idle retention", () => {
+  it("routes process observations after turn settlement and fences stale or retired owners", async () => {
+    const f = fixture();
+    try {
+      const value = input("process-owner");
+      const owner = await f.launch(value);
+      await owner.complete(value.launchId, "background");
+      const target = {
+        ...testNodeWorkerEnvironmentIdentity(value),
+        placementGeneration: value.placementGeneration,
+        expectedBundleHash: value.expectedBundleHash,
+        operation: { action: "list" as const },
+      };
+      mocks.send.mockClear();
+      await expect(
+        f.supervisor.observeProcesses({ ...target, ownerEpoch: target.ownerEpoch + 1 }),
+      ).rejects.toThrow("owner changed");
+      await expect(
+        f.supervisor.observeProcesses({ ...target, expectedBundleHash: "b".repeat(64) }),
+      ).rejects.toThrow("owner changed");
+      expect(mocks.send).not.toHaveBeenCalled();
+      const list = { sessionId: target.sessionId, processes: [], truncated: false };
+      mocks.send.mockImplementationOnce(async (adapter, message) => {
+        expect(adapter).toBe(owner.adapter);
+        if (message.type !== "process") {
+          throw new Error("Expected process request");
+        }
+        await owner.emit({ type: "process-result", requestId: message.requestId, result: list });
+      });
+      await expect(f.supervisor.observeProcesses(target)).resolves.toEqual(list);
+      expect((await f.supervisor.status(value.launchId))?.state).toBe("completed");
+      const dispatched = createDeferred();
+      mocks.send.mockImplementationOnce(async () => {
+        dispatched.resolve();
+      });
+      const pending = f.supervisor.observeProcesses(target);
+      const rejected = expect(pending).rejects.toThrow(/owner ended|owner changed/);
+      await dispatched.promise;
+      await f.supervisor.close();
+      await rejected;
+    } finally {
+      await f.supervisor.close();
+    }
+  });
+
   it.each(["completed", "failed", "closed", "aborted"] as const)(
     "releases prepared workspace custody when public launch is %s",
     async (outcome) => {

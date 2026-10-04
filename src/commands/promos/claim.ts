@@ -23,14 +23,13 @@ import {
 import type { RuntimeEnv } from "../../runtime.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { createPluginCapabilityConsentPrompter } from "../../wizard/plugin-capability-consent.js";
-import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
-import { repairCopilotRuntimePluginInstallForModelSelection } from "../copilot-runtime-plugin-install.js";
 import { normalizeAlias } from "../models/alias-name.js";
 import {
   applyDefaultModelPrimaryUpdate,
   updateConfig,
   upsertCanonicalModelConfigEntry,
 } from "../models/shared.js";
+import { repairModelSelectionRuntimePlugins } from "../runtime-plugin-install.js";
 
 type PromosClaimOptions = {
   apiKey?: string;
@@ -379,15 +378,11 @@ export async function promosClaimCommand(
 
   if (makeDefault && suggested) {
     // Keep default-change runtime repair aligned with `models set`.
-    const repaired = await repairCodexRuntimePluginInstallForModelSelection({
+    const warnings = await repairModelSelectionRuntimePlugins({
       cfg: updated,
       model: suggested.modelRef,
     });
-    const copilotRepaired = await repairCopilotRuntimePluginInstallForModelSelection({
-      cfg: updated,
-      model: suggested.modelRef,
-    });
-    for (const warning of [...repaired.warnings, ...copilotRepaired.warnings]) {
+    for (const warning of warnings) {
       runtime.error?.(warning);
     }
   }

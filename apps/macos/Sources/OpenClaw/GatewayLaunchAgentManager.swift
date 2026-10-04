@@ -107,8 +107,7 @@ enum GatewayLaunchAgentManager {
     }
 
     static func isLaunchAgentWriteDisabled() -> Bool {
-        if FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path) { return true }
-        return false
+        FileManager().fileExists(atPath: self.disableLaunchAgentMarkerURL.path)
     }
 
     static func applyAttachOnlyRuntimeOverride() -> String? {

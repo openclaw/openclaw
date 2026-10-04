@@ -301,8 +301,8 @@ scavenger work between short UI updates; normal reclamation and default heaps re
 
 The test-runtime setup action installs a checksum-pinned prerelease of `openclaw/bun`
 only for jobs that need it. The source commit, archive checksum, and executable
-checksum live together in `.github/actions/setup-test-bun/action.yml`.
-The action checks the release zip and manifest against `SHA256SUMS`, then checks
+checksum live together in `scripts/lib/openclaw-bun.json`, shared by CI and the apps.
+The shared stager checks the release zip and manifest against `SHA256SUMS`, then checks
 the extracted executable against the manifest. Independent archive and executable
 pins keep the selected bytes fixed even if release metadata changes.
 The fork owns the backing storage of `node:vm` cached bytecode, so compiled
@@ -310,10 +310,10 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `e167be5c8fdc8b959b707a13901af019b27bd4a3` with WebKit
-`fb1167ebf2cb9edc1f6771a2c11771b024693ae0` in prerelease
-`openclaw-v1.4.3-20261003-e167be5c8f-webkit-fb1167ebf2`.
-WebKit is unchanged from the previous `13311cf83e` pin. This build fixes idle
+The pinned build pairs Bun `c999d9cb92704b50fa8b15a3663b74e39d9b57c7` with WebKit
+`1600131e46b5af48bbda3559af8d8a3327230b6e` in prerelease
+`openclaw-v1.4.3-20261003-c999d9cb92-webkit-1600131e46`.
+WebKit advances from `fb1167ebf2` in the previous `e167be5c8f` pin. This build fixes idle
 HTTP connection shutdown and filesystem read/write argument defaults. It also
 retains newly assigned Windows environment variables in copies, resets Windows
 pipe standard I/O after completion, and preserves prepared ESM records for
@@ -358,6 +358,10 @@ It retains the upstream Bun sync through `4b02e1031d` and fixes for thread-safe
 function ownership, shared-environment deletion, and a module-key crash.
 The shared provider-catalog retention test is qualified on this build and runs
 on Bun; tests that assert V8 heap behavior continue to run on Node.
+UI retention tests use the local inspector's `HeapProfiler.collectGarbage` on
+both runtimes. Only an unavailable inspector method permits the older Bun GC
+fallback. The qualified UI inventory has no Node-only subset, so each native
+UI shard runs once under `bun-compatible`; `dual` still runs both runtimes.
 The fork keeps the lifecycle-script `node` shim in a per-user directory, with a
 private fallback when that directory is unusable. `NODE` and `npm_node_execpath`
 point to the executable in either location. This lets several accounts on one

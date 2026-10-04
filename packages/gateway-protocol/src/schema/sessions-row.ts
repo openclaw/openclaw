@@ -112,6 +112,8 @@ export const SessionRowSchema = Type.Object(
     /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
     rowMode: Type.Optional(Type.Literal("compact")),
     sessionId: Type.Optional(Type.String()),
+    /** Incarnation revision for invalidating session-scoped client caches after resets. */
+    lifecycleRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),

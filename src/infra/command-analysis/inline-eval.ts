@@ -48,8 +48,6 @@ type PositionalInterpreterSpec = {
   fileFlags?: ReadonlySet<string>;
   fileFlagPrefixes?: readonly string[];
   exactValueFlags?: ReadonlySet<string>;
-  exactOptionalValueFlags?: ReadonlySet<string>;
-  prefixValueFlags?: readonly string[];
   flag: "<command>" | "<program>";
 };
 
@@ -296,7 +294,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "--load",
       "-W",
     ]),
-    prefixValueFlags: ["-F", "--field-separator=", "-v", "--assign=", "--include=", "--load="],
     flag: "<program>",
   },
   {
@@ -317,27 +314,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
       "-s",
       "--max-chars",
     ]),
-    exactOptionalValueFlags: new Set(["--eof", "--replace"]),
-    prefixValueFlags: [
-      "-a",
-      "--arg-file=",
-      "-d",
-      "--delimiter=",
-      "-E",
-      "--eof=",
-      "-I",
-      "--replace=",
-      "-i",
-      "-L",
-      "--max-lines=",
-      "-l",
-      "-n",
-      "--max-args=",
-      "-P",
-      "--max-procs=",
-      "-s",
-      "--max-chars=",
-    ],
     flag: "<command>",
   },
   {
@@ -345,8 +321,6 @@ const POSITIONAL_INTERPRETER_INLINE_EVAL_SPECS: readonly PositionalInterpreterSp
     fileFlags: new Set(["-f", "--file"]),
     fileFlagPrefixes: ["-f", "--file="],
     exactValueFlags: new Set(["-f", "--file", "-l", "--line-length"]),
-    exactOptionalValueFlags: new Set(["-i", "--in-place"]),
-    prefixValueFlags: ["-f", "--file=", "--in-place=", "--line-length="],
     flag: "<program>",
   },
 ];
@@ -548,16 +522,6 @@ export function detectInterpreterInlineEvalArgv(
     }
     if (positionalSpec.exactValueFlags?.has(token)) {
       idx += 1;
-      continue;
-    }
-    if (positionalSpec.exactOptionalValueFlags?.has(token)) {
-      continue;
-    }
-    if (
-      positionalSpec.prefixValueFlags?.some(
-        (prefix) => token.startsWith(prefix) && token.length > prefix.length,
-      )
-    ) {
       continue;
     }
     if (token.startsWith("-")) {

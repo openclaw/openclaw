@@ -85,6 +85,17 @@ export type WorkerDesktopObserveResult = {
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  observeProcesses?(
+    input: Omit<
+      import("../../worker/worker-process-observation.js").NodeWorkerProcessInput,
+      "gatewayNamespace" | "expectedBundleHash"
+    >,
+    assertCurrent: () => void,
+    signal?: AbortSignal,
+  ): Promise<
+    | import("../../../packages/gateway-protocol/src/schema/session-processes.js").SessionsProcessesListResult
+    | import("../../../packages/gateway-protocol/src/schema/session-processes.js").SessionsProcessesStopResult
+  >;
   /** Current explicit provider attestation, never the persisted legacy default. */
   getDedicatedNodeLeaseSignal(environmentId: string): AbortSignal | undefined;
   captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity): {

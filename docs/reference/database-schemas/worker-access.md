@@ -374,10 +374,11 @@ persistence, cron preparation, and opaque SDK updaters retain their existing nat
 routes; these callers do not change the default patch contract. Schemas, retention,
 durability, and update behavior are unchanged.
 
-Per-turn model selection, harness admission, skill-snapshot refresh, dispatch,
-plugin injection probes, completion metadata, and diff-baseline selection read
-durable entries through the existing session readers. Exact candidate projections
-validate only the selected rows, preserving isolation from unrelated damaged rows.
+Per-turn model selection, harness admission, local-turn placement preparation,
+skill-snapshot refresh, dispatch, plugin injection probes, completion metadata,
+and diff-baseline selection read durable entries through the existing session
+readers. Exact candidate projections validate only the selected rows, preserving
+isolation from unrelated damaged rows.
 Sandbox preparation retains its physical reader through workspace
 preparation and rechecks the caller before returning. Gateway reply finalization
 and GitHub publication discovery prepare full entries through the same ordered

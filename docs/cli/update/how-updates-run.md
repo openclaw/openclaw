@@ -149,6 +149,13 @@ refuses the swap and names both targets; filesystem mutation ownership checks
 remain in effect. This fix belongs to the installed updater, so a candidate
 cannot change an older updater's launcher checks during that first update.
 
+Journal-owned publication and rollback also compare launcher bytes or link targets,
+without requiring uid/gid metadata that a non-root updater cannot restore. They
+still require the recorded launcher identity before replacing it. New symlinks
+preserve the existing launcher's ownership when possible; otherwise they use the
+updater's effective user and group instead of inheriting an unusable bin-directory
+group. An ownership fallback produces a warning.
+
 Package publication verifies the candidate before activation and the installed
 package after publication. Launcher publication checks package identities without
 repeatedly hashing both generations. Retirement verifies the live package before

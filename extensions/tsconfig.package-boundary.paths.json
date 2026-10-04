@@ -620,6 +620,12 @@
       "@openclaw/ai/internal/shared": [
         "../packages/plugin-sdk/dist/packages/ai/src/internal/shared.d.ts"
       ],
+      "@openclaw/gateway-protocol": [
+        "../packages/plugin-sdk/dist/packages/gateway-protocol/src/index.d.ts"
+      ],
+      "@openclaw/gateway-protocol/*": [
+        "../packages/plugin-sdk/dist/packages/gateway-protocol/src/*.d.ts"
+      ],
       "@openclaw/llm-core": [
         "../packages/plugin-sdk/dist/packages/llm-core/src/index.d.ts"
       ],

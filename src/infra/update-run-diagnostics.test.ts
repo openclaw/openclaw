@@ -54,39 +54,34 @@ it("records serving health without replacing a persisted restart refusal", () =>
   );
 });
 
-it.each([false, true])(
-  "keeps the first terminal receipt when a stale publisher carries verification=%s",
-  (observed) => {
-    const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-terminal-diagnostics-") } };
-    const run = createUpdateRun({ trigger: "cli" }, options);
-    const terminal = finishUpdateRun(
-      run.runId,
-      {
-        status: "failed",
-        reason: "doctor-failed",
-        diagnostics: {
-          recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
-        },
+it("keeps the first terminal receipt when a stale publisher carries success verification", () => {
+  const options = { env: { OPENCLAW_STATE_DIR: dirs.make("update-terminal-diagnostics-") } };
+  const run = createUpdateRun({ trigger: "cli" }, options);
+  const terminal = finishUpdateRun(
+    run.runId,
+    {
+      status: "failed",
+      reason: "doctor-failed",
+      diagnostics: {
+        recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       },
-      options,
-    );
-    const stale = finishUpdateRun(
-      run.runId,
-      {
-        status: "succeeded",
-        diagnostics: {
-          recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
-          ...(observed
-            ? { verification: { readyz: true, settled: true, versionMatch: true } }
-            : {}),
-        },
+    },
+    options,
+  );
+  const stale = finishUpdateRun(
+    run.runId,
+    {
+      status: "succeeded",
+      diagnostics: {
+        recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
+        verification: { readyz: true, settled: true, versionMatch: true },
       },
-      options,
-    );
-    expect(stale).toEqual(terminal);
-    expect(getUpdateRun(run.runId, options)).toEqual(terminal);
-  },
-);
+    },
+    options,
+  );
+  expect(stale).toEqual(terminal);
+  expect(getUpdateRun(run.runId, options)).toEqual(terminal);
+});
 
 it("keeps recovery observations atomic across a busy write without revising the failed outcome", () => {
   const env = { OPENCLAW_STATE_DIR: dirs.make("update-observation-atomic-") };

@@ -30,6 +30,7 @@ export const en: TranslationMap & {
         string
       >;
     pullRequests: TranslationMap;
+    processesPanel: TranslationMap;
   };
   configForm: TranslationMap & { sections: TranslationMap };
   configPage: TranslationMap;
@@ -3085,8 +3086,24 @@ export const en: TranslationMap & {
     },
     archivedSessionDisabled: "This session is archived. Unarchive it to continue the conversation.",
     subagentViewOnly: "View-only subagent",
-    subagentSessionDisabled:
-      "This is a subagent of {parent}. Continue the conversation in its parent session.",
+    subagentSessionDisabled: "Continue in {parent}.",
+    processesPanel: { title: "Processes", refresh: "Refresh processes" },
+    subagentsPanel: {
+      title: "Subagents",
+      back: "Back to Subagents",
+      running: "Running ({count})",
+      finished: "Finished ({count})",
+      callsOne: "{count} call",
+      callsMany: "{count} calls",
+      empty: "No subagents in this conversation.",
+      noRunning: "No running subagents",
+      refresh: "Refresh subagents",
+      loadMore: "Show more subagents",
+      stop: "Stop {name}",
+      stopping: "Stopping…",
+      elapsed: "Elapsed time",
+      duration: "Run duration",
+    },
     parentSession: "the parent session",
     openParentSession: "Open parent session",
     parentSessionUnavailable: "Parent session information is unavailable.",
@@ -3907,6 +3924,10 @@ export const en: TranslationMap & {
       filesEmpty: "Browse files, artifacts, and changes from this session.",
       companion: "Side chat",
       companionEmpty: "Ask a focused question about this session.",
+      processes: "Processes",
+      processesEmpty: "Inspect background commands and their output for this conversation.",
+      subagents: "Subagents",
+      subagentsEmpty: "Follow delegated work from this conversation.",
       desktop: "Desktop",
       desktopEmpty: "Connect to an available remote desktop.",
       portal: "Portal",

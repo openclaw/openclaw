@@ -100,6 +100,7 @@ const INTERNAL_CORE_EXPORTED_PACKAGE_DIRS = [
   "media-core",
   "normalization-core",
   "acp-core",
+  "worker-runtime",
 ] as const;
 const BUN_NATIVE_ALIAS_FILTER = new RegExp(
   `^(?:${[

@@ -33,14 +33,9 @@ import {
   isCronRunMessage,
   type RoleContentMessage,
 } from "./chat-display-projection.helpers.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 
 type TtsSupplementMarker = { textSha256?: string; spokenText?: string };
-
-export type SubagentCoordinationDisplayResolver = {
-  assertCurrent?: () => void;
-  isSubagentSession: (sessionKey: string) => boolean;
-  isSubagentRunMessage: (runId: string, messageSeq: number | undefined) => boolean;
-};
 
 export function isSubagentCoordinationHistoryInput(
   message: Record<string, unknown>,
@@ -280,6 +275,19 @@ function readChatHistoryRecordTimestampMs(message: unknown): number | undefined 
   return asFiniteNumber(meta?.recordTimestampMs) ?? asFiniteNumber(readRecord(message)?.timestamp);
 }
 
+export function isPreSessionStartAssistantMessage(
+  message: unknown,
+  sessionStartedAt: number | undefined,
+): boolean {
+  const timestamp = readChatHistoryRecordTimestampMs(message);
+  return (
+    sessionStartedAt !== undefined &&
+    readRecord(message)?.role === "assistant" &&
+    timestamp !== undefined &&
+    timestamp < sessionStartedAt
+  );
+}
+
 export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number | undefined) {
   let precedingAnnounce = false;
   return (messages: unknown[]): unknown[] => {
@@ -291,11 +299,7 @@ export function createPreSessionStartAnnouncePairFilter(sessionStartedAt: number
     for (const current of messages) {
       if (precedingAnnounce) {
         precedingAnnounce = false;
-        const ts =
-          readRecord(current)?.role === "assistant"
-            ? readChatHistoryRecordTimestampMs(current)
-            : undefined;
-        if (typeof ts === "number" && ts < sessionStartedAt) {
+        if (isPreSessionStartAssistantMessage(current, sessionStartedAt)) {
           changed = true;
           continue;
         }

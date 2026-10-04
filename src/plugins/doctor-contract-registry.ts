@@ -88,7 +88,7 @@ type PluginDoctorContractEntry = Omit<
   historicalWebhookNormalizer?: PluginDoctorCompatibilityNormalizer;
 };
 
-function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
+export function isTrustedForDurableStores(record: PluginManifestRegistryRecord): boolean {
   return record.origin === "bundled" || record.trustedOfficialInstall === true;
 }
 
@@ -504,7 +504,7 @@ function loadPluginDoctorStateMigrationEntries(
   return entries;
 }
 
-function resolvePluginDoctorStateMigrationRecords(
+export function resolvePluginDoctorStateMigrationRecords(
   params: PluginDoctorRegistryParams & { artifactPreservingReadOnly?: boolean },
 ): PluginManifestRegistryRecord[] {
   if (params.pluginIds?.length === 0) {
