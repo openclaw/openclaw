@@ -35,6 +35,12 @@ spec:
               [ -f /home/node/.openclaw/openclaw.json ] || cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               mkdir -p /home/node/.openclaw/workspace
               [ -f /home/node/.openclaw/workspace/AGENTS.md ] || cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              # fs-safe temp-workspace admission rejects group/world-writable dirs
+              # without the sticky bit (checking ancestors too). A disk-backed
+              # emptyDir defaults to 0777 and fsGroup adds setgid, so prepare an
+              # owned 1777 subdirectory and mount it at /tmp via subPath below.
+              mkdir -p /tmp-volume/gateway-tmp && chmod 1777 /tmp-volume/gateway-tmp || { echo "init-config: cannot prepare /tmp-volume/gateway-tmp (mode 1777): tmp-volume must be writable by UID 1000 (fsGroup 1000)" >&2; exit 1; }
+              [ -k /tmp-volume/gateway-tmp ] || { echo "init-config: /tmp-volume/gateway-tmp is missing the sticky bit; refusing to start" >&2; exit 1; }
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -50,6 +56,8 @@ spec:
               mountPath: /home/node/.openclaw
             - name: config
               mountPath: /config
+            - name: tmp-volume
+              mountPath: /tmp-volume
       containers:
         - name: gateway
           # Bump this immutable versioned tag when upgrading OpenClaw.
@@ -146,6 +154,7 @@ spec:
               mountPath: /home/node/.openclaw
             - name: tmp-volume
               mountPath: /tmp
+              subPath: gateway-tmp
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000
