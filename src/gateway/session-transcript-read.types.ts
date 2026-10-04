@@ -13,6 +13,11 @@ import type {
   TranscriptReadWindow,
   TranscriptReadWindowOptions,
 } from "../sessions/transcript-read-window.js";
+import type {
+  SessionTranscriptSourceCursor,
+  SessionTranscriptSourcePageOptions,
+  SessionTranscriptSourceSnapshot,
+} from "./session-transcript-source-pages.js";
 
 export type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.types.js";
 
@@ -55,6 +60,8 @@ export type ReadRecentSessionMessagesResult = {
 export type ReadSessionMessagesResult = {
   messages: unknown[];
   transcriptPath?: string;
+  nextCursor?: SessionTranscriptSourceCursor;
+  snapshot?: SessionTranscriptSourceSnapshot;
 };
 
 export type ReadSessionMessageByIdResult = {
@@ -92,13 +99,10 @@ export type SessionTranscriptPageOptions = TranscriptReadWindowOptions &
 export type SessionTranscriptReader = {
   subagentCoordination?: SubagentCoordinationDisplayResolver;
   readSessionMessageCountAsync(scope: SessionTranscriptReadScope): Promise<number>;
-  readSessionMessagesAsync(
-    scope: SessionTranscriptReadScope,
-    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
-  ): Promise<unknown[]>;
   readSessionMessagesWithSourceAsync(
     scope: SessionTranscriptReadScope,
-    options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions,
+    options: SessionTranscriptSourcePageOptions,
+    signal?: AbortSignal,
   ): Promise<ReadSessionMessagesResult>;
   readSessionMessageByIdAsync(
     scope: SessionTranscriptReadScope,
@@ -157,7 +161,10 @@ export type SessionTranscriptProjectionSelection =
       messageId: string;
       options?: SessionTranscriptMessageByIdOptions & { allowResetArchiveFallback?: boolean };
     }
-  | { kind: "source"; options: ReadSessionMessagesAsyncOptions & SessionTranscriptReadOptions }
+  | {
+      kind: "source";
+      options: Parameters<SessionTranscriptReader["readSessionMessagesWithSourceAsync"]>[1];
+    }
   | { kind: "lookup"; messageId: string };
 
 export type SessionTranscriptProjectionSelectionResults = {
@@ -167,7 +174,7 @@ export type SessionTranscriptProjectionSelectionResults = {
   page: ReadRecentSessionMessagesResult;
   "around-id": ReadSessionMessagesAroundIdResult;
   "by-id": ReadSessionMessageByIdResult;
-  source: ReadSessionMessagesResult & { offPathMessages?: unknown[] };
+  source: ReadSessionMessagesResult;
   lookup: { hasDisplayMessages: boolean; messages: unknown[] };
 };
 

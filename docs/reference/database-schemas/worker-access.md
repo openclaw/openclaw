@@ -108,6 +108,28 @@ checks current request authority before disclosure. Date preparation stays with
 the caller's timezone owner. Export streaming keeps its distinct snapshot
 lifetime. Schemas, stored bytes, permissions, and update behavior are unchanged.
 
+Transcript source scans read at most 128 events and 8 MiB of stored payload per
+page. Each page releases its deferred read transaction before the next worker
+request. The initial indexed sequence and history window fence the scan: later
+appends are excluded, and a replaced or moved window fails the scan instead of
+mixing histories. The captured physical active-path tail also fences hidden
+controls before retained off-path branches are selected. Pages walk indexed
+active positions without rebuilding the whole marker projection each time.
+Retained off-path branches use the same sequence ceiling.
+Cold reset archives prepare their navigation index in bounded steps before
+returning payload pages. Preparation can return an empty page with a continuation;
+it closes its file handle after each step. File identity invalidates the existing
+index cache, including partial preparation. Ordinary exact archive reads retain
+their oversized image recovery contract.
+An individual record above the byte bound fails explicitly; cleanup never treats
+a truncated source scan as proof that an attachment is unused.
+
+Attachment cleanup and context reports consume pages incrementally. The
+`before_reset` plugin hook, legacy model-context fallback, and unlimited HTTP
+history still require complete results; their callers collect bounded pages and
+retain the corresponding total-result memory cost. No transcript bytes, schema,
+retention policy, or update behavior change.
+
 Ordinary `chat.send` turns prepare persisted session lookups and sharing facts
 through the existing session workers. Missing rows retain the selected store's routing
 facts without opening a writable database on the Gateway thread. The router
