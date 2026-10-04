@@ -22,6 +22,38 @@ describe("Telegram preview and presentation delivery through HTTP", () => {
     waitForBotApiCall,
   } = http;
 
+  it.each([502, 503])(
+    "keeps the same preview after one HTTP %s edit failure",
+    async (errorCode) => {
+      const initial = "The initial answer is visible while the remaining work completes.";
+      const updated = `${initial} More details are ready.`;
+      const finalText = `${updated} The answer is complete.`;
+      let rejected = false;
+      http.respondToCall = (call) => {
+        if (call.method === "editMessageText" && !rejected) {
+          rejected = true;
+          return { error_code: errorCode, description: "Bad Gateway" };
+        }
+        return undefined;
+      };
+      await dispatchProgressTurn(
+        async (options) => {
+          await options?.onPartialReply?.({ text: initial });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+          await options?.onPartialReply?.({ text: updated });
+          await waitForBotApiCall((call) => call.method === "editMessageText");
+        },
+        { mode: "partial", toolProgress: false, finalReply: { text: finalText } },
+      );
+      expect(rejected).toBe(true);
+      expect(acceptedCalls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+      expect([...visibleMessages]).toEqual([[1, finalText]]);
+      expect(
+        acceptedCalls.filter((call) => call.method === "editMessageText").at(-1)?.fields,
+      ).toMatchObject({ message_id: 1, text: finalText });
+    },
+  );
+
   it.each([
     { hook: "reply_payload_sending", mode: "partial" },
     { hook: "message_sending", mode: "progress" },
