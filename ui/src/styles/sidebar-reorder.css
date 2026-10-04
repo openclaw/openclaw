@@ -13,17 +13,11 @@
   flex: 0 0 auto;
 }
 
-/* The contents host exposes both the parent link and its list to this layout. */
-.sidebar-zone-entry--plugin-navigation {
-  position: relative;
+/* A nested plugin section stacks its parent link and children inside the flex row. */
+.nav-item-group {
   display: block;
-  padding-inline-end: 24px;
-}
-
-.sidebar-zone-entry--plugin-navigation > .sidebar-reorder-menu {
-  position: absolute;
-  inset-inline-end: 0;
-  top: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sidebar-reorder-trigger {

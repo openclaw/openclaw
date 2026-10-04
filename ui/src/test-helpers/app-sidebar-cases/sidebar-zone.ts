@@ -362,25 +362,35 @@ describe("AppSidebar interleaved zone", () => {
     const entry = zoneEntry(sidebar, "plugin:example/boards");
     await entry.querySelector<LitElement>("openclaw-plugin-contributions")!.updateComplete;
     expect(entry.querySelectorAll(".nav-item--child")).toHaveLength(2);
-    const parent = entry.querySelector("a");
-    const children = entry.querySelector(".nav-item__children");
-    expect(parent?.nextElementSibling).toBe(children);
-    expect(parent?.closest(".sidebar-zone-entry")).toBe(entry);
-    expect(children?.closest(".sidebar-zone-entry")).toBe(entry);
+    // The parent link and its children share one block group inside the flex row,
+    // so the row keeps its reorder menu and grows with the list.
+    const group = entry.querySelector<HTMLElement>(".nav-item-group")!;
+    const parent = group.querySelector("a")!;
+    const children = group.querySelector<HTMLElement>(".nav-item__children")!;
+    expect(group.parentElement?.tagName).toBe("OPENCLAW-PLUGIN-CONTRIBUTIONS");
+    expect(group.firstElementChild).toBe(parent);
+    expect(parent.nextElementSibling).toBe(children);
     expect(entry.querySelectorAll('[aria-current="page"]')).toHaveLength(1);
     expect(
       entry.querySelector('[aria-current="page"]')?.classList.contains("nav-item--child"),
     ).toBe(true);
-    expect(getComputedStyle(entry).display).toBe("block");
-    expect(["", "auto"]).toContain(getComputedStyle(entry).height);
+    expect(getComputedStyle(entry).display).toBe("flex");
+    expect(getComputedStyle(group).display).toBe("block");
+    expect(children.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      parent.getBoundingClientRect().bottom - 1,
+    );
+    expect(entry.getBoundingClientRect().height).toBeGreaterThanOrEqual(
+      parent.getBoundingClientRect().height + children.getBoundingClientRect().height - 1,
+    );
     const menu = entry.querySelector(".sidebar-reorder-menu")!;
-    expect(getComputedStyle(menu).position).toBe("absolute");
-    expect(getComputedStyle(menu).top).toBe("4px");
+    expect(menu.parentElement).toBe(entry);
     const pinned = zoneEntry(sidebar, "plugin:example/notes");
     expect(entry.nextElementSibling).toBe(pinned);
     expect(pinned.querySelector(".nav-item__children")).toBeNull();
-    expect(getComputedStyle(pinned).display).toBe("block");
-    expect(["", "auto"]).toContain(getComputedStyle(pinned).height);
+    expect(pinned.querySelector(".nav-item-group")).toBeNull();
+    expect(pinned.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+      children.getBoundingClientRect().bottom - 1,
+    );
     const ordinary = zoneEntry(sidebar, "route:usage");
     expect(pinned.nextElementSibling).toBe(ordinary);
     expect(getComputedStyle(ordinary).display).toBe("flex");

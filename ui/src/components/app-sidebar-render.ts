@@ -471,7 +471,7 @@ export function renderAppSidebarZoneEntry(
           entry.key);
   return html`
     <div
-      class="sidebar-zone-entry ${entry.type === "plugin" && !pluginTab ? "sidebar-zone-entry--plugin-navigation" : ""} ${dropPosition ? `sidebar-zone-entry--drop-${dropPosition}` : ""} ${
+      class="sidebar-zone-entry ${dropPosition ? `sidebar-zone-entry--drop-${dropPosition}` : ""} ${
         host.sessionOrganizer.draggingSidebarEntry === serialized
           ? "sidebar-zone-entry--dragging"
           : ""

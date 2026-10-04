@@ -440,13 +440,16 @@ class ControlUiPluginContributions extends OpenClawLightDomContentsElement {
                 (a.entry.value.order ?? 0) - (b.entry.value.order ?? 0) ||
                 a.entry.value.label.localeCompare(b.entry.value.label),
             );
-          return html`${renderLink(parent)}${
-            children.length && (parent.active || children.some((child) => child.active))
-              ? html`<ul class="nav-item__children">
-                  ${children.map((child) => html`<li>${renderLink(child, true, parent.entry.value.icon)}</li>`)}
-                </ul>`
-              : nothing
-          }`;
+          if (!children.length || !(parent.active || children.some((child) => child.active))) {
+            return renderLink(parent);
+          }
+          // The zone entry is a flex row; one block group keeps the children under the link.
+          return html`<div class="nav-item-group">
+            ${renderLink(parent)}
+            <ul class="nav-item__children">
+              ${children.map((child) => html`<li>${renderLink(child, true, parent.entry.value.icon)}</li>`)}
+            </ul>
+          </div>`;
         });
     }
     if (this.kind === "session-header") {
