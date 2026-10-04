@@ -681,9 +681,9 @@ const releasePathPackageUpdateOpenAiLanes = [
   scheduledLane("live-codex-npm-plugin"),
   scheduledLane("codex-on-demand", { timeoutMs: 30 * 60 * 1000 }),
   scheduledLane("release-typed-onboarding"),
-  // Use the shorter package row without changing npm weights or upgrade coverage.
-  ...scheduledLaneList("root-managed-vps-upgrade", "update-restart-auth"),
+  scheduledLane("root-managed-vps-upgrade"),
 ];
+const releasePathPackageUpdateRestartAuthLanes = scheduledLaneList("update-restart-auth");
 
 // Balance the npm-limited rows without raising per-runner resource caps.
 const releasePathPackageOnboardingLanes = scheduledLaneList(
@@ -723,6 +723,7 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
     ),
   ],
   "package-update-openai": releasePathPackageUpdateOpenAiLanes,
+  "package-update-restart-auth": releasePathPackageUpdateRestartAuthLanes,
   "package-update-onboarding": releasePathPackageOnboardingLanes,
   "package-update-migrations": releasePathPackageMigrationLanes,
   "package-update-self-upgrade": releasePathPackageSelfUpgradeLanes,
@@ -741,6 +742,7 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
 
 const betaReleasePathChunks = new Set([
   "package-update-openai",
+  "package-update-restart-auth",
   "package-update-onboarding",
   "package-update-migrations",
   "package-update-self-upgrade",
