@@ -5,6 +5,7 @@ import {
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
+import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -268,6 +269,9 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     embeddedSystemPrompt: {
       config: attempt.config,
       preparedModelRuntime: attempt.preparedModelRuntime,
+      preparedTtsPreferences:
+        attempt.preparedTtsPreferences ??
+        (effectivePromptMode === "full" ? await prepareTtsPreferences() : undefined),
       agentId: params.setup.sessionAgentId,
       workspaceDir: params.setup.effectiveWorkspace,
       runtimeCwd: params.setup.effectiveCwd,

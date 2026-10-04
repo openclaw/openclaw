@@ -605,6 +605,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
     gitCoauthorPrompt,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     silentReplyPromptMode: params.silentReplyPromptMode,
     taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,

@@ -142,6 +142,7 @@ import {
   createCliRunCurrentAssertion,
   resolveCliExecutionTarget,
   retainCliPluginExecutionConsumer,
+  unsupportedIsolatedCompletionError,
 } from "./execution-target.js";
 import { isClaudeCliBackendId, normalizeCliModel } from "./helpers.js";
 import { prepareCliHistoryBoundary } from "./history-boundary.js";
@@ -179,15 +180,6 @@ type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
   isolatedCompletionEnforced?: true;
   secretInput?: CliSecretInput;
 };
-
-function unsupportedIsolatedCompletionError(backendId: string): Error & { code: "unsupported" } {
-  return Object.assign(
-    new Error(
-      `CLI backend "${backendId}" does not support isolated completion; OpenClaw did not start the run.`,
-    ),
-    { name: "IsolatedCompletionUnsupportedError", code: "unsupported" as const },
-  );
-}
 
 type RunCliAgentPrepareParams = RunCliAgentParams & {
   /** Ring-zero tool transport supplied only by the OpenClaw orchestrator. */
@@ -1633,6 +1625,7 @@ async function prepareCliRunContextWithinReadFence(
       : isSideQuestion
         ? extraSystemPrompt
         : await prepareCliSystemPrompt({
+            preparedTtsPreferences: params.preparedTtsPreferences,
             requesterProfileId,
             workspaceDir,
             cwd,

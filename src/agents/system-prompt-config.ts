@@ -5,6 +5,7 @@
  * prompt so callers do not duplicate owner, TTS, alias, memory, or FS policy.
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PreparedTtsPreferences } from "../tts/tts-preferences.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
 import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
@@ -14,6 +15,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 type ConfiguredAgentSystemPromptParams = Parameters<typeof buildAgentSystemPrompt>[0] & {
   config?: OpenClawConfig;
   agentId?: string;
+  preparedTtsPreferences?: PreparedTtsPreferences;
   preparedModelRuntime?: Pick<PreparedModelRuntimeSnapshot, "configuredModelAliases" | "isCurrent">;
 };
 
@@ -28,7 +30,7 @@ function buildModelAliasLines(owner: ConfiguredAgentSystemPromptParams["prepared
 
 /** Builds the agent system prompt after applying config-derived prompt fields. */
 export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPromptParams) {
-  const { config, agentId, preparedModelRuntime, ...renderParams } = params;
+  const { config, agentId, preparedModelRuntime, preparedTtsPreferences, ...renderParams } = params;
   if (!config) {
     return buildAgentSystemPrompt(renderParams);
   }
@@ -45,6 +47,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
     }),
     ttsHint: includeFullSections
       ? buildTtsSystemPromptHint(config, agentId, {
+          preparedTtsPreferences,
           messageToolOnly: renderParams.sourceReplyDeliveryMode === "message_tool_only",
         })
       : undefined,

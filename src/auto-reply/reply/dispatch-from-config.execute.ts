@@ -129,6 +129,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             ctx,
             {
               ...state.getReplyOptions(),
+              preparedTtsPreferences: state.preparedTtsPreferences,
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
               sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,

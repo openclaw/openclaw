@@ -28,6 +28,7 @@ import { resolveSessionDispatchKind } from "../../sessions/session-key-utils.js"
 import { prepareChannelParticipantObservation } from "../../sessions/session-participant-input.js";
 import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
 import { normalizeTtsAutoMode } from "../../tts/tts-config.js";
+import { prepareTtsPreferences, type PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { FinalizedRuntimeMsgContext as FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -411,6 +412,7 @@ export async function gatherDispatchRequest(
     ? resolveSessionAgentId({ sessionKey, config: cfg, fallbackAgentId: ctx.AgentId })
     : sessionAgentId;
   let preparedReplyDispatchRuntime: PreparedReplyDispatchRuntime | undefined;
+  let preparedTtsPreferences: PreparedTtsPreferences;
   try {
     // Channel monitors can retain an older config across hot reloads. The Gateway
     // publication owns admission; outside its lifecycle this returns undefined.
@@ -424,6 +426,9 @@ export async function gatherDispatchRequest(
         });
       },
     );
+    preparedTtsPreferences = await prepareTtsPreferences();
+    params.replyOptions?.abortSignal?.throwIfAborted();
+    params.replyOptions?.operatorAuthority?.assertCurrent();
   } catch (error) {
     if (params.replyOptions?.abortSignal?.aborted && isAbortError(error)) {
       return finishReplyOperationAborted();
@@ -449,6 +454,7 @@ export async function gatherDispatchRequest(
   });
   const { getDispatchReplyOperation, getPreDispatchAbortSignal } = replyOperationCoordinator;
   const maybeApplyTtsWithFinalizationLease = createFinalizationAwareTtsPayloadApplier({
+    preparedTtsPreferences,
     getReplyOperation: getDispatchReplyOperation,
     hasInboundAudio: () =>
       inboundAudio || getDispatchReplyOperation()?.acceptedSteeredInboundAudio === true,
@@ -570,6 +576,7 @@ export async function gatherDispatchRequest(
     sessionTtsAuto,
     workspaceDir,
     preparedReplyDispatchRuntime,
+    preparedTtsPreferences,
     pluginRegistry,
     replyOperationRunState,
     ...replyOperationCoordinator,

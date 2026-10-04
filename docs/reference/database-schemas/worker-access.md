@@ -710,6 +710,15 @@ and update behavior are unchanged.
 
 ## Carry facts, publish after commit
 
+Reply dispatch prepares the machine-owned TTS preference path through the existing
+shared-state reader and carries it through eligibility checks, delivery callbacks,
+and prompt assembly. Missing state is a prepared fact, so later consumers do not
+fall back to host SQL. Standalone prompt, ACP, cron, and message-action preparation
+use the same reader. Config and environment path precedence remain unchanged;
+preference-file contents still refresh at their existing read boundaries. Released
+synchronous TTS SDK helpers retain their compatibility contract. This introduces
+no schema, stored-data, retention, or update change.
+
 Durable progress-card replacements and conditional clears use a narrow adapter
 on the canonical agent writer. The host captures the session, physical store, and
 input before waiting; the worker rereads the current revision and preserves clear
