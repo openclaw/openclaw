@@ -135,8 +135,11 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     return prepareAgentRuntimeAuth({
       provider: params.provider,
       modelId: params.modelId,
-      modelApi: params.model.api,
-      modelBaseUrl: params.model.baseUrl,
+      // Native-owned models carry structural placeholder metadata, not an
+      // observed transport; only authored config and request overrides route them.
+      ...(params.nativeModelOwned
+        ? {}
+        : { modelApi: params.model.api, modelBaseUrl: params.model.baseUrl }),
       requestTransportOverrides: params.requestStreamTransportOverrides,
       config: runParams.config,
       env: process.env,

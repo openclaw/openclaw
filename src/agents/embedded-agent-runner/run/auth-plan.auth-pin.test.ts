@@ -14,6 +14,7 @@ import { writePersistedAuthProfileStoreRaw } from "../../auth-profiles/sqlite.js
 import type { AgentHarness } from "../../harness/types.js";
 import * as modelRuntime from "../model.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
+import { createNativeModelOwnedRuntimeModel } from "./setup.js";
 
 const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
   vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
@@ -49,6 +50,12 @@ const openClawHarness: AgentHarness = {
   runAttempt: async () => {
     throw new Error("Auth preparation must not execute a model turn");
   },
+};
+
+const codexHarness: AgentHarness = {
+  ...openClawHarness,
+  id: "codex",
+  label: "Codex fixture",
 };
 
 describe("embedded run auth plan provider pin", () => {
@@ -302,4 +309,106 @@ describe("embedded run auth plan provider pin", () => {
       expect(model).toEqual(platformModel);
     },
   );
+
+  describe("native-owned placeholder route", () => {
+    // An unlisted model has no static route contract, so only route facts decide
+    // between Platform and ChatGPT; the native placeholder must not be one.
+    const nativeModel = createNativeModelOwnedRuntimeModel({
+      provider: "openai",
+      modelId: "gpt-future-native",
+    });
+    const oauthProfileId = "openai:chatgpt";
+
+    const prepareNativePlaceholderAuth = async (params: {
+      nativeModelOwned: boolean;
+      providerConfig?: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+    }) => {
+      readCodexCliCredentialsCachedMock.mockReturnValue(null);
+      writePersistedAuthProfileStoreRaw(
+        {
+          version: 1,
+          profiles: {
+            [oauthProfileId]: {
+              type: "oauth",
+              provider: "openai",
+              access: "subscription-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 30 * 60_000,
+            },
+          },
+        },
+        agentDir,
+      );
+      const config: OpenClawConfig = {
+        auth: { order: { openai: [oauthProfileId] } },
+        ...(params.providerConfig
+          ? { models: { providers: { openai: params.providerConfig } } }
+          : {}),
+      };
+      const stores = modelRuntime.createEmptyAgentDiscoveryStores();
+      vi.spyOn(modelRuntime, "resolveModelAsync").mockResolvedValue({
+        ...stores,
+        model: nativeModel,
+        logicalRef: { provider: nativeModel.provider, model: nativeModel.id },
+      });
+      return await withPluginRuntimeGenerationScope(
+        { metadataSnapshot: createPluginMetadataSnapshotFixture() },
+        () =>
+          prepareEmbeddedRunAuthPlan({
+            assertCurrent: () => {},
+            runParams: {
+              sessionId: "native-placeholder-session",
+              runId: "native-placeholder-run",
+              workspaceDir: state.workspaceDir,
+              prompt: "Auth preparation only",
+              timeoutMs: 5_000,
+              config,
+            },
+            provider: "openai",
+            modelId: nativeModel.id,
+            model: nativeModel,
+            agentDir,
+            workspaceDir: state.workspaceDir,
+            nativeModelOwned: params.nativeModelOwned,
+            ...stores,
+            getAgentHarness: () => codexHarness,
+            setAgentHarness: () => {},
+            getRuntimeModel: () => nativeModel,
+            getEffectiveModel: () => nativeModel,
+            applyResolvedRuntimeModel: () => {},
+            selectHarnessForPreparedAttempts: () => codexHarness,
+          }),
+      );
+    };
+
+    it("prepares explicit OAuth for an unlisted native-owned model", async () => {
+      const prepared = await prepareNativePlaceholderAuth({ nativeModelOwned: true });
+
+      expect(prepared.preparedAuthAttempts).toMatchObject([
+        { kind: "profile", profileId: oauthProfileId },
+      ]);
+      expect(prepared.preparedAuthAttempts.some((attempt) => attempt.kind === "direct")).toBe(
+        false,
+      );
+    });
+
+    it("keeps treating the same metadata as a Platform route when OpenClaw owns the model", async () => {
+      await expect(prepareNativePlaceholderAuth({ nativeModelOwned: false })).rejects.toThrow(
+        "Explicit auth order for openai has no usable profiles.",
+      );
+    });
+
+    it("keeps an authored Platform route for a native-owned model", async () => {
+      await expect(
+        prepareNativePlaceholderAuth({
+          nativeModelOwned: true,
+          providerConfig: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        }),
+      ).rejects.toThrow("Explicit auth order for openai has no usable profiles.");
+    });
+  });
 });
