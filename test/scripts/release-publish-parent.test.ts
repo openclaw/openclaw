@@ -248,165 +248,152 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
     }
   });
 
-  it("rejects the gate, cancels, and observes completion before dispatching", () => {
-    const result = fixture({ children: [child()] }).run(dispatch());
-    expect(result.status, result.stderr).toBe(0);
-    const mutations = result.calls.filter((call) => call.args.includes("POST") || isCancel(call));
-    expect(mutations.map((call) => call.args)).toEqual([
-      expect.arrayContaining([
-        "POST",
-        `repos/${repo}/actions/runs/91/pending_deployments`,
-        "state=rejected",
-        "environment_ids[]=7",
-        "comment=Superseded release child; rejected by publish parent 100/2",
-      ]),
-      expect.arrayContaining(["run", "cancel", "91"]),
-      expect.arrayContaining([
-        "POST",
-        `repos/${repo}/actions/workflows/plugin-clawhub-release.yml/dispatches`,
-      ]),
-    ]);
-    const afterCancel = result.calls.slice(
-      result.calls.findIndex(isCancel) + 1,
-      result.calls.findIndex(isDispatch),
-    );
-    expect(
-      afterCancel.filter((call) => call.args.includes(`repos/${repo}/actions/runs/91`)),
-    ).toHaveLength(2);
-    expect(result.summary).toContain(
-      `Reclaimed superseded plugin-clawhub-release.yml child: ${url(91)}`,
-    );
-  });
-
-  it.each([
-    { label: "a live publisher", overrides: { jobs: [{ status: "in_progress" }] } },
-    {
-      label: "this parent attempt",
-      overrides: { display_title: `plugin-clawhub-release.yml [${tag}] publish parent=100/2` },
-    },
-    { label: "another actor", overrides: { actor: { login: "someone" } } },
-  ])("preserves and blocks on $label", ({ overrides }) => {
-    const result = fixture({ children: [child(overrides)] }).run(dispatch());
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("ClawHub dispatch blocked by waiting run");
-    expect(result.calls.some(isCancel)).toBe(false);
-    expect(result.calls.some(isDispatch)).toBe(false);
-  });
-
-  it.each(["success", "in_progress"])("preserves a child with a %s parent", (parentState) => {
-    const parent =
-      parentState === "success"
-        ? { conclusion: "success" }
-        : { status: "in_progress", conclusion: null };
-    const result = fixture({ children: [child()], parent }).run(dispatch());
-    expect(result.status).toBe(1);
-    expect(result.calls.some(isCancel)).toBe(false);
-  });
-
-  it("reclaims an older attempt and tolerates a rejected reviewer request", () => {
-    const result = fixture({
-      children: [
-        child({ display_title: `plugin-clawhub-release.yml [${tag}] publish parent=100/1` }),
-      ],
-      rejectFails: true,
-    }).run(dispatch());
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("::warning::");
-    expect(result.calls.filter(isCancel)).toHaveLength(1);
-  });
-
-  it.each(["openclaw-npm-release.yml", "plugin-clawhub-new.yml"])(
-    "sweeps correlated %s children",
-    (name) => {
+  it("reclaims only terminal correlated children before dispatch", () => {
+    const cases = [
+      { name: "plugin-clawhub-release.yml", parent: "80/1", rejectFails: false },
+      { name: "plugin-clawhub-release.yml", parent: "100/1", rejectFails: true },
+      { name: "openclaw-npm-release.yml", parent: "80/1", rejectFails: false },
+      { name: "plugin-clawhub-new.yml", parent: "80/1", rejectFails: false },
+    ];
+    for (const { name, parent, rejectFails } of cases) {
       const result = fixture({
         children: [
           child({
             path: `.github/workflows/${name}`,
-            display_title: `${name} [${tag}] publish parent=80/1`,
+            display_title: `${name} [${tag}] publish parent=${parent}`,
           }),
         ],
+        rejectFails,
       }).run(dispatch(name));
       expect(result.status, result.stderr).toBe(0);
       expect(result.calls.filter(isCancel)).toHaveLength(1);
-    },
-  );
-
-  it("ignores a child completed since the active inventory was read", () => {
-    const result = fixture({ children: [child()], completedBeforeSweep: true }).run(dispatch());
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.some(isCancel)).toBe(false);
-    expect(result.calls.some(isDispatch)).toBe(true);
+      if (rejectFails) {
+        expect(result.stderr).toContain("::warning::");
+      }
+      const mutations = result.calls.filter((call) => call.args.includes("POST") || isCancel(call));
+      expect(mutations.map((call) => call.args)).toEqual([
+        expect.arrayContaining([
+          "POST",
+          `repos/${repo}/actions/runs/91/pending_deployments`,
+          "state=rejected",
+          "environment_ids[]=7",
+          "comment=Superseded release child; rejected by publish parent 100/2",
+        ]),
+        expect.arrayContaining(["run", "cancel", "91"]),
+        expect.arrayContaining(["POST", `repos/${repo}/actions/workflows/${name}/dispatches`]),
+      ]);
+      const afterCancel = result.calls.slice(
+        result.calls.findIndex(isCancel) + 1,
+        result.calls.findIndex(isDispatch),
+      );
+      expect(
+        afterCancel.filter((call) => call.args.includes(`repos/${repo}/actions/runs/91`)),
+      ).toHaveLength(2);
+      expect(result.summary).toContain(`Reclaimed superseded ${name} child: ${url(91)}`);
+    }
   });
 
-  it("skips legacy core titles", () => {
-    const result = fixture({
-      children: [
-        child({
+  it("preserves children without authority to cancel them", () => {
+    const cases: {
+      label: string;
+      overrides?: Record<string, unknown>;
+      parent?: Record<string, unknown>;
+    }[] = [
+      { label: "live publisher", overrides: { jobs: [{ status: "in_progress" }] } },
+      {
+        label: "this parent attempt",
+        overrides: { display_title: `plugin-clawhub-release.yml [${tag}] publish parent=100/2` },
+      },
+      { label: "another actor", overrides: { actor: { login: "someone" } } },
+      { label: "successful parent", parent: { conclusion: "success" } },
+      { label: "live parent", parent: { status: "in_progress", conclusion: null } },
+    ];
+    for (const { label, overrides, parent } of cases) {
+      const result = fixture({ children: [child(overrides)], parent }).run(dispatch());
+      expect(result.status, label).toBe(1);
+      expect(result.stderr).toContain("ClawHub dispatch blocked by waiting run");
+      expect(result.calls.some(isCancel)).toBe(false);
+      expect(result.calls.some(isDispatch)).toBe(false);
+    }
+  });
+
+  it("ignores completed or uncorrelated legacy children", () => {
+    const cases = [
+      { name: "plugin-clawhub-release.yml", completedBeforeSweep: true, overrides: {} },
+      {
+        name: "openclaw-npm-release.yml",
+        completedBeforeSweep: false,
+        overrides: {
           path: ".github/workflows/openclaw-npm-release.yml",
           display_title: "OpenClaw NPM Release",
-        }),
-      ],
-    }).run(dispatch("openclaw-npm-release.yml"));
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.some(isCancel)).toBe(false);
+        },
+      },
+    ];
+    for (const { name, completedBeforeSweep, overrides } of cases) {
+      const result = fixture({ children: [child(overrides)], completedBeforeSweep }).run(
+        dispatch(name),
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls.some(isCancel)).toBe(false);
+      expect(result.calls.some(isDispatch)).toBe(true);
+    }
   });
 
-  it("only reclaims plugin npm runs older than the parent and excludes its known child", () => {
-    const npm = {
-      path: ".github/workflows/plugin-npm-release.yml",
-      display_title: `Plugin NPM Release [all-publishable] ${target}`,
-    };
-    const result = fixture({
-      children: [
-        child(npm),
-        child({ ...npm, id: 93, created_at: "2026-09-24T02:00:00Z" }),
-        child({ ...npm, id: 94 }),
-      ],
-    }).run(dispatch("plugin-npm-release.yml"), { CHILD_PLUGIN_NPM_RUN_ID: "94" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.filter(isCancel).map((call) => call.args.at(-1))).toEqual(["91"]);
-    expect(
-      result.calls.filter((call) => call.args.includes(`repos/${repo}/actions/runs/100`)),
-    ).toHaveLength(1);
+  it("reclaims only older unowned plugin npm children when no other parent is live", () => {
+    for (const otherParent of [false, true]) {
+      const npm = {
+        path: ".github/workflows/plugin-npm-release.yml",
+        display_title: `Plugin NPM Release [all-publishable] ${target}`,
+      };
+      const result = fixture({
+        children: [
+          child(npm),
+          child({ ...npm, id: 93, created_at: "2026-09-24T02:00:00Z" }),
+          child({ ...npm, id: 94 }),
+          ...(otherParent
+            ? [
+                child({
+                  id: 80,
+                  path: ".github/workflows/openclaw-release-publish.yml",
+                  display_title: "OpenClaw Release Publish",
+                  status: "in_progress",
+                }),
+              ]
+            : []),
+        ],
+      }).run(dispatch("plugin-npm-release.yml"), { CHILD_PLUGIN_NPM_RUN_ID: "94" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls.filter(isCancel).map((call) => call.args.at(-1))).toEqual(
+        otherParent ? [] : ["91"],
+      );
+      if (otherParent) {
+        expect(result.stderr).toContain("Another publish parent is live");
+        expect(result.calls.some(isDispatch)).toBe(true);
+      } else {
+        expect(
+          result.calls.filter((call) => call.args.includes(`repos/${repo}/actions/runs/100`)),
+        ).toHaveLength(1);
+      }
+    }
   });
 
-  it("leaves plugin npm children alone while another publish parent is live", () => {
-    const result = fixture({
-      children: [
-        child({
-          path: ".github/workflows/plugin-npm-release.yml",
-          display_title: `Plugin NPM Release [all-publishable] ${target}`,
-        }),
-        child({
-          id: 80,
-          path: ".github/workflows/openclaw-release-publish.yml",
-          display_title: "OpenClaw Release Publish",
-          status: "in_progress",
-        }),
-      ],
-    }).run(dispatch("plugin-npm-release.yml"));
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("Another publish parent is live");
-    expect(result.calls.some(isCancel)).toBe(false);
-    expect(result.calls.some(isDispatch)).toBe(true);
-  });
-
-  it("refuses capped inventories", () => {
-    const blocked = fixture({ capped: true }).run(dispatch());
-    expect(blocked.status).toBe(1);
-    expect(blocked.calls.some(isDispatch)).toBe(false);
-  });
-
-  it("shares the sweep deadline and prints manual reject/cancel commands", () => {
-    const result = fixture({
-      children: [child(), child({ id: 93 })],
-      cancelStates: ["waiting", "completed"],
-    }).run(dispatch(), { RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "5" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(url(93));
-    expect(result.stderr).toContain("environment_ids[]=<id>");
-    expect(result.stderr).toContain(`gh run cancel --repo ${repo} 93`);
-    expect(result.calls.some(isDispatch)).toBe(false);
+  it("refuses dispatch when inventory or cancellation cannot establish a free slot", () => {
+    const cases: { config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }[] = [
+      { config: { capped: true }, env: {}, messages: [] },
+      {
+        config: { children: [child(), child({ id: 93 })], cancelStates: ["waiting", "completed"] },
+        env: { RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "5" },
+        messages: [url(93), "environment_ids[]=<id>", `gh run cancel --repo ${repo} 93`],
+      },
+    ];
+    for (const { config, env, messages } of cases) {
+      const result = fixture(config).run(dispatch(), env);
+      expect(result.status).toBe(1);
+      expect(result.calls.some(isDispatch)).toBe(false);
+      for (const message of messages) {
+        expect(result.stderr).toContain(message);
+      }
+    }
   });
 
   it("failure cleanup cancels a waiting npm child and preserves an active one", () => {

@@ -276,6 +276,7 @@ describe("doctor config flow", () => {
         gateway: { mode: "local" },
       },
       parsedConfig: { gateway: { mode: "local" } },
+      sourceConfigBeforeMigrations: { gateway: { mode: "local" } },
       repair: true,
     });
 
@@ -284,7 +285,7 @@ describe("doctor config flow", () => {
     expect(result.explicitSetPaths).toBeUndefined();
     expect(result.cfg.agents?.entries).toEqual({ main: { workspace: "/tmp/migrated-main" } });
     expect(result.pendingChangePanels).toContain(
-      "Prepared the canonical agent roster without retired default markers for persistence.",
+      "Prepared the canonical agent roster for persistence.",
     );
     expect(terminalNoteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
     expect(terminalNoteMock.mock.calls.some(([message]) => message.includes("Persisted"))).toBe(
@@ -621,7 +622,6 @@ describe("doctor config flow", () => {
         agents: { entries: { openclaw: { default: true } } },
         session: { maintenance: { rotateBytes: "10mb" } },
         browser: {
-          relayBindHost: "0.0.0.0",
           profiles: { chromeLive: { driver: "extension", color: "#00AA00" } },
         },
         tools: { alsoAllow: ["browser"] },
@@ -631,7 +631,6 @@ describe("doctor config flow", () => {
 
     expect(result.cfg).not.toHaveProperty("bridge");
     expect(result.cfg.gateway?.auth).toEqual({ mode: "token", token: "ok" });
-    expect(result.cfg.browser).not.toHaveProperty("relayBindHost");
     expect(result.cfg.browser?.profiles?.chromeLive?.driver).toBe("extension");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
@@ -739,7 +738,7 @@ describe("doctor config flow", () => {
     expect(channel?.accounts).toEqual({ work: { enabled: true } });
   });
 
-  it("promotes covered legacy keys when an absent plugin has no declarations", async () => {
+  it("seeds an empty account map for covered legacy keys without plugin declarations", async () => {
     const result = await runConfig({
       repair: true,
       config: {
@@ -747,7 +746,7 @@ describe("doctor config flow", () => {
           "legacy-demo": {
             dmPolicy: "allowlist",
             appToken: "legacy-app-token",
-            accounts: { work: { enabled: true } },
+            accounts: {},
           },
         },
       },
@@ -756,11 +755,12 @@ describe("doctor config flow", () => {
     const channel = result.cfg.channels?.["legacy-demo"];
     expect(channel?.dmPolicy).toBeUndefined();
     expect(channel?.appToken).toBeUndefined();
-    expect(channel?.accounts?.default).toEqual({
-      dmPolicy: "allowlist",
-      appToken: "legacy-app-token",
+    expect(channel?.accounts).toEqual({
+      default: {
+        dmPolicy: "allowlist",
+        appToken: "legacy-app-token",
+      },
     });
-    expect(channel?.accounts?.work).toEqual({ enabled: true, dmPolicy: "allowlist" });
   });
 
   it('repairs open dmPolicy allowFrom variants with ["*"] in one pass', async () => {
@@ -806,6 +806,7 @@ describe("doctor config flow", () => {
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {
     const result = await runConfig({
       repair: true,
+      preflightMode: "compat",
       config: {
         channels: {
           whatsapp: {
@@ -831,7 +832,7 @@ describe("doctor config flow", () => {
     );
     expect(toolsBySender.owner).toBeUndefined();
     expect(toolsBySender.alice).toBeUndefined();
-    expect(toolsBySender["id:owner"]).toEqual({ deny: ["exec"] });
+    expect(toolsBySender["id:owner"]).toEqual({ allow: ["exec"] });
     expect(toolsBySender["id:alice"]).toEqual({ deny: ["exec"] });
     expect(toolsBySender["username:@ops-bot"]).toEqual({ allow: ["fs.read"] });
     expect(toolsBySender["*"]).toEqual({ deny: ["exec"] });
@@ -898,9 +899,9 @@ describe("doctor config flow", () => {
   it("scaffolds custom profiles in both scopes while excluding interpreters", () => {
     const { config } = maybeRepairExecSafeBinProfiles({
       tools: { exec: { safeBins: ["myfilter", "python3"] } },
-      agents: { list: [{ id: "ops", tools: { exec: { safeBins: ["mytool", "node"] } } }] },
+      agents: { entries: { ops: { tools: { exec: { safeBins: ["mytool", "node"] } } } } },
     });
     expect(config.tools?.exec?.safeBinProfiles).toEqual({ myfilter: {} });
-    expect(config.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
+    expect(config.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({ mytool: {} });
   });
 });

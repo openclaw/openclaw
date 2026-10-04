@@ -65,6 +65,13 @@ supplied. Neither job depends on the other, so
 their results remain independently visible; either requested proof failing fails
 the workflow.
 
+Set `skip_defender_exclusions=true` to leave Windows Defender policy unchanged
+throughout the workflow, including native and installed Scheduled Task proof jobs.
+This skips only the workspace and Node process exclusions; proof selection,
+isolation checks, native lifecycle tests, cleanup, and evidence upload remain
+unchanged. The default is `false`, preserving the existing best-effort exclusions
+for Windows CI and exact replay.
+
 For both proofs, set `target_ref` to an exact 40-character commit SHA. Both jobs
 check out that target, and native proof verifies checkout equality before running
 the lifecycle test. Native preflight runs before setup and requires an interactive

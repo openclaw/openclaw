@@ -14,16 +14,21 @@ import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 /** Runtime consumers retain capabilities, never the concrete loader implementation. */
 export interface PluginInstanceHandle extends PluginInvocationInstance, PluginInstanceExecution {
   readonly disposing: boolean;
-  readonly hasActiveCall: boolean;
   readonly acceptingCalls: boolean;
+  readonly replacementPending: boolean;
   readonly hasRetainedConsumers: boolean;
   readonly owner?: PluginInstanceOwner;
   toolRegistrationComplete: boolean;
   runConsumer<T>(consume: () => T): T;
   adopt<T>(value: T): T;
+  admitFactory(factory: (...args: never[]) => unknown): void;
   retainWork(): () => void;
   readonly retainedWorkCount: number;
-  waitForRetainedWork(signal: AbortSignal, includeConsumers?: boolean): Promise<void>;
+  readonly ordinaryCallCount: number;
+  waitForRetainedWork(
+    signal: AbortSignal,
+    options?: { includeConsumers?: boolean; includeCalls?: boolean },
+  ): Promise<void>;
   reserveReplacement(): () => void;
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
@@ -45,6 +50,8 @@ export type PluginInvocationBinding = {
 };
 
 export type PluginInvocationContext = {
+  /** Retained consumers in this context are joined by a pending reload drain. */
+  readonly holdsPendingReplacement?: boolean;
   lookup: (instance: PluginInstanceHandle) => PluginInvocationBinding | undefined;
 };
 
@@ -67,6 +74,16 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   Symbol.for("openclaw.pluginInvocationContext"),
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
+
+/** Current work that a pending reload drain is joining, through nested calls or retained scopes. */
+export function currentPluginWorkHoldsPendingReplacement(): boolean {
+  for (let call = pluginInstanceInvocation.getStore(); call; call = call.parent) {
+    if (call.instance.holdsPendingReplacement(call.token)) {
+      return true;
+    }
+  }
+  return pluginInvocationContext.getStore()?.holdsPendingReplacement === true;
+}
 
 export function resolvePluginInstanceOwner(record: PluginRecord, registry: PluginRegistry) {
   let owner = pluginInstanceState.records.get(record);

@@ -87,15 +87,37 @@ transcript retains lazy header initialization until its first append. Incognito
 SQLite remains with its process-local owner. `SessionManager.inMemory()` stays
 synchronous and does not access SQLite.
 
-The synchronous `open`, `openBounded`, `openDetachedBounded`, `setSessionTarget`,
-and `reloadPersistedTranscript` methods are deprecated plugin compatibility
-variants. Runtime code should await their asynchronous counterparts. Metadata
-appends and transcript mutations retain their own write-admission contracts.
+The synchronous `open`, `openBounded`, `openDetachedBounded`, `openModelContext`,
+`setSessionTarget`, and `reloadPersistedTranscript` methods are deprecated
+third-party compatibility variants through the next Plugin SDK major. Runtime
+code should await their asynchronous counterparts.
+
+## Awaited transcript mutations
+
+Await `appendMessageAsync`, `appendCustomEntryAsync`, `appendSessionInfoAsync`,
+and the other `Async` persistence methods before using the resulting view or
+publishing dependent work. File-backed writes reuse the canonical SQLite worker,
+preserve per-session FIFO ordering, and adopt the committed result before the
+promise resolves. User and custom messages and `beforeFreshMessageCommit` use
+this same worker path. Incognito retains its process-local persistence owner;
+its awaited API preserves the same completion ordering.
+
+The low-level `persistAsync` retains its raw persistence contract and does not add
+the supplied entry to the loaded tree; use an append method or reload afterward.
+`branchAsync` and `resetLeafAsync` prepare navigation in queue order without
+writing a leaf record by themselves. The synchronous `resetLeaf()` remains a
+supported in-memory operation.
+
+Synchronous persistence methods retain their immediate return values for
+third-party plugins and warn once per method per process. Their removal gate is
+the next Plugin SDK major. See the [migration table](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+for every replacement, return value, and the additive extension and provider
+replay APIs. Transcript formats, schemas, and update behavior are unchanged.
 
 ## Bounded model context
 
-`SessionManager.openModelContext` and `openModelContextAsync` from
-`openclaw/plugin-sdk/agent-sessions` accept optional `limits: { maxBytes, maxEvents }`.
+Use `await SessionManager.openModelContextAsync(...)` from
+`openclaw/plugin-sdk/agent-sessions` with optional `limits: { maxBytes, maxEvents }`.
 Bounded reads are strict by default. The reader measures projected payload bytes
 in SQLite before loading them and selects a recent context with its latest
 compaction or reset boundary. It preserves
@@ -370,6 +392,28 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     whose live config hash does not match the requested mounts or policy. Pass
     only exact tool names whose registered implementations the calling plugin
     confines; wildcard prefixes do not prove tool ownership.
+
+    Sandbox workspace preparation checks the selected state root's live owner.
+    This applies to
+    `prepareWorkspaceAuthority(...)` and `resolveSandboxContext(...)` from
+    `openclaw/plugin-sdk/agent-harness-runtime`. Disabled sandbox resolution stays
+    a no-op, and read-only session classification remains available in foreign
+    processes. When sandboxing is enabled, a foreign live Gateway or embedded
+    owner causes `code: "GATEWAY_STATE_OWNER_REQUIRED"` before sandbox workspace,
+    registry, or projection mutation. Run the call inside the owning Gateway
+    plugin/runtime, or stop the Gateway and wait for embedded runs to finish,
+    then retry offline.
+
+    Calls hosted by the current Gateway or embedded owner stay in-process.
+    Preparation rechecks captured custody before workspace setup and backend
+    provisioning. Losing that custody rejects with `GATEWAY_STATE_OWNER_REQUIRED`;
+    built-in container backends also retain the check across provisioning awaits.
+    Standalone SDK callers also stay local when no live owner exists. Preparation
+    does not acquire a temporary lock or forward permission callbacks over RPC;
+    it does not prevent another owner from starting after offline admission.
+    Released parameters and return types are unchanged. Older SDK binaries and
+    other state roots remain outside this same-root gate; database freshness
+    checks still apply. No migration or update step is required.
 
   </Accordion>
 </AccordionGroup>

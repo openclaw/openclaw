@@ -1,4 +1,6 @@
+import type { ResponseFunctionToolCall } from "openai/resources/responses/responses.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createAiTransportHost, runWithAiTransportHost } from "../host.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   claimOpenAIResponsesHttpContinuation,
@@ -52,7 +54,7 @@ function continuationState(): ResponsesContinuationState {
   };
 }
 
-function nextRequest(phase = "final_answer"): ResponsesContinuationRequest {
+function nextRequest(phase = "final_answer", text = "answer"): ResponsesContinuationRequest {
   return {
     input: [
       firstUser,
@@ -60,7 +62,7 @@ function nextRequest(phase = "final_answer"): ResponsesContinuationRequest {
         type: "message",
         role: "assistant",
         phase,
-        content: [{ type: "output_text", text: "answer", annotations: [] }],
+        content: [{ type: "output_text", text, annotations: [] }],
       },
       { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
     ] as never,
@@ -89,6 +91,17 @@ function claim(params: {
     },
     request: params.request ?? continuationState().lastRequest,
   });
+}
+
+function toolCall(
+  callId: string,
+  fields: Partial<ResponseFunctionToolCall> = {},
+): ResponseFunctionToolCall {
+  return { type: "function_call", call_id: callId, name: "exec", arguments: "{}", ...fields };
+}
+
+function toolOutput(callId: string, output = "recorded") {
+  return { type: "function_call_output" as const, call_id: callId, output };
 }
 
 afterEach(() => {
@@ -356,324 +369,84 @@ describe("OpenAI Responses continuation", () => {
     expect({ state, request }).toEqual(before);
   });
 
-  it("continues a tool-calling round despite replay re-sanitizing call_id, and restores the raw call_id on the wire delta", () => {
-    // Real shape: the cached lastResponseItems is the raw provider response
-    // (bare call_id), but replaying history for the next round runs it
-    // through normalizeOpenAIResponsesToolCallIds (embedded-agent-helpers)
-    // for provider-format compatibility -- a real, necessary id reshape, not
-    // a change to what the model actually said. Before this fixed, that
-    // reshape made every multi-round tool-calling turn permanently
-    // ineligible for continuation (history_changed on every attempt,
-    // confirmed live against a real gateway).
-    const rawCallId = "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb";
-    const toolCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: rawCallId,
-      name: "exec",
-      arguments: '{"command":"echo hi"}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
-    };
-    // The exact reshape normalizeOpenAIResponsesToolCallIds would have
-    // produced for the paired "rawCallId|fc_1" (verified against
-    // normalizeOpenAIResponsesFunctionCallId directly, then split back to
-    // just the call_id half the way the request builder splits it onto the
-    // wire) -- not a hand-approximated shape, so the restore-to-raw path
-    // under test actually has to recognize it via the real transform, not a
-    // lucky string match.
-    const reshapedCallId = "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627";
-    const replayedToolCall = {
-      ...toolCall,
-      id: "fc_1",
-      call_id: reshapedCallId,
-    };
-    const toolResult = {
-      type: "function_call_output",
-      call_id: reshapedCallId,
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
-    };
-
-    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
-
-    // The wire delta must carry the RAW call_id the provider actually
-    // returned, not the client's replay-local reshape of it -- a server
-    // that reconstructs full history from its own cached copy of the raw
-    // response (e.g. a proxy virtualizing previous_response_id
-    // server-side) has no way to know about the client's reshape, and
-    // pairs function_call_output.call_id against the function_call it
-    // cached verbatim.
-    expect(result).toMatchObject({
-      continuationStatus: "continued",
-      request: {
-        previous_response_id: "resp_1",
-        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
-      },
-    });
-  });
-
-  it("continues a tool-calling round when replay preserves the raw non-canonical call_id/id pair unchanged", () => {
-    // Real shape for a direct Responses transport caller that never runs
-    // history through the agent-level normalizer: transcript-transform.ts's
-    // transformMessages preserves same-model tool-call ids verbatim on its
-    // same-model branch, so this replayed function_call/function_call_output
-    // pair carries the exact same raw, non-canonical call_id and item id the
-    // provider originally returned -- not the agent-reshaped composite the
-    // sibling test above covers. Before this fixed, the cached side
-    // canonicalized the call_id/id *pair*, while the replayed side
-    // canonicalized only the bare call_id, so this exact case -- nothing
-    // about the call actually changed -- permanently forced history_changed
-    // and resent the whole conversation every round.
-    const rawCallId = "functions.gateway:0";
-    const rawItemId = "fc_tmp_kegospxl46";
-    const toolCall = {
-      type: "function_call",
-      id: rawItemId,
-      status: "completed",
-      call_id: rawCallId,
-      name: "exec",
-      arguments: '{"command":"echo hi"}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
-    };
-    // Replayed completely unchanged -- same raw call_id, same raw id, no
-    // agent-level reshape applied at all.
-    const replayedToolCall = { ...toolCall };
-    const toolResult = {
-      type: "function_call_output",
-      call_id: rawCallId,
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
-    };
-
-    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
-
-    expect(result).toMatchObject({
-      continuationStatus: "continued",
-      request: {
-        previous_response_id: "resp_1",
-        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
-      },
-    });
-  });
-
-  it("continues a tool-calling round when replay omits the item id entirely (replayResponsesItemIds:false)", () => {
-    // A connection configured with replayResponsesItemIds:false (e.g. the
-    // ChatGPT-Responses provider) omits function_call.id from the wire
-    // while preserving its raw call_id verbatim -- openai-responses-replay-
-    // messages-internal.ts's toolCall handling literally never puts `id` on
-    // the item in that case. The cached side still has the full raw
-    // call_id/id pair (from the provider's own response), so pairing it
-    // unconditionally (as the sibling "unchanged pair" test above requires)
-    // would hash a different input than this replay's un-pairable bare
-    // call_id ever could, permanently forcing history_changed for a call
-    // that didn't actually change -- a real regression the pairing fix
-    // above introduced for this equally real replay shape.
-    const rawCallId = "functions.gateway:0";
-    const rawItemId = "fc_tmp_kegospxl46";
-    const toolCall = {
-      type: "function_call",
-      id: rawItemId,
-      status: "completed",
-      call_id: rawCallId,
-      name: "exec",
-      arguments: '{"command":"echo hi"}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
-    };
-    // Replayed with the same raw call_id but no `id` field at all -- exactly
-    // what a replayResponsesItemIds:false connection sends. Everything else
-    // about the item is otherwise unchanged from the cached one.
-    const { id: _unusedItemId, ...replayedToolCall } = toolCall;
-    const toolResult = {
-      type: "function_call_output",
-      call_id: rawCallId,
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, { type: "reasoning" }, replayedToolCall, toolResult] as never,
-    };
-
-    const result = resolveResponsesContinuationRequest(state, nextRoundRequest);
-
-    expect(result).toMatchObject({
-      continuationStatus: "continued",
-      request: {
-        previous_response_id: "resp_1",
-        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
-      },
-    });
-  });
-
-  it("restores the raw call id when replay omits the item id and reshapes the bare call id", () => {
-    const rawCallId = "functions.gateway:0";
-    const rawItemId = "fc_tmp_kegospxl46";
-    const bareReshapedCallId = normalizeOpenAIResponsesFunctionCallId(rawCallId);
-    const toolCall = {
-      type: "function_call",
-      id: rawItemId,
-      status: "completed",
-      call_id: rawCallId,
-      name: "exec",
-      arguments: '{"command":"echo hi"}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [{ type: "reasoning" }, toolCall] as never,
-    };
-    const { id: _itemId, ...replayedToolCall } = toolCall;
-    replayedToolCall.call_id = bareReshapedCallId;
-    const request: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [
-        firstUser,
-        { type: "reasoning" },
-        replayedToolCall,
-        { type: "function_call_output", call_id: bareReshapedCallId, output: "hi\n" },
-      ] as never,
-    };
-
-    const result = resolveResponsesContinuationRequest(state, request);
-
-    expect(result).toMatchObject({
-      continuationStatus: "continued",
-      request: {
-        previous_response_id: "resp_1",
-        input: [{ type: "function_call_output", call_id: rawCallId, output: "hi\n" }],
-      },
-    });
-  });
+  it.each([
+    [
+      "paired reshape",
+      "chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb",
+      "fc_1",
+      "call_chatcmpl-tool-20cf1f2fabdd434da069764b4dca72eb_f_3b92d47627",
+      true,
+    ],
+    ["unchanged pair", "functions.gateway:0", "fc_tmp_kegospxl46", "functions.gateway:0", true],
+    ["omitted item ID", "functions.gateway:0", "fc_tmp_kegospxl46", "functions.gateway:0", false],
+    [
+      "bare reshape",
+      "functions.gateway:0",
+      "fc_tmp_kegospxl46",
+      normalizeOpenAIResponsesFunctionCallId("functions.gateway:0"),
+      false,
+    ],
+  ] as const)(
+    "restores the provider call ID after %s replay",
+    (_name, rawId, itemId, replayId, keepItemId) => {
+      const call = toolCall(rawId, {
+        id: itemId,
+        status: "completed",
+        arguments: '{"command":"echo hi"}',
+      });
+      const state = continuationState();
+      state.lastResponseItems = [{ type: "reasoning" }, call] as never;
+      const { id: _id, ...bareCall } = call;
+      const request: ResponsesContinuationRequest = {
+        ...state.lastRequest,
+        input: [
+          firstUser,
+          { type: "reasoning" },
+          {
+            ...bareCall,
+            ...(keepItemId ? { id: itemId } : {}),
+            call_id: replayId,
+          },
+          toolOutput(replayId, "hi\n"),
+        ] as never,
+      };
+      // The provider pairs against its cached raw ID, never the client-local replay shape.
+      expect(resolveResponsesContinuationRequest(state, request)).toMatchObject({
+        continuationStatus: "continued",
+        request: { previous_response_id: "resp_1", input: [toolOutput(rawId, "hi\n")] },
+      });
+    },
+  );
 
   it.each([
-    ["id", "fc_output_changed"],
-    ["status", "in_progress"],
-  ] as const)("rejects continuation when prior function_call_output %s changes", (field, value) => {
-    const originalOutput = {
-      type: "function_call_output",
-      id: "fc_output_1",
-      call_id: "call_tool_1",
-      output: "recorded",
-      status: "completed",
-    };
-    const state = continuationState();
-    state.lastRequest.input = [firstUser, originalOutput] as never;
-    const next = nextRequest();
-    next.input = [
-      firstUser,
-      { ...originalOutput, [field]: value },
-      ...(next.input ?? []).slice(1),
-    ] as never;
-
-    expect(resolveResponsesContinuationRequest(state, next).continuationStatus).toBe(
-      "history_changed",
-    );
-  });
-
-  it("matches a replayed output call id without pairing it to the output item id", () => {
-    const rawCallId = "functions.gateway:0";
-    const output = {
-      type: "function_call_output",
-      id: "fc_output_1",
-      call_id: rawCallId,
-      output: "recorded",
-      status: "completed",
-    };
+    ["id", "fc_output_changed", "history_changed"],
+    ["status", "in_progress", "history_changed"],
+    ["call_id", normalizeOpenAIResponsesFunctionCallId("functions.gateway:0"), "continued"],
+  ] as const)("compares prior output %s independently of its item ID", (field, value, expected) => {
+    const output = { ...toolOutput("functions.gateway:0"), id: "fc_output_1", status: "completed" };
     const state = continuationState();
     state.lastRequest.input = [firstUser, output] as never;
     const request = nextRequest();
     request.input = [
       firstUser,
-      { ...output, call_id: normalizeOpenAIResponsesFunctionCallId(rawCallId) },
+      { ...output, [field]: value },
       ...(request.input ?? []).slice(1),
     ] as never;
-
-    expect(resolveResponsesContinuationRequest(state, request).continuationStatus).toBe(
-      "continued",
-    );
+    expect(resolveResponsesContinuationRequest(state, request).continuationStatus).toBe(expected);
   });
 
-  it("does not tolerate an unrelated function-call id change as the known replay reshape", () => {
-    // A changed call_id that ISN'T the client's own reshape of the cached raw
-    // id (e.g. the model made a genuinely different tool call, or a
-    // corrupted replay) must still be treated as real history drift. The
-    // resolver accepts only an ID owned by the same cached call occurrence.
-    const toolCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: "call_original_abc",
-      name: "exec",
-      arguments: '{"command":"echo hi"}',
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [toolCall] as never,
-    };
-    const replayedToolCall = { ...toolCall, call_id: "call_unrelated_xyz" };
-    const toolResult = {
-      type: "function_call_output",
-      call_id: "call_unrelated_xyz",
-      output: "hi\n",
-    };
-    const nextRoundRequest: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [firstUser, replayedToolCall, toolResult] as never,
-    };
-
-    expect(resolveResponsesContinuationRequest(state, nextRoundRequest).continuationStatus).toBe(
-      "history_changed",
-    );
-  });
-
-  it("rejects distinct raw call ids that collapse to the same replay shape", () => {
-    const cachedCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: " x",
-      name: "exec",
-      arguments: "{}",
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [cachedCall] as never,
-    };
+  it.each([
+    ["unrelated call", "call_original_abc", "call_unrelated_xyz", "call_unrelated_xyz"],
+    ["colliding call", " x", "x", "x"],
+    ["colliding result", " x", " x", "x"],
+  ])("rejects a %s instead of restoring an unowned ID", (_name, rawId, replayId, outputId) => {
+    const call = toolCall(rawId, { id: "fc_1", status: "completed" });
+    const state = continuationState();
+    state.lastResponseItems = [call];
     const request: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [
-        firstUser,
-        { ...cachedCall, call_id: "x" },
-        { type: "function_call_output", call_id: "x", output: "recorded" },
-      ] as never,
+      ...state.lastRequest,
+      input: [firstUser, { ...call, call_id: replayId }, toolOutput(outputId)] as never,
     };
-
     expect(resolveResponsesContinuationRequest(state, request)).toEqual({
       continuationStatus: "history_changed",
       request,
@@ -726,78 +499,24 @@ describe("OpenAI Responses continuation", () => {
     });
   });
 
-  it("rejects an unrelated earlier call ID even when its result changes with it", () => {
-    const cachedCall = {
-      type: "function_call",
-      call_id: "call_a",
-      name: "lookup",
-      arguments: "{}",
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: {
-        model: "gpt-5.6-luna",
-        store: true,
-        input: [
-          firstUser,
-          cachedCall,
-          { type: "function_call_output", call_id: "call_a", output: "recorded" },
-        ] as never,
-      },
-      lastResponseId: "resp_1",
-      lastResponseItems: [assistantOutput],
-    };
-    const request: ResponsesContinuationRequest = {
-      ...state.lastRequest,
-      input: [
-        firstUser,
-        { ...cachedCall, call_id: "call_b" },
-        { type: "function_call_output", call_id: "call_b", output: "recorded" },
-        assistantOutput,
-        { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
-      ] as never,
-    };
-
-    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
-      continuationStatus: "history_changed",
-      request,
-    });
-  });
-
   it.each([
-    { name: "call and result", callId: "x", outputId: "x" },
-    { name: "result", callId: " x", outputId: "x" },
-  ])("rejects an earlier $name change that shares a replay shape", ({ callId, outputId }) => {
-    const cachedCall = {
-      type: "function_call",
-      call_id: " x",
-      name: "lookup",
-      arguments: "{}",
-    };
-    const cachedOutput = {
-      type: "function_call_output",
-      call_id: " x",
-      output: "recorded",
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: {
-        model: "gpt-5.6-luna",
-        store: true,
-        input: [firstUser, cachedCall, cachedOutput] as never,
-      },
-      lastResponseId: "resp_1",
-      lastResponseItems: [assistantOutput],
-    };
+    ["unrelated call and result", "call_a", "call_b", "call_b"],
+    ["colliding call and result", " x", "x", "x"],
+    ["colliding result", " x", " x", "x"],
+  ])("rejects an earlier %s change", (_name, rawId, replayId, outputId) => {
+    const call = toolCall(rawId, { name: "lookup" });
+    const state = continuationState();
+    state.lastRequest.input = [firstUser, call, toolOutput(rawId)] as never;
     const request: ResponsesContinuationRequest = {
       ...state.lastRequest,
       input: [
         firstUser,
-        { ...cachedCall, call_id: callId },
-        { ...cachedOutput, call_id: outputId },
+        { ...call, call_id: replayId },
+        toolOutput(outputId),
         assistantOutput,
         { type: "message", role: "user", content: [{ type: "input_text", text: "second" }] },
       ] as never,
     };
-
     expect(resolveResponsesContinuationRequest(state, request)).toEqual({
       continuationStatus: "history_changed",
       request,
@@ -934,36 +653,6 @@ describe("OpenAI Responses continuation", () => {
     third?.release();
   });
 
-  it("rejects a continuation delta whose tool result id is not a replay shape of the cached call", () => {
-    const cachedCall = {
-      type: "function_call",
-      id: "fc_1",
-      status: "completed",
-      call_id: " x",
-      name: "exec",
-      arguments: "{}",
-    };
-    const state: ResponsesContinuationState = {
-      lastRequest: { model: "gpt-5.6-luna", store: true, input: [firstUser] as never },
-      lastResponseId: "resp_1",
-      lastResponseItems: [cachedCall] as never,
-    };
-    const request: ResponsesContinuationRequest = {
-      model: "gpt-5.6-luna",
-      store: true,
-      input: [
-        firstUser,
-        cachedCall,
-        { type: "function_call_output", call_id: "x", output: "recorded" },
-      ] as never,
-    };
-
-    expect(resolveResponsesContinuationRequest(state, request)).toEqual({
-      continuationStatus: "history_changed",
-      request,
-    });
-  });
-
   it("rejects ambiguous restoration when distinct cached calls share a bare replay shape", () => {
     const cachedCalls = [
       { type: "function_call", id: "fc_1", call_id: " x", name: "first", arguments: "{}" },
@@ -1036,6 +725,38 @@ describe("OpenAI Responses continuation", () => {
     next?.release();
   });
 
+  it("keeps matching-session and all-session cleanup inside one runtime owner", () => {
+    const firstHost = createAiTransportHost();
+    const secondHost = createAiTransportHost();
+    const commit = (owner: typeof firstHost, sessionId: string, responseId: string) =>
+      runWithAiTransportHost(owner, () => {
+        claim({ sessionId })?.commit(continuationState().lastRequest, {
+          id: responseId,
+          output: continuationState().lastResponseItems,
+        });
+      });
+    const previousResponseId = (owner: typeof firstHost, sessionId: string) =>
+      runWithAiTransportHost(owner, () => {
+        const claimed = claim({ sessionId, request: nextRequest() });
+        const responseId = claimed?.request.previous_response_id;
+        claimed?.release();
+        return responseId;
+      });
+
+    commit(firstHost, "shared", "first-shared");
+    commit(firstHost, "other", "first-other");
+    commit(secondHost, "shared", "second-shared");
+    commit(secondHost, "other", "second-other");
+
+    cleanupSessionResources("shared", firstHost);
+    expect(previousResponseId(firstHost, "shared")).toBeUndefined();
+    expect(previousResponseId(secondHost, "shared")).toBe("second-shared");
+
+    cleanupSessionResources(undefined, firstHost);
+    expect(previousResponseId(firstHost, "other")).toBeUndefined();
+    expect(previousResponseId(secondHost, "other")).toBe("second-other");
+  });
+
   it("keeps preparation exclusive and preserves a cleanup-time replacement after failure", () => {
     claim({})?.commit(continuationState().lastRequest, {
       id: "resp_first",
@@ -1066,18 +787,94 @@ describe("OpenAI Responses continuation", () => {
     expect(next?.request.previous_response_id).toBe("resp_replacement");
     next?.release();
   });
+});
 
-  it("expires completed continuation state after the bounded idle TTL", () => {
-    vi.useFakeTimers();
-    const first = claim({});
-    first?.commit(continuationState().lastRequest, {
-      id: "resp_expiring",
-      output: continuationState().lastResponseItems,
+describe("OpenAI Responses continuation cache bounds", () => {
+  // Exercise the production count and serialized-byte limits without exporting test-only seams.
+  const capacity = 1000;
+  const byteBudget = 64 * 1024 * 1024;
+  const responseItems = (text: string) => [
+    {
+      ...assistantOutput,
+      content: [{ type: "output_text" as const, text, annotations: [], logprobs: [] }],
+    },
+  ];
+  function commit(sessionId: string, responseId: string, text = "answer") {
+    claim({ sessionId })?.commit(continuationState().lastRequest, {
+      id: responseId,
+      output: responseItems(text),
     });
-    vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-
-    const next = claim({ request: nextRequest() });
-    expect(next?.request.previous_response_id).toBeUndefined();
+  }
+  function previousResponseId(sessionId: string, text = "answer") {
+    const next = claim({ sessionId, request: nextRequest("final_answer", text) });
+    const id = next?.request.previous_response_id;
     next?.release();
+    return id;
+  }
+
+  it.each([
+    [89 * 60 * 1000, "resp_cached"],
+    [90 * 60 * 1000 + 1, undefined],
+  ] as const)("bounds idle retention at 90 minutes (elapsed=%s)", (elapsed, expected) => {
+    vi.useFakeTimers();
+    commit("session-1", "resp_cached");
+    vi.advanceTimersByTime(elapsed);
+    expect(previousResponseId("session-1")).toBe(expected);
+  });
+
+  it.each([
+    { bound: "entry count", count: capacity, bytes: 0, reclaim: false },
+    { bound: "commit order after reclaim", count: capacity, bytes: 0, reclaim: true },
+    { bound: "aggregate bytes", count: 4, bytes: Math.floor(byteBudget / 5), reclaim: false },
+  ])("evicts the oldest committed baseline at the $bound limit", ({ count, bytes, reclaim }) => {
+    vi.useFakeTimers();
+    const text = bytes ? "x".repeat(bytes) : "answer";
+    for (let i = 0; i < count; i++) {
+      commit(`session-${i}`, `resp-${i}`, text);
+    }
+    if (reclaim) {
+      const oldest = claim({ sessionId: "session-0", request: nextRequest() });
+      expect(oldest?.request.previous_response_id).toBe("resp-0");
+      oldest?.commit(continuationState().lastRequest, {
+        id: "resp-refreshed",
+        output: [assistantOutput],
+      });
+    }
+    commit("session-overflow", "resp-overflow", text);
+    expect(previousResponseId(`session-${reclaim ? 1 : 0}`, text)).toBeUndefined();
+    expect(previousResponseId(`session-${reclaim ? 0 : count - 1}`, text)).toBe(
+      reclaim ? "resp-refreshed" : `resp-${count - 1}`,
+    );
+  });
+
+  it("skips an oversized entry without evicting a neighbor or leaving its claim stuck", () => {
+    commit("neighbor", "resp_neighbor");
+    const text = "x".repeat(byteBudget + 1);
+    commit("session-1", "resp_oversized", text);
+    const afterOversized = claim({ request: nextRequest("final_answer", text) });
+    expect(afterOversized?.request.previous_response_id).toBeUndefined();
+    expect(previousResponseId("neighbor")).toBe("resp_neighbor");
+    afterOversized?.commit(continuationState().lastRequest, {
+      id: "resp_normal",
+      output: [assistantOutput],
+    });
+    expect(previousResponseId("session-1")).toBe("resp_normal");
+  });
+
+  it("does not overwrite a replacement claim created during commit serialization", () => {
+    const first = claim({});
+    let replacement: ReturnType<typeof claim>;
+    const output = {
+      ...assistantOutput,
+      toJSON() {
+        cleanupSessionResources("session-1");
+        replacement = claim({});
+        return { ...assistantOutput };
+      },
+    };
+    first?.commit(continuationState().lastRequest, { id: "resp_race", output: [output] });
+    expect(replacement).toBeDefined();
+    expect(claim({})).toBeUndefined();
+    replacement?.release();
   });
 });

@@ -12,6 +12,7 @@ import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
+import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient, type ClickClackClient } from "./http-client.js";
@@ -195,10 +196,7 @@ export async function sendClickClackText(params: {
     threadId: params.threadId,
     replyToId: params.replyToId,
     provenance: params.provenance,
-    nonce: textDeliveryNonce({
-      deliveryQueueId: params.deliveryQueueId,
-      deliveryPartIndex: params.deliveryPartIndex,
-    }),
+    nonce: textDeliveryNonce(params),
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
   });
@@ -228,10 +226,7 @@ export async function sendClickClackMedia(params: {
     receipt: MessageReceipt;
   }) => Promise<void> | void;
 }): Promise<string> {
-  const nonces = mediaDeliveryNonces({
-    deliveryQueueId: params.deliveryQueueId,
-    deliveryPartIndex: params.deliveryPartIndex,
-  });
+  const nonces = mediaDeliveryNonces(params);
   const { account, client } = createOutboundContext(params);
   const maxBytes = Math.min(
     resolveChannelMediaMaxBytes({
@@ -241,14 +236,15 @@ export async function sendClickClackMedia(params: {
     }) ?? CLICKCLACK_MAX_UPLOAD_BYTES,
     CLICKCLACK_MAX_UPLOAD_BYTES,
   );
+  const mediaLoadOptions = {
+    maxBytes,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  };
   const preloadedMedia = nonces.upload
     ? undefined
-    : await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      });
+    : await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadOptions);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
@@ -257,13 +253,7 @@ export async function sendClickClackMedia(params: {
   let mediaFilename = preloadedMedia?.fileName?.trim();
   if (!upload) {
     const media =
-      preloadedMedia ??
-      (await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes,
-        mediaAccess: params.mediaAccess,
-        mediaLocalRoots: params.mediaLocalRoots,
-        mediaReadFile: params.mediaReadFile,
-      }));
+      preloadedMedia ?? (await loadOutboundMediaFromUrl(params.mediaUrl, mediaLoadOptions));
     const contentType = media.contentType?.trim() || "application/octet-stream";
     const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
     mediaFilename = filename;
@@ -316,17 +306,6 @@ export async function sendClickClackMedia(params: {
   return message.id;
 }
 
-function collectReconciliationMediaUrls(ctx: ChannelMessageUnknownSendContext): string[] {
-  const planned = ctx.renderedBatchPlan?.items[0]?.mediaUrls;
-  if (planned?.length) {
-    return planned.map((url) => url.trim()).filter(Boolean);
-  }
-  const payload = ctx.payloads[0];
-  return [payload?.mediaUrl, ...(payload?.mediaUrls ?? [])]
-    .map((url) => url?.trim())
-    .filter((url): url is string => Boolean(url));
-}
-
 /**
  * Completes an unknown durable send through ClickClack's message/upload nonces.
  * Media recovery never rereads the original source after restart.
@@ -340,7 +319,13 @@ export async function reconcileClickClackUnknownSend(
       error: "ClickClack reconciliation requires exactly one payload",
     };
   }
-  const mediaUrls = collectReconciliationMediaUrls(ctx);
+  const payload = ctx.payloads[0];
+  const plannedMediaUrls = ctx.renderedBatchPlan?.items[0]?.mediaUrls;
+  const mediaUrls = normalizeTrimmedStringList(
+    plannedMediaUrls?.length
+      ? plannedMediaUrls
+      : [payload?.mediaUrl, ...(payload?.mediaUrls ?? [])],
+  );
   const { account, client } = createOutboundContext({
     cfg: ctx.cfg as CoreConfig,
     accountId: ctx.accountId,
@@ -352,7 +337,6 @@ export async function reconcileClickClackUnknownSend(
       : ctx.replyToMode === "off"
         ? undefined
         : ctx.replyToId;
-  const payload = ctx.payloads[0];
   const caption = ctx.renderedBatchPlan?.items[0]?.text ?? payload?.text ?? "";
   if (mediaUrls.length === 0) {
     const nonce = textDeliveryNonce({

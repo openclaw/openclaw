@@ -54,7 +54,7 @@ describe("forced worker environment abandonment", () => {
       runId: "forced-run",
       owner: { kind: "worker", environmentId, ownerEpoch: 2 },
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
     const binding = claim;
     await store.authorizeWorkerTurnTools(claim, ["sessions_send"]);
     expect(
@@ -95,18 +95,18 @@ describe("forced worker environment abandonment", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
   });
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {
     const { store, environmentId, active } = await createActiveAbandonmentFixture(database);
-    store.startDrain({
+    await store.startDrain({
       sessionId: active.sessionId,
       environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const claim = store.claimReclaimWorkspaceResult({
+    const claim = await store.claimReclaimWorkspaceResult({
       ...REQUEST,
       claimId: "reclaim-forced-missing-workspace",
       runId: "reclaim-forced-missing-workspace",
@@ -127,7 +127,7 @@ describe("forced worker environment abandonment", () => {
       turnClaim: null,
       recoveryError: "Worker result abandoned by forced operator teardown",
     });
-    expect(store.listPendingWorkspaceResults()).toEqual([]);
+    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
     expect(resolveWorkspace).toHaveBeenCalledOnce();
   });
 
@@ -150,7 +150,7 @@ describe("forced worker environment abandonment", () => {
       basePackSha256: createHash("sha256").update("").digest("hex"),
       basePack: Buffer.alloc(0),
     });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -159,7 +159,7 @@ describe("forced worker environment abandonment", () => {
     if (draining.state !== "draining") {
       throw new Error("draining placement fixture was not draining");
     }
-    store.startReconcile({
+    await store.startReconcile({
       sessionId: draining.sessionId,
       environmentId: draining.environmentId,
       ownerEpoch: draining.activeOwnerEpoch,

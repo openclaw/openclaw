@@ -351,15 +351,22 @@ export function loadRuntimePluginCandidate(params: {
       }
       const catalog = source.capabilityCatalog.value;
       if (Object.hasOwn(catalog, catalogRequest.family)) {
+        // Index the managed collections: native iterators would yield unbound provider objects.
         // Catalog callables belong to their shared inventory, not a per-family runtime instance.
-        for (const provider of catalog.speechProviders ?? []) {
-          params.registryBuilder.registerSpeechProvider(record, provider);
+        const speechProviders = catalog.speechProviders ?? [];
+        for (const index of speechProviders.keys()) {
+          params.registryBuilder.registerSpeechProvider(record, speechProviders[index]!);
         }
-        for (const provider of catalog.realtimeTranscriptionProviders ?? []) {
-          params.registryBuilder.registerRealtimeTranscriptionProvider(record, provider);
+        const transcriptionProviders = catalog.realtimeTranscriptionProviders ?? [];
+        for (const index of transcriptionProviders.keys()) {
+          params.registryBuilder.registerRealtimeTranscriptionProvider(
+            record,
+            transcriptionProviders[index]!,
+          );
         }
-        for (const provider of catalog.realtimeVoiceProviders ?? []) {
-          params.registryBuilder.registerRealtimeVoiceProvider(record, provider);
+        const voiceProviders = catalog.realtimeVoiceProviders ?? [];
+        for (const index of voiceProviders.keys()) {
+          params.registryBuilder.registerRealtimeVoiceProvider(record, voiceProviders[index]!);
         }
         // Descriptor coverage must never satisfy full-runtime containment checks.
         record.imported = false;

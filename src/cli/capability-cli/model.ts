@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import { collectTextContentBlocks } from "../../agents/content-blocks.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   normalizeThinkLevel,
@@ -47,13 +48,6 @@ async function loadModelCatalogForInspection(cfg: OpenClawConfig, rawAgentId?: s
   );
 }
 
-function collectModelRunText(content: Array<{ type: string; text?: string }>): string {
-  return content
-    .map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : ""))
-    .join("")
-    .trim();
-}
-
 function requireModelRunPrompt(value: unknown): string {
   if (typeof value !== "string" || normalizeOptionalString(value) === undefined) {
     throw new Error("--prompt cannot be empty or whitespace-only.");
@@ -61,14 +55,7 @@ function requireModelRunPrompt(value: unknown): string {
   return value;
 }
 
-type ModelRunImageFile = {
-  path: string;
-  fileName: string;
-  mimeType: string;
-  data: string;
-};
-
-async function readModelRunImageFiles(files: string[] | undefined): Promise<ModelRunImageFile[]> {
+async function readModelRunImageFiles(files: string[] | undefined) {
   if (!files || files.length === 0) {
     return [];
   }
@@ -217,7 +204,7 @@ async function runModelRun(params: {
                 ...(params.thinking ? { reasoning: params.thinking } : {}),
               },
             });
-            const text = collectModelRunText(result.content);
+            const text = collectTextContentBlocks(result.content).join("").trim();
             if (!text) {
               const providerErrorMessage = (result as { errorMessage?: unknown }).errorMessage;
               const detail =

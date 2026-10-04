@@ -20,21 +20,15 @@ Read only the references needed for the selected phase:
 - Validation selection or failed proof: [validation and confidence](references/validation.md), with `$release-openclaw-ci` for workflow execution and immutable manifests.
 - Interrupted publication or registry promotion: [publication recovery](references/publication-recovery.md).
 - Native assets: [platform publication](references/platform-publication.md), with `$release-openclaw-mac` for macOS operations.
-- Stable postpublish synchronization: [main closeout](references/stable-main-closeout.md).
+- Stable postpublish synchronization and the exact-SHA deployment handoff:
+  [main closeout](references/stable-main-closeout.md).
 - Release notes: `$openclaw-changelog-update`, including its separate approved post-release docs-mirror route. Initial release generation keeps its existing format; docs publication does not run automatically during release. Requested announcements: `$release-openclaw-announcement` for Discord, `$release-tweets` for X. Announcements never gate publication and require explicit posting authorization.
 - Published artifact verification: `$verify-release`. GHSA operations: `$openclaw-ghsa-maintainer` only with explicit security-workflow authorization.
 
 ## Shared release boundaries
 
-Windows Node unit-test CI shards (`checks-windows-node-*`) in FRV's `normalCi`
-child are advisory for Release Decision and publication. The named
-`windows-node-ci` class belongs to `scripts/full-release-validation-policy.mjs`;
-failures remain recorded in the decision, GitHub step summary, and release
-evidence manifest. It is policy-derived, never an operator input or waiver.
-Ordinary PR, push, scheduled, and main CI keep Windows blocking.
-
-Every other selected validation lane must succeed unless it is a recorded
-flake (below): macOS Node and other normal CI jobs, install smoke, survivor
+Every selected validation lane must succeed: Windows and macOS Node and other
+normal CI jobs, install smoke, survivor
 lanes, `update-first-hop-compat*`, pack/npm qualification, package integrity,
 and Linux/Windows/macOS Gateway checks, including Windows packaged
 install/upgrade checks in Release Checks. A cancelled run still blocks. Preserve
@@ -52,23 +46,12 @@ elsewhere or on rerun, no relation to the release delta, a runner or infra
 signature, a history of the same case flaking, or a pre-existing product bug
 that is not a regression (for example the 2026.9.6 "Assign to…" bug). A real
 blocker is a regression in shipped bytes or behavior, or an update/install/
-publish defect; fix it on the release branch. A flake never blocks: rerun it on
+publish defect; fix it on the release branch. Rerun a flake on
 the same Release SHA with at most two recorded reruns by default, and file a
 fix-in-parallel issue or PR on `main` with the evidence. Never re-cut, change
-tooling, or start a new FRV for a flake. Main-only failures and infrastructure
+tooling, or start a new FRV for a flake. A flake that remains red blocks publication. Main-only failures and infrastructure
 failures (runner outages, GitHub ghost jobs, hosted-runner offload) count as
 flakes for the release.
-
-A flake still red after its reruns in an eligible FRV `normalCi` job gets a
-`recorded-flake` receipt from the trusted-main
-`full-release-flake-classification.yml` workflow (exact job URL, tracking
-issue/PR, reason), then the parent decision reruns per the
-[CI skill](../release-openclaw-ci/SKILL.md#publication-requirements). The
-receipt binds the exact parent run and attempt, job and attempt, and Release
-SHA; the failure stays visible in the step summary, manifest, and release notes.
-Other children stay strict for now. Never classifiable: the CI gate,
-seal/evidence jobs, Build Artifacts, install smoke, survivor lanes,
-`update-first-hop-compat*`, pack/npm qualification, and package integrity.
 
 Dependency advisories never delay a release. A newly published advisory is
 never a reason to re-cut, change tooling, or rerun validation. Record it in the
@@ -171,8 +154,6 @@ Required publication proofs and enforced environment approvals remain required.
 A passing sibling cannot replace missing required evidence. npm + ClawHub is the
 priority path. macOS, Windows, Linux, and Android native publication runs in
 parallel and never gates npm/ClawHub, GitHub release finalization, or main closeout.
-Selected Windows/macOS Gateway and native-app CI failures block release
-validation unless the exact `normalCi` job has a valid `recorded-flake` receipt;
-`windows-node-ci` remains policy-advisory. Platform
-publishers retain their own artifact
+Selected Windows Node, Linux/Windows/macOS Gateway, and native-app CI failures
+block release validation. Platform publishers retain their own artifact
 and updater contracts; report pending platforms and proof gaps accurately.

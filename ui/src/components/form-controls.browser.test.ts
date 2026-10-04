@@ -1,4 +1,3 @@
-// Control UI tests cover form controls behavior.
 import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
@@ -11,10 +10,6 @@ import {
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const describeBrowserLayout = chromiumAvailable ? describe : describe.skip;
-
-type MobileFixture = {
-  page: Page;
-};
 
 let browser: Browser;
 let desktopContext: BrowserContext;
@@ -82,64 +77,29 @@ function controlsHtml() {
   `;
 }
 
-function revealedSensitiveInputHtml() {
-  return `
-    <span
-      class="oc-sensitive-input"
-      data-sensitive-input
-      data-sensitive-mask-ready="true"
-      data-revealed="true"
-    >
-      <span class="oc-sensitive-mask" data-sensitive-mask hidden>
-        <span data-sensitive-mask-text>*******************************</span>
-      </span>
-      <input type="text" value="fake-client-secret-for-ui-proof" />
-      <button class="oc-sensitive-toggle" type="button" aria-label="Hide value">◎</button>
-    </span>
-  `;
-}
-
 function mediaDeviceRowsHtml() {
-  return `
-    <main style="width: 100%; max-width: 900px">
-      <div class="settings-row">
-        <div class="settings-row__text"><span class="settings-row__title">Microphone input</span></div>
-        <div class="settings-row__control">
-          <select class="settings-select settings-select--media-device">
-            <option>MacBook Pro Microphone (Built-in)</option>
-          </select>
-          <button class="btn btn--sm btn--icon" type="button">↻</button>
-        </div>
+  const devices = [
+    ["Microphone input", "MacBook Pro Microphone (Built-in)"],
+    ["Camera", "System default"],
+  ];
+  return `<main style="width: 100%; max-width: 900px">${devices
+    .map(
+      ([label, option]) => `
+    <div class="settings-row">
+      <div class="settings-row__text"><span class="settings-row__title">${label}</span></div>
+      <div class="settings-row__control">
+        <select class="settings-select settings-select--media-device"><option>${option}</option></select>
+        <button class="btn btn--sm btn--icon" type="button">↻</button>
       </div>
-      <div class="settings-row">
-        <div class="settings-row__text"><span class="settings-row__title">Camera</span></div>
-        <div class="settings-row__control">
-          <select class="settings-select settings-select--media-device">
-            <option>System default</option>
-          </select>
-          <button class="btn btn--sm btn--icon" type="button">↻</button>
-        </div>
-      </div>
-    </main>
-  `;
+    </div>`,
+    )
+    .join("")}</main>`;
 }
 
-async function openMobileFixture(): Promise<MobileFixture> {
-  let page: Page | undefined;
-  try {
-    page = await mobileContext.newPage();
-    await page.setContent(
-      `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${controlsHtml()}</body></html>`,
-    );
-    return { page };
-  } catch (error) {
-    await page?.close().catch(() => {});
-    throw error;
-  }
-}
-
-async function closeMobileFixture(fixture: MobileFixture): Promise<void> {
-  await fixture.page.close().catch(() => {});
+async function setFixture(page: Page, body: string, attributes = "", head = "") {
+  await page.setContent(
+    `<!doctype html><html ${attributes}><head>${head}<style>${readUiCss()}</style></head><body>${body}</body></html>`,
+  );
 }
 
 beforeAll(async () => {
@@ -170,11 +130,24 @@ afterAll(async () => {
   await browser?.close().catch(() => {});
 });
 
-describeBrowserLayout("sensitive input visibility", () => {
+describeBrowserLayout("form controls and app chrome styles", () => {
   it("removes the mask layer from layout when the value is revealed", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await page.setContent(
-        `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${revealedSensitiveInputHtml()}</body></html>`,
+      await setFixture(
+        page,
+        `<span
+          class="oc-sensitive-input"
+          data-sensitive-input
+          data-sensitive-mask-ready="true"
+          data-revealed="true"
+        >
+          <span class="oc-sensitive-mask" data-sensitive-mask hidden>
+            <span data-sensitive-mask-text>*******************************</span>
+          </span>
+          <input type="text" value="fake-client-secret-for-ui-proof" />
+          <button class="oc-sensitive-toggle" type="button" aria-label="Hide value">◎</button>
+        </span>`,
+        'data-theme-mode="light"',
       );
 
       const state = await page.locator("[data-sensitive-mask]").evaluate((mask) => ({
@@ -184,24 +157,18 @@ describeBrowserLayout("sensitive input visibility", () => {
       expect(state).toEqual({ hidden: true, display: "none" });
     });
   });
-});
 
-describeBrowserLayout("settings icon buttons", () => {
   it("keeps MCP remove glyphs proportionate to settings buttons", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await page.setContent(`
-        <!doctype html>
-        <html data-theme-mode="light">
-          <head><style>${readUiCss()}</style></head>
-          <body>
-            <div class="settings-row__control">
-              <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
-                <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
-              </button>
-            </div>
-          </body>
-        </html>
-      `);
+      await setFixture(
+        page,
+        `<div class="settings-row__control">
+          <button class="btn btn--sm btn--icon mcp-server-remove" type="button" aria-label="Remove synthetic server">
+            <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
+          </button>
+        </div>`,
+        'data-theme-mode="light"',
+      );
 
       const metrics = await page
         .getByRole("button", { name: "Remove synthetic server", exact: true })
@@ -220,15 +187,22 @@ describeBrowserLayout("settings icon buttons", () => {
       expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
     });
   });
-});
 
-describeBrowserLayout("shared button states", () => {
-  it("honors distinct primary fill and hover colors in a custom light palette", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await page.emulateMedia({ reducedMotion: "reduce" });
-      await page.setContent(`<!doctype html>
-        <html data-theme="custom-light" data-theme-mode="light">
-          <head><style>
+  it.each(["custom-light", "dark", "light"] as const)(
+    "preserves action fill and foreground contrast on hover in %s mode",
+    async (theme) => {
+      const primary = theme === "custom-light";
+      await withBrowserPage(desktopContext.newPage(), async (page) => {
+        await page.emulateMedia({ reducedMotion: "reduce" });
+        await setFixture(
+          page,
+          `<main style="padding: 24px">
+            <button class="btn" type="button">Cancel</button>
+            <button class="btn ${primary ? "primary" : "danger"}" type="button">Action</button>
+          </main>`,
+          `data-theme="${theme}" data-theme-mode="${primary ? "light" : theme}"`,
+          primary
+            ? `<style>
             :root[data-theme="custom-light"] {
               --primary: #1e40af;
               --primary-hover: #1e3a8a;
@@ -236,35 +210,48 @@ describeBrowserLayout("shared button states", () => {
               --accent: #d1fae5;
               --accent-hover: #a7f3d0;
             }
-            ${readUiCss()}
-          </style></head>
-          <body><main style="padding: 24px"><button class="btn primary" type="button">Continue</button></main></body>
-        </html>`);
-      const button = page.getByRole("button", { name: "Continue", exact: true });
-      expect(await buttonAppearance(button)).toMatchObject({
-        background: "rgb(30, 64, 175)",
-        border: "rgba(0, 0, 0, 0)",
-        color: "rgb(255, 255, 255)",
+          </style>`
+            : "",
+        );
+        const button = page.getByRole("button", { name: "Action", exact: true });
+        const resting = await buttonAppearance(button);
+        expect(resting.border).toBe("rgba(0, 0, 0, 0)");
+        if (primary) {
+          expect(resting).toMatchObject({
+            background: "rgb(30, 64, 175)",
+            color: "rgb(255, 255, 255)",
+          });
+        } else {
+          const neutral = await buttonAppearance(
+            page.getByRole("button", { name: "Cancel", exact: true }),
+          );
+          expect(resting.background).not.toBe("rgba(0, 0, 0, 0)");
+          expect(resting.background).not.toBe(neutral.background);
+          expect(resting.color).not.toBe(neutral.color);
+        }
+        await button.hover();
+        const hovered = await buttonAppearance(button);
+        expect(hovered.border).toBe(resting.border);
+        expect(hovered.color).toBe(resting.color);
+        if (primary) {
+          expect(hovered.background).toBe("rgb(30, 58, 138)");
+        } else {
+          expect(hovered.background).not.toBe(resting.background);
+        }
       });
-      await button.hover();
-      expect(await buttonAppearance(button)).toMatchObject({
-        background: "rgb(30, 58, 138)",
-        border: "rgba(0, 0, 0, 0)",
-        color: "rgb(255, 255, 255)",
-      });
-    });
-  });
+    },
+  );
 
   it.each(["dark", "light"] as const)(
     "keeps disabled buttons visually settled on hover and press in %s mode",
     async (theme) => {
       await withBrowserPage(desktopContext.newPage(), async (page) => {
         await page.emulateMedia({ reducedMotion: "reduce" });
-        await page.setContent(`<!doctype html>
-          <html data-theme="${theme}" data-theme-mode="${theme}">
-            <head><style>${readUiCss()}</style></head>
-            <body><main style="padding: 24px"><button class="btn" type="button">Action</button></main></body>
-          </html>`);
+        await setFixture(
+          page,
+          `<main style="padding: 24px"><button class="btn" type="button">Action</button></main>`,
+          `data-theme="${theme}" data-theme-mode="${theme}"`,
+        );
         const button = page.getByRole("button", { name: "Action", exact: true });
         for (const variant of [
           "",
@@ -314,46 +301,14 @@ describeBrowserLayout("shared button states", () => {
     },
   );
 
-  it.each(["dark", "light"] as const)(
-    "keeps destructive buttons softly tinted without a hard border in %s mode",
-    async (theme) => {
-      await withBrowserPage(desktopContext.newPage(), async (page) => {
-        await page.emulateMedia({ reducedMotion: "reduce" });
-        await page.setContent(`<!doctype html>
-          <html data-theme="${theme}" data-theme-mode="${theme}">
-            <head><style>${readUiCss()}</style></head>
-            <body><main style="padding: 24px">
-              <button class="btn" type="button">Cancel</button>
-              <button class="btn danger" type="button">Delete</button>
-            </main></body>
-          </html>`);
-        const neutral = await buttonAppearance(
-          page.getByRole("button", { name: "Cancel", exact: true }),
-        );
-        const button = page.getByRole("button", { name: "Delete", exact: true });
-        const resting = await buttonAppearance(button);
-        expect(resting.border).toBe("rgba(0, 0, 0, 0)");
-        expect(resting.background).not.toBe("rgba(0, 0, 0, 0)");
-        expect(resting.background).not.toBe(neutral.background);
-        expect(resting.color).not.toBe(neutral.color);
-        await button.hover();
-        const hovered = await buttonAppearance(button);
-        expect(hovered.border).toBe(resting.border);
-        expect(hovered.color).toBe(resting.color);
-        expect(hovered.background).not.toBe(resting.background);
-      });
-    },
-  );
-});
-
-describeBrowserLayout("settings row wrapping", () => {
   it.each([393, 768, 1200])("keeps long copy beside its tile at %ipx", async (width) => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width, height: 1000 });
       const description =
         "Calendar notes and reminders remain readable before enabling a connector. ".repeat(8);
-      await page.setContent(`<!doctype html><html><head><meta charset="utf-8"><style>${readUiCss()}</style></head>
-        <body><main style="max-width: 1100px">
+      await setFixture(
+        page,
+        `<main style="max-width: 1100px">
           <div class="settings-row plugins-item">
             <span class="plugins-tile" aria-hidden="true">C</span>
             <div class="settings-row__text"><span class="settings-row__title">Connector</span>
@@ -362,7 +317,10 @@ describeBrowserLayout("settings row wrapping", () => {
               <button class="btn btn--sm btn--icon" aria-label="Remove connector">×</button></div>
             <div class="plugins-row-message" role="status">Connector remains disabled.</div>
           </div>
-        </main></body></html>`);
+        </main>`,
+        "",
+        `<meta charset="utf-8">`,
+      );
       const geometry = await page.locator(".settings-row").evaluate((row) => {
         const [tile, text, control, message] = Array.from(row.children, (child) =>
           child.getBoundingClientRect(),
@@ -394,15 +352,11 @@ describeBrowserLayout("settings row wrapping", () => {
       expect(geometry.overflow).toBeLessThanOrEqual(1);
     });
   });
-});
 
-describeBrowserLayout("settings media device controls", () => {
   it("keeps paired selectors the same width across device labels and viewports", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
-      await page.setContent(
-        `<!doctype html><html data-theme-mode="light"><head><style>${readUiCss()}</style></head><body>${mediaDeviceRowsHtml()}</body></html>`,
-      );
+      await setFixture(page, mediaDeviceRowsHtml(), 'data-theme-mode="light"');
 
       const measure = () =>
         page.locator(".settings-row").evaluateAll((rows) =>
@@ -436,13 +390,10 @@ describeBrowserLayout("settings media device controls", () => {
       expect(mobile.every((row) => row.selectTop === row.buttonTop)).toBe(true);
     });
   });
-});
 
-describeBrowserLayout("touch-primary form controls", () => {
-  it("keeps text-entry controls large enough to avoid mobile focus zoom", async () => {
-    const fixture = await openMobileFixture();
-    const { page } = fixture;
-    try {
+  it("keeps mobile control sizes and themed select affordances", async () => {
+    await withBrowserPage(mobileContext.newPage(), async (page) => {
+      await setFixture(page, controlsHtml(), 'data-theme-mode="light"');
       const metrics = await page.evaluate(() => {
         const selectors = [
           ".field input",
@@ -480,15 +431,7 @@ describeBrowserLayout("touch-primary form controls", () => {
       for (const size of metrics.sizes) {
         expect(size.fontSize, size.selector).toBeGreaterThanOrEqual(16);
       }
-    } finally {
-      await closeMobileFixture(fixture);
-    }
-  });
 
-  it("keeps settings select affordances visible in light mode", async () => {
-    const fixture = await openMobileFixture();
-    const { page } = fixture;
-    try {
       // Both the .field-wrapped and bare settings selects draw the themed
       // chevron; bare ones once fell back to the misaligned native arrow.
       const selects = await page.locator("select.settings-select").evaluateAll((nodes) =>
@@ -514,15 +457,7 @@ describeBrowserLayout("touch-primary form controls", () => {
         expect(select.size).toEqual(["5px 5px", "5px 5px"]);
         expect(select.repeat).toEqual(["no-repeat", "no-repeat"]);
       }
-    } finally {
-      await closeMobileFixture(fixture);
-    }
-  });
 
-  it("aligns text controls without stretching checkbox and radio inputs", async () => {
-    const fixture = await openMobileFixture();
-    const { page } = fixture;
-    try {
       const dimensions = await page.evaluate(() => {
         const height = (selector: string) => {
           const node = document.querySelector(selector);
@@ -543,13 +478,9 @@ describeBrowserLayout("touch-primary form controls", () => {
       expect(dimensions.select).toBe(38);
       expect(dimensions.checkbox).toBeLessThan(38);
       expect(dimensions.radio).toBeLessThan(38);
-    } finally {
-      await closeMobileFixture(fixture);
-    }
+    });
   });
-});
 
-describeBrowserLayout("mount fallback cursor", () => {
   it("uses the arrow for recovery controls and the hand for its real link", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setContent(readStyleSheet("ui/index.html"));
@@ -575,18 +506,28 @@ describeBrowserLayout("mount fallback cursor", () => {
       });
     });
   });
-});
 
-describeBrowserLayout("app chrome interaction styles", () => {
-  it("scales sidebar typography with the Control UI text-size preference", async () => {
-    await withBrowserPage(desktopContext.newPage(), async (page) => {
-      await page.setViewportSize({ width: 1200, height: 800 });
-      await page.setContent(`
-        <!doctype html>
-        <html>
-          <head><style>${readUiCss()}</style></head>
-          <body>
-            <span class="nav-item__text">Navigation</span>
+  it.each(["desktop", "mobile"] as const)(
+    "scales %s sidebar typography while preserving input sizes and bounded counts",
+    async (mode) => {
+      const mobile = mode === "mobile";
+      await withBrowserPage((mobile ? mobileContext : desktopContext).newPage(), async (page) => {
+        if (!mobile) {
+          await page.setViewportSize({ width: 1200, height: 800 });
+        }
+        await setFixture(
+          page,
+          mobile
+            ? `<div class="shell shell--mobile-nav">
+              <span class="nav-item">Mobile navigation</span>
+              <div class="file-view__search"><input value="query" /></div>
+              <input class="settings-sidebar__search-input" value="settings" />
+              <div class="sidebar-recent-session sidebar-recent-session--child">
+                <span class="sidebar-recent-session__name">Child session</span>
+                <span class="session-row-trail">3m</span>
+              </div>
+            </div>`
+            : `<span class="nav-item__text">Navigation</span>
             <span class="sidebar-recent-session__name">Recent session</span>
             <span class="session-row-trail">3m</span>
             <div class="sidebar-session-catalog-host__head">
@@ -617,74 +558,86 @@ describeBrowserLayout("app chrome interaction styles", () => {
               <h3>Preview heading</h3>
               <p>Agent file preview</p>
               <table><tbody><tr><td>Preview cell</td></tr></tbody></table>
-            </article>
-          </body>
-        </html>
-      `);
-
-      const selectors = [
-        ".nav-item__text",
-        ".sidebar-recent-session__name",
-        ".session-row-trail",
-        ".sidebar-session-catalog-host__count",
-        ".sidebar-session-catalog-project__count",
-        ".sidebar-agent-card__name",
-        ".settings-sidebar__item-label",
-        ".sidebar-file-view__path",
-        ".chat-workspace-rail__file-badge",
-        ".session-menu__shortcut",
-        ".file-view__search-counter",
-        ".file-view__save-notice",
-        ".sidebar-markdown pre code",
-        ".md-preview-dialog__reader.sidebar-markdown > p",
-        ".md-preview-dialog__reader.sidebar-markdown > h3",
-        ".md-preview-dialog__reader.sidebar-markdown td",
-      ];
-      const readFontSizes = () =>
-        page.evaluate((targets) => {
-          return Object.fromEntries(
-            targets.map((selector) => {
-              const node = document.querySelector(selector);
-              if (!(node instanceof HTMLElement)) {
-                throw new Error(`Missing sidebar typography fixture ${selector}`);
-              }
-              return [selector, Number.parseFloat(getComputedStyle(node).fontSize)];
-            }),
+            </article>`,
+          "",
+          mobile ? '<meta name="viewport" content="width=device-width, initial-scale=1.0" />' : "",
+        );
+        const targets: [selector: string, baseline?: number, scaledBase?: number][] = mobile
+          ? [
+              [".sidebar-recent-session--child .sidebar-recent-session__name", 12],
+              [".sidebar-recent-session--child .session-row-trail", 10],
+              [".file-view__search input", 16, 12],
+              [".settings-sidebar__search-input", 16, 12.5],
+              [".shell--mobile-nav .nav-item", 12],
+            ]
+          : [
+              ...[
+                ".nav-item__text",
+                ".sidebar-recent-session__name",
+                ".session-row-trail",
+                ".sidebar-session-catalog-host__count",
+                ".sidebar-session-catalog-project__count",
+                ".sidebar-agent-card__name",
+                ".settings-sidebar__item-label",
+                ".sidebar-file-view__path",
+                ".chat-workspace-rail__file-badge",
+                ".session-menu__shortcut",
+                ".file-view__search-counter",
+                ".file-view__save-notice",
+                ".sidebar-markdown pre code",
+                ".md-preview-dialog__reader.sidebar-markdown > p",
+                ".md-preview-dialog__reader.sidebar-markdown > h3",
+                ".md-preview-dialog__reader.sidebar-markdown td",
+              ].map((selector): [string] => [selector]),
+              [".file-view__search input", 12],
+            ];
+        const readSizes = () =>
+          page.evaluate(
+            (entries) =>
+              entries.map(([selector]) => {
+                const node = document.querySelector(selector);
+                if (!(node instanceof HTMLElement)) {
+                  throw new Error(`Missing sidebar typography fixture ${selector}`);
+                }
+                return Number.parseFloat(getComputedStyle(node).fontSize);
+              }),
+            targets,
           );
-        }, selectors);
-
-      const baseline = await readFontSizes();
-      const baselineInput = await page.$eval(".file-view__search input", (node) =>
-        Number.parseFloat(getComputedStyle(node).fontSize),
-      );
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
-      });
-      const scaled = await readFontSizes();
-      const scaledInput = await page.$eval(".file-view__search input", (node) =>
-        Number.parseFloat(getComputedStyle(node).fontSize),
-      );
-
-      for (const selector of selectors) {
-        const baselineSize = baseline[selector];
-        const scaledSize = scaled[selector];
-        if (baselineSize === undefined || scaledSize === undefined) {
-          throw new Error(`Missing computed sidebar font size for ${selector}`);
+        const baseline = await readSizes();
+        if (mobile) {
+          expect(
+            await page.evaluate(() => matchMedia("(hover: none) and (pointer: coarse)").matches),
+          ).toBe(true);
         }
-        expect(scaledSize, selector).toBeCloseTo(baselineSize * 1.4, 1);
-      }
-      expect(baselineInput).toBe(12);
-      expect(scaledInput).toBeCloseTo(12 * 1.4, 1);
-      for (const selector of [
-        ".sidebar-child-session-toggle",
-        ".sidebar-session-catalog-host__count",
-        ".sidebar-session-catalog-project__count",
-      ]) {
-        const fits = await page.$eval(selector, (node) => node.scrollWidth <= node.clientWidth);
-        expect(fits, selector).toBe(true);
-      }
-    });
-  });
+        await page.evaluate(() => {
+          document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
+        });
+        const scaled = await readSizes();
+        targets.forEach(([selector, expectedBaseline, scaledBase], index) => {
+          const initial = baseline[index];
+          if (initial === undefined) {
+            throw new Error(`Missing computed sidebar font size for ${selector}`);
+          }
+          if (expectedBaseline !== undefined) {
+            expect(initial, selector).toBe(expectedBaseline);
+          }
+          expect(scaled[index], selector).toBeCloseTo((scaledBase ?? initial) * 1.4, 1);
+        });
+        if (!mobile) {
+          for (const selector of [
+            ".sidebar-child-session-toggle",
+            ".sidebar-session-catalog-host__count",
+            ".sidebar-session-catalog-project__count",
+          ]) {
+            expect(
+              await page.$eval(selector, (node) => node.scrollWidth <= node.clientWidth),
+              selector,
+            ).toBe(true);
+          }
+        }
+      });
+    },
+  );
 
   it.each([
     { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
@@ -706,29 +659,23 @@ describeBrowserLayout("app chrome interaction styles", () => {
     "shows the mobile drawer command palette button only where nothing else carries it ($label)",
     async ({ nativeClass, merged, search }) => {
       await withBrowserPage(mobileContext.newPage(), async (page) => {
-        await page.setContent(`
-        <!doctype html>
-        <html class="${nativeClass}">
-          <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <style>${readUiCss()}</style>
-          </head>
-          <body>
-            <div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
-              <div class="sidebar-brand">
-                <div class="sidebar-brand__actions">
-                  <button
-                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
-                  ></button>
-                  <button
-                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
-                  ></button>
-                </div>
+        await setFixture(
+          page,
+          `<div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+            <div class="sidebar-brand">
+              <div class="sidebar-brand__actions">
+                <button
+                  class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
+                ></button>
+                <button
+                  class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
+                ></button>
               </div>
             </div>
-          </body>
-        </html>
-      `);
+          </div>`,
+          `class="${nativeClass}"`,
+          `<meta name="viewport" content="width=device-width, initial-scale=1.0" />`,
+        );
 
         const display = await page.evaluate(() => {
           const read = (selector: string) => {
@@ -759,96 +706,27 @@ describeBrowserLayout("app chrome interaction styles", () => {
     },
   );
 
-  it("scales mobile sidebar variants while preserving the coarse-pointer input floor", async () => {
-    await withBrowserPage(mobileContext.newPage(), async (page) => {
-      await page.setContent(`
-        <!doctype html>
-        <html>
-          <head>
-            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-            <style>${readUiCss()}</style>
-          </head>
-          <body>
-            <div class="shell shell--mobile-nav">
-              <span class="nav-item">Mobile navigation</span>
-              <div class="file-view__search"><input value="query" /></div>
-              <input class="settings-sidebar__search-input" value="settings" />
-              <div class="sidebar-recent-session sidebar-recent-session--child">
-                <span class="sidebar-recent-session__name">Child session</span>
-                <span class="session-row-trail">3m</span>
-              </div>
-            </div>
-          </body>
-        </html>
-      `);
-
-      const readSizes = () =>
-        page.evaluate(() => {
-          const fontSize = (selector: string) => {
-            const node = document.querySelector(selector);
-            if (!(node instanceof HTMLElement)) {
-              throw new Error(`Missing mobile sidebar fixture ${selector}`);
-            }
-            return Number.parseFloat(getComputedStyle(node).fontSize);
-          };
-          return {
-            childName: fontSize(".sidebar-recent-session--child .sidebar-recent-session__name"),
-            childTrail: fontSize(".sidebar-recent-session--child .session-row-trail"),
-            coarsePointer: matchMedia("(hover: none) and (pointer: coarse)").matches,
-            fileSearch: fontSize(".file-view__search input"),
-            settingsSearch: fontSize(".settings-sidebar__search-input"),
-            navItem: fontSize(".shell--mobile-nav .nav-item"),
-          };
-        });
-
-      const baseline = await readSizes();
-      expect(baseline).toMatchObject({
-        childName: 12,
-        childTrail: 10,
-        coarsePointer: true,
-        fileSearch: 16,
-        settingsSearch: 16,
-        navItem: 12,
-      });
-
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--control-ui-text-scale", "1.4");
-      });
-      const scaled = await readSizes();
-      expect(scaled.childName).toBeCloseTo(12 * 1.4, 1);
-      expect(scaled.childTrail).toBeCloseTo(10 * 1.4, 1);
-      expect(scaled.fileSearch).toBeCloseTo(12 * 1.4, 1);
-      expect(scaled.settingsSearch).toBeCloseTo(12.5 * 1.4, 1);
-      expect(scaled.navItem).toBeCloseTo(12 * 1.4, 1);
-    });
-  });
-
   it("uses one canonical scrollbar width while preserving normal content scroll and text entry", async () => {
     await withBrowserPage(desktopContext.newPage(), async (page) => {
       await page.setViewportSize({ width: 1200, height: 800 });
-      await page.setContent(`
-        <!doctype html>
-        <html>
-          <head><style>${readUiCss()}</style></head>
-          <body>
-            <aside class="settings-sidebar">
-              <nav class="settings-sidebar__nav">
-                <span class="settings-sidebar__item-label">Settings row</span>
-              </nav>
-              <input class="settings-sidebar__search-input" value="editable settings search" />
-            </aside>
-            <aside class="sidebar">
-              <div class="sidebar-shell__body">Recent session</div>
-            </aside>
-            <main class="content" style="height: 100px">
-              <div class="settings-card">App chrome tile</div>
-              <div style="height: 200px"></div>
-            </main>
-            <section class="chat-thread" style="height: 100px">Selectable transcript</section>
-            <div class="board-tabs__track">Hidden horizontal rail</div>
-          </body>
-        </html>
-      `);
+      await setFixture(
+        page,
+        `<aside class="settings-sidebar">
+          <nav class="settings-sidebar__nav">
+            <span class="settings-sidebar__item-label">Settings row</span>
+          </nav>
+          <input class="settings-sidebar__search-input" value="editable settings search" />
+        </aside>
+        <aside class="sidebar">
+          <div class="sidebar-shell__body">Recent session</div>
+        </aside>
+        <main class="content" style="height: 100px">
+          <div class="settings-card">App chrome tile</div>
+          <div style="height: 200px"></div>
+        </main>
+        <section class="chat-thread" style="height: 100px">Selectable transcript</section>
+        <div class="board-tabs__track">Hidden horizontal rail</div>`,
+      );
 
       const metrics = await page.evaluate(() => {
         const style = (selector: string) => {

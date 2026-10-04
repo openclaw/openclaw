@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
+import { clearFollowupDrainCallback } from "../../auto-reply/reply/queue/drain.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "../../auto-reply/reply/queue/enqueue.js";
+import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import type { FollowupRun } from "../../auto-reply/reply/queue/types.js";
 import {
+  clearCommandLane,
   CommandLaneClearedError,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -22,7 +24,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
@@ -175,7 +178,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  clearSessionQueues([sessionKey, sourceSessionId]);
+  for (const key of [sessionKey, sourceSessionId]) {
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
+    clearCommandLane(resolveEmbeddedSessionLane(key));
+  }
   setCommandLaneConcurrency(sessionLane, 1);
   await Promise.all(queuedCommandSettlements);
   queuedCommandSettlements.clear();
@@ -229,7 +236,7 @@ function context(active = false): GatewayRequestContext {
     chatAbortControllers: new Map(
       active ? [["active-run", { sessionId: sourceSessionId, sessionKey }]] : undefined,
     ),
-    getRuntimeConfig: () => ({ agents: { list: [{ id: "main", default: true }] } }),
+    getRuntimeConfig: () => ({ agents: { entries: { main: {} } } }),
     getSessionEventSubscriberConnIds: () => new Set(),
   } as unknown as GatewayRequestContext;
 }
@@ -415,7 +422,7 @@ function restrictedOperator(email: string, agentId: string, sandbox?: "required"
     },
   };
   const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
     gateway: {
       roles: {
         default: "guest",
@@ -614,7 +621,7 @@ describe("session message-cut methods", () => {
         { status: "rejected", reason: expect.any(CommandLaneClearedError) },
       ]);
     } finally {
-      clearSessionQueues([key]);
+      clearCommandLane(lane);
       setCommandLaneConcurrency(lane, 1);
       await settled;
     }
@@ -737,7 +744,7 @@ describe("session message-cut methods", () => {
       createdActor: { type: "human", id: profileId },
       createdAt: expect.any(Number),
     });
-    expect(listSessionStateEventsSince(forkKey ?? "", "main", 0, 20).events).toContainEqual(
+    expect((await listSessionStateEventsSince(forkKey ?? "", "main", 0, 20)).events).toContainEqual(
       expect.objectContaining({
         kind: "created",
         actorType: "human",
@@ -795,7 +802,7 @@ describe("session message-cut methods", () => {
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const mutationEntered = createDeferredCore();
     const releaseMutation = createDeferredCore();
-    const archiving = runExclusiveSessionLifecycleMutation({
+    const archiving = runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [sourceSessionId],
       run: async () => {
@@ -949,7 +956,7 @@ describe("session message-cut methods", () => {
         },
       } as GatewayClient;
       const runtimeConfig: GatewayRequestContext["getRuntimeConfig"] = () => ({
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         gateway: {
           roles: {
             default: "guest",

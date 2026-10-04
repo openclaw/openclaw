@@ -83,7 +83,7 @@ vi.mock("./reply/agent-runner.runtime.js", () => ({
       if (/context window exceeded/i.test(message)) {
         return "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
       }
-      return renderControlUiAgentFailureCopy(message);
+      return renderControlUiAgentFailureCopy();
     };
     const stripHeartbeat = (text?: string) => {
       const trimmed = text?.trim();
@@ -385,7 +385,7 @@ describe("trigger handling", () => {
   for (const testCase of [
     {
       error: "sandbox is not defined.",
-      expected: renderControlUiAgentFailureCopy("sandbox is not defined."),
+      expected: renderControlUiAgentFailureCopy(),
     },
     {
       error: "Context window exceeded",

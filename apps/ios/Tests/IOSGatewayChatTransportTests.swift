@@ -569,6 +569,29 @@ struct IOSGatewayChatTransportTests {
         }
     }
 
+    @Test func `snooze and wake carry the observed session identity`() async throws {
+        try await self.withSessionTransport { transport, recorder in
+            try await transport.patchSession(
+                key: "global",
+                expectedSessionID: " session-a ",
+                snoozedUntil: .until(Date(timeIntervalSince1970: 2_000_000_000.125)))
+            let erasedTransport: any OpenClawChatTransport = transport
+            try await erasedTransport.patchSession(
+                key: "global",
+                expectedSessionID: "session-a",
+                snoozedUntil: .wake)
+
+            let requests = await recorder.all()
+            try #require(requests.count == 2)
+            #expect(requests.map(\.method) == ["sessions.patch", "sessions.patch"])
+            #expect(requests.allSatisfy { $0.params["key"]?.value as? String == "global" })
+            #expect(requests.allSatisfy { $0.params["agentId"]?.value as? String == "reviewer" })
+            #expect(requests.allSatisfy { $0.params["expectedSessionId"]?.value as? String == "session-a" })
+            #expect(requests[0].params["snoozedUntil"]?.value as? Int == 2_000_000_000_125)
+            #expect(requests[1].params["snoozedUntil"]?.value is NSNull)
+        }
+    }
+
     @Test func `thinking changes dispatch through selected agent session target`() async throws {
         try await self.withSessionTransport { transport, recorder in
             try await transport.setSessionThinking(sessionKey: "global", thinkingLevel: "high")

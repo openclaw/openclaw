@@ -602,7 +602,13 @@ describe("Mattermost outbound", () => {
         });
         throw new Error("activity store unavailable");
       });
-      const ctx = { cfg: config(), to: "channel:CHAN1", text: "provider-final", onDeliveryResult };
+      const ctx = {
+        cfg: config(),
+        to: "channel:CHAN1",
+        text: "provider-final",
+        onDeliveryResult,
+        ...(mode === "text" ? { mediaUrl: "https://example.com/incidental.png" } : {}),
+      };
       const pending =
         mode === "text"
           ? outbound.sendText!(ctx)
@@ -614,6 +620,7 @@ describe("Mattermost outbound", () => {
               },
             });
       await expect(pending).rejects.toThrow("activity store unavailable");
+      expect(sendMessageMattermostMock.mock.calls[0]?.[2].mediaUrl).toBeUndefined();
       expect(onDeliveryResult).toHaveBeenCalledTimes(1);
       expect(onDeliveryResult).toHaveBeenCalledWith({
         channel: "mattermost",

@@ -48,11 +48,12 @@ import type { WorkerDevicePlacementRequirementResolver } from "./worker-environm
 import { createWorkerPlacementDispatchService } from "./worker-environments/placement-dispatch.js";
 import { createWorkerPlacementIdleSweep } from "./worker-environments/placement-idle-sweep.js";
 import { createWorkerPlacementRunnerAvailabilityReader } from "./worker-environments/placement-projector.js";
+import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 import { createPlacementSessionRetirement } from "./worker-environments/placement-session-retirement.js";
 import type { WorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/placement-target.js";
 import { createRepositoryWorkspaceMutationService } from "./worker-environments/repository-workspace-mutation.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
-import { isFailedWorkerPlacementEnvironmentGone } from "./worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "./worker-environments/session-workspace.js";
 import { createWorkerPlacementRedispatch } from "./worker-environments/worker-placement-redispatch.js";
 import { createWorkerSessionTurnPlacementProvider } from "./worker-environments/worker-turn-launcher.js";
@@ -116,11 +117,6 @@ export function createGatewayWorkerPlacementRuntime(
     publishAcceptedWorkspace,
     reconcilePublications,
   } = params.githubPublicationRuntime ?? createGatewayGitHubPublicationRuntime(params);
-  const diskSpace = createWorkerPlacementDiskSpaceMonitor({
-    placements: params.placements,
-    environments: params.environments,
-    warn: params.warn,
-  });
   const withPreparedRecovery = createWorkerWorkspaceRecoveryPreparer({
     loadSessionRuntime: loadWorkerPlacementSessionRuntimeModule,
     getConfig: getRuntimeConfig,
@@ -137,6 +133,12 @@ export function createGatewayWorkerPlacementRuntime(
     environments: params.environments,
     hasCurrentDeviceRunner: (deviceId) =>
       nodeWorkerSupervisorTransport?.hasCurrentRunner(deviceId) === true,
+  });
+  const diskSpace = createWorkerPlacementDiskSpaceMonitor({
+    placements: params.placements,
+    environments: params.environments,
+    runnerAvailability,
+    warn: params.warn,
   });
   const reclaimBarriers = createGatewayWorkerPlacementReclaimBarriers({
     placements: params.placements,
@@ -229,9 +231,9 @@ export function createGatewayWorkerPlacementRuntime(
           getConfig: getRuntimeConfig,
           ...identity,
           action: "activation",
-          run: () => {
+          run: (_workspace, assertCurrent) => {
             authorize?.();
-            return activate();
+            return activate(assertCurrent);
           },
         }),
       runRecoveryBarrier: async ({ environmentId, expectedGeneration, run, ...identity }) =>
@@ -240,7 +242,7 @@ export function createGatewayWorkerPlacementRuntime(
           getConfig: getRuntimeConfig,
           ...identity,
           action: "recovery",
-          run: async (workspace) => {
+          run: async (workspace, assertCurrent) => {
             const placement = params.placements.get(identity.sessionId);
             if (
               placement?.state !== "provisioning" ||
@@ -251,7 +253,7 @@ export function createGatewayWorkerPlacementRuntime(
                 `Session ${identity.sessionKey} placement changed before cloud worker recovery. Retry.`,
               );
             }
-            await run(workspace);
+            await run(workspace, assertCurrent);
           },
         }),
       onActivated: ({ sessionId }) => {
@@ -370,17 +372,30 @@ export function createGatewayWorkerPlacementRuntime(
       isStopping: () => stopped,
     });
     // Session evidence must survive until its remote owner has been reclaimed or proven gone.
+    const preservationKeys = (placements: readonly WorkerSessionPlacementRecord[]) =>
+      placements.flatMap((placement) =>
+        placement.state === "failed" &&
+        isFailedWorkerPlacementEnvironmentGone({
+          environmentService: params.environments,
+          placement,
+        })
+          ? []
+          : [placement.sessionKey],
+      );
     const uninstallSessionMaintenancePreservation = registerSessionMaintenancePreserveKeysProvider(
-      () =>
-        params.placements.listForReconcile().flatMap((placement) =>
-          placement.state === "failed" &&
-          isFailedWorkerPlacementEnvironmentGone({
-            environmentService: params.environments,
-            placement,
-          })
-            ? []
-            : [placement.sessionKey],
-        ),
+      () => preservationKeys(params.placements.listForReconcile()),
+      async () => {
+        const prepared = await params.placements.prepareMaintenancePlacements();
+        return {
+          capture() {
+            prepared.assertCurrent();
+            const keys = preservationKeys(prepared.placements);
+            prepared.assertCurrent();
+            return keys;
+          },
+          dispose: prepared.release,
+        };
+      },
     );
     const trackOperation = (
       slot: { current: Promise<void> | undefined },

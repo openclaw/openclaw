@@ -28,12 +28,13 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import type { GatewayConnectionScope } from "../../lib/gateway-connection-lifecycle.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import { repoName } from "../../lib/session-display.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import {
   resolveSessionPreferredFaceForKey,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
 import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import { gcManagedWorktrees } from "../../lib/worktrees/gc-worktrees.ts";
 import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
@@ -236,7 +237,9 @@ class WorktreesPage extends OpenClawLightDomElement {
       return;
     }
     this.gcLoading = true;
-    await this.runOperation(scope, () => scope.client.request("worktrees.gc", {}));
+    await this.runOperation(scope, () =>
+      gcManagedWorktrees(scope.client, () => this.gateway.isCurrent(scope)),
+    );
   }
 
   private toggleCreate() {
@@ -385,8 +388,8 @@ class WorktreesPage extends OpenClawLightDomElement {
     return renderSettingsRow({
       title: record.name,
       description: html`
-        <span title=${record.repoRoot}>${repoName(record.repoRoot)}</span> · ${record.branch} ·
-        ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
+        <span title=${record.repoRoot}>${pathDisplayName(record.repoRoot)}</span> · ${record.branch}
+        · ${this.renderOwner(record)} · ${formatRelativeTimestamp(record.lastActiveAt)}
       `,
       control: html`
         ${

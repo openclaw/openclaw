@@ -149,14 +149,12 @@ export function parseOAuthAuthorizationInput(
     return {};
   }
 
-  try {
-    const url = new URL(value);
+  const url = URL.parse(value);
+  if (url) {
     return {
       code: url.searchParams.get("code") ?? undefined,
       state: url.searchParams.get("state") ?? undefined,
     };
-  } catch {
-    // Plain pasted code or query-string input.
   }
 
   if (value.includes("#")) {

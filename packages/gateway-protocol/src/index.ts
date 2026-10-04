@@ -32,12 +32,14 @@ export * from "./schema/canvas.js";
 export * from "./schema/progress-card.js";
 export * from "./schema/transcripts.js";
 export {
+  SessionConversationLinkSchema,
   SessionCreatedActorSchema,
   SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionConversationLink,
   type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,
@@ -56,6 +58,11 @@ export * from "./schema/sessions-reactions.js";
 export * from "./schema/sessions-activity-summary.js";
 export * from "./schema/sessions-delete.js";
 export * from "./schema/sessions-goal.js";
+export {
+  SESSIONS_FILES_ASSETS_MAX_REFS,
+  SESSIONS_FILES_ASSET_MAX_BYTES,
+  SESSIONS_FILES_ASSETS_MAX_TOTAL_BYTES,
+} from "./schema/sessions.js";
 export * from "./schema/sessions-provider-review.js";
 export {
   SESSION_CREATE_IDEMPOTENCY_RETENTION_MS,
@@ -63,6 +70,8 @@ export {
 } from "./schema/sessions-create.js";
 export * from "./schema/projects.js";
 export * from "./migration-api.js";
+export * from "./schema/storage.js";
+export * from "./schema/backup.js";
 export * from "./restart-unavailable.js";
 export type * from "./public-session-catalog.js";
 export * from "./validator-registry.js";
@@ -84,3 +93,5 @@ export {
 export type * from "./schema-types.js";
 export type { GatewayCoreRequestParams } from "./core-request-params.js";
 export type { SessionsPatchResult } from "./sessions-patch-result.js";
+
+export * from "./schema/session-processes.js";

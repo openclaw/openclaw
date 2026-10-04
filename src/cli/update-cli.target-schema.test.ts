@@ -8,6 +8,7 @@ import { resolveConfigPath } from "../config/paths.js";
 import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-managed-service-handoff-cleanup.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
@@ -63,6 +64,7 @@ import {
 } from "./update-cli-modules.test-support.js";
 import { UpdatePreMutationError } from "./update-cli/shared.js";
 import {
+  newerAgentSchemaFixture,
   packageTargetStatus,
   writeOpenClawPackageFixture,
 } from "./update-cli/update-cli-package.test-support.js";
@@ -71,6 +73,7 @@ import * as runtimeRecovery from "./update-cli/update-command-runtime-recovery.t
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     initializeExistingUpdateProfile,
@@ -132,7 +135,7 @@ describe("update-cli", () => {
       }
       primeServiceCommand(
         [
-          "node",
+          nodeExecutable,
           kind === "git" ? path.join(root, "dist", "index.js") : entryPath,
           "gateway",
           "run",
@@ -168,18 +171,15 @@ describe("update-cli", () => {
           incompatible:
             env.OPENCLAW_STATE_DIR === managedState || callerIncompatible
               ? [
-                  {
-                    kind: "agent",
-                    path: path.join(
+                  newerAgentSchemaFixture(
+                    path.join(
                       env.OPENCLAW_STATE_DIR!,
                       "agents",
                       "worker",
                       "agent",
                       "openclaw-agent.sqlite",
                     ),
-                    foundVersion: 999,
-                    supportedVersion: 11,
-                  },
+                  ),
                 ]
               : [],
           indeterminate: [],
@@ -245,23 +245,19 @@ describe("update-cli", () => {
       databasePreflightMocks.preflightOpenClawDatabaseSchemas.mockImplementation(({ env }) => ({
         incompatible:
           env.OPENCLAW_STATE_DIR === managedState
-            ? [
-                {
-                  kind: "agent",
-                  path: path.join(managedState, "worker.sqlite"),
-                  foundVersion: 999,
-                  supportedVersion: 11,
-                },
-              ]
+            ? [newerAgentSchemaFixture(path.join(managedState, "worker.sqlite"))]
             : [],
         indeterminate: [],
       }));
       vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
-        primeServiceCommand(["node", path.join(root, "dist", "index.js"), "gateway", "run"], {
-          OPENCLAW_PROFILE: "work",
-          OPENCLAW_STATE_DIR: managedState,
-          OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
-        });
+        primeServiceCommand(
+          [nodeExecutable, path.join(root, "dist", "index.js"), "gateway", "run"],
+          {
+            OPENCLAW_PROFILE: "work",
+            OPENCLAW_STATE_DIR: managedState,
+            OPENCLAW_CONFIG_PATH: path.join(managedState, "openclaw.json"),
+          },
+        );
         serviceLoaded.mockResolvedValue(true);
         await requireValue(
           options.beforeGitMutation,
@@ -347,6 +343,7 @@ describe("update-cli", () => {
       });
     }
     if (failure === "package runtime") {
+      runtimeRecovery.stubNodeRuntime();
       nodeVersionSatisfiesEngine.mockReturnValue(false);
     }
 
@@ -478,6 +475,7 @@ describe("update-cli", () => {
   it.each([true, false])(
     "uses inspected package runtime requirements when a later lookup disagrees (compatible=%s)",
     async (compatible) => {
+      runtimeRecovery.stubNodeRuntime();
       // This case specifies a non-container system runtime, independent of the test host.
       runtimeRecovery.mockNonContainerSystemRuntime();
       const root = await mockPackageInstallAtCaseDir("openclaw-runtime-target");
@@ -534,7 +532,7 @@ describe("update-cli", () => {
     readPackageVersion.mockResolvedValue("1.0.0");
     primeNpmChannelTag("latest", "1.0.0");
     vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue(
-      packageTargetStatus({ target: "1.0.0", version: "1.0.0" }),
+      packageTargetStatus({ version: "1.0.0" }),
     );
     const packageSpec = "file:/owned/openclaw-current.tgz";
 
@@ -968,7 +966,7 @@ describe("update-cli", () => {
     }
     const entrypoint = requireValue(entrypoints[0], "updated entrypoint");
     const install = gatewayCommandCall(entrypoint, "install");
-    expect(install?.[0][0]).toContain("node");
+    expect(install?.[0][0]).toBe(process.execPath);
     expect(install?.[0].slice(1)).toEqual([
       entrypoint,
       "gateway",
@@ -995,7 +993,7 @@ describe("update-cli", () => {
     await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
       const entrypoint = path.join(process.cwd(), "dist", "index.js");
       vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
-      mockRunningManagedGateway(["node", entrypoint, "gateway"]);
+      mockRunningManagedGateway([nodeExecutable, entrypoint, "gateway"]);
       mockGitUpdateAfterMutation(makeOkUpdateResult({ root: process.cwd() }));
       const update = requireValue(
         vi.mocked(updateGitCheckout).getMockImplementation(),

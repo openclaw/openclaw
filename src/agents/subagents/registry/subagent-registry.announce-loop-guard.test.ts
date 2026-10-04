@@ -1,6 +1,10 @@
 // Announce loop-guard tests prove deferred delivery retries through its time
 // window, then gives up instead of looping forever after repeated failures.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  configureMockSubagentRegistryPersistence,
+  type MockSubagentRegistryRows,
+} from "../../subagent-test-fixtures.test-helpers.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
@@ -22,8 +26,7 @@ const mocks = vi.hoisted(() => ({
   runSubagentAnnounceFlow: vi.fn().mockResolvedValue("retryable"),
   captureSubagentCompletionReply: vi.fn(),
   loadSubagentRegistryFromSqlite: vi.fn(() => new Map()),
-  saveSubagentRegistryChangesToSqlite: vi.fn(),
-  saveSubagentRegistryToSqlite: vi.fn(),
+  persistRegistryRows: vi.fn<MockSubagentRegistryRows>(),
   resolveAgentTimeoutMs: vi.fn(() => 60_000),
 }));
 
@@ -70,8 +73,6 @@ vi.mock("../../../infra/agent-events.js", () => ({
 
 vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: mocks.loadSubagentRegistryFromSqlite,
-  saveSubagentRegistryChangesToSqlite: mocks.saveSubagentRegistryChangesToSqlite,
-  saveSubagentRegistryToSqlite: mocks.saveSubagentRegistryToSqlite,
 }));
 
 vi.mock("../../../state/openclaw-state-db-readonly.js", () => ({
@@ -108,8 +109,6 @@ vi.mock("../../../browser-lifecycle-cleanup.js", () => ({
 
 describe("announce loop guard (#18264)", () => {
   let registry: typeof import("./subagent-registry.test-helpers.js");
-  let persistence: typeof import("./subagent-registry-state.js");
-  let persistAsync: typeof persistence.persistSubagentRunsToDiskAsyncOrThrow;
 
   async function hydrateAndActivateRegistry() {
     await registry.initSubagentRegistry();
@@ -145,14 +144,10 @@ describe("announce loop guard (#18264)", () => {
   }
 
   beforeAll(async () => {
-    persistence = await import("./subagent-registry-state.js");
-    const { createSubagentPersistenceMock } =
-      await import("../../subagent-test-fixtures.test-helpers.js");
-    persistAsync = createSubagentPersistenceMock(persistence).persistSubagentRunsToDiskAsyncOrThrow;
     registry = await import("./subagent-registry.test-helpers.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useFakeTimers();
     vi.clearAllMocks();
     mocks.loadSubagentRegistryFromSqlite.mockReset();
@@ -161,15 +156,16 @@ describe("announce loop guard (#18264)", () => {
     mocks.onAgentEvent.mockReturnValue(mocks.onAgentEventStop);
     mocks.runSubagentAnnounceFlow.mockReset();
     mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
-    registry.resetSubagentRegistryForTests({ persist: false });
-    vi.spyOn(persistence, "persistSubagentRunsToDiskAsyncOrThrow").mockImplementation(persistAsync);
+    await registry.resetSubagentRegistryForTests({ persist: false });
+    mocks.persistRegistryRows.mockReset();
+    await configureMockSubagentRegistryPersistence(mocks);
   });
 
   afterEach(async () => {
     try {
       await flushAsync();
     } finally {
-      registry.resetSubagentRegistryForTests({ persist: false });
+      await registry.resetSubagentRegistryForTests({ persist: false });
       vi.useRealTimers();
       vi.restoreAllMocks();
       vi.clearAllMocks();
@@ -201,13 +197,14 @@ describe("announce loop guard (#18264)", () => {
     // Initialization finalizes expired pending rows without another recipient-visible attempt.
     const beforeInit = Date.now();
     await hydrateAndActivateRegistry();
-    await waitForRun(entry.runId, (run) => typeof run.cleanupCompletedAt === "number");
+    const completed = await waitForRun(
+      entry.runId,
+      (run) => typeof run.cleanupCompletedAt === "number",
+    );
 
     expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
-    expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
-    expect(mocks.saveSubagentRegistryChangesToSqlite).toHaveBeenCalledWith(expect.any(Map), [
-      entry.runId,
-    ]);
+    expect(completed.cleanupCompletedAt).toBeGreaterThanOrEqual(beforeInit);
+    expect(mocks.persistRegistryRows).toHaveBeenCalledWith(expect.any(Map), [entry.runId]);
   });
 
   test.each([

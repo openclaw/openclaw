@@ -2,6 +2,7 @@
 // Resolves activation config before loading or staging a Gateway registry.
 import { performance } from "node:perf_hooks";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import type { PluginLogger } from "../plugins/logger-types.js";
 import {
   getPluginCache,
   getPluginMetadataSnapshotCache,
@@ -16,11 +17,11 @@ import { resolveDurableWorkerProviderAutoEnabledReasons } from "../plugins/worke
 import { mergeActivationSectionsIntoRuntimeConfig } from "./plugin-activation-runtime-config.js";
 import { loadGatewayPlugins } from "./server-plugins.js";
 
-type GatewayPluginBootstrapLog = Parameters<typeof loadGatewayPlugins>[0]["log"];
+type GatewayPluginBootstrapLog = Required<PluginLogger>;
 type GatewayPluginBootstrapParams = Omit<
   Parameters<typeof loadGatewayPlugins>[0],
   "autoEnabledReasons"
-> & { logDiagnostics?: boolean };
+> & { log: GatewayPluginBootstrapLog };
 
 // Reload replaces the cache's metadata object and permits the next generation's notices.
 const loggedInfoByMetadata = new WeakMap<object, Set<string>>();
@@ -81,7 +82,7 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
       : getPluginCache(),
     () => {
       const started = performance.now();
-      const { logDiagnostics = true, ...loadParams } = params;
+      const { log, ...loadParams } = params;
       const activationSourceConfig = params.activationSourceConfig ?? params.cfg;
       const autoEnabled = applyPluginAutoEnable({
         config: activationSourceConfig,
@@ -118,10 +119,10 @@ export function prepareGatewayPluginLoad(params: GatewayPluginBootstrapParams) {
         autoEnabledReasons,
         channelPluginLoadIntent: params.channelPluginLoadIntent ?? "full",
       });
-      if (logDiagnostics && loaded.pluginRegistry.diagnostics.length > 0) {
+      if (loaded.pluginRegistry.diagnostics.length > 0) {
         logGatewayPluginDiagnostics({
           diagnostics: loaded.pluginRegistry.diagnostics,
-          log: params.log,
+          log,
         });
       }
       return { ...loaded, resolvedConfig };

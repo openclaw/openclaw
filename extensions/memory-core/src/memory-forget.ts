@@ -8,7 +8,7 @@ import {
 import {
   buildSessionEntry,
   listSessionTranscriptCorpusEntriesForAgent,
-  resolveMemorySessionTargets,
+  resolveMemorySessionTargetsAsync,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import {
   isFileMissingError,
@@ -77,7 +77,7 @@ type MemoryForgetParams = {
 };
 
 type MemoryForgetContext = {
-  targets: ReturnType<typeof resolveMemorySessionTargets>;
+  targets: Awaited<ReturnType<typeof resolveMemorySessionTargetsAsync>>;
   databaseOptions: Parameters<typeof withOpenClawAgentDatabaseWrite>[0];
   database?: ReturnType<typeof borrowOpenClawAgentDatabase>;
   origins?: MemoryEntryOrigin[];
@@ -100,7 +100,7 @@ export async function forgetMemoryEntries(params: MemoryForgetParams): Promise<M
       path: resolveOpenClawAgentSqlitePath({ agentId: params.agentId, env }),
     };
     const context: MemoryForgetContext = {
-      targets: resolveMemorySessionTargets({
+      targets: await resolveMemorySessionTargetsAsync({
         agentId: params.agentId,
         storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
         sessionIds: params.sessionIds,

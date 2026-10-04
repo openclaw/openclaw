@@ -1,6 +1,7 @@
 import { modelRequestBodyState } from "@openclaw/ai/internal/openai";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { fireAndForgetBoundedHook } from "../../../hooks/fire-and-forget.js";
@@ -50,6 +51,8 @@ export type ModelCallDiagnosticContext = Omit<PluginHookModelCallStartedEvent, "
   nextCallId: () => string;
   ownerGeneration?: CoreModelRequestOwnerGeneration;
   onStarted?: () => void;
+  /** Each streamed non-empty text, thinking or tool-call delta; keepalives never count. */
+  onOutputDelta?: () => void;
   onTerminal?: () => void;
   onSucceeded?: (startedAt: number) => void;
   suppressPluginHooks?: boolean;
@@ -72,6 +75,17 @@ type ModelCallStreamOptions = Parameters<StreamFn>[2];
 
 function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
   return modelContent ? { modelContent } : undefined;
+}
+
+function isModelOutputDelta(chunk: unknown): boolean {
+  return (
+    isRecord(chunk) &&
+    (chunk.type === "text_delta" ||
+      chunk.type === "thinking_delta" ||
+      chunk.type === "toolcall_delta") &&
+    typeof chunk.delta === "string" &&
+    chunk.delta.length > 0
+  );
 }
 
 function boundedTimelineAttribute(value: string | undefined): string | undefined {
@@ -380,6 +394,13 @@ export function createModelLifecycle(params: {
     observer,
     propagatedOptions,
     startedAt,
+    observeChunk(chunk: unknown) {
+      observer.observeResponseChunk(startedAt, chunk);
+      observer.maybeEmitStreamProgress(eventBase);
+      if (params.ctx.onOutputDelta && isModelOutputDelta(chunk)) {
+        params.ctx.onOutputDelta();
+      }
+    },
     emitCompleted() {
       // Iterator exhaustion can emit diagnostics before result() supplies the terminal response.
       if (!terminalNotified && (observer.state.terminalSucceeded || observer.state.terminalError)) {

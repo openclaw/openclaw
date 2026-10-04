@@ -344,7 +344,7 @@ describe("runStartupSessionMigration", () => {
   );
 
   it.each(["configured", "retired-root"] as const)(
-    "preserves the %s legacy source and requires explicit Doctor import",
+    "preserves the %s legacy source until a configured Doctor import",
     async (layout) => {
       const stateDir = fs.realpathSync.native(tempDirs.make("openclaw-legacy-session-startup-"));
       const env = { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_PROFILE: "migration" };
@@ -362,6 +362,12 @@ describe("runStartupSessionMigration", () => {
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
       fs.writeFileSync(storePath, original);
 
+      if (layout === "retired-root") {
+        await expect(
+          runStartupSessionMigration({ cfg, env, log: makeLog() }),
+        ).resolves.toBeUndefined();
+        cfg.session = { store: storePath };
+      }
       await expect(runStartupSessionMigration({ cfg, env, log: makeLog() })).rejects.toThrow(
         "openclaw --profile migration doctor --fix",
       );

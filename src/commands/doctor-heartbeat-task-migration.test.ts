@@ -94,7 +94,7 @@ tasks:
   process.env.HOME = env.HOME;
   process.env.OPENCLAW_STATE_DIR = env.OPENCLAW_STATE_DIR;
   const cfg = {
-    agents: { defaults: { heartbeat: { every: "30m" } }, list: [{ id: "main" }] },
+    agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
   const cron = createTestCronService(storePath, cfg, nowMs);
@@ -202,7 +202,7 @@ describe("heartbeat scratch task cron migration", () => {
     tempDirs.push(root);
     const env = { ...process.env, HOME: path.join(root, "home"), OPENCLAW_STATE_DIR: root };
     const cfg = {
-      agents: { defaults: { heartbeat: { every: "30m" } }, list: [{ id: "main" }] },
+      agents: { defaults: { heartbeat: { every: "30m" } }, entries: { main: {} } },
     } as OpenClawConfig;
 
     await expect(collectHeartbeatTaskMigrationFindings(cfg, env)).resolves.toEqual([]);

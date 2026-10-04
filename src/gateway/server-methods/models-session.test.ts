@@ -19,7 +19,8 @@ import {
   readUserModelAuthProfile,
 } from "../../state/user-model-accounts.js";
 import { publishUserProfileAliasChange } from "../../state/user-profile-events.js";
-import { ensureProfileForEmail, setDisplayName } from "../../state/user-profiles.js";
+import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import {
@@ -409,10 +410,12 @@ describe("direct session model catalogs", () => {
       const f = fixture();
       f.config.agents = {
         ...f.config.agents,
-        list: [
-          { id: "main", default: true },
-          { id: "other", default: false },
-        ],
+        ownership: "explicit",
+        defaults: {
+          ...f.config.agents?.defaults,
+          systemAgent: { agentId: "main" },
+        },
+        entries: { main: {}, other: {} },
       };
       await state.writeConfig(f.config);
       const sessionKey = "agent:main:saved";

@@ -1,10 +1,14 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, it, vi } from "vitest";
-import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
-import {
-  toolsEffectiveInventoryMocks as inventoryMocks,
-  toolsEffectiveTestDependencies,
-} from "./tools-effective.test-support.js";
+import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { toolsEffectiveInventoryMocks as inventoryMocks } from "./tools-effective.test-support.js";
+
+const { toolsEffectiveHandlers, testing } = await import("./tools-effective.js");
+
+vi.mock("../session-utils.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../session-utils.js")>()),
+  loadGatewaySessionEntryReadOnly: vi.fn(),
+}));
 
 beforeEach(() => {
   testing.resetToolsEffectiveCacheForTest();
@@ -13,35 +17,30 @@ beforeEach(() => {
 
 it("invalidates fresh inventory when only the persisted session ceiling changes", async () => {
   const sessionKey = "agent:main:subagent:policy-refresh";
-  const loaded: ReturnType<typeof toolsEffectiveTestDependencies.loadGatewaySessionEntryReadOnly> =
-    {
-      cfg: { agents: { entries: { main: {} } } },
-      agentId: "main",
-      storePath: "/tmp/tools-effective-policy-refresh/sessions.sqlite",
-      store: {},
-      canonicalKey: sessionKey,
-      storeKeys: [sessionKey],
-      legacyKey: undefined,
-      entry: {
-        sessionId: "unchanged-session",
-        updatedAt: 1,
-        spawnDepth: 1,
-        spawnedBy: "agent:main:main",
-        inheritedToolPolicyVersion: 1,
-      },
-    };
-  const loadSession = vi
-    .fn<typeof toolsEffectiveTestDependencies.loadGatewaySessionEntryReadOnly>()
+  const loaded: ReturnType<typeof loadGatewaySessionEntryReadOnly> = {
+    cfg: { agents: { entries: { main: {} } } },
+    agentId: "main",
+    storePath: "/tmp/tools-effective-policy-refresh/sessions.sqlite",
+    store: {},
+    canonicalKey: sessionKey,
+    storeKeys: [sessionKey],
+    legacyKey: undefined,
+    entry: {
+      sessionId: "unchanged-session",
+      updatedAt: 1,
+      spawnDepth: 1,
+      spawnedBy: "agent:main:main",
+      inheritedToolPolicyVersion: 1,
+    },
+  };
+  vi.mocked(loadGatewaySessionEntryReadOnly)
     .mockReturnValueOnce(loaded)
     .mockReturnValueOnce({
       ...loaded,
       entry: { ...expectDefined(loaded.entry, "session fixture"), inheritedToolDeny: ["exec"] },
     });
   const handler = expectDefined(
-    createToolsEffectiveHandlers({
-      ...toolsEffectiveTestDependencies,
-      loadGatewaySessionEntryReadOnly: loadSession,
-    })["tools.effective"],
+    toolsEffectiveHandlers["tools.effective"],
     "tools.effective handler",
   );
   const invoke = async () => {

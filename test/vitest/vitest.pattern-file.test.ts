@@ -2,8 +2,14 @@ import { spawnSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { filterFilesByPatterns, intersectIncludePatterns } from "./vitest.include-patterns.ts";
+import { globSync } from "tinyglobby";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  filterFilesByPatterns,
+  intersectIncludePatterns,
+  nonBrowserTestBasenamePattern,
+} from "./vitest.include-patterns.ts";
 import {
   collectVitestExcludePatterns,
   matchesVitestCliSelection,
@@ -31,16 +37,18 @@ describe("native CLI selection", () => {
           "--input-type=module",
           "--eval",
           `import { matchesVitestGlob } from './test/vitest/vitest.pattern-file.ts';
-           import { filterFilesByPatterns } from './test/vitest/vitest.include-patterns.ts';
+           import { filterFilesByPatterns, nonBrowserTestBasenamePattern } from './test/vitest/vitest.include-patterns.ts';
            console.log(JSON.stringify(filterFilesByPatterns(
-             ['ui/src/example.test.ts', 'ui/src/example.browser.test.ts'],
-             ['ui/src/**/!(*.browser).test.ts'], [], matchesVitestGlob
+             ['ui/src/example.test.ts', 'ui/src/example.browser-import.test.ts', 'ui/src/example.browser.test.ts'],
+             ['ui/src/**/' + nonBrowserTestBasenamePattern], [], matchesVitestGlob
            )));`,
         ],
         { cwd: root, encoding: "utf8", env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" } },
       );
       expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe('["ui/src/example.test.ts"]');
+      expect(result.stdout.trim()).toBe(
+        '["ui/src/example.test.ts","ui/src/example.browser-import.test.ts"]',
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -48,13 +56,33 @@ describe("native CLI selection", () => {
 
   it.each([
     { file: "ui/src/pages/devices/capability-chips.test.ts", selected: true },
+    { file: "ui/src/pages/devices/capability.browser-import.test.ts", selected: true },
+    { file: "ui/src/pages/devices.browser/capability.test.ts", selected: true },
+    { file: "ui/src/pages/devices/capability.browser-helper.browser.test.ts", selected: false },
     { file: "ui/src/pages/devices/capability-chips.browser.test.ts", selected: false },
   ])("preserves UI extglob ownership for $file", ({ file, selected }) => {
-    const include = ["ui/src/**/!(*.browser).test.ts"];
+    const include = ["ui/src/**/" + nonBrowserTestBasenamePattern];
     const expected = selected ? [file] : [];
     expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", file])).toEqual(expected);
     expect(intersectIncludePatterns(include, [file], matchesVitestGlob)).toEqual(expected);
     expect(matchesVitestCliSelection(file, include, ["run", file], "", {})).toBe(selected);
+    expect(
+      narrowIncludePatternsForCli(include, ["node", "vitest", "run", path.resolve(file)]),
+    ).toEqual(selected ? [path.resolve(file).replaceAll("\\", "/")] : []);
+  });
+
+  it("keeps non-test paths outside UI discovery when CLI narrowing is unavailable", () => {
+    const file = "ui/src/pages/devices/capability.ts";
+    const absoluteFile = path.resolve(file);
+    const include = ["ui/src/**/" + nonBrowserTestBasenamePattern];
+    expect(narrowIncludePatternsForCli(include, ["node", "vitest", "run", file])).toEqual([]);
+    expect(
+      narrowIncludePatternsForCli(include, ["node", "vitest", "run", absoluteFile]),
+    ).toBeNull();
+    expect(intersectIncludePatterns(include, [file], matchesVitestGlob)).toEqual([]);
+    for (const target of [file, absoluteFile]) {
+      expect(matchesVitestCliSelection(file, include, ["run", target], "", {})).toBe(false);
+    }
   });
 
   const infraFile = "src/infra/sqlite-worker-operation-attachment.test.ts";
@@ -198,6 +226,52 @@ describe("batch file selection", () => {
 });
 
 describe("intersectIncludePatterns", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it("preserves native non-browser test discovery through directory selection", () => {
+    const root = tempDirs.make("vitest-ui-selector-");
+    const uiFiles = [
+      "ui/src/ordinary.test.ts",
+      "ui/src/shared.browser-import.test.ts",
+      "ui/src/folder.browser/ordinary.test.ts",
+      "ui/src/shared.browser.contract.test.ts",
+    ];
+    const pluginFiles = ["extensions/example/browser/shared.browser-import.test.ts"];
+    const files = [
+      ...uiFiles,
+      ...pluginFiles,
+      "ui/src/only.browser.test.ts",
+      "ui/src/helper.browser-helper.browser.test.ts",
+      "ui/src/readme.ts",
+      "extensions/example/browser/only.browser.test.ts",
+      "other/example.test.ts",
+    ];
+    for (const file of files) {
+      const target = path.join(root, file);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, "");
+    }
+    const owner = [
+      "ui/src/**/" + nonBrowserTestBasenamePattern,
+      "extensions/*/browser/**/" + nonBrowserTestBasenamePattern,
+    ];
+    for (const { requested, expected } of [
+      { requested: ["ui/src/**/*.test.ts"], expected: uiFiles },
+      { requested: ["extensions/**/*.test.ts"], expected: pluginFiles },
+      { requested: ["**/*.test.ts"], expected: [...uiFiles, ...pluginFiles] },
+    ]) {
+      const selected = intersectIncludePatterns(owner, requested, matchesVitestGlob);
+      expect(filterFilesByPatterns(files, selected!, [], matchesVitestGlob).toSorted()).toEqual(
+        expected.toSorted(),
+      );
+      expect(
+        globSync(selected!, { cwd: root, dot: true, expandDirectories: false })
+          .map((file) => file.replaceAll("\\", "/"))
+          .toSorted(),
+      ).toEqual(expected.toSorted());
+    }
+  });
+
   it("projects arbitrary candidate globs onto a finite literal owner", () => {
     const owner = [
       "ui/src/e2e/chat.e2e.test.ts",
@@ -214,13 +288,13 @@ describe("intersectIncludePatterns", () => {
     ).toEqual(["ui/src/e2e/chat.e2e.test.ts", "ui/src/e2e/chat.capture.e2e.test.ts"]);
   });
 
-  it("retains the ambiguity guard for glob-owned inventories", () => {
-    expect(() =>
-      intersectIncludePatterns(
-        ["ui/src/**/*.e2e.test.ts"],
-        ["ui/src/e2e/*.e2e.test.ts"],
-        matchesVitestGlob,
-      ),
-    ).toThrow("cannot safely intersect non-literal include path");
+  it.each([
+    ["ui/src/**/*.e2e.test.ts", "ui/src/e2e/*.e2e.test.ts"],
+    ["ui/src/**/!(*.browser.test.ts)", "ui/src/**/*.test.ts"],
+    ["ui/src/**/prefix" + nonBrowserTestBasenamePattern, "ui/src/**/*.test.ts"],
+  ])("retains the ambiguity guard for glob-owned inventory %s", (owner, requested) => {
+    expect(() => intersectIncludePatterns([owner], [requested], matchesVitestGlob)).toThrow(
+      "cannot safely intersect non-literal include path",
+    );
   });
 });

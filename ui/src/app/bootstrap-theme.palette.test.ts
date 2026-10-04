@@ -1,12 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectMcpAppStyleVariables } from "../components/mcp-app-theme.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
 const disposals: Array<() => void> = [];
+beforeEach((testContext) => {
+  const existingFontLinks = new Set(document.querySelectorAll('link[id^="openclaw-typeface-"]'));
+  testContext.onTestFinished(() => {
+    for (const link of document.querySelectorAll('link[id^="openclaw-typeface-"]')) {
+      if (!existingFontLinks.has(link)) {
+        link.remove();
+      }
+    }
+  });
+});
 afterEach(() => {
   for (const dispose of disposals.splice(0).toReversed()) {
     dispose();
@@ -40,14 +50,18 @@ function pendingPalette() {
 }
 
 describe("applied theme palette publication", () => {
-  it.each(["load", "error"])(
-    "publishes the applied palette after %s without a branding change",
+  it.each(["synchronous", "load", "error"])(
+    "publishes the applied palette with %s completion without a branding change",
     (event) => {
       const { snapshots } = setup();
       const mascot = document.documentElement.dataset.themeMascot;
       document.documentElement.style.setProperty("--card", "#ffffff");
-      patchSettings({ theme: "tide", themeMode: "dark" });
+      patchSettings({ theme: event === "synchronous" ? "claw" : "tide", themeMode: "dark" });
       expect(snapshots).toHaveBeenCalledOnce();
+      if (event === "synchronous") {
+        expect(snapshots).toHaveLastReturnedWith(expect.objectContaining({ mode: "dark" }));
+        return;
+      }
       expect(snapshots).toHaveNthReturnedWith(
         1,
         expect.objectContaining({
@@ -74,13 +88,6 @@ describe("applied theme palette publication", () => {
       );
     },
   );
-
-  it("coalesces synchronous palette application with the preference publication", () => {
-    const { snapshots } = setup();
-    patchSettings({ themeMode: "dark" });
-    expect(snapshots).toHaveBeenCalledOnce();
-    expect(snapshots).toHaveLastReturnedWith(expect.objectContaining({ mode: "dark" }));
-  });
 
   it.each(["superseded", "disposed"])("ignores a %s palette completion", (state) => {
     const { theme, snapshots } = setup();

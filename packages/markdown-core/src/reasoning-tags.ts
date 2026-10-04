@@ -510,7 +510,7 @@ export function createReasoningTagTextPartitioner(): ReasoningTagTextPartitioner
         const codeSpans = ownership.codeSpans;
         nonFinalRetainStart = ownership.retainStart;
         nonFinalOpenEndedCode = codeSpans.some(([, spanEnd]) => spanEnd === source.length);
-        if (!codeSpans.some(([, spanEnd]) => spanEnd === source.length)) {
+        if (!nonFinalOpenEndedCode) {
           compactCommittedSource(ownership.retainStart);
         }
       }

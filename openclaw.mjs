@@ -149,6 +149,9 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
     return false;
   }
   const desiredDirectory = resolvePackagedCompileCacheDirectory();
+  if (!desiredDirectory) {
+    return false;
+  }
   const desired = path.resolve(desiredDirectory);
   if (
     path.resolve(currentDirectory) === desired ||
@@ -710,16 +713,18 @@ if (isBrowserNativeHostInvocation) {
   ) {
     try {
       const directory = resolvePackagedCompileCacheDirectory();
-      const baseDirectory = path.resolve(directory);
-      const result = module.enableCompileCache(directory);
-      void maintainOpenClawCompileCache(directory);
-      const enabled = module.constants?.compileCacheStatus?.ENABLED;
-      if (enabled !== undefined && result?.status === enabled) {
-        // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first
-        // successful input without importing runtime code before cache activation.
-        const key = Symbol.for("openclaw.nodeCompileCacheBase");
-        const owner = (globalThis[key] ??= {});
-        owner.baseDirectory ??= baseDirectory;
+      if (directory) {
+        const baseDirectory = path.resolve(directory);
+        const result = module.enableCompileCache(directory);
+        void maintainOpenClawCompileCache(directory);
+        const enabled = module.constants?.compileCacheStatus?.ENABLED;
+        if (enabled !== undefined && result?.status === enabled) {
+          // Bootstrap adapter for src/infra/node-compile-cache-env.ts: preserve the first
+          // successful input without importing runtime code before cache activation.
+          const key = Symbol.for("openclaw.nodeCompileCacheBase");
+          const owner = (globalThis[key] ??= {});
+          owner.baseDirectory ??= baseDirectory;
+        }
       }
     } catch {
       // Ignore errors

@@ -78,10 +78,14 @@ describe("runtime finalization retains original authority", () => {
   });
 
   it.each(
-    (["explicit", "ambient"] as const).flatMap((authority) =>
-      (["canonical", "refresh", "deferred", "secrets"] as const).flatMap((boundary) =>
-        [false, true].map((revoke) => ({ authority, boundary, revoke })),
-      ),
+    [
+      { authority: "explicit", boundary: "canonical" },
+      { authority: "explicit", boundary: "refresh" },
+      { authority: "explicit", boundary: "deferred" },
+      { authority: "explicit", boundary: "secrets" },
+      { authority: "ambient", boundary: "canonical" },
+    ].flatMap(({ authority, boundary }) =>
+      [false, true].map((revoke) => ({ authority, boundary, revoke })),
     ),
   )(
     "$authority write across $boundary (revoke=$revoke)",

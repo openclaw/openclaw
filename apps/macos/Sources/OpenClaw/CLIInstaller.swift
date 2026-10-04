@@ -166,15 +166,9 @@ enum CLIInstaller {
         }
     }
 
-    static func installedLocation() -> String? {
-        self.installedLocations(
-            searchPaths: CommandResolver.preferredPaths(),
-            fileManager: .default).first
-    }
-
     static func installedLocation(
-        searchPaths: [String],
-        fileManager: FileManager) -> String?
+        searchPaths: [String] = CommandResolver.preferredPaths(),
+        fileManager: FileManager = .default) -> String?
     {
         self.installedLocations(searchPaths: searchPaths, fileManager: fileManager).first
     }
@@ -183,22 +177,15 @@ enum CLIInstaller {
         searchPaths: [String],
         fileManager: FileManager) -> [String]
     {
-        var locations: [String] = []
-        for basePath in searchPaths {
+        searchPaths.compactMap { basePath in
             let candidate = URL(fileURLWithPath: basePath).appendingPathComponent("openclaw").path
             var isDirectory: ObjCBool = false
-
             guard fileManager.fileExists(atPath: candidate, isDirectory: &isDirectory),
-                  !isDirectory.boolValue
-            else {
-                continue
-            }
-
-            guard fileManager.isExecutableFile(atPath: candidate) else { continue }
-
-            locations.append(candidate)
+                  !isDirectory.boolValue,
+                  fileManager.isExecutableFile(atPath: candidate)
+            else { return nil }
+            return candidate
         }
-        return locations
     }
 
     static func managedExecutableLocation(
@@ -236,17 +223,7 @@ enum CLIInstaller {
     }
 
     static func managedStatus(
-        installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
-        usesBundledRuntime: Bool = true) async -> Status
-    {
-        await self.managedStatus(
-            expectedVersion: GatewayEnvironment.expectedGatewayVersionString(),
-            installedCLI: installedCLI,
-            usesBundledRuntime: usesBundledRuntime)
-    }
-
-    static func managedStatus(
-        expectedVersion: String?,
+        expectedVersion: String? = GatewayEnvironment.expectedGatewayVersionString(),
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         usesBundledRuntime: Bool = true) async -> Status
     {
@@ -266,6 +243,13 @@ enum CLIInstaller {
         }
         if usesBundledRuntime, BundledRuntime.isBundledApp { return self.bundledStatus() }
         guard FileManager.default.isExecutableFile(atPath: location) else {
+            if !FileManager.default.fileExists(atPath: location),
+               let authority = try? self.captureCanonicalUpdateAuthority(executable: location),
+               authority.file == nil
+            {
+                return await self.managedStatus(
+                    expectedVersion: expectedVersion, installedCLI: authority.cli, usesBundledRuntime: false)
+            }
             return .missing(location: location)
         }
 
@@ -321,18 +305,11 @@ enum CLIInstaller {
             output: response.stdout,
             expectedVersion: expectedVersion)
         guard versionStatus.isReady else { return versionStatus }
-        guard await self.runtimeIsCompatible(environment: environment) else {
+        let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+        guard case .success = await RuntimeLocator.resolve(searchPaths: paths) else {
             return .unusable(location: location)
         }
         return versionStatus
-    }
-
-    private static func runtimeIsCompatible(environment: [String: String]) async -> Bool {
-        let paths = environment["PATH"]?.split(separator: ":").map(String.init) ?? []
-        if case .success = await RuntimeLocator.resolve(searchPaths: paths) {
-            return true
-        }
-        return false
     }
 
     static func classifyVersion(
@@ -594,7 +571,7 @@ enum CLIInstaller {
         repair: Bool = false,
         installedCLI: GatewayLaunchAgentManager.InstalledServiceCLI? = nil,
         checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil,
-        onDispatch: (@MainActor @Sendable () -> Void)? = nil,
+        onDispatch: (@MainActor @Sendable () throws -> Void)? = nil,
         statusHandler: @escaping @MainActor @Sendable (String) async -> Void) async
         -> ManagedCLIUpdateOutcome
     {
@@ -616,21 +593,29 @@ enum CLIInstaller {
                 profile: .current,
                 searchPaths: CommandResolver.preferredPaths())
         } ?? self.probeEnvironment(location: executable)
-        let beforeSpawn: @Sendable () -> String? = {
-            guard let installedCLI else { return nil }
-            return GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: installedCLI)
+        let canonicalAuthority: CanonicalUpdateAuthority?
+        do {
+            canonicalAuthority = try installedCLI == nil ? self
+                .captureCanonicalUpdateAuthority(executable: executable) : nil
+        } catch {
+            return .failure(message: String(localized: "Gateway update failed."), details: error.localizedDescription)
         }
-        do { try await checkCurrent?() } catch {
+        if let canonicalAuthority, canonicalAuthority.file == nil {
+            command = canonicalAuthority.cli.prefix + command.dropFirst()
+        }
+        let beforeSpawn: @Sendable () -> String? = {
+            if let installedCLI { return GatewayLaunchAgentManager.serviceUpdateAuthorityError(for: installedCLI) }
+            return canonicalAuthority?.currentError()
+        }
+        do {
+            try await checkCurrent?()
+            if let error = beforeSpawn() { throw GatewayHostingError(message: error) }
+            try onDispatch?()
+        } catch {
             let message = String(localized: "Gateway update failed.")
             await statusHandler(message)
             return .failure(message: message, details: error.localizedDescription)
         }
-        if let error = beforeSpawn() {
-            let message = String(localized: "Gateway update failed.")
-            await statusHandler(message)
-            return .failure(message: message, details: error)
-        }
-        onDispatch?()
         let response = await ShellExecutor.runDetailed(
             command: command,
             cwd: nil,
@@ -650,15 +635,15 @@ enum CLIInstaller {
             } else {
                 String(localized: "Gateway update failed.")
             }
-            let details = self.firstNonEmpty([
+            let details = [
                 reason,
                 failedStep.map { "\($0.name): \($0.stderrTail ?? "exit \($0.exitCode ?? -1)")" },
                 response.stderr,
                 response.errorMessage,
                 response.stdout,
-            ])
+            ].compactMap { $0?.nonEmpty }.first
             await statusHandler(message)
-            return .failure(message: message, details: details.map(self.limitDiagnostic))
+            return .failure(message: message, details: details.map { String($0.suffix(4000)) })
         }
 
         let managedStatus = await self.managedStatus(
@@ -707,8 +692,8 @@ enum CLIInstaller {
     }
 
     static func activateLocalGateway(
-        mode: AppState.ConnectionMode = AppStateStore.shared.connectionMode,
-        paused: Bool = AppStateStore.shared.isPaused,
+        mode: @autoclosure () -> AppState.ConnectionMode = AppStateStore.shared.connectionMode,
+        paused: @autoclosure () -> Bool = AppStateStore.shared.isPaused,
         start: @MainActor () -> Void = { GatewayProcessManager.shared.setActive(true) },
         waitUntilReady: @MainActor () async -> Bool = {
             await GatewayProcessManager.shared.waitForGatewayReady(
@@ -717,30 +702,22 @@ enum CLIInstaller {
         failureReason: @MainActor () -> String? = { GatewayProcessManager.shared.lastFailureReason }) async
         -> LocalGatewayActivation
     {
-        guard mode == .local, !paused else { return .deferred }
+        guard mode() == .local, !paused() else { return .deferred }
         start()
-        guard await waitUntilReady() else { return .failed(reason: failureReason()) }
-        return .ready
+        let ready = await waitUntilReady()
+        guard mode() == .local, !paused() else { return .deferred }
+        return ready ? .ready : .failed(reason: failureReason())
     }
 
     private static func parseInstallEvents(_ output: String) -> [InstallEvent] {
         let decoder = JSONDecoder()
-        let lines = output
-            .split(whereSeparator: \.isNewline)
-            .map { String($0) }
-        var events: [InstallEvent] = []
-        for line in lines {
-            guard let data = line.data(using: .utf8) else { continue }
-            if let event = try? decoder.decode(InstallEvent.self, from: data) {
-                events.append(event)
-            }
+        return output.split(whereSeparator: \.isNewline).compactMap {
+            try? decoder.decode(InstallEvent.self, from: Data($0.utf8))
         }
-        return events
     }
 
     nonisolated static func installStatus(forEventLine line: String) -> String? {
-        guard let data = line.data(using: .utf8),
-              let event = try? JSONDecoder().decode(InstallEvent.self, from: data),
+        guard let event = try? JSONDecoder().decode(InstallEvent.self, from: Data(line.utf8)),
               event.event == "step",
               let name = event.name,
               let status = event.status
@@ -773,31 +750,15 @@ enum CLIInstaller {
         let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let decoder = JSONDecoder()
-        if let data = trimmed.data(using: .utf8),
-           let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: data)
-        {
+        if let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: Data(trimmed.utf8)) {
             return result
         }
         for line in trimmed.split(whereSeparator: \.isNewline).reversed() {
-            guard let data = String(line).data(using: .utf8),
-                  let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: data)
+            guard let result = try? decoder.decode(ManagedCLIUpdateSummary.self, from: Data(line.utf8))
             else { continue }
             return result
         }
         return nil
-    }
-
-    private static func firstNonEmpty(_ values: [String?]) -> String? {
-        values.compactMap { value in
-            let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed?.isEmpty == false ? trimmed : nil
-        }.first
-    }
-
-    private static func limitDiagnostic(_ value: String) -> String {
-        let maximumCharacters = 4000
-        guard value.count > maximumCharacters else { return value }
-        return String(value.suffix(maximumCharacters))
     }
 }
 

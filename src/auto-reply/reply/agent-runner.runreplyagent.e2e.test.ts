@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers/promises";
 // E2E tests for run-reply-agent execution and generated session artifacts.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import {
   emptySqliteCounts,
   observeParentSqlite,
@@ -37,7 +37,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
-import type { TypingMode } from "../../config/types.js";
+import type { OpenClawConfig, TypingMode } from "../../config/types.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   buildHandledBeforeAgentReplyPayloads,
@@ -62,13 +62,13 @@ import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
-  clearSessionQueues,
   enqueueFollowupRun,
   refreshQueuedFollowupSession,
   scheduleFollowupDrain,
   type FollowupRun,
   type QueueSettings,
 } from "./queue.js";
+import { clearFollowupQueueForTest } from "./queue.test-helpers.js";
 import { REPLY_ADMISSION_TICKET, reserveReplyAdmissionTicket } from "./reply-admission-ticket.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -327,7 +327,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  clearSessionQueues(["main"]);
+  clearFollowupQueueForTest("main");
   replyRunTesting.resetReplyRunRegistry();
   state.compactEmbeddedAgentSessionMock.mockReset();
   state.compactEmbeddedAgentSessionMock.mockResolvedValue({
@@ -665,7 +665,7 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("keeps the replacement source when retired admission completes", async () => {
+  it("keeps the replacement source when retired admission completes", async ({ signal }) => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture();
     const sourceContext = {
       Provider: "discord",
@@ -738,7 +738,7 @@ describe("runReplyAgent active steering", () => {
     );
     let replacement: ReplyOperation | undefined;
     try {
-      await withTestTimeout(committed.promise, 5_000, "first source admission did not persist");
+      await withinTest(committed.promise, signal);
       expect(requireStoredSessionEntry(storePath).restartRecoveryDeliverySourceRunId).toBe(
         "source-first",
       );
@@ -2089,13 +2089,13 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  it("delivers an authenticated channel reply through the configured default agent", async () => {
+  it("delivers an authenticated channel reply through the explicitly selected agent", async () => {
     const config = {
       agents: {
-        list: [{ id: "ops", default: true }, { id: "worker" }],
+        entries: { ops: {}, worker: {} },
         defaults: { compaction: { memoryFlush: {} } },
       },
-    };
+    } satisfies OpenClawConfig;
     const sessionEntry = makeSessionEntry();
     const sessionStore = { main: sessionEntry };
     const storePath = join(
@@ -2124,7 +2124,7 @@ describe("runReplyAgent pending final delivery capture", () => {
     const { followupRun, run, sourceTurnId } = createMinimalRun({
       sessionCtx,
       runOverrides: {
-        agentId: undefined,
+        agentId: "ops",
         config,
         messageProvider: "discord",
       },
@@ -4119,7 +4119,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
     expect(payloads.map((payload) => payload?.text)).toHaveLength(1);
-    expect(payloads[0]?.text).toContain("provider internal error");
+    expect(payloads[0]?.text).toContain("The AI service is having trouble");
   });
 
   it("announces model fallback transitions across verbose levels", async () => {
@@ -4479,7 +4479,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(onBlockReply).toHaveBeenCalledOnce();
       expect(onBlockReply).toHaveBeenCalledWith(
         expect.objectContaining({
-          text: "LLM request failed: provider rejected the request schema or tool payload.",
+          text: "LLM request rejected: Synthetic provider failure for delivery proof\\.",
           isError: true,
         }),
       );
@@ -5902,9 +5902,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
     const payloads = Array.isArray(res) ? res : res ? [res] : [];
     expect(payloads.length).toBe(1);
-    expect(payloads[0]?.text).toContain("LLM connection failed");
-    expect(payloads[0]?.text).toContain("socket connection was closed unexpectedly");
-    expect(payloads[0]?.text).toContain("```");
+    expect(payloads[0]?.text).toContain("Lost the connection to the AI service");
+    expect(payloads[0]?.text).toContain("openclaw logs --follow");
+    expect(payloads[0]?.text).not.toContain("socket connection was closed unexpectedly");
   });
 });
 

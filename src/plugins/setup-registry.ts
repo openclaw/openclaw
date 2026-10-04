@@ -13,6 +13,7 @@ import { runPluginRegistration } from "./api-lifecycle.js";
 import { hasPluginConfigMigrationSource } from "./config-contract-matches.js";
 import { findUninspectedPluginDiagnostic } from "./discovery-availability.js";
 import { discoverConfiguredPluginLoadPaths } from "./discovery.js";
+import { applyPluginDoctorCompatibilitySequence } from "./doctor-compatibility-migration.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
   selectInstalledPluginManifestRecords,
@@ -30,6 +31,7 @@ import { resolvePluginControlPlaneFingerprint } from "./plugin-control-plane-con
 import { getPluginValueInstance, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import { resolvePluginMetadataEnvFingerprint } from "./plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
 import {
   resolvePluginRuntimeExecutionArtifact,
@@ -103,8 +105,6 @@ type SetupAutoEnableReason = {
   pluginId: string;
   reason: string;
 };
-
-type PluginApiBuildParams = Parameters<typeof buildPluginApi>[0];
 
 const NOOP_LOGGER: PluginLogger = {
   info() {},
@@ -273,27 +273,6 @@ function resolveSetupRegistration(
   };
 }
 
-function buildSetupPluginApi(params: {
-  record: PluginManifestRecord;
-  setupSource: string;
-  handlers: PluginApiBuildParams["handlers"];
-}): ReturnType<typeof buildPluginApi> {
-  return buildPluginApi({
-    id: params.record.id,
-    name: params.record.name ?? params.record.id,
-    version: params.record.version,
-    description: params.record.description,
-    source: params.setupSource,
-    rootDir: params.record.rootDir,
-    registrationMode: "setup-only",
-    config: {} as OpenClawConfig,
-    runtime: createUnavailableRuntime("setup-only", params.record.id),
-    logger: NOOP_LOGGER,
-    resolvePath: (input) => input,
-    handlers: params.handlers,
-  });
-}
-
 function matchesProvider(provider: ProviderPlugin, providerId: string): boolean {
   const normalized = normalizeProviderId(providerId);
   if (normalizeProviderId(provider.id) === normalized) {
@@ -394,8 +373,14 @@ function loadSetupManifestRecords(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   pluginIds?: readonly string[];
+  metadataSnapshot?: PluginMetadataSnapshot;
 }) {
-  const { snapshot: index, manifestRegistry } = loadPluginRegistrySnapshotWithMetadata(params);
+  const { snapshot: index, manifestRegistry } = params.metadataSnapshot
+    ? {
+        snapshot: params.metadataSnapshot.index,
+        manifestRegistry: params.metadataSnapshot.manifestRegistry,
+      }
+    : loadPluginRegistrySnapshotWithMetadata(params);
   if (!manifestRegistry) {
     return loadPluginManifestRegistryForInstalledIndex({ ...params, index, includeDisabled: true })
       .plugins;
@@ -597,9 +582,18 @@ export const resolvePluginSetupRegistry = withPluginSetupCache(function (params?
     const recordCliBackends = new Map<string, SetupCliBackendEntry>();
     const recordConfigMigrations: SetupConfigMigrationEntry[] = [];
     const recordAutoEnableProbes: SetupAutoEnableProbeEntry[] = [];
-    const api = buildSetupPluginApi({
-      record,
-      setupSource: setupRegistration.setupSource,
+    const api = buildPluginApi({
+      id: record.id,
+      name: record.name ?? record.id,
+      version: record.version,
+      description: record.description,
+      source: setupRegistration.setupSource,
+      rootDir: record.rootDir,
+      registrationMode: "setup-only",
+      config: {},
+      runtime: createUnavailableRuntime("setup-only", record.id),
+      logger: NOOP_LOGGER,
+      resolvePath: (input) => input,
       handlers: {
         registerProvider(provider) {
           const key = `${record.id}:${normalizeProviderId(provider.id)}`;
@@ -712,6 +706,7 @@ export const resolvePluginSetupCliBackend = withPluginSetupCache(function (param
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): SetupCliBackendEntry | undefined {
   const normalized = normalizeProviderId(params.backend);
 
@@ -723,6 +718,7 @@ export const resolvePluginSetupCliBackend = withPluginSetupCache(function (param
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
+    metadataSnapshot: params.metadataSnapshot,
     normalizedId: normalized,
     listIds: listSetupCliBackendIds,
   });
@@ -741,6 +737,7 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
 }): {
   config: OpenClawConfig;
   changes: string[];
+  warnings?: string[];
 } {
   const loadPaths = params.config.plugins?.load?.paths ?? [];
   const warning = findUninspectedPluginDiagnostic(
@@ -750,18 +747,14 @@ export const runPluginSetupConfigMigrations = withPluginSetupCache(function (par
     log.warn(warning.message);
     return { config: params.config, changes: [] };
   }
-  let next = params.config;
-  const changes: string[] = [];
   const pluginIds = resolveRelevantSetupMigrationPluginIds(params);
-  for (const entry of resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations) {
-    const migration = entry.migrate(next);
-    if (migration?.changes.length) {
-      next = migration.config;
-      changes.push(...migration.changes);
-    }
-  }
-
-  return { config: next, changes };
+  return applyPluginDoctorCompatibilitySequence(
+    params.config,
+    resolvePluginSetupRegistry({ ...params, pluginIds }).configMigrations.map((entry) => ({
+      pluginId: entry.pluginId,
+      normalizeCompatibilityConfig: ({ cfg }) => entry.migrate(cfg) ?? { config: cfg, changes: [] },
+    })),
+  );
 });
 
 export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function (params: {
@@ -775,13 +768,7 @@ export const resolvePluginSetupAutoEnableReasons = withPluginSetupCache(function
   const reasons: SetupAutoEnableReason[] = [];
   const seen = new Set<string>();
 
-  for (const entry of resolvePluginSetupRegistry({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    pluginIds: params.pluginIds,
-    manifestRegistry: params.manifestRegistry,
-  }).autoEnableProbes) {
+  for (const entry of resolvePluginSetupRegistry(params).autoEnableProbes) {
     const raw = entry.probe({
       config: params.config,
       env,

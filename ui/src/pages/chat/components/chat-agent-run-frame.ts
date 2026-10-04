@@ -13,12 +13,14 @@ import {
   renderActivityGroup,
   renderMessageGroup,
   renderMessageGroupContent,
+} from "./chat-message-group.ts";
+import {
   renderStreamGroup,
   renderStreamGroupPart,
   renderWorkGroupSummary,
   type StreamGroupOptions,
   type StreamGroupPart,
-} from "./chat-message.ts";
+} from "./chat-message-stream.ts";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { renderChatSourcePreviews } from "./chat-source-previews.ts";
 import { renderWorkGroupBrowserTabPreviews } from "./chat-tool-cards.ts";

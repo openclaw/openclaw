@@ -3,6 +3,7 @@ import path from "node:path";
 import readline from "node:readline";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import {
   isSilentReplyPrefixText,
   isSilentReplyText,
@@ -10,6 +11,7 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../../auto-reply/tokens.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   isToolCallBlock,
   resolveToolUseId,
@@ -20,18 +22,56 @@ import {
   type SessionTranscriptRuntimeTarget,
   waitForSessionTranscriptProjection,
 } from "../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import { resolveSilentReplySettings } from "../../config/silent-reply.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
-} from "../../gateway/cli-session-history.js";
+} from "../../gateway/cli-session-history.claude.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import { buildAgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.types.js";
 import type { ExecApprovalContinuationPromptRange } from "../bash-tools.exec-approval-output.js";
 import { isClaudeToolResultBlockType, isClaudeToolUseBlockType } from "../cli-output-records.js";
 import { cliBackendLog } from "../cli-runner/log.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
+import type { ReplyExpectation } from "../reply-completion.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
+import type { AgentCommandOpts } from "./types.js";
 
 const CLAUDE_CLI_TRANSCRIPT_MAX_RECORDS = 500;
+
+export function resolveCommandReplyExpectation(params: {
+  cfg: OpenClawConfig;
+  sessionKey?: string;
+  sessionEntry?: Pick<SessionEntry, "chatType">;
+  messageChannel?: string;
+  opts: { lane?: string; privateCompletion?: true; inputProvenance?: InputProvenance };
+}): ReplyExpectation | undefined {
+  if (
+    params.opts.privateCompletion ||
+    params.opts.lane === AGENT_LANE_SUBAGENT ||
+    isSubagentSessionKey(params.sessionKey) ||
+    !isDeliverableMessageChannel(params.messageChannel ?? "")
+  ) {
+    return "required";
+  }
+  if (params.opts.inputProvenance?.kind !== "inter_session") {
+    return undefined;
+  }
+  const chatType = normalizeChatType(params.sessionEntry?.chatType);
+  return resolveSilentReplySettings({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    surface: params.messageChannel,
+    conversationType: chatType === "channel" ? "group" : chatType,
+  }).policy === "allow"
+    ? "optional"
+    : "required";
+}
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -177,8 +217,14 @@ function toToolContentBlocks(content: unknown): ToolContentBlock[] | undefined {
   );
 }
 
-async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<boolean> {
-  return await readCliTranscriptFile(filePath, false, async (fh, size) => {
+export async function claudeCliSessionTranscriptHasOrphanedToolUse(
+  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
+): Promise<boolean> {
+  const expectedPath = claudeCliSessionTranscriptPath(params);
+  if (!expectedPath) {
+    return false;
+  }
+  return await readCliTranscriptFile(expectedPath, false, async (fh, size) => {
     const tailBytes = Math.min(size, CLAUDE_CLI_ORPHAN_PROBE_TAIL_BYTES);
     const start = size - tailBytes;
     const buffer = Buffer.alloc(tailBytes);
@@ -234,16 +280,6 @@ async function jsonlFileHasOrphanedTrailingToolUse(filePath: string): Promise<bo
     }
     return false;
   });
-}
-
-export async function claudeCliSessionTranscriptHasOrphanedToolUse(
-  params: Parameters<typeof claudeCliSessionTranscriptPath>[0],
-): Promise<boolean> {
-  const expectedPath = claudeCliSessionTranscriptPath(params);
-  if (!expectedPath) {
-    return false;
-  }
-  return await jsonlFileHasOrphanedTrailingToolUse(expectedPath);
 }
 
 export function resolveFallbackRetryPrompt(params: {
@@ -342,13 +378,22 @@ function formatFallbackTurns(
 }
 
 /** Prefer the harvested summary, then retain recent turns within the fallback prompt budget. */
-function formatClaudeCliFallbackPrelude(
-  seed: ClaudeCliFallbackSeed,
-  options?: { charBudget?: number },
-): string {
+export function buildClaudeCliFallbackContextPrelude(params: {
+  cliSessionId: string | undefined;
+  homeDir?: string;
+  charBudget?: number;
+}): string {
+  const sessionId = params.cliSessionId?.trim();
+  if (!sessionId) {
+    return "";
+  }
+  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
+  if (!seed) {
+    return "";
+  }
   const charBudget = Math.max(
     CLAUDE_CLI_FALLBACK_PRELUDE_MIN_TURN_CHARS,
-    options?.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
+    params.charBudget ?? CLAUDE_CLI_FALLBACK_PRELUDE_DEFAULT_CHAR_BUDGET,
   );
   const heading = "## Prior session context (from claude-cli)";
   const sections: string[] = [heading];
@@ -381,23 +426,6 @@ function formatClaudeCliFallbackPrelude(
     return "";
   }
   return sections.join("\n");
-}
-
-/** Read a CLI session and project the available fallback context. */
-export function buildClaudeCliFallbackContextPrelude(params: {
-  cliSessionId: string | undefined;
-  homeDir?: string;
-  charBudget?: number;
-}): string {
-  const sessionId = params.cliSessionId?.trim();
-  if (!sessionId) {
-    return "";
-  }
-  const seed = readClaudeCliFallbackSeed({ cliSessionId: sessionId, homeDir: params.homeDir });
-  if (!seed) {
-    return "";
-  }
-  return formatClaudeCliFallbackPrelude(seed, { charBudget: params.charBudget });
 }
 
 /** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
@@ -499,4 +527,45 @@ export function rebaseExecApprovalContinuationPromptRange(params: {
     start: offset + params.range.start,
     end: offset + params.range.end,
   };
+}
+
+export function isClaudeCliProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "claude-cli";
+}
+
+/** Restores completion tools only on runtimes that enforce the captured requester cap. */
+export function resolveCompletionToolPolicy(params: {
+  run: { sessionEntry: SessionEntry | undefined; opts: AgentCommandOpts };
+  trustedSubagentAnnounceHandoff: boolean;
+  isSubagentAnnounceHandoff: boolean;
+  isRawModelRun: boolean;
+  isCliExecutionProvider: boolean;
+  cliExecutionProvider: string;
+  completionNeedsMessageDelivery: boolean;
+}) {
+  const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  const completionRetainsRequesterTools =
+    params.trustedSubagentAnnounceHandoff &&
+    !params.isRawModelRun &&
+    (!params.isCliExecutionProvider ||
+      (isClaudeCliProvider(params.cliExecutionProvider) &&
+        run.sessionEntry?.execHost !== "node" &&
+        !run.opts.trustedInternalHandoff?.settleBatch &&
+        !messageToolOwnsVisibleReply(run.opts))) &&
+    (!messageToolOwnsVisibleReply(run.opts) || completionNeedsMessageDelivery);
+  // CLI message-only delivery keeps its existing narrow grant. A denied completion
+  // must clear an explicit cap so its owner can relay frozen text tool-free.
+  const runtimeToolsAllow = isSubagentAnnounceHandoff
+    ? completionRetainsRequesterTools
+      ? run.opts.toolsAllow
+      : completionNeedsMessageDelivery
+        ? ["message"]
+        : undefined
+    : run.opts.toolsAllow;
+  const disableTools =
+    run.opts.modelRun === true ||
+    (isSubagentAnnounceHandoff &&
+      !completionRetainsRequesterTools &&
+      !completionNeedsMessageDelivery);
+  return { completionRetainsRequesterTools, runtimeToolsAllow, disableTools };
 }

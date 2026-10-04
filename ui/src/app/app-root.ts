@@ -125,7 +125,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
       void import("../styles/native-embed.css");
     }
     void import("../components/session-progress-hovercard-registration.ts");
-    this.resetLoginSensitivePresentation();
+    this.loginShowGatewaySecret = false;
     this.runtime = bootstrapApplication();
     const runtime = this.runtime;
     this.startupPending = true;
@@ -182,7 +182,7 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginGatewaySource = null;
     this.loginConnectionClient = null;
     this.pendingGatewayUrl = null;
-    this.resetLoginSensitivePresentation();
+    this.loginShowGatewaySecret = false;
     super.disconnectedCallback();
   }
 
@@ -197,13 +197,13 @@ export class OpenClawApp extends OpenClawLightDomElement {
     if (sourceChanged) {
       this.loginGatewaySource = gateway;
       this.loginConnectionClient = null;
-      this.resetLoginSensitivePresentation();
+      this.loginShowGatewaySecret = false;
     }
     const snapshot = gateway.snapshot;
     const clientChanged = snapshot.client !== this.loginConnectionClient;
     if (clientChanged) {
       this.loginConnectionClient = snapshot.client;
-      this.resetLoginSensitivePresentation();
+      this.loginShowGatewaySecret = false;
     }
     if (sourceChanged || clientChanged) {
       this.syncLoginConnection(gateway);
@@ -221,10 +221,6 @@ export class OpenClawApp extends OpenClawLightDomElement {
     this.loginGatewayUrl = connection.gatewayUrl;
     this.loginToken = connection.token;
     this.loginPassword = connection.password;
-  }
-
-  private resetLoginSensitivePresentation() {
-    this.loginShowGatewaySecret = false;
   }
 
   private updateLoginGatewayUrl(value: string) {
@@ -600,7 +596,17 @@ export class OpenClawApp extends OpenClawLightDomElement {
       ((this.startupPending && gatewaySnapshot.phase === "stopped") ||
         gatewaySnapshot.phase === "starting" ||
         (gatewaySnapshot.phase === "connecting" && !this.loginGatePinned));
-    const warmConnectPending = initialConnectPending && runtime.warmBoot && !this.loginGatePinned;
+    // A failed network attempt cannot revoke the already admitted local cache.
+    // Credential changes and explicit auth/pairing rejections still return to sign-in.
+    const warmConnectPending =
+      runtime.documentMode === null &&
+      runtime.warmBoot &&
+      !this.loginGatePinned &&
+      (initialConnectPending ||
+        (gatewaySnapshot.phase === "connecting" &&
+          !gatewaySnapshot.lastErrorAuthReason &&
+          (gatewaySnapshot.lastErrorCode === null ||
+            gatewaySnapshot.lastErrorCode === "GATEWAY_BUSY")));
     if (initialConnectPending && !warmConnectPending) {
       return renderConnectingSplash(gatewayStartupStatus);
     }

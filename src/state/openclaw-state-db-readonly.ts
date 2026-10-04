@@ -9,6 +9,7 @@ import {
   retainSnapshotWork,
   SqliteSnapshotCleanupError,
 } from "../infra/sqlite-readonly-location-cleanup.js";
+import { prepareSqliteReadOnlyLocationSyncInProcess } from "../infra/sqlite-readonly-location.js";
 import type { PreparedSqliteReadOnlyLocation } from "../infra/sqlite-readonly-location.types.js";
 import {
   prepareSqliteReadOnlyLocation,
@@ -40,7 +41,10 @@ import {
   existingPathOrUndefined,
   resolveOpenClawStateSqlitePath,
 } from "./openclaw-state-db.paths.js";
-import type { OpenClawStateReadReceipt } from "./openclaw-state-read-error.js";
+import {
+  getOpenClawDatabaseMaintenanceScope,
+  maintenanceOwnerMayCopySourcesInProcess,
+} from "./openclaw-state-maintenance-context.js";
 import {
   startOpenClawStateReadOperation,
   type OpenClawStateReadCompletion,
@@ -53,6 +57,7 @@ import {
   runSynchronousReadScope,
 } from "./openclaw-state-read-scope.js";
 import type {
+  OpenClawStateReadReceipt,
   OpenClawStateReadOptions,
   OpenClawStateReadCommand,
   OpenClawStateReadReply,
@@ -107,10 +112,19 @@ export async function withOpenClawStateDatabaseReadSnapshot<T>(
     try {
       openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
       admission = captureOpenClawStateDatabaseReadAdmission(pathname);
-      prepared = await prepareSqliteReadOnlyLocation(pathname, {
-        preserveSourceArtifacts: isArtifactPreservingStateRead(),
-        signal: controller.signal,
-      });
+      controller.signal.throwIfAborted();
+      if (
+        isArtifactPreservingStateRead() &&
+        maintenanceOwnerMayCopySourcesInProcess(getOpenClawDatabaseMaintenanceScope(), pathname) &&
+        !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(pathname)
+      ) {
+        prepared = prepareSqliteReadOnlyLocationSyncInProcess(pathname);
+      } else {
+        prepared = await prepareSqliteReadOnlyLocation(pathname, {
+          preserveSourceArtifacts: isArtifactPreservingStateRead(),
+          signal: controller.signal,
+        });
+      }
     } catch (error) {
       throw new Error(
         `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(error)}`,
@@ -534,7 +548,10 @@ export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
 /** Publication guards need current rows, never an inherited discovery snapshot. */
 export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
-  options: OpenClawStateDatabaseOptions = {},
+  options: OpenClawStateDatabaseOptions & {
+    /** Existing host mutation guards may read natively outside worker admission grants. */
+    allowNativeRead?: true;
+  } = {},
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): T | undefined {
   const pathname = resolveReadOnlyPath(options);
@@ -556,7 +573,9 @@ export function withExistingOpenClawStateDatabaseCurrentReadOnly<T>(
     return withOpenClawStateReadOnlyLocation(
       operation,
       pathname,
-      prepareSqliteReadOnlyLocationSync(pathname),
+      options.allowNativeRead && !isArtifactPreservingStateRead() && !openStateSchemaReadAdmission
+        ? pathname
+        : prepareSqliteReadOnlyLocationSync(pathname),
       openStateSchemaReadAdmission,
     );
   });
@@ -601,4 +620,13 @@ export function readCurrentOpenClawStateDatabaseContentVersion(
   const pathname = resolveReadOnlyPath(options);
   const env = options.env ?? process.env;
   return stateSnapshotReads.exit(() => readAdmittedStateContentVersion(pathname, env));
+}
+
+/** Current guards leave discovery snapshots after validating their inherited read admission. */
+export function withCurrentOpenClawStateReadScope<T>(
+  options: OpenClawStateDatabaseOptions,
+  operation: (pathname: string) => T,
+): T {
+  const pathname = resolveReadOnlyPath(options);
+  return stateSnapshotReads.exit(() => operation(pathname));
 }

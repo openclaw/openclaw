@@ -21,6 +21,22 @@ postures and maintenance modes documented on the other pages.
 
 ## Config writes and backups
 
+Update-history inspection and reconciliation are best-effort maintenance. A failure
+prints a warning and allows independent Doctor repairs and plugin registry mutations
+to continue. Writable passes also try to save the warning on the latest existing
+SQLite update run, without changing its outcome or activity timestamps or creating
+a new run. Read-only passes do not write history. Database integrity, migration,
+and unsettled process cleanup checks still protect mutations.
+
+Snapshot workers use the runtime executing the CLI. Native workers inherit an
+unchanged working directory, avoiding a redundant directory change that can fail
+after `sudo -u` switches users. A spawn refusal names the runtime and working
+directory; check executable permissions and directory access for the service user.
+Disk-space or `XDG_CACHE_HOME` guidance applies to snapshot storage failures, not
+runtime launch permissions.
+
+After its checks finish, `doctor --fix` settles its own inspection workers while retaining maintenance ownership, then checks whether abandoned updater runtimes can be removed. Independent OpenClaw processes, Worker threads, and shared-broker work still prevent removal. Doctor reports the holder PIDs and asks you to let their work finish before rerunning `openclaw doctor --fix`.
+
 - On npm global installs, Doctor reports retained `.openclaw.package-backup-*.databases` directories (and `.openclaw-package-backup-*.databases`, the name a failed cleanup retires them under) beside the installed package, with their total regular-file size in bytes and human-readable units and a quoted removal command for each directory. The scan is bounded; incomplete sizes are lower bounds. If inspection is incomplete before any snapshot is found, Doctor warns and asks you to list the npm global root manually, including hidden entries. A missing global root produces no warning. This is warning-only, including with `--fix`: confirm no update is in progress and no recovery needs the snapshots before removing them manually. Updater-driven Doctor passes defer this check so they do not report the active update's snapshots; run standalone Doctor after the update settles.
 - Any config write (including a `--fix` repair) rotates a backup to `~/.openclaw/openclaw.json.bak` (with a numbered `.bak.1`..`.bak.4` ring). `--fix` also drops unknown config keys reported by schema validation, listing each removal; it skips this while an update is in progress so partially written upgrade state is not stripped before its migration finishes.
 - If `openclaw.json` cannot be parsed and no last-known-good config can be recovered, `doctor --fix` leaves the file unchanged and exits with an error instead of writing a partial replacement. The error points to `openclaw config validate` for the exact parse position and explains how to edit or regenerate the config.
@@ -39,7 +55,6 @@ postures and maintenance modes documented on the other pages.
 - State integrity checks detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.
 - Doctor scans historical `~/.openclaw/cron/jobs.json` stores and previously configured legacy store locations for old cron job shapes, imports jobs and quarantine records into SQLite, and archives the migrated JSON files.
 - Doctor reports cron jobs with an explicit `payload.model` override, including provider-namespace counts and mismatches against `agents.defaults.model`, so scheduled jobs that do not inherit the default model are visible during auth or billing investigations.
-- Doctor reports automatically captured job tool lists that contain no native capabilities when the configured backend supports native-tool capture. Older captures could omit native tools; deliberately restricted jobs can be left as is. Doctor never widens these lists, including with `--fix`. To change a list, use `openclaw cron edit <id> --tools "<complete list>" --json` from an authorized session that holds the tools, including every tool the job should retain.
 - Doctor reports cron jobs still marked in-flight (`state.runningAtMs`), which can make `openclaw cron list` show them as `running`. This check is read-only: if no Gateway is currently executing a marked job, the next cron service startup records the interrupted run and clears the marker.
 
 ## Tool and channel policy
@@ -80,7 +95,7 @@ postures and maintenance modes documented on the other pages.
 
 - If sandbox mode is enabled but Docker is unavailable, doctor reports a high-signal warning with remediation (`install Docker` or `openclaw config set agents.defaults.sandbox.mode off`).
 - Doctor identifies per-agent `agents.entries.<id>.sandbox` Docker, browser, and prune overrides ignored under shared scope. It also warns when an agent's explicit primary model omits fallbacks and therefore disables the defaults' fallback chain; both diagnostics use canonical agent paths after legacy roster normalization.
-- If legacy sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), doctor reports them; `--fix` migrates valid entries into SQLite and quarantines invalid legacy files.
+- If retired sandbox registry files or shard directories are present (`~/.openclaw/sandbox/containers.json`, `~/.openclaw/sandbox/browsers.json`, `~/.openclaw/sandbox/containers/`, or `~/.openclaw/sandbox/browsers/`), Doctor reports them and `--fix` refuses without changing their contents. Upgrade through `2026.9.7` and run `openclaw doctor --fix` on the original host first; see [legacy state migration](/cli/doctor/state-migrations).
 
 ## Secrets and channel credentials
 

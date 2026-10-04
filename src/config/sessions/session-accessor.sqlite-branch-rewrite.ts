@@ -41,6 +41,12 @@ export function prepareTranscriptRewriteSync(
   appendParentId: string | null,
   assertActive: () => void,
   loadedVersion: SessionTranscriptContextVersion | undefined,
+  admit?: (stage: "transaction" | "commit") => void,
+  preparation?: {
+    messagesAlreadyRedacted: true;
+    scheduleProjectionReconcile?: boolean;
+    onProjectionReconcileNeeded?: () => void;
+  },
 ): (
   entries: Array<SessionEntry | SessionLeafControl>,
   sources: ReadonlyMap<string, SessionEntry>,
@@ -74,15 +80,18 @@ export function prepareTranscriptRewriteSync(
         "Transcript rewrite must own its commit; run it outside the active transaction",
       );
     }
-    // Replays bypass hooks, but retain canonical storage redaction. No payload preparation under BEGIN.
-    for (const entry of entries) {
-      if (entry.type === "message") {
-        entry.message = redactTranscriptMessageForStorage(entry.message, {});
+    // Worker rewrites retain the host's prepared bytes; diagnostic redaction is not idempotent.
+    if (!preparation?.messagesAlreadyRedacted) {
+      for (const entry of entries) {
+        if (entry.type === "message") {
+          entry.message = redactTranscriptMessageForStorage(entry.message, {});
+        }
       }
     }
     let committedVersion: SessionTranscriptContextVersion;
     runOpenClawAgentWriteTransaction(
       (current) => {
+        admit?.("transaction");
         // Custody stages commit first; insert observers must also see the committed manager view.
         // The version is assigned before COMMIT; rollback discards this publication.
         if (!deferOpenClawAgentPostCommitPublication(current, () => adopt(committedVersion))) {
@@ -136,27 +145,34 @@ export function prepareTranscriptRewriteSync(
               throw new Error("Transcript rewrite message has no source entry");
             }
             const result = withSessionPendingInputRelocation(source.id, entry.message, () =>
-              appendTranscriptMessageInTransaction(current, resolved, {
-                eventId: entry.id,
-                parentId: entry.parentId,
-                now: Date.parse(entry.timestamp),
-                message: entry.message,
-                messageAlreadyRedacted: true,
-                appendMode: entry.appendMode,
-                idempotencyLookup: "caller-checked",
-              }),
+              appendTranscriptMessageInTransaction(
+                current,
+                resolved,
+                {
+                  eventId: entry.id,
+                  parentId: entry.parentId,
+                  now: Date.parse(entry.timestamp),
+                  message: entry.message,
+                  messageAlreadyRedacted: true,
+                  appendMode: entry.appendMode,
+                  idempotencyLookup: "caller-checked",
+                },
+                undefined,
+                preparation,
+              ),
             );
             if (!result?.appended || result.messageId !== entry.id) {
               throw new Error("Transcript rewrite message was not appended");
             }
             entry.message = result.message;
-          } else if (!appendTranscriptEventInTransaction(current, resolved, entry)) {
+          } else if (!appendTranscriptEventInTransaction(current, resolved, entry, preparation)) {
             throw new Error("Transcript rewrite entry was not appended");
           }
         }
         assertActive();
         assertOwnedTranscriptWriteCommit(fencedScope);
         committedVersion = readTranscriptContextVersionInTransaction(current, resolved.sessionId);
+        admit?.("commit");
       },
       options,
       { operationLabel: "session.transcript.prepare-rewrite" },

@@ -269,7 +269,8 @@ Cancelled preparation must reject after cleanup, not report a missing login.
 | `fetchUsageSnapshot`              | Custom usage endpoint                                                                       |
 | `createEmbeddingProvider`         | Provider-owned embedding adapter for memory/search                                          |
 | `buildReplayPolicy`               | Custom transcript replay/compaction policy                                                  |
-| `sanitizeReplayHistory`           | Provider-specific replay rewrites after generic cleanup                                     |
+| `sanitizeReplayHistoryAsync`      | Provider-specific replay rewrites with awaited transcript metadata after generic cleanup    |
+| `sanitizeReplayHistory`           | Deprecated third-party replay compatibility hook; migrate to `sanitizeReplayHistoryAsync`   |
 | `validateReplayTurns`             | Strict replay-turn validation before the embedded runner                                    |
 | `onModelSelected`                 | Post-selection callback (e.g. telemetry)                                                    |
 
@@ -335,5 +336,15 @@ credentials are not included. Share the policy with request construction.
 The host publishes only `supportsFastMode`, preserving unknown behavior
 and clearing saved preferences. This describes local applicability, not
 upstream entitlement or fulfillment, and does not reject `/fast` commands.
+
+`resolveServiceTiers(ctx)` can publish known model/route tier restrictions through
+the same lightweight artifact and provider registration. It receives
+`ProviderFastModePolicyContext`; return `undefined` when the provider has no
+restriction to add. The API-key OpenAI Responses catalog intersects a returned
+list with account observations or its route defaults, preserving `"default"`
+as Standard processing. A `false` Fast capability together with `["default"]`
+keeps the Control UI on disabled Standard controls without confusing an explicit
+configured tier with a model limitation. Share this capability decision with the
+provider request builder; it does not itself alter configuration or grant access.
 
 </Accordion>

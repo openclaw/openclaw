@@ -177,7 +177,7 @@ describe("gateway startup import boundaries", () => {
     expect(serverImpl).not.toContain('from "./server-methods.js"');
     expect(serverImpl).not.toContain('from "./config-reload.js"');
     expect(serverImpl).not.toMatch(
-      /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
+      /import\s+\{[^}]*resolveSessionForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
     );
     expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
       'import("./server-session-key.js")',
@@ -207,7 +207,6 @@ describe("gateway startup import boundaries", () => {
     expect(readSource("src/gateway/server-aux-handlers.ts")).not.toMatch(
       /import\s+\{[^}]*create(?:Exec|Plugin|Secrets)[^}]*\}\s+from "\.\/server-methods\//s,
     );
-    expect(validation).not.toContain("legacy-secretref-env-marker");
     expect(validation).not.toContain("commands/doctor");
     const workerStartup = readSource("src/gateway/server-worker-environment-startup.ts");
     expect(serverImpl).toContain('import("./server-worker-environment-startup.js")');

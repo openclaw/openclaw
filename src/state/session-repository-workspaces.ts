@@ -29,9 +29,9 @@ import type {
   RepositoryWorkspaceCreate,
   RepositoryWorkspaceMutationResult,
   RepositoryWorkspaceOwner,
-  RepositoryWorkspaceWorkerOperations,
   SessionRepositoryWorkspaceRecord,
 } from "./session-repository-workspaces.types.js";
+import type { RepositoryWorkspaceWorkerOperations } from "./session-repository-workspaces.worker-contract.js";
 
 export type { PreparedRepositoryWorkspace } from "./session-repository-workspaces.publication.js";
 

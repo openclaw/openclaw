@@ -104,83 +104,51 @@ describe("SQLite transaction diagnostics", () => {
     },
   );
 
-  it("does not warn for busyTimeoutMs: 0 with fast successful transactions (regression)", () => {
-    const logger = { warn: vi.fn() };
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const db = createDatabase();
-    const location = vi.spyOn(db, "location");
-    const exec = db.exec.bind(db);
-    vi.spyOn(db, "exec").mockImplementation((sql) => {
-      exec(sql);
-      now += 5;
-    });
-
-    runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        now += 5;
-        return "committed";
-      },
-      { busyTimeoutMs: 0, logger },
-    );
-
-    // busyTimeoutMs: 0 should NOT collapse threshold to 1ms.
-    // With the default 1000ms threshold, 5ms steps are not slow.
-    // Before the fix, this would have produced false-positive warnings.
-    expect(logger.warn).not.toHaveBeenCalledWith("slow SQLite transaction step", expect.anything());
-    expect(location).not.toHaveBeenCalled();
-  });
-
-  it("still warns for busyTimeoutMs: 0 when transaction crosses the default 1000ms threshold", () => {
-    const logger = { warn: vi.fn() };
-    let now = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const db = createDatabase();
-    const exec = db.exec.bind(db);
-    vi.spyOn(db, "exec").mockImplementation((sql) => {
-      exec(sql);
-      now += 1_500;
-    });
-
-    runSqliteImmediateTransactionSync(db, () => "committed", {
-      busyTimeoutMs: 0,
-      databaseLabel: "agent.sqlite",
-      logger,
-      slowTransactionHoldMs: 0,
-    });
-
-    // The 1000ms default threshold still catches genuinely slow transactions.
-    expect(logger.warn).toHaveBeenCalledWith("slow SQLite transaction step", expect.anything());
-  });
-
-  it.each(["immediate", "deferred"] as const)(
-    "logs slow successful %s transaction steps without attributing lock contention",
-    (mode) => {
+  it.each([
+    { mode: "immediate", busyTimeoutMs: 0, elapsedMs: 5 },
+    { mode: "immediate", busyTimeoutMs: 5_000, elapsedMs: 1_500 },
+    { mode: "deferred", busyTimeoutMs: 0, elapsedMs: 1_500 },
+  ] as const)(
+    "reports successful $mode steps at $elapsedMs ms with busyTimeoutMs=$busyTimeoutMs",
+    ({ mode, busyTimeoutMs, elapsedMs }) => {
       const logger = { warn: vi.fn() };
       let now = 0;
       vi.spyOn(Date, "now").mockImplementation(() => now);
       const db = createDatabase();
+      const location = vi.spyOn(db, "location");
       const exec = db.exec.bind(db);
       vi.spyOn(db, "exec").mockImplementation((sql) => {
         exec(sql);
-        now += 1_500;
+        now += elapsedMs;
       });
 
       const run =
         mode === "immediate" ? runSqliteImmediateTransactionSync : runSqliteDeferredTransactionSync;
+      const diagnosticContext = { sessionId: "session-diagnostics", rows: 0 };
       withSqliteReaderOwner({ operation: "worker.entries", ownerKind: "worker" }, () =>
         run(
           db,
           () => {
             db.prepare("INSERT INTO entries VALUES ('committed', 'value')").run();
-            now += 1_500;
+            diagnosticContext.rows = 1;
+            now += elapsedMs;
             return "committed";
           },
-          { busyTimeoutMs: 5_000, logger, slowTransactionHoldMs: 0 },
+          {
+            busyTimeoutMs,
+            logger,
+            diagnosticContext,
+            ...(elapsedMs === 5 ? {} : { slowTransactionHoldMs: 0 }),
+          },
         ),
       );
       expect(readEntries(db)).toEqual(["committed"]);
+      if (elapsedMs === 5) {
+        // Zero busy timeout must retain the default slow-step threshold.
+        expect(logger.warn).not.toHaveBeenCalled();
+        expect(location).not.toHaveBeenCalled();
+        return;
+      }
 
       expect(logger.warn).toHaveBeenCalledWith(
         "slow SQLite transaction step",
@@ -200,6 +168,7 @@ describe("SQLite transaction diagnostics", () => {
             : {}),
           isMainThread,
           operation: "worker.entries",
+          context: { sessionId: "session-diagnostics", rows: 0 },
           pid: process.pid,
           step: "begin",
           threadId,
@@ -207,11 +176,12 @@ describe("SQLite transaction diagnostics", () => {
       );
       expect(logger.warn).toHaveBeenCalledWith("slow SQLite transaction step", {
         async: false,
-        busyTimeoutMs: 5_000,
+        busyTimeoutMs,
         database: ":memory:",
         elapsedMs: 1_500,
         isMainThread,
         operation: "worker.entries",
+        context: { sessionId: "session-diagnostics", rows: 1 },
         pid: process.pid,
         step: "commit",
         threadId,
@@ -225,6 +195,7 @@ describe("SQLite transaction diagnostics", () => {
           isMainThread,
           mode,
           operation: "worker.entries",
+          context: { sessionId: "session-diagnostics", rows: 1 },
           pid: process.pid,
           threadId,
         }),

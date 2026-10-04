@@ -7,8 +7,9 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { DiagnosticSecurityEvent } from "../infra/diagnostic-events.js";
+import type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { expectedNpmCommand } from "../test-utils/npm-command.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -112,10 +113,10 @@ function mockSuccessfulPackageInstall() {
 }
 
 function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -257,15 +258,16 @@ describe("installPluginFromGitSpec", () => {
       ]);
       expect(cloneArgv[4]).toContain("/repo");
       expect(commandArgvAt(2)).toEqual(["git", "switch", "--detach", "--", "abc123"]);
-      expect(commandArgvAt(4)).toEqual([
-        "npm",
-        "install",
-        "--omit=dev",
-        "--loglevel=error",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-      ]);
+      expect(commandArgvAt(4)).toEqual(
+        expectedNpmCommand([
+          "install",
+          "--omit=dev",
+          "--loglevel=error",
+          "--ignore-scripts",
+          "--no-audit",
+          "--no-fund",
+        ]),
+      );
       for (const index of [0, 2]) {
         expect(runCommandWithTimeoutMock.mock.calls[index]?.[1]?.timeoutMs).toBe(gitWork);
       }

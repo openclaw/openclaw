@@ -20,6 +20,7 @@ import { createInternalAgentTurnFacade } from "./agent-turn/internal-facade.js";
 import type { InternalAgentTurnPrincipalOptions } from "./agent-turn/internal-facade.types.js";
 import {
   resolveLeastPrivilegeOperatorScopesForMethod,
+  ADMIN_SCOPE,
   APPROVALS_SCOPE,
   WRITE_SCOPE,
 } from "./method-scopes.js";
@@ -163,7 +164,11 @@ export function createGatewayInstanceRuntime(
         allowedMethods: recoverySessionMethods,
         client: createSyntheticPluginRuntimeClient({
           operatorRoleActor: { kind: "system" },
-          scopes: resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
+          // Lifecycle cleanup can outlive the client that owns the accepted run.
+          scopes:
+            method === "chat.abort"
+              ? [ADMIN_SCOPE]
+              : resolveLeastPrivilegeOperatorScopesForMethod(method, payload),
         }),
         method,
         payload,
@@ -186,6 +191,7 @@ export function createGatewayInstanceRuntime(
         dispatchOptions.internalDeliveryMediaUrls ||
         dispatchOptions.runtimeContextFragments ||
         dispatchOptions.internalDeliverySuppressText === true ||
+        dispatchOptions.internalDeliverySuppressErrors === true ||
         delegatedToolPolicyHandoffId ||
         dispatchOptions.scopes ||
         dispatchOptions.syntheticScopes,
@@ -201,6 +207,7 @@ export function createGatewayInstanceRuntime(
               internalDeliveryMediaUrls: dispatchOptions.internalDeliveryMediaUrls,
               runtimeContextFragments: dispatchOptions.runtimeContextFragments,
               internalDeliverySuppressText: dispatchOptions.internalDeliverySuppressText,
+              internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
               delegatedToolPolicyHandoffId,
               scopes: dispatchOptions.scopes ?? dispatchOptions.syntheticScopes,
             }),

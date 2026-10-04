@@ -15,6 +15,7 @@ import type {
   MessagePresentationButton,
   MessagePresentationOption,
 } from "../../../interactive/payload.js";
+import { chunkItems } from "../../../utils/chunk-items.js";
 import type { ChannelPresentationCapabilities } from "../outbound.types.js";
 
 type ActionLimits = NonNullable<NonNullable<ChannelPresentationCapabilities["limits"]>["actions"]>;
@@ -174,21 +175,6 @@ function consumeButtonBudget(budget: ActionBudget, count: number): void {
   }
 }
 
-function chunkButtons(
-  buttons: readonly MessagePresentationButton[],
-  maxActionsPerRow: number | undefined,
-): MessagePresentationButton[][] {
-  const rowSize = positiveInteger(maxActionsPerRow);
-  if (!rowSize) {
-    return buttons.length > 0 ? [[...buttons]] : [];
-  }
-  const rows: MessagePresentationButton[][] = [];
-  for (let index = 0; index < buttons.length; index += rowSize) {
-    rows.push(buttons.slice(index, index + rowSize));
-  }
-  return rows;
-}
-
 function hasActionSlotBudget(budget: ActionBudget): boolean {
   return budget.remainingActions !== 0 && budget.remainingRows !== 0;
 }
@@ -278,10 +264,9 @@ function adaptButtonsBlock(
     return fallback;
   }
   return [
-    ...chunkButtons(buttons, limits?.maxActionsPerRow).map((row): MessagePresentationBlock => ({
-      type: "buttons",
-      buttons: row,
-    })),
+    ...chunkItems(buttons, positiveInteger(limits?.maxActionsPerRow) ?? buttons.length).map(
+      (row): MessagePresentationBlock => ({ type: "buttons", buttons: row }),
+    ),
     ...fallback,
   ];
 }

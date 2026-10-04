@@ -88,6 +88,7 @@ import {
   resolveRuntimePlacementSeconds,
 } from "./ci-test-timings.mts";
 import { UI_E2E_OWNER_WATCHES, UI_E2E_SMOKE_TEST_FILES } from "./ci-ui-e2e-owner-inventory.mts";
+import { groupBy } from "./group-by.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 import { isExclusiveCiTestConfig } from "./local-check-runtime.mts";
 import { readPositiveEnvInt } from "./numeric-options.mjs";
@@ -152,8 +153,6 @@ type NodeTestPlanOptions = {
   includePrExemptRuntimeTests?: boolean;
   compact?: boolean;
   compactMode?: CompactNodeTestPlanMode;
-  compactGroupCount?: number;
-  compactWholeGroupCount?: number;
   compactNodeJobCap?: number;
   runnerBackend?: string;
 };
@@ -1574,11 +1573,6 @@ const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 const RELEASE_ONLY_TOOLING_SHARDS = new Set(["core-tooling"]);
 const RELEASE_ONLY_UI_TEST_FILES = new Set([
   "ui/src/e2e/activity-run-inspector.real-gateway.e2e.test.ts",
-  "ui/src/e2e/board-fixture.e2e.test.ts",
-  "ui/src/e2e/chat-attachment-menu.e2e.test.ts",
-  "ui/src/e2e/github-link-hovercard.e2e.test.ts",
-  "ui/src/e2e/settings-layout.e2e.test.ts",
-  "ui/src/e2e/native-embed-settings.e2e.test.ts",
   "ui/src/components/app-sidebar.stress.browser.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/desktop-resize.real-gateway.e2e.test.ts",
@@ -1594,31 +1588,16 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
 ]);
 
 const sharedUiE2eInputs = [
-  "package.json",
-  "pnpm-lock.yaml",
-  "pnpm-workspace.yaml",
-  "tsconfig.json",
-  "tsdown.config.ts",
   "ui/{package.json,tsconfig.json,index.html,vite.config.ts}",
-  "ui/config/**",
-  "ui/public/**",
-  "ui/src/{main.ts,styles.css,local-storage.ts,app-*.ts,build-info*.ts}",
-  "ui/src/{app,lit,styles,i18n,plugins}/**",
-  "ui/src/components/{app-*,router-*}.ts",
-  "ui/src/lib/{gateway,auth,theme}/**",
-  "ui/src/test-helpers/control-ui-{e2e*,mock*,gateway*}.ts",
+  "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule}.ts",
+  "ui/config/control-ui-boot-modules.json",
+  "ui/src/main.ts",
+  "ui/src/app/{app-host,app-root,bootstrap,router-outlet,router-outlet-controller}.ts",
+  "ui/src/app/app-shell-{view,chrome,navigation,gateway}.ts",
+  "ui/src/test-helpers/control-ui-e2e.ts",
+  "ui/src/test-helpers/control-ui-e2e-{build-publication,contract,controls,defaults,port,readiness,shared-preview}.ts",
   "ui/src/e2e/control-ui-e2e-suite.test-support.ts",
-  "packages/{gateway-client,gateway-protocol}/**",
-  "src/gateway/control-ui*.ts",
-  "scripts/{control-ui-*,ui.mjs,run-vitest*}",
-  "scripts/lib/control-ui-*",
-  "scripts/lib/vitest-*",
-  "scripts/lib/test-selector-*",
-  "scripts/test-projects*",
-  "scripts/lib/ci-{ui-*,node-test-plan.mts,changed-node-test-plan.mts,policy-test-watch.mts,proof-test-inventory.mts}",
-  "scripts/ci-build-manifest.mjs",
-  "test/vitest/vitest.{shared*,ui*}",
-  ".github/workflows/ci.yml",
+  "test/vitest/vitest.ui-e2e{.config,.global-setup,.bundled.global-setup,.setup,.sequencer,-preflight,-prebuilt.config,-prebuilt.global-setup}.ts",
 ] as const;
 
 /** These inputs own every served UI, rather than one route or feature fixture. */
@@ -1654,31 +1633,22 @@ export function resolveUiE2ePrTestSelection(
     return full("changed paths unavailable");
   }
   if (hasSharedUiE2eInput(changedPaths)) {
-    return full("shared UI harness, infrastructure, or build input");
+    return full("core E2E harness, UI bundle configuration, or global app shell");
   }
   const paths = [...changedPaths];
   const graphOptions = { tooling: true, resolveAliases: true, runtimeOnly: true };
   const roots = [...new Set(UI_E2E_OWNER_WATCHES.flatMap(({ ownerRoots }) => ownerRoots))];
-  const unknownSource = paths.find(
-    (file) =>
-      file.startsWith("ui/src/") &&
-      !file.endsWith(".test.ts") &&
-      !file.includes("test-support") &&
-      !file.includes("/test-helpers/") &&
-      !UI_E2E_OWNER_WATCHES.some(({ watchGlobs }) =>
-        watchGlobs.some((glob) => matchesGlob(file, glob)),
-      ) &&
-      !hasImportGraphImpactOnTargets([file], roots, cwd, graphOptions),
-  );
-  if (unknownSource) {
-    return full(`unmapped UI source: ${unknownSource}`);
-  }
   const policyTargets = new Set(resolvePolicyTestTargets(paths));
   const importedTargets = new Set(
     resolveAffectedTestsFromImportGraph(paths, cwd, { ...graphOptions, forceFull: true }),
   );
   const impactedRoots = new Set(
-    roots.filter((root) => hasImportGraphImpactOnTargets(paths, [root], cwd, graphOptions)),
+    // Served routes share shell/store cycles. Following those transitively makes a
+    // leaf change select every route; declared owners and their direct imports
+    // supply PR coverage, while the complete composition runs hourly.
+    roots.filter((root) =>
+      hasImportGraphImpactOnTargets(paths, [root], cwd, { ...graphOptions, direct: true }),
+    ),
   );
   const watches = new Map(UI_E2E_OWNER_WATCHES.map((watch) => [watch.testFile, watch]));
   const smoke = new Set<string>(UI_E2E_SMOKE_TEST_FILES);
@@ -1692,9 +1662,6 @@ export function resolveUiE2ePrTestSelection(
       selected.push("fixed cross-cutting smoke");
     }
     const watch = watches.get(file);
-    if (!watch || !isPrExemptRuntimeTestFile(file)) {
-      selected.push("retained until complete browser ownership is mapped");
-    }
     if (policyTargets.has(file)) {
       selected.push("explicit source-owner watch");
     }
@@ -1703,7 +1670,7 @@ export function resolveUiE2ePrTestSelection(
     }
     const matchedRoots = watch?.ownerRoots.filter((root) => impactedRoots.has(root));
     if (matchedRoots?.length) {
-      selected.push(`route/component dependency: ${matchedRoots.join(", ")}`);
+      selected.push(`direct route/component dependency: ${matchedRoots.join(", ")}`);
     }
     if (selected.length) {
       reasons[file] = selected;
@@ -1888,26 +1855,16 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
   return Object.entries(groups)
     .flatMap(([groupName, includePatterns]) => {
       // Retain separate command stripes so packing can spread their import cost across jobs.
-      if (groupName === "auto-reply-reply-commands") {
-        return createStripedBatches(
-          includePatterns,
-          AUTO_REPLY_COMMANDS_STRIPES,
-          stripeFileWeight,
-        ).map((batch, index) => ({
-          configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-          includePatterns: batch,
-          requiresDist: false,
-          shardName: `${groupName}-${index + 1}`,
-        }));
-      }
-      return [
-        {
-          configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
-          includePatterns,
-          requiresDist: false,
-          shardName: groupName,
-        },
-      ];
+      const striped = groupName === "auto-reply-reply-commands";
+      const batches = striped
+        ? createStripedBatches(includePatterns, AUTO_REPLY_COMMANDS_STRIPES, stripeFileWeight)
+        : [includePatterns];
+      return batches.map((batch, index) => ({
+        configs: ["test/vitest/vitest.auto-reply-reply.config.ts"],
+        includePatterns: batch,
+        requiresDist: false,
+        shardName: striped ? `${groupName}-${index + 1}` : groupName,
+      }));
     })
     .filter((shard) => shard.includePatterns.length > 0);
 }
@@ -1978,15 +1935,14 @@ function resolveAgentCoreShardName(file: string): string {
 
 function createAgentCoreSplitShards(): NodeTestSplitShard[] {
   const excludedTests = new Set(agentVitestProjectOwners.core.exclude);
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/agents")) {
-    const name = relative("src/agents", file).replaceAll("\\", "/");
-    if (name.includes("/") || excludedTests.has(file)) {
-      continue;
-    }
-    const shardName = resolveAgentCoreShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(
+    listTrackedTestFiles("src/agents").filter(
+      (file) =>
+        !relative("src/agents", file).replaceAll("\\", "/").includes("/") &&
+        !excludedTests.has(file),
+    ),
+    resolveAgentCoreShardName,
+  );
 
   const sharedShards = [
     "agentic-agents-core-auth",
@@ -2003,26 +1959,16 @@ function createAgentCoreSplitShards(): NodeTestSplitShard[] {
       const includePatterns = groups.get(shardName) ?? [];
       // Retain the import-heavy CLI stripes; their files also share the bounded
       // worker pool, while timing estimates account for the effective file workers.
-      if (shardName === "agentic-agents-core-runner-cli") {
-        return createStripedBatches(
-          includePatterns,
-          AGENTS_CORE_RUNNER_CLI_STRIPES,
-          stripeFileWeight,
-        ).map((batch, index) => ({
-          configs: [agentVitestProjectOwners.core.config],
-          includePatterns: batch,
-          requiresDist: false,
-          shardName: `${shardName}-${index + 1}`,
-        }));
-      }
-      return [
-        {
-          configs: [agentVitestProjectOwners.core.config],
-          includePatterns,
-          requiresDist: false,
-          shardName,
-        },
-      ];
+      const striped = shardName === "agentic-agents-core-runner-cli";
+      const batches = striped
+        ? createStripedBatches(includePatterns, AGENTS_CORE_RUNNER_CLI_STRIPES, stripeFileWeight)
+        : [includePatterns];
+      return batches.map((batch, index) => ({
+        configs: [agentVitestProjectOwners.core.config],
+        includePatterns: batch,
+        requiresDist: false,
+        shardName: striped ? `${shardName}-${index + 1}` : shardName,
+      }));
     })
     .filter((shard) => shard.includePatterns.length > 0);
 
@@ -2132,11 +2078,10 @@ function resolveGatewayServerShardName(file: string): string {
 }
 
 function createGatewayServerSplitShards(): NodeTestSplitShard[] {
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/gateway").filter(isGatewayServerTestFile)) {
-    const shardName = resolveGatewayServerShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(
+    listTrackedTestFiles("src/gateway").filter(isGatewayServerTestFile),
+    resolveGatewayServerShardName,
+  );
   return [
     "agentic-control-plane-agent-chat",
     "agentic-control-plane-auth-node",
@@ -2183,11 +2128,7 @@ function resolveCronShardName(file: string): string {
 }
 
 function createCronSplitShards(): NodeTestSplitShard[] {
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/cron")) {
-    const shardName = resolveCronShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(listTrackedTestFiles("src/cron"), resolveCronShardName);
 
   return [
     "core-runtime-cron-parallel-core",
@@ -2316,14 +2257,10 @@ function resolveInfraShardName(file: string): string {
 }
 
 function createInfraSplitShards(): NodeTestSplitShard[] {
-  const groups = new Map<string, string[]>();
-  for (const file of listTrackedTestFiles("src/infra")) {
-    if (isDatabaseWorkerCoreTestFile(file)) {
-      continue;
-    }
-    const shardName = resolveInfraShardName(file);
-    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
-  }
+  const groups = groupBy(
+    listTrackedTestFiles("src/infra").filter((file) => !isDatabaseWorkerCoreTestFile(file)),
+    resolveInfraShardName,
+  );
   groups.set("core-runtime-infra-storage-state", [
     ...(groups.get("core-runtime-infra-storage-state") ?? []),
     ...databaseWorkerCoreTestFiles,
@@ -3583,6 +3520,30 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
   const weight = (entries: readonly string[]) =>
     entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
   const totalWeight = weight(files);
+  const singletonKeys = generation(files.map((file) => [file])).timingKeys;
+  const knownFileCosts = new Map<string, number>();
+  for (const [index, file] of files.entries()) {
+    const singleton = singletonKeys[index]!.match(/#include-1-[a-f0-9]{12}$/u)![0];
+    const cost = singletonCosts.get(singleton);
+    if (cost !== undefined) {
+      knownFileCosts.set(file, cost);
+    }
+  }
+  const knownSeconds = [...knownFileCosts.values()].reduce((sum, cost) => sum + cost, 0);
+  const unknownWeight = weight(files.filter((file) => !knownFileCosts.has(file)));
+  const residualSeconds = Math.max(0, seconds - knownSeconds);
+  const unknownSecondsPerWeight =
+    unknownWeight > 0 ? Math.max(seconds / totalWeight, residualSeconds / unknownWeight) : 0;
+  const knownResidualPerWeight = unknownWeight === 0 ? residualSeconds / totalWeight : 0;
+  // Repricing measured files must preserve the complete generation's remaining work.
+  const projectedSeconds = (stripe: readonly string[]) =>
+    stripe.reduce(
+      (sum, file) =>
+        sum +
+        (knownFileCosts.get(file) ?? stripeFileWeight(file) * unknownSecondsPerWeight) +
+        stripeFileWeight(file) * knownResidualPerWeight,
+      0,
+    );
   let count = Math.min(
     files.length,
     Math.max(
@@ -3595,7 +3556,7 @@ function splitHostedReleaseShard(shard: NodeTestShard): NodeTestShard[] {
     const stripes = createStripedBatches(files, count, stripeFileWeight);
     const keys = generation(stripes).timingKeys;
     const predicted = stripes.map((stripe, index) =>
-      Math.ceil(timings[keys[index]!] ?? (seconds * weight(stripe)) / totalWeight),
+      Math.ceil(timings[keys[index]!] ?? projectedSeconds(stripe)),
     );
     if (
       predicted.every((cost) => cost <= budget) &&
@@ -5267,8 +5228,18 @@ function createCompactNodeTestShardBundles(
     }
   }
 
-  // Settle Gateway admission before runtime placement reads the recipient's policy.
+  // Runtime placement compares required runner capacity and settled Gateway admission.
   for (const job of compactJobs) {
+    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
+    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
+    if (
+      usesBlacksmithCapacity(job.runner) &&
+      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
+      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
+    ) {
+      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
+      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
+    }
     if (
       job.planConcurrency !== 2 ||
       !job.groups.some((group) => group.configs.some(isExclusiveCiTestConfig))
@@ -5340,16 +5311,6 @@ function createCompactNodeTestShardBundles(
   }
 
   for (const job of compactJobs) {
-    // Memory-gated plans need the measured 8-CPU/30.95-GiB allocation, even alone.
-    // Normalize the previous two-worker allowance onto their unmeasured siblings below.
-    if (
-      usesBlacksmithCapacity(job.runner) &&
-      job.runner !== EXTRA_LARGE_NODE_TEST_RUNNER &&
-      job.groups.some((group) => group.minTotalMemoryBytes !== undefined)
-    ) {
-      job.runner = EXTRA_LARGE_NODE_TEST_RUNNER;
-      job.env = { ...job.env, ...PINNED_COMPACT_GROUP_ENV };
-    }
     if (
       job.env?.OPENCLAW_VITEST_MAX_WORKERS !== "2" ||
       !job.groups.some((group) => usesMeasuredCompactWorkers(group, options.runnerBackend))

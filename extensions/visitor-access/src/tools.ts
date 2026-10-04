@@ -39,7 +39,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_invite",
       label: "Invite visitor",
       description:
-        "Grant or renew visitor access to team.openclaw.ai. Requires administrator or designated-owner authority. Provide the Team sign-in email or a GitHub login with a matching public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit.",
+        "Grant or renew visitor access to team.openclaw.ai. Requires administrator or designated-owner authority. Provide exactly one Team sign-in email or GitHub login. A GitHub invitation uses the immutable account ID, not public email. Checks restricted guest access and preserves existing assigned roles. Grants expire after the configured duration (14 days by default); forever must be explicit.",
       parameters: Type.Object(
         {
           ...identityFields,
@@ -54,7 +54,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
             Type.Boolean({ description: "Explicitly grant access without expiry." }),
           ),
         },
-        { additionalProperties: false },
+        { additionalProperties: false, oneOf: [{ required: ["email"] }, { required: ["github"] }] },
       ),
       outputSchema: Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService, raw: unknown) =>
@@ -64,7 +64,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_revoke",
       label: "Revoke visitor",
       description:
-        "Remove the recorded Visitor invitations selected for a canonical profileId, or cancel one invitation by grantId, including before first sign-in. Use the IDs returned by visitor_list or visitor_invite. Person selection requires the original profile bindings to remain current at local commit and before policy requests. Already committed expirations remain ended if cleanup fails. Email cancels one email's invitation and can remove an unmanaged policy entry. GitHub login resolves one current verified profile and selects its recorded invitations; missing or conflicting profiles require an exact email. Do not combine profileId or grantId with another selector. Preserves saved work, existing PRs and independent staff access. Already absent grants are a no-op.",
+        "Remove the recorded Visitor invitations selected for a canonical profileId, or cancel one invitation by grantId, including before first sign-in. Use the IDs returned by visitor_list or visitor_invite. Person selection keeps the selected identity current at local commit and before policy requests. Already committed expirations remain ended if cleanup fails. Email targets that address. GitHub login targets its immutable account and its canonical person's recorded invitations. An explicit email or GitHub login can remove that target's unmanaged policy entry. Do not combine profileId or grantId with another selector. Preserves saved work, existing PRs and independent staff access. Already absent grants are a no-op.",
       parameters: Type.Object(
         {
           ...identityFields,
@@ -80,7 +80,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       name: "visitor_list",
       label: "List visitors",
       description:
-        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy emails are reported and retained; missing policy emails are never automatically restored.",
+        "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
       parameters: Type.Object({}, { additionalProperties: false }),
       outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
       run: (service: VisitorAccessService) => service.list(assertCurrent),

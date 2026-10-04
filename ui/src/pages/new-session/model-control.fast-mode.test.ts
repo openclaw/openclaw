@@ -55,7 +55,7 @@ describe("new-session speed preferences", () => {
     },
   );
 
-  it.each([true, false, "auto", "ultrafast"] as const)(
+  it.each(["auto", "ultrafast"] as const)(
     "restores a standalone speed preference %s",
     async (fastMode) => {
       const { context } = contextWith([
@@ -72,14 +72,7 @@ describe("new-session speed preferences", () => {
       control.load(context, "main", true, { preference: { fastMode } });
       expect(control.isRestoringPreference()).toBe(true);
       await waitForFast(() => expect(control.fastMode).toBe(fastMode));
-      const selected =
-        fastMode === "auto"
-          ? undefined
-          : fastMode === "ultrafast"
-            ? "ultrafast"
-            : fastMode
-              ? "on"
-              : "off";
+      const selected = fastMode === "auto" ? undefined : "ultrafast";
       const options = Array.from(
         renderControl(control, context).querySelectorAll<HTMLButtonElement>(
           "[data-chat-speed-option]",
@@ -97,37 +90,48 @@ describe("new-session speed preferences", () => {
     },
   );
 
-  it("does not restore speed for an unsupported provider", async () => {
-    const { context } = contextWith([{ id: "local-model", name: "Local", provider: "ollama" }]);
-    const onSelectionChange = vi.fn();
-    const control = new NewSessionModelControl(() => undefined, onSelectionChange);
-    control.load(context, "main", true, {
-      preference: { model: "ollama/local-model", fastMode: true },
-    });
-    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-    expect(control.fastMode).toBeUndefined();
-    expect(onSelectionChange).toHaveBeenLastCalledWith({
-      model: "ollama/local-model",
-      thinkingLevel: "",
-      fastMode: undefined,
-    });
-    control.reset();
-  });
-
   it.each([
-    { provider: "ollama", supportsFastMode: true },
-    { provider: "openai", supportsFastMode: false },
+    { provider: "ollama", support: true, runtime: undefined },
+    { provider: "openai", support: false, runtime: undefined },
+    { provider: "openai", support: true, runtime: "codex" },
+    { provider: "openai", support: false, runtime: "codex" },
   ])(
-    "restores speed according to catalog support $supportsFastMode for $provider",
-    async ({ provider, supportsFastMode }) => {
+    "restores speed for $provider/$runtime with support=$support",
+    async ({ provider, support, runtime }) => {
       const model = `${provider}/model`;
-      const { context } = contextWith([{ id: "model", name: "Model", provider, supportsFastMode }]);
+      const { context } = contextWith([
+        {
+          id: "model",
+          name: "Model",
+          provider,
+          supportsFastMode: runtime ? !support : support,
+          ...(runtime
+            ? {
+                agentRuntime: { id: "openclaw", source: "model" },
+                runtimeChoices: [
+                  {
+                    agentRuntime: { id: runtime, source: "model" },
+                    supportsFastMode: support,
+                    available: true,
+                  },
+                ],
+              }
+            : {}),
+        },
+      ]);
       const onSelectionChange = vi.fn();
-      const control = new NewSessionModelControl(() => undefined, onSelectionChange);
-      control.load(context, "main", true, { preference: { model, fastMode: true } });
+      const control = new NewSessionModelControl(
+        () => undefined,
+        runtime ? undefined : onSelectionChange,
+      );
+      control.load(context, "main", true, {
+        preference: { model, agentRuntime: runtime, fastMode: true },
+      });
       await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-      expect(control.fastMode).toBe(supportsFastMode ? true : undefined);
-      if (supportsFastMode) {
+      expect(control.fastMode).toBe(support ? true : undefined);
+      if (runtime) {
+        expect(control.agentRuntime).toBe(runtime);
+      } else if (support) {
         expect(onSelectionChange).not.toHaveBeenCalled();
       } else {
         expect(onSelectionChange).toHaveBeenLastCalledWith({
@@ -139,33 +143,6 @@ describe("new-session speed preferences", () => {
       control.reset();
     },
   );
-
-  it.each([true, false])("uses alternate runtime speed support %s", async (support) => {
-    const { context } = contextWith([
-      {
-        id: "model",
-        name: "Model",
-        provider: "openai",
-        supportsFastMode: !support,
-        agentRuntime: { id: "openclaw", source: "model" },
-        runtimeChoices: [
-          {
-            agentRuntime: { id: "codex", source: "model" },
-            supportsFastMode: support,
-            available: true,
-          },
-        ],
-      },
-    ]);
-    const control = new NewSessionModelControl(() => undefined);
-    control.load(context, "main", true, {
-      preference: { model: "openai/model", agentRuntime: "codex", fastMode: true },
-    });
-    await waitForFast(() => expect(control.isRestoringPreference()).toBe(false));
-    expect(control.agentRuntime).toBe("codex");
-    expect(control.fastMode).toBe(support ? true : undefined);
-    control.reset();
-  });
 
   it("clears speed when switching to a provider without a wire mapping", async () => {
     const { context } = contextWith([
@@ -202,3 +179,61 @@ describe("new-session speed preferences", () => {
     expect(renderControl(control, context).querySelector("[data-chat-speed-option]")).toBeNull();
   });
 });
+
+it.each(["blue", "red"])(
+  "applies supported speed choices when switching a Fast draft to Daybreak %s",
+  async (color) => {
+    const id = "gpt-daybreak-" + color + "-latest";
+    const { context } = contextWith([
+      {
+        id: "gpt-5.6-luna",
+        name: "General model",
+        provider: "openai",
+        reasoning: true,
+        supportsFastMode: true,
+      },
+      {
+        id,
+        name: "Daybreak",
+        provider: "openai",
+        reasoning: true,
+        supportsFastMode: color === "blue",
+        supportsServiceTierRecovery: true,
+        serviceTiers: color === "blue" ? ["default", "priority"] : ["default"],
+        effectiveFastMode: "ultrafast",
+      },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+    await waitForFast(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-speed-option="on"]'),
+      ).not.toBeNull(),
+    );
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!
+      .click();
+    expect(control.fastMode).toBe(true);
+    renderControl(control, context)
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="openai/' + id + '"]')!
+      .click();
+    const container = renderControl(control, context);
+    expect(control.selected).toBe("openai/" + id);
+    expect(
+      container
+        .querySelector('[data-chat-speed-option="' + (color === "blue" ? "on" : "off") + '"]')
+        ?.getAttribute("aria-checked"),
+    ).toBe("true");
+    for (const option of container.querySelectorAll<HTMLButtonElement>(
+      "[data-chat-speed-option]",
+    )) {
+      expect(option.disabled).toBe(
+        color === "red" || option.dataset.chatSpeedOption === "ultrafast",
+      );
+    }
+    expect(
+      container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")?.disabled,
+    ).not.toBe(true);
+    control.reset();
+  },
+);

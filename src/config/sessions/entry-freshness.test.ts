@@ -1,8 +1,11 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { resolveSessionEntryResetFreshness } from "./entry-freshness.js";
 import {
   appendTranscriptEvent,
@@ -23,9 +26,10 @@ describe("resolveSessionEntryResetFreshness", () => {
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeStateDatabaseForTest();
     cleanupTempDirs(tempDirs);
   });
 

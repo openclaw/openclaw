@@ -1,5 +1,5 @@
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { controlNextRecoverySleep } from "../../../test/helpers/infra/delivery-recovery.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -93,6 +93,10 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     migrateLegacyPendingOutboundDeliveriesMock.mockClear();
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("keeps one-time migration out of repeated canonical drains", async () => {
     await drain();
     await drain();
@@ -127,7 +131,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
         }),
       },
     );
-    beginConversationDeliveryOperation(scope, {
+    await beginConversationDeliveryOperation(scope, {
       operationId,
       operationKind: "send",
       conversationRef,
@@ -176,8 +180,8 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
   });
 
   it("retries deferred rows for every channel through the gateway-wide drain", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     const channels = ["discord", "slack", "signal"] as const;
-    const deliveryIds: string[] = [];
     for (const channel of channels) {
       const id = await enqueueDelivery(
         {
@@ -187,8 +191,11 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
         },
         tmpDir,
       );
-      await failDelivery(id, "temporary connection failure", tmpDir);
-      deliveryIds.push(id);
+      setQueuedEntryState(tmpDir, id, {
+        retryCount: 1,
+        lastAttemptAt: Date.now(),
+        lastError: "temporary connection failure",
+      });
     }
     deliver.mockImplementation(async (entry) => [
       { channel: entry.channel, messageId: `${entry.channel}-delivered` },
@@ -205,13 +212,7 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     expect(deliver).not.toHaveBeenCalled();
     expect(await loadPendingDeliveries(tmpDir)).toHaveLength(channels.length);
 
-    for (const id of deliveryIds) {
-      setQueuedEntryState(tmpDir, id, {
-        retryCount: 1,
-        lastAttemptAt: Date.now() - 5_000,
-        lastError: "temporary connection failure",
-      });
-    }
+    vi.setSystemTime(Date.now() + 5_000);
     await drainAll();
 
     expect(deliver.mock.calls.map(([entry]) => entry.channel).toSorted()).toEqual(
@@ -384,7 +385,13 @@ describe("drainPendingDeliveriesCore for reconnect", () => {
     );
   });
   it("recomputes backoff bypass after rereading the claimed entry", async () => {
-    const id = await enqueueFailed();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const id = await enqueue();
+    setQueuedEntryState(tmpDir, id, {
+      retryCount: 1,
+      lastAttemptAt: Date.now(),
+      lastError: NO_LISTENER_ERROR,
+    });
     let mutated = false;
 
     await drain({

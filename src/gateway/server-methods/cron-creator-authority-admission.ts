@@ -4,7 +4,7 @@ import {
   revokeRequesterCronAuthority,
 } from "../../agents/subagents/requester-cron-authority.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
+import { hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -65,7 +65,7 @@ function resolveDirectOperatorAuthority(
   }
   const isDirectOperator =
     isDirectTurn &&
-    clientHasAdminScope(params.client ?? null) &&
+    hasGatewayAdminScope(params.client) &&
     (internal?.isLocalClient === true || internal?.controlUiAdmin === true);
   return isDirectOperator
     ? Object.freeze({

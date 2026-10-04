@@ -4,7 +4,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import {
   admitFollowupRunLifecycle,
-  clearSessionQueues,
   completeFollowupRunLifecycle,
   enqueueFollowupRun,
   scheduleFollowupDrain,
@@ -15,8 +14,9 @@ import {
   createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { clearFollowupDrainCallback } from "./queue/drain.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/enqueue.test-support.js";
-import { getExistingFollowupQueue } from "./queue/state.js";
+import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 const settings = createQueueSettings();
@@ -38,7 +38,8 @@ beforeEach(() => {
   resetRecentQueuedMessageIdDedupe();
 });
 afterEach(() => {
-  clearSessionQueues([key]);
+  clearFollowupQueue(key);
+  clearFollowupDrainCallback(key);
   vi.useRealTimers();
 });
 
@@ -166,7 +167,8 @@ describe("followup queue deduplication", () => {
     for (const messageId of ["m2", "m3"]) {
       expect(enqueueFollowupRun(key, source(messageId, { messageId }), capped)).toBe(true);
     }
-    clearSessionQueues([key]);
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
     expect(onAbandoned).toHaveBeenCalledOnce();
     const retry = source("first");
     retry.turnAdoptionLifecycle = { onAdopted: () => {} };
@@ -185,7 +187,8 @@ describe("followup queue deduplication", () => {
     expect(enqueueFollowupRun(key, first, settings)).toBe(true);
     const admission = admitFollowupRunLifecycle(first);
     await vi.advanceTimersByTimeAsync(0);
-    clearSessionQueues([key]);
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
     await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
     const replacement = source("replacement");
     replacement.turnAdoptionLifecycle = { onAdopted: () => {} };
@@ -204,7 +207,8 @@ describe("followup queue deduplication", () => {
     await admitFollowupRunLifecycle(run);
     completeFollowupRunLifecycle(run);
     expect(onAbandoned).not.toHaveBeenCalled();
-    clearSessionQueues([key]);
+    clearFollowupQueue(key);
+    clearFollowupDrainCallback(key);
     expect(enqueueFollowupRun(key, source("redelivery"), settings)).toBe(false);
   });
 });

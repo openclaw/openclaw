@@ -3,6 +3,7 @@ import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
+import { flushLogger } from "../logging/logger.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import {
   encodeOpenClawStateWorkerError,
@@ -332,6 +333,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
+          ...(request.target ? { target: request.target } : {}),
           ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
@@ -444,6 +446,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   }
   if (request.type === "close" && reply.ok && actors.size === 0) {
     // The broker can terminate this worker as soon as the final close is acknowledged.
+    await flushLogger();
     await new Promise<void>((resolve) => {
       drainProcessOutput(resolve);
     });

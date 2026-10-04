@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { LEGACY_CONFIG_MIGRATIONS_RUNTIME_TTS } from "./legacy-config-migrations.runtime.tts.js";
-import { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+import {
+  LEGACY_TALK_VOICE_CALL_INHERITANCE,
+  normalizeLegacyTalkConfig,
+} from "./legacy-talk-config-normalizer.js";
 
 function migrateLegacyConfig(raw: Record<string, unknown> | null) {
   const changes: string[] = [];
@@ -19,6 +22,69 @@ function providerTts(provider: string, config: Record<string, unknown>) {
 }
 
 describe("legacy migrate provider-shaped config", () => {
+  it.each([
+    {
+      talk: undefined,
+      inheritedProvider: undefined,
+      provider: "openai",
+      providers: { openai: { model: "inherited" } },
+    },
+    {
+      talk: undefined,
+      inheritedProvider: "openai",
+      provider: "openai",
+      providers: { openai: { model: "inherited" } },
+    },
+    {
+      talk: { realtime: { providers: { google: { model: "explicit" } } } },
+      inheritedProvider: "openai",
+      provider: "google",
+      providers: { openai: { model: "inherited" }, google: { model: "explicit" } },
+    },
+    {
+      talk: {
+        realtime: { provider: "google", providers: { openai: { model: "explicit" } } },
+      },
+      inheritedProvider: "openai",
+      provider: "google",
+      providers: { openai: { model: "explicit" } },
+    },
+    {
+      talk: {
+        realtime: { provider: "openai", providers: { OpenAI: { model: "explicit" } } },
+      },
+      inheritedProvider: "openai",
+      provider: "openai",
+      providers: { OpenAI: { model: "explicit" } },
+    },
+  ])("persists inherited Talk settings with selected provider $provider", (fixture) => {
+    const raw: Record<string, unknown> = {
+      ...(fixture.talk ? { talk: fixture.talk } : {}),
+      plugins: {
+        entries: {
+          "voice-call": {
+            config: {
+              realtime: {
+                provider: fixture.inheritedProvider,
+                providers: { openai: { model: "inherited" } },
+              },
+            },
+          },
+        },
+      },
+    };
+    const plugins = structuredClone(raw.plugins);
+    const changes: string[] = [];
+    LEGACY_TALK_VOICE_CALL_INHERITANCE.apply(raw, changes);
+    expect(raw.talk).toEqual({
+      realtime: { provider: fixture.provider, providers: fixture.providers },
+    });
+    expect(raw.plugins).toEqual(plugins);
+    const again: string[] = [];
+    LEGACY_TALK_VOICE_CALL_INHERITANCE.apply(raw, again);
+    expect(again).toEqual([]);
+  });
+
   const legacyTts = {
     provider: "edge",
     enabled: true,
@@ -74,43 +140,6 @@ describe("legacy migrate provider-shaped config", () => {
         ),
       ).map((migration) => migration.id),
     ).toEqual(expected);
-  });
-
-  it("moves legacy realtime Talk selectors without overwriting canonical realtime config", () => {
-    const input = {
-      talk: {
-        provider: "openai",
-        voiceId: "legacy-voice",
-        providers: { openai: { apiKey: "test-key", custom: true } },
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        model: "gpt-realtime",
-        voice: "alloy",
-        unknown: "discarded",
-      },
-    };
-    const migrated = normalizeLegacyTalkConfig(input, []);
-    expect(migrated.talk).toEqual({
-      provider: "openai",
-      voiceId: "legacy-voice",
-      providers: { openai: { apiKey: "test-key", custom: true } },
-      realtime: {
-        provider: "openai",
-        providers: { openai: { apiKey: "test-key", custom: true } },
-        mode: "realtime",
-        transport: "gateway-relay",
-        brain: "agent-consult",
-        model: "gpt-realtime",
-        speakerVoice: "alloy",
-      },
-    });
-    const conflicting = {
-      ...migrated,
-      talk: { ...migrated.talk, model: "obsolete", voice: "obsolete" },
-    };
-    expect(normalizeLegacyTalkConfig(conflicting, [])).toEqual(migrated);
-    expect(normalizeLegacyTalkConfig(migrated, [])).toBe(migrated);
   });
 
   it("does not copy plain Talk speech provider config into talk.realtime", () => {

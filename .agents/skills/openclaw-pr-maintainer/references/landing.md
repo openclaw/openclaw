@@ -68,6 +68,13 @@ Keep images embedded and video URLs on their own lines for GitHub playback.
 Feature-detect format/size support rather than assuming a particular CLI release.
 Do not disclose private desktop content, identifiers, model routes, or secrets.
 
+## Red main and inherited failures
+
+- **Red `main` is an emergency, not a queue item.** When CI on `main` is red, fix it in a fresh worktree, prove it with the exact failing check plus the focused tests (locally or on a Testbox), and push that exact fix directly to `main` — no PR, no auto-merge wait — so every open PR unblocks at once. This applies to deterministic breaks and to flaky tests seen red on `main` alike; open a PR only if the direct push is refused by a ruleset, and say so. Reruns do not clear a red `main`, and PRs whose merge ref went red need a fresh push after the fix lands.
+- Pushes to `main` run only `security-fast`; full `main` CI runs hourly.
+- **CI is expensive; do not spend it on proof.** Prove changes with focused local runs (Crabbox/Testbox for suites too heavy for the host) and trust those results. Do not dispatch workflow runs, rerun jobs, re-push, or update branches just to obtain or confirm green. Breaking `main` is an acceptable cost; fix it forward.
+- **Pre-existing reds do not block landing.** A PR whose only failing checks also fail on current `main` (same test, in files the PR does not touch) may land through the native landing workflow's admin exception; name the inherited failure in the PR. A tiny PR-caused failure (lint, types, a stale test expectation) may land the same way only if the lander pushes the fix to `main` immediately afterward. Anything larger stays blocked.
+
 ## Review, prepare, merge
 
 For main-targeted PRs, prefer the native sequence; adapt as needed.
@@ -90,6 +97,18 @@ nit sweep is required. Templates describe unfinished work with valid enum values
 FOR /prepare-pr`. After every push, rerun `review-init`; checkout alone does not
 refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
+
+After the [test-failure investigation](../../openclaw-testing/SKILL.md#test-failure-policy),
+a local failure whose cause or safe fix remains unresolved can retain
+`tests.result: "fail"` with `tests.investigatedLocalFailures`. Bind `head` to the
+exact reviewed SHA and record every original `failure`, actual
+`reproductionAttempts`, `evidence`, and `remainingUncertainty` in its nonempty
+`failures` array. Attempts and evidence are nonempty string arrays; failure and
+uncertainty are nonempty strings. Keep that evidence in the PR and never claim a
+passing replay proves a fix. The structured disposition permits READY review
+under the existing policy; it does not waive substantive findings, behavioral
+review, required CI, security, or enforced reviews. Failed CI still uses its
+separate admission policy below.
 
 Select one gate mode per invocation; older shells or installed instructions may
 still set `OPENCLAW_TESTBOX=1`. The command above clears it only for that process.
@@ -449,6 +468,23 @@ recovery are outside this exception. Another explicit recovery must use the new
 outcome OID and independently qualify its response; there is no automatic retry.
 If the PR has merged meanwhile, reconcile the retained outcome without sending
 another merge request.
+
+When an unaccepted prior-CI REST admin request is uncertain, a different current
+head fences its exact `sha`. After fresh review and exact-head `github_pending`
+preparation, retire it into an ordinary current-head auto request:
+
+```bash
+scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
+  --replacement-head <HEAD_SHA> --auto-merge
+```
+
+Do not pass `--admin-evidence`. The replacement must differ, and the PR must stay
+OPEN and `MERGEABLE/BLOCKED` or `MERGEABLE/BEHIND`. Normal required-check,
+ClawSweeper, review, security, and owner gates still apply. The successor CAS
+records route `auto` plus `recovery.staleHeadRetirement`, preserving ancestry
+and exact regular capture bytes without interpreting them; an empty capture is
+valid. Missing, symlink, extra, or admission-mutated captures, same-head or
+stale evidence, lifecycle/head drift, queue state, and failed gates stay blocked.
 
 After two identical pre-dispatch failures without new evidence, stop invoking
 the same blocked route. Inspect the failure and select an already-authorized

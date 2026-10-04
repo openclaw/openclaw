@@ -12,7 +12,6 @@ import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../config/confi
 import { clearSessionStoreCacheForTest } from "../../config/sessions/store-writer-state.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
-import * as sessionAdmission from "../../sessions/session-lifecycle-admission.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -139,7 +138,7 @@ describe("visible yielded session continuation", () => {
       const resetId = randomUUID();
       const rootFinished = createDeferred();
       const nestedOpen = createDeferred();
-      const nestedClosed = createDeferred();
+      const nestedClosed = createDeferred<{ writableEnded: boolean; fixtureStopping: boolean }>();
       const requesterWaitAttached = createDeferred();
       const requesterYielded = createDeferred();
       const requesterFinished = createDeferred();
@@ -154,7 +153,6 @@ describe("visible yielded session continuation", () => {
       const resetAcknowledged = createDeferred<{ state?: string }>();
       const attachedChatRuns = new Set<string>();
       const handlers = new Set<Promise<void>>();
-      const evidence: Array<Record<string, unknown>> = [];
       const failureTrace: Array<Record<string, unknown>> = [];
       const runAliases = new Map<string, number>();
       const fixtureStartedAt = Date.now();
@@ -166,6 +164,7 @@ describe("visible yielded session continuation", () => {
       let childRequests = 0;
       let providerRequests = 0;
       let yieldDispatched = false;
+      let resetComplete = false;
       let unexpectedInference = 0;
       let stopping = false;
       let providerServer: ReturnType<typeof createServer> | undefined;
@@ -206,9 +205,6 @@ describe("visible yielded session continuation", () => {
           JSON.stringify({ fixtureErrors, runs: snapshot(), trace: failureTrace.slice(-12) }),
         );
       });
-      const record = (kind: string, facts: Record<string, unknown> = {}) => {
-        evidence.push({ at: Date.now(), kind, ...facts, runs: snapshot() });
-      };
       const originalWait = agentJob.waitForAgentJob;
       const waiterSpy = vi.spyOn(agentJob, "waitForAgentJob").mockImplementation((params) => {
         const pending = originalWait(params);
@@ -218,44 +214,20 @@ describe("visible yielded session continuation", () => {
             requesterWaitAttached.resolve();
           }
         }
-        record("wait-attached", { runId: params.runId, source: params.source });
         void pending.then(
           (result) => {
-            record("wait-result", { runId: params.runId, source: params.source, result });
             if (params.source === "chat" && params.runId === requester?.runId) {
               requesterWaitFinished.resolve(result);
             }
           },
-          (error: unknown) => {
-            record("wait-rejected", { runId: params.runId, error: String(error) });
-          },
+          () => {},
         );
         return pending;
       });
-      const originalInterrupt = sessionAdmission.interruptSessionWorkAdmissions;
-      const admissionSpy = vi
-        .spyOn(sessionAdmission, "interruptSessionWorkAdmissions")
-        .mockImplementation((params) => {
-          record("admission-interrupt-entry");
-          const pending = originalInterrupt(params);
-          void pending.then(
-            (released) => {
-              record("admission-interrupt-release", { released });
-            },
-            (error: unknown) => {
-              record("admission-interrupt-rejected", { error: String(error) });
-            },
-          );
-          return pending;
-        });
       const unsubscribe = onAgentEvent((event) => {
         if (event.stream !== "lifecycle") {
           return;
         }
-        record("lifecycle", {
-          runId: event.runId,
-          data: event.data,
-        });
         if (!runAliases.has(event.runId)) {
           runAliases.set(event.runId, runAliases.size + 1);
         }
@@ -301,7 +273,6 @@ describe("visible yielded session continuation", () => {
           runId: expect.any(String),
           childSessionKey: expect.any(String),
         });
-        record("spawn-receipt", { callId, receipt: result });
         return result;
       }
       function tool(
@@ -341,7 +312,6 @@ describe("visible yielded session continuation", () => {
             const body: { input: ResponseInput[]; tools: Array<{ name: string }> } = JSON.parse(
               Buffer.concat(chunks).toString(),
             );
-            record("provider-request", { body });
             expect(request.url).toBe("/v1/responses");
             failureTrace.push({
               kind: "provider-request",
@@ -351,7 +321,7 @@ describe("visible yielded session continuation", () => {
               requesterStep,
               childRequests,
               yieldDispatched,
-              resetAcknowledged: evidence.some((event) => event.kind === "reset-acknowledged"),
+              resetAcknowledged: resetComplete,
               stopping,
               input: body.input.map((item) => {
                 const text =
@@ -413,7 +383,6 @@ describe("visible yielded session continuation", () => {
                 return;
               }
               unexpectedInference++;
-              record("unexpected-requester-inference");
               response.writeHead(400, { "content-type": "application/json" }).end(
                 JSON.stringify({
                   error: { message: "Fixture refuses requester inference after yield." },
@@ -503,11 +472,10 @@ describe("visible yielded session continuation", () => {
             expect(++childRequests, "held nested request must not replay").toBe(1);
             childResponse = response;
             response.once("close", () => {
-              record("nested-stream-close", {
+              nestedClosed.resolve({
                 writableEnded: response.writableEnded,
                 fixtureStopping: stopping,
               });
-              nestedClosed.resolve();
             });
             if (outcome === "reset") {
               response.writeHead(200, { "content-type": "text/event-stream" });
@@ -515,7 +483,6 @@ describe("visible yielded session continuation", () => {
                 `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: randomUUID(), object: "response", status: "in_progress", model: "gpt-5.4", output: [] } })}\n\n`,
               );
             }
-            record("nested-stream-open");
             nestedOpen.resolve();
           })().catch((error: unknown) => {
             if (!stopping) {
@@ -554,7 +521,7 @@ describe("visible yielded session continuation", () => {
                 },
                 subagents: { maxSpawnDepth: 2, maxConcurrent: 4 },
               },
-              entries: { main: { default: true } },
+              entries: { main: {} },
             },
             tools: {
               profile: "full",
@@ -615,7 +582,6 @@ describe("visible yielded session continuation", () => {
         await withinTest(rootFinished.promise, signal);
         await withinTest(requesterYielded.promise, signal);
         const waitResult = await withinTest(requesterWaitFinished.promise, signal);
-        record("before-reset", { waitResult });
         expect
           .soft(waitResult, "chat waiter must retain actual yield metadata")
           .toMatchObject({ status: "ok", yielded: true });
@@ -652,15 +618,14 @@ describe("visible yielded session continuation", () => {
         );
         const reset = await withinTest(resetAcknowledged.promise, signal);
         expect(reset.state).toBe("final");
-        record("reset-acknowledged");
-        await withinTest(nestedClosed.promise, signal);
+        resetComplete = true;
+        const closed = await withinTest(nestedClosed.promise, signal);
         await withinTest(settleSubagentRegistryPersistenceWork(), signal);
         // The reported continuation arrived 127 ms after acknowledgement on 2026-09-10.
         // This window observes absence after synchronization with real cancellation.
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 1_000);
         });
-        record("observation-complete");
         expect(fixtureErrors, `provider fixture failures: ${JSON.stringify(failureTrace)}`).toEqual(
           [],
         );
@@ -668,7 +633,7 @@ describe("visible yielded session continuation", () => {
           unexpectedInference,
           `requester must not reach inference after reset: ${JSON.stringify(failureTrace)}`,
         ).toBe(0);
-        expect(evidence.find((event) => event.kind === "nested-stream-close")).toMatchObject({
+        expect(closed).toEqual({
           writableEnded: false,
           fixtureStopping: false,
         });
@@ -678,9 +643,7 @@ describe("visible yielded session continuation", () => {
           expect(run?.execution).toMatchObject({ status: "terminal" });
           expect(run?.endedReason).toBe("subagent-killed");
         }
-        record("native-runs-cancelled");
       } finally {
-        record("fixture-cleanup-start", { fixtureErrors, unexpectedInference });
         stopping = true;
         fixtureAbort.abort();
         providerServer?.closeAllConnections();
@@ -697,7 +660,6 @@ describe("visible yielded session continuation", () => {
         await Promise.allSettled(handlers);
         unsubscribe();
         waiterSpy.mockRestore();
-        admissionSpy.mockRestore();
         publicationSpy.mockRestore();
         clearRuntimeConfigSnapshot();
         clearConfigCache();

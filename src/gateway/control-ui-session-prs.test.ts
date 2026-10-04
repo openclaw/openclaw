@@ -61,6 +61,19 @@ describe("parseGitHubRemoteUrl", () => {
     expect(parseGitHubRemoteUrl("ssh://git@github.com/openclaw/openclaw.git")).toEqual(expected);
   });
 
+  it("parses the configured GitHub Enterprise host without admitting another host", () => {
+    const expected = { owner: "acme", repo: "private-repo" };
+    expect(
+      parseGitHubRemoteUrl("https://ghe.example.test/acme/private-repo.git", "ghe.example.test"),
+    ).toEqual(expected);
+    expect(
+      parseGitHubRemoteUrl("git@ghe.example.test:acme/private-repo.git", "ghe.example.test"),
+    ).toEqual(expected);
+    expect(
+      parseGitHubRemoteUrl("https://github.com/acme/private-repo.git", "ghe.example.test"),
+    ).toBeNull();
+  });
+
   it("rejects non-GitHub and malformed remotes", () => {
     expect(parseGitHubRemoteUrl("https://gitlab.com/openclaw/openclaw.git")).toBeNull();
     expect(parseGitHubRemoteUrl("git@github.com:openclaw")).toBeNull();
@@ -595,7 +608,7 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(fetchImpl.mock.calls).toHaveLength(2);
   });
 
-  it("caches local facts until activity or the slow working-tree fallback refreshes them", async () => {
+  it("revalidates local facts on refresh and observes changed merged heads or the slow fallback", async () => {
     let pulls: Record<string, unknown>[] = [];
     const fetchImpl = routedFetch([
       { match: "/pulls?head=", response: () => githubJson(pulls) },
@@ -636,8 +649,8 @@ describe("loadControlUiSessionPullRequests", () => {
     additions = 2;
     expect((await load("agent:main:a")).branch?.additions).toBe(1);
     expect(localGitReads()).toHaveLength(1);
-    expect((await load("agent:main:a", true)).branch?.additions).toBe(2);
-    expect(localGitReads()).toHaveLength(2);
+    expect((await load("agent:main:a", true)).branch?.additions).toBe(1);
+    expect(localGitReads()).toHaveLength(1);
     expect(
       fetchImpl.mock.calls.filter((call) =>
         requestUrl(call[0] as RequestInfo | URL).includes("/pulls?head="),
@@ -647,22 +660,22 @@ describe("loadControlUiSessionPullRequests", () => {
     pulls = [pullListItem({ merged_at: "2026-07-09T10:00:00Z" })];
     additions = 4;
     expect((await load("agent:main:a", true)).branch?.additions).toBe(4);
-    expect(localGitReads()).toHaveLength(3);
+    expect(localGitReads()).toHaveLength(2);
 
     const githubRequests = fetchImpl.mock.calls.length;
     vi.advanceTimersByTime(60_000);
     additions = 5;
     expect((await load("agent:main:a")).branch?.additions).toBe(4);
-    expect(localGitReads()).toHaveLength(3);
+    expect(localGitReads()).toHaveLength(2);
     expect(fetchImpl.mock.calls).toHaveLength(githubRequests);
 
     vi.advanceTimersByTime(240_001);
     additions = 5;
     expect((await load("agent:main:a")).branch?.additions).toBe(5);
-    expect(localGitReads()).toHaveLength(4);
+    expect(localGitReads()).toHaveLength(3);
 
     expect((await load("agent:main:b")).branch?.additions).toBe(3);
-    expect(localGitReads()).toHaveLength(5);
+    expect(localGitReads()).toHaveLength(4);
   });
 
   it("refreshes branch context on metadata changes without repeating it for working-tree activity", async () => {

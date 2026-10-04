@@ -26,7 +26,10 @@ import {
 } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { startPluginServices, type PluginServicesHandle } from "../plugins/services.js";
+import {
+  startPluginServices,
+  type PluginServicesHandle,
+} from "../plugins/services.test-support.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { OpenClawPluginApi } from "../plugins/types.js";
 import { setActiveDegradedSecretOwners } from "../secrets/runtime-degraded-state.js";
@@ -325,7 +328,9 @@ export async function createPluginReloadRecoveryFixture(
           sourceConfig: nextConfig,
           changedPaths,
           checkpoint: options.checkpoint,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
+          prepareConfigEffects:
+            options.prepareConfigEffects ??
+            (() => ({ retire: () => {}, rollback: rollbackConfigEffects })),
           pluginLifecycle: {
             reason: "reload",
             waitForDrain: options.waitForDrain,

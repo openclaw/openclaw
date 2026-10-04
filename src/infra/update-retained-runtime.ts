@@ -211,11 +211,12 @@ async function runWithRetainedUpdateRuntime<T>(
           const inventoryMs = Math.round(performance.now() - inventoryStartedAt);
           const materializationStartedAt = performance.now();
           const counts = await withUpdateCandidateIoBudget(
-            { directory: privateRoot, bytes: plan.bytes, timeoutMs },
-            async (signal) =>
+            { directory: privateRoot, bytes: plan.bytes, timeoutMs, progress: "reported" },
+            async (signal, reportProgress) =>
               await linkUpdateCandidatePluginTrees(plan, {
                 targetStateDir: privateRoot,
                 candidateRoot,
+                onMaterialized: reportProgress,
                 onProgress: () => {
                   signal.throwIfAborted();
                 },
@@ -253,11 +254,15 @@ async function runWithRetainedUpdateRuntime<T>(
       closing = true;
       // A signal can arrive during projection; stop and join its last filesystem write.
       await preparation?.catch(() => undefined);
-      const retained = directory;
-      if (retained) {
-        await removeTemporaryArtifacts(retained, "Updater runtime", (error) => {
-          reportRetainedUpdateRuntime(retained, `cleanup failed: ${formatErrorMessage(error)}`);
-        });
+      if (directory) {
+        if (prepared) {
+          reportRetainedUpdateRuntime(
+            directory,
+            "worker generation settled; cleanup deferred to the next eligible update or openclaw doctor --fix",
+          );
+        } else {
+          await removeTemporaryArtifacts(directory, "Updater runtime");
+        }
       }
       unregister?.();
     },

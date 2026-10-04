@@ -76,6 +76,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (opts.json) {
     defaultRuntime.writeJson({
       ...status,
+      extraServices: status.extraServices.map(({ sourcePath: _sourcePath, ...service }) => service),
       service: projectDaemonServiceForJson(status.service, { includeDefinitionPaths: false }),
     });
     return;
@@ -179,10 +180,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
       const configPath = `${shortenHomePath(config.path)}${config.exists ? "" : " (missing)"}${config.valid ? "" : " (invalid)"}`;
       printInfo(`Config (${kind}):`, configPath);
       if (!config.valid && config.issues?.length) {
-        const issueLabel = kind === "cli" ? "Config issue:" : "Service config issue:";
+        const issueLabel =
+          kind === "cli" ? "Warning: Config issue:" : "Warning: Service config issue:";
         for (const issue of config.issues.slice(0, 5)) {
-          defaultRuntime.error(
-            `${errorText(issueLabel)} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
+          printWarning(
+            `${issueLabel} ${formatConfigIssueLine(issue, "", { normalizeRoot: true })}`,
           );
         }
       }
@@ -194,6 +196,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           printWarning(formatConfigIssueLine(warning, "-", { normalizeRoot: true }));
         }
       }
+    }
+    if (!status.config.cli.valid || status.config.daemon?.valid === false) {
+      printWarning(`Run \`${formatCliCommand("openclaw doctor --fix")}\` to repair configuration.`);
     }
     if (status.config.mismatch) {
       printError(
@@ -400,6 +405,7 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     spacer();
   }
 
+  const disabledTask = process.platform === "win32" && service.runtime?.state === "Disabled";
   if (service.runtime?.missingUnit) {
     if (serviceTargetsProbe) {
       printError("Service unit not found.");
@@ -412,24 +418,26 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     }
   } else if (
     service.runtime?.missingGuiSession ||
-    (serviceLoaded && service.runtime?.status === "stopped")
+    (serviceLoaded && (disabledTask || service.runtime?.status === "stopped"))
   ) {
-    const missingGuiSession = service.runtime.missingGuiSession;
+    const missingGuiSession = service.runtime?.missingGuiSession;
     const startLimitHit = process.platform === "linux" && isSystemdStartLimitHit(service.runtime);
-    printError(
-      missingGuiSession
-        ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
-        : startLimitHit
-          ? // systemd gave up restarting after repeated crashes; sending the operator
-            // to restart (which now clears the failed latch) beats "exited immediately".
-            `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
-              "openclaw gateway restart",
-            )} or inspect logs.`
-          : "Service is loaded but not running (likely exited immediately).",
-    );
+    if (!disabledTask) {
+      printError(
+        missingGuiSession
+          ? "LaunchAgent plist exists, but macOS has no usable GUI session for this user."
+          : startLimitHit
+            ? // systemd gave up restarting after repeated crashes; sending the operator
+              // to restart (which now clears the failed latch) beats "exited immediately".
+              `systemd stopped restarting the gateway after repeated crashes; run ${formatCliCommand(
+                "openclaw gateway restart",
+              )} or inspect logs.`
+            : "Service is loaded but not running (likely exited immediately).",
+      );
+    }
     const env = service.command?.environment ?? process.env;
     for (const hint of buildGatewayRuntimeRecoveryHints({
-      kind: missingGuiSession ? "gui-session" : "stopped",
+      kind: missingGuiSession ? "gui-session" : disabledTask ? "disabled-task" : "stopped",
       restartCommand: formatCliCommand("openclaw gateway restart", env),
       env,
       logFile: status.logFile,

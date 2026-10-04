@@ -142,9 +142,76 @@ path to inspect before retrying recovery. Sibling `.openclaw.update-stage-*`
 directories are outside that package fingerprint; do not remove stages that
 another updater may still be using.
 
-An older installed updater that stops with `Package rollback verification byte
-limit exceeded` cannot obtain this repair from its staged candidate. Use the
-installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+Launcher backups verify the saved file bytes or symlink target. Recreating an
+equivalent npm or Homebrew launcher does not invalidate recovery because its
+inode, timestamps, or ownership metadata changed. A changed symlink target still
+refuses the swap and names both targets; filesystem mutation ownership checks
+remain in effect. This fix belongs to the installed updater, so a candidate
+cannot change an older updater's launcher checks during that first update.
+
+On POSIX npm installations, publication admission checks the existing package
+directory or source-link entry and standard launchers before staging. The source
+link check does not require ownership of the external checkout. Additional launcher destinations
+are checked against the staged candidate before validation; unrelated prefix files
+are left alone. An ownership
+refusal names the object path, its owner UID, and the expected UID. Writable
+prefix parents such as `bin` and `lib/node_modules` may belong to another UID;
+their directory identities still must remain unchanged during publication and
+recovery. Published objects and private recovery artifacts retain their ownership
+checks. This admission behavior belongs to the installed updater, so it cannot
+repair the checks in an already-running older updater.
+
+Journal-owned publication and rollback also compare launcher bytes or link targets,
+without requiring uid/gid metadata that a non-root updater cannot restore. They
+still require the recorded launcher identity before replacing it. New symlinks
+preserve the existing launcher's ownership when possible; otherwise they use the
+updater's effective user and group instead of inheriting an unusable bin-directory
+group. An ownership fallback produces a warning.
+
+Package publication verifies the candidate before activation and the installed
+package after publication. Launcher publication checks package identities without
+repeatedly hashing both generations. Retirement verifies the live package before
+deleting obsolete backups; rollback still hashes a backup before restoring it
+and verifies the restored bytes. These improvements belong to the installed
+updater and do not change an older updater already running.
+
+Candidate verification uses the same best-effort contract when its scan reaches
+the resource limits: activation and publication continue with directory identity,
+package version, and launcher verification, recording that full package contents
+are unverified. The reader allows **500,000 entries / 8 GiB**; the shared deadline
+still bounds scan time. When a scan completes, its fingerprint must still match.
+
+When full verification is available, these checks walk every entry to verify
+identity, metadata, directory listings, links, and a final metadata sweep. A
+file's content digest from the earlier baseline or staged-package scan is reused
+only when its complete metadata, including inode, link count, size, modification
+time, and change time, is unchanged and its change time predates that earlier
+read by at least five seconds. Recovery helpers and later commands re-read file
+contents. Like the metadata sweep, these checks observe the package rather than
+lock it: writes through an already-modified shared memory mapping may not update
+file times. Keep other package managers and tools that modify the installation
+stopped during an update.
+
+Future installed updaters hash package files in short-lived worker threads with
+synchronous reads, at most four files at a time. The sealed recovery helper uses
+the same path; if worker threads are unavailable, hashing runs in-process. A file
+whose digest is reused under the rule above is not re-read; every other file is
+read afresh in the workers. The asynchronous directory walk, serial final
+metadata recheck, and deadlines are unchanged. Older installed updaters keep
+their own scanning behavior.
+
+The published 2026.9.7 and 2026.9.8 updaters still use their own **50,000-entry /
+1 GiB** caps for candidates; the candidate cannot change that installed driver.
+For a supervisor version of 2026.9.8 or earlier, including prereleases, candidate
+admission refuses a tree with more than 50,000 entries and directs you to run
+`npm i -g openclaw@latest` manually (preserving the requested version or tag when
+specified). This counts
+the package root and every entry, including hidden lockfiles, without following
+symlinks. Newer supervisors do not receive this size refusal.
+
+An older installed updater that stops with `Package rollback verification entry
+limit exceeded` or `Package rollback verification byte limit exceeded` likewise
+needs the installation's [manual package update method](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
 with a verified backup and the managed Gateway stopped during replacement.
 
 Interrupting a fresh local update before activation records a failed,
@@ -171,6 +238,11 @@ host links target the staged installation. Literal imports, `require()` calls, a
 literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
+
+Before each candidate check starts, the updater names the check and command.
+These progress messages go to stderr with `--json`, leaving stdout for the JSON
+result. The installed updater owns these announcements, so an older updater gains
+them on its next update after installing this version.
 
 Plugin dependency inventory skips incidental Git runtime transaction directories
 named `<destination>.openclaw-update-<UUID>.tmp`. Their candidate and rollback
@@ -199,11 +271,27 @@ classification. The live plugin files and host links stay unchanged. Channels,
 cron, automatic updates, and other side services are suppressed in this canary.
 The copied databases undergo the same schema checks and migrations without
 reviving the removed Tasks registry.
-The canary also defers session catalog hydration, worker recovery, and startup
-maintenance until activation, recording a warning. Required configuration,
+The canary also defers session catalog hydration, subagent and worker recovery,
+and startup maintenance until activation, recording a warning. Required configuration,
 database ownership, schema, and migration checks still run before readiness;
 plugin runtime loading remains part of validation. The serving Gateway prepares
 its session catalogs and maintenance normally after activation.
+
+Before copying state, the updater admits its existing-schema progress writer and
+retains that connection through validation. Progress writes therefore keep the
+shared database's WAL files available while SQLite takes a consistent snapshot.
+The connection reuses its admitted schema facts while each write still checks
+current authority, source identity, and schema changes. This prevents progress
+recording itself from interrupting the copy; integrity and replacement checks
+remain enabled. The installed updater must contain this fix. A new candidate
+cannot change an older driver's initial snapshot behavior.
+
+An initial progress receipt refusal stops validation before state copying or child
+startup. If saving a completed check fails, the updater preserves the reporting
+error; that check keeps its successful result and is not reported again. The
+updater still settles owned child processes and temporary-copy cleanup.
+Progress errors while a stage is active retain that stage's existing failure and
+cleanup handling.
 
 After the canary passes, the updater records temporary-copy cleanup and previous-Gateway
 readiness verification as active steps. `openclaw update status`, including `--json`,
@@ -287,6 +375,10 @@ reports its size and applied budget. Snapshot time does not consume the separate
 runtime validation budget. Each validation process receives a fresh allowance
 that scales with measured database and plugin bytes. An explicit per-step
 timeout replaces that derived allowance.
+While retaining its own runtime, the updater reports completed file operations
+directly instead of repeatedly scanning the growing copy. If those operations
+stop completing, isolated filesystem probes still track a slow individual copy.
+This improvement applies when the installed updater contains the fix.
 Automatic and chat updates leave that runtime allowance derived from state.
 Their request and recovery watchdogs do not become update validation deadlines.
 Startup and readiness responses share their own allowance, including reading
@@ -366,6 +458,15 @@ TMPDIR=/var/tmp openclaw update --yes
 ```
 
 Subsequent updates use the new updater's measured destination selection.
+
+Snapshot creation checks the source and the final transformed output for full
+SQLite integrity and foreign-key consistency. It validates the transformed output
+once, in private publication staging, and verifies its exact bytes before making
+the snapshot available. The same checks cover recovery backups. This avoids a
+duplicate full-database scan without changing the backup or rollback contract.
+The published 2026.9.7 updater selects its own snapshot worker, so its initial
+snapshot does not benefit from this change on the first upgrade. Updaters that
+select the staged candidate's worker can use the candidate's snapshot implementation.
 
 Live snapshots use SQLite read transactions and private backups while writers
 continue. Artifact-preserving planning and Doctor checks retain byte-neutral
@@ -569,8 +670,14 @@ refuses automatic restoration. Gateway maintenance ownership does not exclude
 independent SQLite writers, and these observations cannot distinguish Doctor's
 own writes from foreign commits. Changed databases require manual recovery.
 Rollback checks those facts again while holding database file exclusions. The
-fingerprints cover database, WAL, and rollback-journal identity, timestamps,
-sizes, and content digests; they reuse the snapshot inventory.
+fingerprints cover database identity, committed page content, and the retained
+WAL transaction counter and commit checksum; they reuse the snapshot inventory.
+Checkpointing already-captured WAL pages into the same database does not
+invalidate rollback while that write evidence remains available. New commits,
+replacement of a database, or loss of the captured WAL write evidence still
+refuse restoration.
+An exact write reversal that leaves both committed bytes and retained write
+evidence unchanged is admitted: it leaves no later data for rollback to discard.
 
 When that evidence matches, the updater restores the databases before restoring
 the package. It holds the
@@ -1013,6 +1120,11 @@ version order from their `beta` and `latest` dist-tags, using the same policy as
 the core updater. This includes official plugins with a default/latest catalog
 target and managed `@beta` selectors. OpenClaw installs the exact inspected
 version while keeping the selected tag or restored catalog default for future updates.
+
+Npm plugin updates reuse the registry metadata already selected for the same
+installation attempt, avoiding a second lookup before download. Compatibility,
+integrity, install-policy, and capability-consent checks still apply to the
+selected package. A fallback to another target resolves that target separately.
 
 ClawHub plugins on the beta channel try their own `@beta` tag. If that release
 is unavailable, OpenClaw falls back to the default/latest spec and reports a

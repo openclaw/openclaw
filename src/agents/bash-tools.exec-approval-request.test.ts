@@ -7,11 +7,10 @@ import {
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
-vi.mock("../infra/command-explainer/index.js", () => ({
-  explainShellCommand: async (command: string) => command,
-  formatCommandSpans: (command: string) =>
+vi.mock("./bash-tools.exec-approval-request.runtime.js", () => ({
+  resolveExecApprovalCommandSpans: async (command: string) =>
     command.startsWith("pwsh ") || command.startsWith("cmd.exe ")
-      ? []
+      ? undefined
       : command.startsWith("node ")
         ? [{ startIndex: 0, endIndex: 4 }]
         : [

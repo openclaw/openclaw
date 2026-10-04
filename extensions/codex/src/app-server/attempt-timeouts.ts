@@ -1,4 +1,5 @@
 import { addTimerTimeoutGraceMs, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { codexPrewriteRejectionCause } from "./rpc-error.js";
 
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 // Native terminal receipt must still reach local settlement; a blocked
@@ -27,20 +28,16 @@ export class CodexAppServerStartupError extends Error {
 export function isCodexAppServerStartupError(
   error: unknown,
   reason?: CodexAppServerStartupErrorReason,
-): error is CodexAppServerStartupError {
+): boolean {
+  const cause = codexPrewriteRejectionCause(error);
   return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_STARTUP_CANCELLED" &&
-    "reason" in error &&
-    (error.reason === "aborted" || error.reason === "timed_out") &&
-    (reason === undefined || error.reason === reason)
+    cause instanceof Error &&
+    "code" in cause &&
+    cause.code === "CODEX_APP_SERVER_STARTUP_CANCELLED" &&
+    "reason" in cause &&
+    (cause.reason === "aborted" || cause.reason === "timed_out") &&
+    (reason === undefined || cause.reason === reason)
   );
-}
-
-function resolvePositiveIntegerTimeoutMs(value: number | undefined, fallbackMs: number): number {
-  const fallback = resolveTimerTimeoutMs(fallbackMs, 1);
-  return resolveTimerTimeoutMs(value, fallback);
 }
 
 export async function withCodexStartupTimeout<T>(params: {
@@ -100,16 +97,16 @@ export function resolveCodexStartupTimeoutMs(params: {
   timeoutMs: number;
   timeoutFloorMs?: number;
 }): number {
-  const timeoutFloorMs = resolvePositiveIntegerTimeoutMs(
+  const timeoutFloorMs = resolveTimerTimeoutMs(
     params.timeoutFloorMs,
     CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
   );
-  const timeoutMs = resolvePositiveIntegerTimeoutMs(params.timeoutMs, timeoutFloorMs);
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, timeoutFloorMs);
   return Math.max(timeoutFloorMs, timeoutMs);
 }
 
 export function resolveCodexGatewayTimeoutWithGraceMs(timeoutMs: number, graceMs = 10_000): number {
-  const timeout = resolvePositiveIntegerTimeoutMs(timeoutMs, 1);
+  const timeout = resolveTimerTimeoutMs(timeoutMs, 1);
   const grace = resolveTimerTimeoutMs(graceMs, 0, 0);
   return addTimerTimeoutGraceMs(timeout, grace) ?? timeout;
 }

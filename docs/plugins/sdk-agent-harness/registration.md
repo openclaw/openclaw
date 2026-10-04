@@ -84,6 +84,14 @@ route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
 
+To report the same execution route in utility-model settings, a harness may add
+`resolveIsolatedCompletionRuntime({ authorizationOwner })`, where the owner is
+`"host"` or `"harness"`. Return `"openclaw"` when that authorization owner uses the
+shared host-prepared completion helper,
+or `"self"` when the harness executes the call. Without this hook, the settings
+report the harness itself. Keep the selector synchronous and side-effect-free,
+and reuse it in isolated dispatch so the reported route follows execution.
+
 When supplied, call `params.assertCurrent()` after preparation awaits and
 immediately before each credential handoff, inference request, or process start,
 including retries.

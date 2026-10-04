@@ -194,15 +194,9 @@ export function resolveProviderApi(
   }
   const provider = sourceProvider ? normalizeHermesProviderId(sourceProvider) : "";
   const baseUrl = readHermesBaseUrl(raw);
-  let hostname = "";
-  let pathname = "";
-  try {
-    const parsed = baseUrl ? new URL(baseUrl) : undefined;
-    hostname = parsed?.hostname.toLowerCase() ?? "";
-    pathname = parsed?.pathname.toLowerCase().replace(/\/+$/u, "") ?? "";
-  } catch {
-    // Provider identity still supplies the protocol for templated endpoints.
-  }
+  const parsed = URL.parse(baseUrl ?? "");
+  const hostname = parsed?.hostname.toLowerCase() ?? "";
+  const pathname = parsed?.pathname.toLowerCase().replace(/\/+$/u, "") ?? "";
   // Hermes honors an explicit Responses mode for named providers. Plain
   // `custom` is the exception: endpoint detection rejects stale Responses state.
   if (transport === "codex_responses" && sourceProvider !== "custom") {
@@ -233,18 +227,14 @@ export function resolveProviderApi(
 }
 
 function normalizeProviderBaseUrl(baseUrl: string, api: OpenClawModelApi): string {
-  if (api !== "anthropic-messages") {
+  const parsed = api === "anthropic-messages" ? URL.parse(baseUrl) : null;
+  if (!parsed) {
     return baseUrl;
   }
-  try {
-    const parsed = new URL(baseUrl);
-    // The Anthropic SDK appends /v1/messages. Store the canonical base so
-    // imported proxy paths do not repeat the version segment.
-    parsed.pathname = parsed.pathname.replace(/\/v1\/?$/u, "");
-    return parsed.toString().replace(/\/$/u, "");
-  } catch {
-    return baseUrl;
-  }
+  // The Anthropic SDK appends /v1/messages. Store the canonical base so
+  // imported proxy paths do not repeat the version segment.
+  parsed.pathname = parsed.pathname.replace(/\/v1\/?$/u, "");
+  return parsed.toString().replace(/\/$/u, "");
 }
 
 export function readEnvReference(value: unknown): string | undefined {
@@ -265,17 +255,14 @@ export function readProviderApiKeyEnv(raw: Record<string, unknown>): string | un
 }
 
 export function resolveHermesEndpointApiKeyEnv(baseUrl: string): string | undefined {
-  try {
-    const hostname = new URL(baseUrl).hostname.toLowerCase();
-    return hostname === "openai.com" ||
+  const hostname = URL.parse(baseUrl)?.hostname.toLowerCase();
+  return hostname &&
+    (hostname === "openai.com" ||
       hostname.endsWith(".openai.com") ||
       hostname === "openai.azure.com" ||
-      hostname.endsWith(".openai.azure.com")
-      ? "OPENAI_API_KEY"
-      : undefined;
-  } catch {
-    return undefined;
-  }
+      hostname.endsWith(".openai.azure.com"))
+    ? "OPENAI_API_KEY"
+    : undefined;
 }
 
 function readModelMetadata(raw: Record<string, unknown>): Omit<HermesModelConfig, "id"> {

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { SystemRunApprovalFileOperand } from "./exec-approvals.js";
+import type { SystemRunApprovalFileOperand } from "./exec-approvals-core.js";
 
 function hashFileContentsSync(filePath: string): string {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");

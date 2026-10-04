@@ -102,11 +102,11 @@ function requestSlashCommandRefresh(
     return;
   }
   const refresh = host.refreshCommands();
-  if (!refresh || typeof refresh.then !== "function") {
+  if (!refresh) {
     return;
   }
   state.slashCommandRefreshPending = true;
-  void Promise.resolve(refresh)
+  void refresh
     .catch(() => undefined)
     .finally(() => {
       state.slashCommandRefreshPending = false;

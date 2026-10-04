@@ -1,5 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { sleepWithAbort } from "@openclaw/retry";
 import type { SessionObserverDigest } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import { pruneMapToMaxSize } from "../../../../src/infra/map-size.ts";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
@@ -9,6 +10,7 @@ import {
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
 import { pickFreshestObserverDigest } from "../../lib/observer-digest.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import {
   resolveUiConversationIdentity,
@@ -22,8 +24,7 @@ import {
 import type { SessionChangedRowResult } from "../../lib/sessions/session-row-reconcile.ts";
 import { handleChatGatewayEvent, type ChatEventPayload } from "./chat-gateway.ts";
 import { invalidateChatBranches, loadChatBranches } from "./chat-history-branches.ts";
-import { sleep } from "./chat-history-retry.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
+import { getChatHistoryLoadState } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   pullRequestLinksIn,
@@ -73,13 +74,6 @@ const PENDING_INPUT_REASONS = new Set(["send", "agent.run.started", "agent.input
 const MISSING_TERMINAL_HISTORY_RETRY_DELAYS_MS = [100, 400, 1_500, 3_000] as const;
 const MAX_REMEMBERED_TERMINAL_RECOVERY_CLAIMS = 64;
 type ChatPanePresentation = () => boolean;
-
-function sessionMessageMatchesChat(
-  state: ChatPageHost,
-  event: NonNullable<ReturnType<typeof readSessionChangedEvent>>,
-): boolean {
-  return chatScopedEventSessionMatches(state, event.key, event.agentId ?? undefined);
-}
 
 function selectedGlobalEventAgentId(state: ChatPageHost, agentId: string | null): string {
   return agentId ? normalizeAgentId(agentId) : resolveUiDefaultAgentId(state);
@@ -136,11 +130,19 @@ function handleSessionMessageEvent(
   if (!event || !globalSessionEventMatchesChat(state, event)) {
     return false;
   }
-  const matchesChat = sessionMessageMatchesChat(state, event);
+  const matchesChat = visibleSessionMatches(state, event.key, event.agentId ?? undefined);
   const isUserMessage =
     readSessionMessageIdentity(asNullableRecord(payload)?.message)?.role === "user";
   if (matchesChat) {
     invalidateChatBranches(state);
+    // A pre-commit snapshot can erase even an admitted live reply when its leaf advances.
+    // Fence it before run settlement, while retaining the loader's single queued refresh.
+    if (getChatHistoryLoadState(state).phase === "in-flight") {
+      void loadChatHistory(state, {
+        deferBranches: !presentation(),
+        supersedeInFlight: true,
+      }).finally(() => state.requestUpdate?.());
+    }
     // A previous run can persist its final after the next local run starts.
     // Admit that sequenced row now so the later unsequenced chat.final replay
     // replaces it in place instead of appending below the newer user turn.
@@ -196,7 +198,6 @@ function handleSessionMessageEvent(
     state.pendingSessionMessageReloadSessionKey = null;
     void loadChatHistory(state, {
       deferBranches: !presentation(),
-      supersedeInFlight: isUserMessage && event.hasActiveRun === true,
     }).finally(() => state.requestUpdate?.());
   }
   return matchesChat;
@@ -331,7 +332,7 @@ async function recoverMissingTerminalReply(
     if (delayMs === undefined) {
       return;
     }
-    await sleep(delayMs);
+    await sleepWithAbort(delayMs);
   }
 }
 
@@ -345,7 +346,9 @@ function handleSessionsChangedEvent(
   const runIdBeforeApply = state.chatRunId;
   const event = readSessionChangedEvent(payload);
   const matchesChat = Boolean(
-    event && globalSessionEventMatchesChat(state, event) && sessionMessageMatchesChat(state, event),
+    event &&
+    globalSessionEventMatchesChat(state, event) &&
+    visibleSessionMatches(state, event.key, event.agentId ?? undefined),
   );
   const source = asNullableRecord(payload);
   const resetsSession = source?.reason === "reset" || source?.phase === "reset";
@@ -422,10 +425,11 @@ function handleSessionsChangedEvent(
   ) {
     invalidateChatBranches(state);
     // Legacy multi-message writes cannot prove individual message cursors.
-    // One scoped authoritative snapshot recovers them without ending a run.
-    void loadChatHistory(state, { deferBranches: !presented }).finally(() =>
-      state.requestUpdate?.(),
-    );
+    // A snapshot begun before this invalidation cannot recover the committed rows.
+    void loadChatHistory(state, {
+      deferBranches: !presented,
+      supersedeInFlight: true,
+    }).finally(() => state.requestUpdate?.());
     return true;
   }
   if (
@@ -460,7 +464,7 @@ function finalAssistantReplyHasPullRequestLink(
 ): boolean {
   if (
     payload?.state !== "final" ||
-    !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId)
+    !visibleSessionMatches(state, payload.sessionKey, payload.agentId)
   ) {
     return false;
   }
@@ -527,7 +531,7 @@ export function handlePageGatewayEvent(
         : undefined;
     const apply = () => {
       const sessionMatches = Boolean(
-        payload && chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId),
+        payload && visibleSessionMatches(state, payload.sessionKey, payload.agentId),
       );
       const recoveryRunId =
         payload?.state === "final" &&
@@ -613,7 +617,7 @@ export function handlePageGatewayEvent(
         : terminalPayload.agentId,
     );
     const connectionEpoch = state.connectionEpoch;
-    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope)?.item;
+    const queued = readDeliveredQueuedChatSendForRun(state, terminalPayload.runId, scope);
     const ownerIsCurrent = captureOutboxPayloadOwner(state);
     // Keep the complete user display pinned before applying the terminal, but
     // ordinary input retains its durable retry bytes until consumption is proven.
@@ -636,7 +640,7 @@ export function handlePageGatewayEvent(
     const payload = event.payload as SessionObserverDigest | undefined;
     if (
       !payload ||
-      !chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId) ||
+      !visibleSessionMatches(state, payload.sessionKey, payload.agentId) ||
       !observerDigestMatchesAuthoritativeRun(state, payload)
     ) {
       return;

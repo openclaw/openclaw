@@ -16,7 +16,11 @@ import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
-import type { ProviderPolicyNotice, RunOutputUsage } from "./tool-stream-contract.ts";
+import type {
+  LiveToolStreamState,
+  ProviderPolicyNotice,
+  RunOutputUsage,
+} from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -93,4 +97,6 @@ export type ChatState = StreamCausalBoundaryState & {
   requestUpdate?: () => void;
   /** Reports transcript loading edges; see CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT. */
   transcriptLoadingChanged?: () => void;
-};
+  /** Reports transient read recovery to the shell connection indicator. */
+  historyRecoveryChanged?: () => void;
+} & LiveToolStreamState;

@@ -11,6 +11,7 @@ import { renderSettingsEmpty, renderSettingsSection } from "../../components/set
 import { t } from "../../i18n/index.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { pathDisplayName } from "../../lib/path-display.ts";
 import {
   countLines,
   countWords,
@@ -44,7 +45,7 @@ function formatWorkspaceRelativePath(filePath: string, workspace: string | null 
   if (normalizedWorkspace && normalizedPath.startsWith(`${normalizedWorkspace}/`)) {
     return normalizedPath.slice(normalizedWorkspace.length + 1) || ".";
   }
-  return normalizedPath.split(/[\\/]+/).findLast(Boolean) ?? normalizedPath;
+  return pathDisplayName(normalizedPath);
 }
 
 function toDomId(value: string) {

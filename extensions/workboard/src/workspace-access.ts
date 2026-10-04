@@ -301,18 +301,13 @@ async function assertPathAllowed(
 async function assertWorkspaceAllowed(
   value: unknown,
   access: WorkboardWorkspaceAccess,
-  options?: { sourceOnly?: boolean },
-): Promise<string | undefined> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const workspace = value as Record<string, unknown>;
-  if (options?.sourceOnly) {
-    return await assertPathAllowed(workspace.sourcePath ?? workspace.path, access);
+): Promise<void> {
+  const workspace = asOptionalRecord(value);
+  if (!workspace) {
+    return;
   }
   await assertPathAllowed(workspace.path, access);
   await assertPathAllowed(workspace.sourcePath, access);
-  return undefined;
 }
 
 export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
@@ -395,7 +390,8 @@ export async function assertWorkboardWorkspaceSourceAccess(
   workspace: WorkboardWorkspace | undefined,
   access: WorkboardWorkspaceAccess,
 ): Promise<string | undefined> {
-  return await assertWorkspaceAllowed(workspace, access, { sourceOnly: true });
+  const record = asOptionalRecord(workspace);
+  return await assertPathAllowed(record?.sourcePath ?? record?.path, access);
 }
 
 export function guardWorkboardToolsForWorkspaceAccess(

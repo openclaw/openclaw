@@ -1,13 +1,31 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import { withDoctorSqliteMaintenanceLock } from "../commands/doctor-sqlite-maintenance-lock.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  openOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
+} from "../state/openclaw-state-db.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  readDeferredPluginMigrations,
+  recordDeferredPluginMigrations,
+} from "./deferred-plugin-migrations.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import * as sqliteSnapshot from "./sqlite-snapshot.js";
 import * as mutationAdmission from "./sqlite-worker-operation-admission.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
+import {
+  runPluginDoctorStateMigrationPlans,
+  runPostSessionPluginDoctorStateRepairs,
+} from "./state-migrations.plugin-doctor.js";
 
 describe("plugin doctor ingress authority", () => {
   it("rolls back a queued claim when the repair owner expires before native commit", async () => {
@@ -339,4 +357,328 @@ describe("plugin doctor session identity evidence", () => {
       },
     );
   });
+});
+
+describe("Telegram registered SQLite offset repair", () => {
+  const namespace = "telegram.update-offsets";
+  const config: OpenClawConfig = {
+    plugins: { allow: ["telegram"] },
+    channels: { telegram: { enabled: true } },
+  };
+  const pending = [
+    {
+      pluginId: "telegram",
+      requiresStateMigration: true as const,
+      reason: "offset repair pending",
+      command: "openclaw doctor --fix",
+    },
+  ];
+
+  const firstOriginal = {
+    key: "first",
+    raw: '{ "version": 1, "lastUpdateId": 777, "extra": ["kept"] }',
+    createdAt: 11,
+    expiresAt: null,
+  };
+  const originals = [
+    firstOriginal,
+    {
+      key: "second",
+      raw: '{ "version": 2, "lastUpdateId": 999, "botId": "111111" }',
+      createdAt: 12,
+      expiresAt: 8_000_000_000_000,
+    },
+  ];
+  function seed(db: DatabaseSync) {
+    for (const row of originals) {
+      db.prepare(
+        "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run("telegram", namespace, row.key, row.raw, row.createdAt, row.expiresAt);
+    }
+  }
+  function rows(db: DatabaseSync) {
+    return db
+      .prepare(
+        "SELECT entry_key, value_json, created_at, expires_at FROM plugin_state_entries WHERE plugin_id = ? AND namespace = ? ORDER BY entry_key",
+      )
+      .all("telegram", namespace);
+  }
+  async function registeredMigration() {
+    const contract = await loadBundledPluginFacade<{
+      stateMigrations: PluginDoctorStateMigration[];
+    }>({ pluginId: "telegram", artifactBasename: "doctor-contract-api.js" });
+    const migration = contract.stateMigrations.find(({ id }) => id === "telegram-update-offsets");
+    if (!migration) {
+      throw new Error("Missing registered Telegram offset migration");
+    }
+    return migration;
+  }
+
+  it("backs up exact originals and normalizes once without binding credentials or changing row age", async () => {
+    await withOpenClawTestState(
+      { label: "telegram-offset-doctor", applyEnv: false },
+      async ({ env, stateDir }) => {
+        const { db } = openOpenClawStateDatabase({ env });
+        seed(db);
+        const before = rows(db);
+        const context = createPluginDoctorStateMigrationContext({
+          pluginId: "telegram",
+          env,
+          config: {},
+          repairAuthority: {
+            assertCurrent() {},
+            assertOwnedInTransaction(database) {
+              expect(database.isTransaction).toBe(true);
+            },
+          },
+        });
+        const migration = await registeredMigration();
+        const input = {
+          config: {},
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "credentials"),
+          context,
+        };
+        expect(await migration.detectLegacyState(input)).not.toBeNull();
+        await recordDeferredPluginMigrations({ env, pending });
+        const earlier = await runPluginDoctorStateMigrationPlans({
+          config,
+          env,
+          detected: { stateDir, oauthDir: input.oauthDir, doctorOnlyStateMigrations: true },
+        });
+        expect(earlier.completedPluginIds ?? []).not.toContain("telegram");
+        expect(readDeferredPluginMigrations({ env })).toEqual(pending);
+        const result = await withDoctorSqliteMaintenanceLock({
+          env,
+          operation: "telegram-offset-test",
+          run: (maintenanceAuthority) =>
+            runPostSessionPluginDoctorStateRepairs({
+              env,
+              config,
+              maintenanceAuthority,
+            }),
+        });
+        expect(result.warnings).toEqual([]);
+        expect(readDeferredPluginMigrations({ env })).toEqual([]);
+        const backupPath = result.changes
+          .find((line) => line.startsWith("Saved pre-migration SQLite backup: "))
+          ?.split(": ")[1];
+        if (!backupPath) {
+          throw new Error("Missing verified pre-repair backup");
+        }
+        const backup = openNodeSqliteDatabase(backupPath, { readOnly: true });
+        try {
+          expect(rows(backup)).toEqual(before);
+        } finally {
+          backup.close();
+        }
+        expect(rows(db)).toEqual([
+          {
+            entry_key: "first",
+            value_json: JSON.stringify({
+              version: 3,
+              lastUpdateId: 777,
+              extra: ["kept"],
+              botId: null,
+              tokenFingerprint: null,
+            }),
+            created_at: 11,
+            expires_at: null,
+          },
+          {
+            entry_key: "second",
+            value_json: JSON.stringify({
+              version: 3,
+              lastUpdateId: 999,
+              botId: "111111",
+              tokenFingerprint: null,
+            }),
+            created_at: 12,
+            expires_at: 8_000_000_000_000,
+          },
+        ]);
+        expect(await migration.detectLegacyState(input)).toBeNull();
+        expect(await migration.migrateLegacyState(input)).toEqual({ changes: [], warnings: [] });
+      },
+    );
+  });
+
+  it.each([
+    { raw: '{"version":1,"lastUpdateId":"777"}', padding: 511 },
+    { raw: '{"version":1,"lastUpdateId":-1}', padding: 0 },
+    { raw: '{"version":2,"lastUpdateId":777,"botId":{}}', padding: 0 },
+  ])("leaves malformed durable offsets pending: $raw", async ({ raw, padding }) => {
+    await withOpenClawTestState(
+      { label: "telegram-offset-malformed", applyEnv: false },
+      async ({ env }) => {
+        const { db } = openOpenClawStateDatabase({ env });
+        seed(db);
+        db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = 'second'").run(
+          raw,
+        );
+        db.exec("BEGIN");
+        try {
+          const insert = db.prepare(
+            "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+          );
+          for (let index = 0; index < padding; index++) {
+            insert.run("telegram", namespace, `middle-${index}`, firstOriginal.raw, 11, null);
+          }
+          db.exec("COMMIT");
+        } catch (error) {
+          db.exec("ROLLBACK");
+          throw error;
+        }
+        const before = rows(db);
+        await recordDeferredPluginMigrations({ env, pending });
+        const result = await withDoctorSqliteMaintenanceLock({
+          env,
+          operation: "telegram-offset-malformed-test",
+          run: (maintenanceAuthority) =>
+            runPostSessionPluginDoctorStateRepairs({ env, config, maintenanceAuthority }),
+        });
+        expect(result.warnings.join("\n")).toContain(
+          'account "second" is malformed; restore its known-good state backup',
+        );
+        expect(result.changes).toEqual([]);
+        expect(rows(db)).toEqual(before);
+        expect(readDeferredPluginMigrations({ env })).toEqual(pending);
+      },
+    );
+  });
+
+  it("refuses unsupported inspection instead of certifying empty Telegram state", async () => {
+    await withOpenClawTestState(
+      { label: "telegram-offset-unsupported", applyEnv: false },
+      async ({ env, stateDir }) => {
+        const context = createPluginDoctorStateMigrationContext({
+          pluginId: "telegram",
+          env,
+          config,
+        });
+        delete context.readPluginStateEntriesInKeyRange;
+        const migration = await registeredMigration();
+        const input = {
+          config,
+          env,
+          stateDir,
+          oauthDir: path.join(stateDir, "credentials"),
+          context,
+        };
+        expect(() => migration.detectLegacyState(input)).toThrow(
+          "Update OpenClaw before inspecting Telegram SQLite offsets",
+        );
+        await expect(migration.migrateLegacyState(input)).rejects.toThrow(
+          "Update OpenClaw before inspecting Telegram SQLite offsets",
+        );
+      },
+    );
+  });
+
+  it("keeps Telegram pending when its registered after-session repair loses authority", async () => {
+    await withOpenClawTestState(
+      { label: "telegram-offset-pending", applyEnv: false },
+      async ({ env }) => {
+        const { db } = openOpenClawStateDatabase({ env });
+        seed(db);
+        await recordDeferredPluginMigrations({ env, pending });
+        let active = true;
+        const createSnapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
+        const interception = vi
+          .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
+          .mockImplementation(async (options) => {
+            const backup = await createSnapshot(options);
+            active = false;
+            return backup;
+          });
+        try {
+          const result = await withDoctorSqliteMaintenanceLock({
+            env,
+            operation: "telegram-offset-pending-test",
+            run: (authority) =>
+              runPostSessionPluginDoctorStateRepairs({
+                env,
+                config,
+                maintenanceAuthority: {
+                  assertCurrent() {
+                    authority.assertCurrent();
+                    if (!active) {
+                      throw new Error("repair owner expired");
+                    }
+                  },
+                },
+              }),
+          });
+          expect(result.warnings.join("\n")).toContain("repair owner expired");
+          expect(readDeferredPluginMigrations({ env })).toEqual(pending);
+          expect(rows(db)[0]).toMatchObject({ value_json: firstOriginal.raw });
+        } finally {
+          interception.mockRestore();
+        }
+      },
+    );
+  });
+
+  it.each(["row", "generation"] as const)(
+    "refuses a changed %s after backup without partially normalizing",
+    async (change) => {
+      await withOpenClawTestState(
+        { label: `telegram-offset-${change}`, applyEnv: false },
+        async ({ env, stateDir }) => {
+          const database = openOpenClawStateDatabase({ env });
+          seed(database.db);
+          const assertCurrent = () => {};
+          const context = createPluginDoctorStateMigrationContext({
+            pluginId: "telegram",
+            env,
+            config: {},
+            repairAuthority: { assertCurrent, assertOwnedInTransaction: assertCurrent },
+          });
+          const migration = await registeredMigration();
+          const createSnapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
+          const interception = vi
+            .spyOn(sqliteSnapshot, "createVerifiedSqliteSnapshot")
+            .mockImplementation(async (options) => {
+              const backup = await createSnapshot(options);
+              if (change === "row") {
+                database.db
+                  .prepare(
+                    "UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = 'second'",
+                  )
+                  .run('{"version":3,"lastUpdateId":123,"botId":null,"tokenFingerprint":null}');
+              }
+              if (change === "generation") {
+                await closeOpenClawStateDatabaseAsync();
+                fs.renameSync(database.path, `${database.path}.original`);
+                fs.copyFileSync(backup.path, database.path);
+              }
+              return backup;
+            });
+          try {
+            await expect(
+              migration.migrateLegacyState({
+                config: {},
+                env,
+                stateDir,
+                oauthDir: path.join(stateDir, "credentials"),
+                context,
+              }),
+            ).rejects.toThrow(
+              change === "row" ? /Plugin state changed/ : /identity changed|source changed/,
+            );
+            const current = openOpenClawStateDatabase({ env }).db;
+            expect(rows(current)[0]).toMatchObject({
+              entry_key: "first",
+              value_json: firstOriginal.raw,
+              created_at: 11,
+              expires_at: null,
+            });
+          } finally {
+            interception.mockRestore();
+          }
+        },
+      );
+    },
+  );
 });

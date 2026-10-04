@@ -13,7 +13,7 @@ import {
 } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
@@ -282,19 +282,19 @@ export function normalizeAssistantFinalDeliveryText(text: string): string {
   return sanitizePendingFinalDeliveryText(parsed.payload.text ?? "");
 }
 
-export function refreshSessionEntryFromStore(params: {
+export async function refreshSessionEntryFromStore(params: {
   storePath?: string;
   sessionKey?: string;
   fallbackEntry?: SessionEntry;
   activeSessionStore?: Record<string, SessionEntry>;
   expectedGeneration?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
-}): SessionEntry | undefined {
+}): Promise<SessionEntry | undefined> {
   const { storePath, sessionKey, fallbackEntry, activeSessionStore } = params;
   if (!storePath || !sessionKey) {
     return fallbackEntry;
   }
   try {
-    const latestEntry = loadSessionEntryReadOnly({
+    const latestEntry = await readSessionEntryReadOnlyInWorker({
       storePath,
       sessionKey,
     });
@@ -322,10 +322,7 @@ export function resolveAdmittedRunSessionFile(params: {
   sessionFile?: string;
   sessionKey?: string;
 }): string | undefined {
-  if (params.sessionKey?.trim()) {
-    return params.sessionKey.trim();
-  }
-  return params.sessionFile;
+  return normalizeOptionalString(params.sessionKey) ?? params.sessionFile;
 }
 
 export async function handleReplyAgentRunError(

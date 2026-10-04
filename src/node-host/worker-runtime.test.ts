@@ -8,8 +8,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import { testing as execApprovalsStoreTesting } from "../infra/exec-approvals-store.test-support.js";
-import { saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "../infra/exec-approvals-store.test-support.js";
 import { clearExecutablePathCache } from "../infra/executable-path.js";
 import * as pathEnv from "../infra/path-env.js";
 import * as terminalUpload from "../infra/terminal-file-upload.js";
@@ -282,9 +284,6 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(messages.find((message) => message.type === "ready")).toMatchObject({
       workerHostingEnabled: true,
     });
-    expect(fixture.prepare).toHaveBeenCalledWith(
-      expect.objectContaining({ enableWorkerRuns: true }),
-    );
     const connection = {
       url: "wss://gateway.example.test/current",
       protocol: 4,
@@ -425,8 +424,6 @@ it.runIf(process.platform !== "win32").each([
           fixture.handleInvoke.mockImplementation(handleInvoke);
           const prepared = await prepareNodeHostRuntime({
             config: { nodeHost: { skills: { enabled: false } } },
-            enableDuplexPluginCommands: true,
-            enableWorkerRuns: true,
           });
           let rejectSameGatewayRefresh = false;
           const worker = startWorkerFixture(false, undefined, {

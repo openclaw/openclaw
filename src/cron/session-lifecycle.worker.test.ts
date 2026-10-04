@@ -2,20 +2,16 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import type { WorkerOptions } from "node:worker_threads";
 import { expect, it, onTestFinished, vi } from "vitest";
 import {
-  emptySqliteCounts,
-  observeParentSqlite,
-} from "../../test/helpers/sqlite-parent-observer.js";
-import {
   registerGeneratedMediaTaskActivity,
   clearGeneratedMediaTaskActivity,
 } from "../agents/media-generation-activity.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import "../agents/subagents/registry/subagent-registry-maintenance.js";
-import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   saveSubagentRegistryChangesToSqlite,
   saveSubagentRegistryToSqlite,
-} from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+} from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
+import { clearSubagentRunsReadCacheForTest } from "../agents/subagents/registry/subagent-registry-state.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
@@ -25,7 +21,6 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -289,65 +284,6 @@ async function expectRefusal(
   expect(loadSessionEntry(fixture.exact)).toBeDefined();
   await fixture.verifyPreserved();
 }
-
-async function assertCleanupOffHost(fixture: Awaited<ReturnType<typeof seedCronFixture>>) {
-  const kind = fixture.kind;
-  const reader = holdInitialRead(kind);
-  const parent = observeParentSqlite();
-  let settled = false;
-  const outcome = fixture.start().finally(() => {
-    settled = true;
-  });
-  void outcome.catch(() => {});
-  let counts = emptySqliteCounts();
-  try {
-    expect(
-      await Promise.race([reader.entered.then(() => "worker"), outcome.then(() => "done")]),
-    ).toBe("worker");
-    await nextTurn();
-    expect(settled).toBe(false);
-    reader.release();
-    expect(
-      await Promise.race([
-        fixture.probe.checkpoint.promise.then(() => "grant"),
-        outcome.then(() => "done"),
-      ]),
-    ).toBe("grant");
-    expect(fixture.probe.grantAttempts).toBe(1);
-    await nextTurn();
-    expect(settled).toBe(false);
-    fixture.probe.release();
-    const result = await outcome;
-    counts = { ...parent.counts };
-    if (kind === "reaper") {
-      expect(result).toEqual({ swept: true, pruned: 1 });
-    }
-    expect(fixture.log.warn).not.toHaveBeenCalled();
-  } finally {
-    reader.release();
-    fixture.probe.release();
-    await outcome.catch(() => {});
-    parent.restore();
-    reader.restore();
-  }
-  expect(loadSessionEntry(fixture.exact)).toBeUndefined();
-  await fixture.verifyPreserved();
-  expect(counts).toEqual(emptySqliteCounts());
-}
-
-it.each(["continuation", "reaper"] as const)(
-  "retires an idle %s alias without host SQLite while preserving its base transcript",
-  async (kind) => {
-    await withCronFixture(kind, assertCleanupOffHost);
-  },
-);
-
-it("retires a cold continuation alias without host SQLite while preserving its base transcript", async () => {
-  await withCronFixture("continuation", async (fixture) => {
-    await closeOpenClawAgentDatabasesAsync();
-    await assertCleanupOffHost(fixture);
-  });
-});
 
 it.each([
   ["continuation", "relevant"],

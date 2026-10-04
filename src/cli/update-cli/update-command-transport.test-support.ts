@@ -7,6 +7,7 @@ import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-s
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import type {
   runCommandWithTimeout,
   runExec,
@@ -54,6 +55,31 @@ export function createUpdateExecTransportFixture(params: {
 }): typeof runExec {
   return async (...args: Parameters<typeof runExec>) => {
     const options = args[2];
+    if (args[1][0] === "-e" && args[1][1]?.includes("sqliteSelectionError")) {
+      const result = await params.run(...args);
+      if (result.stdout.trim() || result.stderr.trim()) {
+        return result;
+      }
+      return {
+        stdout: JSON.stringify({
+          nodeVersion: process.versions.node,
+          bunVersion:
+            args[0] === process.execPath
+              ? (process.versions.bun ?? null)
+              : path.win32
+                    .basename(args[0])
+                    .toLowerCase()
+                    .replace(/\.exe$/u, "") === "bun"
+                ? "1.4.3"
+                : null,
+          sqliteVersion: "3.53.4",
+          sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
+          sqliteSelectionError: null,
+          nodeSharedSqlite: false,
+        }),
+        stderr: "",
+      };
+    }
     if (
       params.isPlistStdinConversion(args[0], args[1]) &&
       typeof options === "object" &&
@@ -181,7 +207,7 @@ export async function createUpdateCommandTransportFixture(transport: {
 }
 
 export async function createUpdateUtf8CommandTransportFixture(
-  transport: Parameters<typeof createUpdateCommandTransportFixture>[0],
+  transport: Parameters<typeof createUpdateCommandTransportFixture>[0] & { exec: typeof runExec },
   run: typeof runUtf8CommandWithTimeout,
 ): Promise<typeof runUtf8CommandWithTimeout> {
   const hostPlatform = process.platform;
@@ -189,6 +215,24 @@ export async function createUpdateUtf8CommandTransportFixture(
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const runDoctorFixture = await createUpdateCommandTransportFixture(transport);
   return async (argv, options) => {
+    if (argv[2] === "doctor" && argv[3] === "--repair") {
+      // Legacy Doctor now uses the custody runner; keep its effects in the shared fixture.
+      try {
+        const result = await transport.exec(
+          expectDefined(argv[0], "Doctor executable"),
+          argv.slice(1),
+          options,
+        );
+        return commandResult({ ...result, cleanup: "normal" });
+      } catch (error) {
+        // This effect double starts no native child, including on diagnostic failures.
+        throw recordCommandProcessFailure(error, {
+          code: null,
+          cleanup: "normal",
+          termination: "exit",
+        });
+      }
+    }
     if (
       argv.length === 3 &&
       argv[2] === "--check" &&

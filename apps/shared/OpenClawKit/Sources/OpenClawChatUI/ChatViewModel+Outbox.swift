@@ -654,17 +654,11 @@ extension OpenClawChatViewModel {
 
     private static func outboxUserMessage(for command: OpenClawChatOutboxCommand) -> OpenClawChatMessage {
         var content = [
-            OpenClawChatMessageContent(
-                type: "text",
-                text: command.text,
-                mimeType: nil,
-                fileName: nil,
-                content: nil),
+            OpenClawChatMessageContent(type: "text", text: command.text),
         ]
         content.append(contentsOf: command.attachments.map { attachment in
             OpenClawChatMessageContent(
                 type: attachment.type,
-                text: nil,
                 mimeType: attachment.mimeType,
                 fileName: attachment.fileName,
                 sizeBytes: attachment.data.count,
@@ -1122,30 +1116,22 @@ extension OpenClawChatViewModel {
 
     private func scheduleOutboxRetry(afterAttempts attempts: Int) {
         let delays = self.outboxRetryDelaysMs
-        guard !delays.isEmpty else {
-            self.outboxRetryTask?.cancel()
-            self.outboxRetryTask = Task { [weak self] in
-                await Task.yield()
-                self?.flushOutboxIfNeeded()
-            }
-            return
-        }
-        let delayMs = delays[min(max(attempts - 1, 0), delays.count - 1)]
+        let delayMs = delays.isEmpty ? nil : delays[min(max(attempts - 1, 0), delays.count - 1)]
         self.outboxRetryTask?.cancel()
         self.outboxRetryTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
-            guard !Task.isCancelled else { return }
+            if let delayMs {
+                try? await Task.sleep(nanoseconds: delayMs * 1_000_000)
+                guard !Task.isCancelled else { return }
+            } else {
+                await Task.yield()
+            }
             self?.flushOutboxIfNeeded()
         }
     }
 
     func outboxAgentID(for session: SessionSnapshot) -> String? {
-        guard self.transport.outboxRequiresSessionRoutingContract else { return nil }
-        if session.key.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "unknown" {
-            return nil
-        }
-        let normalized = session.deliveryAgentID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalized?.isEmpty == false ? normalized : nil
+        guard self.outboxRequiresAgentID(for: session) else { return nil }
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.deliveryAgentID)?.lowercased()
     }
 
     private func outboxRequiresAgentID(for session: SessionSnapshot) -> Bool {
@@ -1157,9 +1143,7 @@ extension OpenClawChatViewModel {
         if !self.transport.outboxRequiresSessionRoutingContract {
             return OpenClawChatOutboxCommand.legacyUnboundRoutingContract
         }
-        let normalized = session.sessionRoutingContract?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return normalized?.isEmpty == false ? normalized : nil
+        return ChatPayloadDecoding.trimmedNonEmptyString(session.sessionRoutingContract)
     }
 
     /// Resolve once, before persistence. Re-resolving a presentation alias

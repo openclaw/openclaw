@@ -310,12 +310,14 @@ export function adjustTextareaHeight(
       thread.scrollTop = thread.scrollHeight;
     }
     const after = thread.scrollTop;
-    if (thread.clientHeight === threadHeight && after === scrollPosition?.scrollTop) {
+    const clientHeight = thread.clientHeight;
+    if (clientHeight === threadHeight && after === scrollPosition?.scrollTop) {
       return;
     }
     // A following composer commit can hide this viewport from browser observers.
     publishTranscriptScroll(thread, {
       type: "resize",
+      viewport: { clientHeight, scrollHeight: thread.scrollHeight, scrollTop: after },
       ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
         ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
         : {}),

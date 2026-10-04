@@ -4,7 +4,11 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
-import type { GatewayScheduler, GatewayScheduledJob } from "../../infra/gateway-scheduler.js";
+import type {
+  GatewayScheduler,
+  GatewayScheduledJob,
+  GatewaySchedulerScope,
+} from "../../infra/gateway-scheduler.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
@@ -138,7 +142,6 @@ export type CronServiceDeps = {
   defaultAgentId?: string;
   /** Resolve the current default when runtime config can change after startup. */
   resolveDefaultAgentId?: () => string | undefined;
-  legacyDefaultAgentId?: string;
   /** Resolve configured or persisted owners whose session stores need periodic cleanup. */
   resolveSessionStoreAgentIds?: () => string[];
   /** Revalidate resident policy using the supplied transaction or worker deletion facts. */
@@ -332,12 +335,17 @@ export type CronServiceState = {
     sortBy: CronJobsSortBy;
     sortDir: CronSortDir;
     jobs: CronJob[];
+    /** Requested rows are detached and frozen once for this list generation. */
+    readJobs: WeakMap<CronJob, CronJob>;
     snapshotRevision: string;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
   durableNextRunAtMsByJobId: Map<string, number | undefined>;
   timer: GatewayScheduledJob | null;
+  schedulerScope: GatewaySchedulerScope;
+  /** Retains stopped generations while an immediate restart admits new work. */
+  schedulerDrain: Promise<void>;
   running: boolean;
   /** Number of timer batches currently executing admitted scheduled work. */
   activeTimerTicks: number;
@@ -349,6 +357,8 @@ export type CronServiceState = {
   /** Owns scheduled-tick exclusion until startup catch-up publishes deferred slots. */
   startupCatchup?: object;
   activeManualRunJobIds: Set<string>;
+  /** Accepted manual runs until their terminal history row is written, keyed by runId. */
+  queuedManualRuns: Map<string, Promise<unknown>>;
   manualSetupTimeoutNotified: boolean;
   /** Bounds scheduled, manual, and on-exit work with one shared cron limit. */
   runAdmission: CronRunAdmission;
@@ -377,6 +387,8 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     timer: null,
+    schedulerScope: deps.scheduler.scope(),
+    schedulerDrain: Promise.resolve(),
     running: false,
     activeTimerTicks: 0,
     stopped: false,
@@ -384,6 +396,7 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     schedulingPaused: false,
     schedulerStarted: false,
     activeManualRunJobIds: new Set<string>(),
+    queuedManualRuns: new Map<string, Promise<unknown>>(),
     manualSetupTimeoutNotified: false,
     runAdmission: { active: 0, waiters: [], capacityListener: null },
     queuedRunReservationsByJobId: new Map<string, QueuedCronRunReservation>(),

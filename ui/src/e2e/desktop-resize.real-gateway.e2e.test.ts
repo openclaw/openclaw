@@ -146,7 +146,7 @@ async function captureDesktopSockets(page: Page) {
   // No connection, RFB authentication, RPC, or bridge is replaced.
   await page.addInitScript(() => {
     localStorage.setItem(
-      "openclaw:control-ui:community-invite",
+      "openclaw:control-ui:community-invite:v2",
       JSON.stringify({ dismissedAtMs: 1770000000000 }),
     );
     const NativeSocket = window.WebSocket;

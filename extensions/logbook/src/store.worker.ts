@@ -255,7 +255,8 @@ class LogbookDatabaseStore {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.walMaintenance.stop();
     try {
       this.walMaintenance.close();
     } finally {
@@ -385,13 +386,6 @@ class LogbookDatabaseStore {
         .limit(1),
     );
     return row ? toBatch(row) : null;
-  }
-
-  batchFrames(batchId: number): LogbookFrame[] {
-    return executeSqliteQuerySync(
-      this.db,
-      this.framesQuery.where("batch_id", "=", batchId),
-    ).rows.map(toFrame);
   }
 
   sampledBatchFrames(batchId: number): LogbookFrame[] {
@@ -665,8 +659,6 @@ export function createSqliteWorkerBackend(
           return store.resetErrorBatches();
         case "nextPendingBatch":
           return store.nextPendingBatch();
-        case "batchFrames":
-          return store.batchFrames(command.input.batchId);
         case "sampledBatchFrames":
           return store.sampledBatchFrames(command.input.batchId);
         case "replaceObservations":

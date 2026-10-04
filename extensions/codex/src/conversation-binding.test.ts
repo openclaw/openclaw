@@ -1,6 +1,4 @@
 import type { ReadFileSyncOptions } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import {
   clearActiveEmbeddedRun,
@@ -11,7 +9,13 @@ import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  useSessionStoreTempDirs,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-binding-");
 
 const sharedClientMocks = vi.hoisted(() => ({
   getSharedCodexAppServerClient: vi.fn(),
@@ -496,12 +500,15 @@ function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0
 }
 
 describe("codex conversation binding", () => {
-  beforeEach(async () => {
+  // Incognito handles live in the isolated test home, outside the session-store root.
+  afterAll(() => closeOpenClawAgentDatabasesAsync());
+
+  beforeEach(() => {
     resetCodexTestBindingStore();
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-binding-"));
+    tempDir = sessionDirs.make();
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     publicBindingMocks.resolveByConversation.mockReset();
     publicBindingMocks.resolveByConversation.mockReturnValue({ bindingId: "binding-1" });
     sharedClientMocks.getSharedCodexAppServerClient.mockReset();
@@ -535,7 +542,6 @@ describe("codex conversation binding", () => {
       origins: {},
       layers: [],
     });
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   beforeEach(() => {
@@ -1578,16 +1584,15 @@ describe("codex conversation binding", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "bot-a",
+            entries: {
+              "bot-a": {
                 tools: {
                   exec: {
                     mode: "auto",
                   },
                 },
               },
-            ],
+            },
           },
         } as never,
         sessionFile,
@@ -1877,12 +1882,7 @@ describe("codex conversation binding", () => {
           },
           tools: { exec: { host: "gateway" } },
           agents: {
-            list: [
-              {
-                id: "bot-a",
-                tools: { exec: { host: "node", node: "worker-1" } },
-              },
-            ],
+            entries: { "bot-a": { tools: { exec: { host: "node", node: "worker-1" } } } },
           },
         } as never,
       },
@@ -1921,16 +1921,15 @@ describe("codex conversation binding", () => {
             },
           },
           agents: {
-            list: [
-              {
-                id: "bot-a",
+            entries: {
+              "bot-a": {
                 tools: {
                   exec: {
                     mode: "auto",
                   },
                 },
               },
-            ],
+            },
           },
         } as never,
       },

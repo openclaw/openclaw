@@ -1,16 +1,10 @@
-import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
-import {
-  createNestedToolActivity,
-  readNestedToolActivity,
-  type NestedToolActivity,
-} from "../../../sessions/nested-tool-activity.js";
+import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
-import { sanitizeToolResult } from "../../embedded-agent-tool-results.js";
 import {
   copyInternalToolResultState,
   getInternalToolExecutionPreparer,
@@ -20,22 +14,22 @@ import { withSessionManagerWrite } from "../../sessions/session-manager-write-ad
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
-import { redactTranscriptMessage } from "../../transcript-redact.js";
 import { recordEmbeddedToolReceipt } from "../tool-send-receipts.js";
+import type { AttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
 
 /** One owner for nested execution, acceptance, and durable display activity. */
 export function createSubscribedToolSearchExecutor(params: {
-  attempt: Pick<EmbeddedRunAttemptInternalParams, "config" | "runId" | "sessionId" | "sessionKey">;
+  attempt: Pick<EmbeddedRunAttemptInternalParams, "runId" | "sessionKey">;
   runSignal: AbortSignal;
   sessionManager: AgentSession["sessionManager"];
   subscription: Pick<ReturnType<typeof subscribeEmbeddedAgentSession>, "runToolLifecycle">;
   isCurrent: () => boolean;
   isReplaySafeTool: (tool: Parameters<ToolSearchCatalogToolExecutor>[0]["tool"]) => boolean;
-  nestedToolActivities: NestedToolActivity[];
+  nestedToolActivityState: AttemptNestedToolActivityState;
 }): ToolSearchCatalogToolExecutor {
   const { attempt, subscription } = params;
-  const activityScope = randomUUID();
+  const { scopeId: activityScope } = params.nestedToolActivityState;
   let nestedStartOrder = 0;
   return async (toolParams) => {
     const runSignal = params.runSignal;
@@ -74,7 +68,7 @@ export function createSubscribedToolSearchExecutor(params: {
               toolCallId: toolParams.toolCallId,
               toolName: toolParams.toolName,
               input: terminal.executedArguments,
-              result: sanitizeToolResult(terminal.result),
+              result: terminal.readSanitizedResult(),
               isError: terminal.isError,
               startedAt,
               timestamp: Date.now(),
@@ -84,7 +78,7 @@ export function createSubscribedToolSearchExecutor(params: {
           await runWithOwnedSessionTranscriptWrite(
             { sessionTarget: manager.getSessionTarget(), sessionKey: attempt.sessionKey },
             () =>
-              withSessionManagerWrite(manager, () => {
+              withSessionManagerWrite(manager, async () => {
                 // Revalidate the exact attempt after awaited acceptance and writer admission.
                 if (!params.isCurrent()) {
                   return;
@@ -92,14 +86,25 @@ export function createSubscribedToolSearchExecutor(params: {
                 if (isRecord(terminal.result)) {
                   copyInternalToolResultState(terminal.result, message);
                 }
-                manager.appendMessage(message);
-                const recorded = readNestedToolActivity(
-                  redactTranscriptMessage(message, attempt.config),
-                );
-                if (!recorded) {
-                  throw new Error("Nested activity became invalid during transcript redaction");
+                const target = manager.getSessionTarget();
+                const sessionId = manager.getSessionId();
+                const entryId = await manager.appendMessageAsync(message);
+                if (!params.isCurrent()) {
+                  return;
                 }
-                params.nestedToolActivities.push(recorded);
+                const activity = params.nestedToolActivityState;
+                if (!terminal.isError) {
+                  activity.successfulToolNames.add(toolParams.toolName);
+                }
+                if (entryId) {
+                  activity.accepted ??= {
+                    firstEntryId: entryId,
+                    lastEntryId: entryId,
+                    sessionId,
+                    target,
+                  };
+                  activity.accepted.lastEntryId = entryId;
+                }
               }),
           );
           notifyToolActivity(attempt.runId);

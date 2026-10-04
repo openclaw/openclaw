@@ -35,7 +35,10 @@ apps/shared/OpenClawWatchRTC/build.sh watchsimulator /tmp/watch-rtc-simulator ar
 ```
 
 Each command writes `libopenclaw_watch_rtc.a` and its Cargo build cache to the
-chosen output directory. A native macOS proof can use `macosx` with `arm64` or
+chosen output directory. CI can set `OPENCLAW_WATCH_RTC_CACHE_DIR` to reuse compiled slices across fresh
+Xcode builds. The phase checks source, compiler, SDK, target and build-setting
+fingerprints plus the archive checksum before reuse; a miss runs the locked Cargo
+build. The final archive is always written into the requested output directory. A native macOS proof can use `macosx` with `arm64` or
 `x86_64`; macOS execution does not verify Watch radio or background behavior.
 
 | SDK | Xcode architecture | Rust target |

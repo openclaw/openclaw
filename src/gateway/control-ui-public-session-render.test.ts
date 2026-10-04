@@ -219,4 +219,29 @@ describe("public session document", () => {
     expect(html).toContain('aria-label="Conversation"');
     expect(html).toContain('name="referrer" content="no-referrer"');
   });
+
+  it("truncates titles and messages without splitting UTF-16 surrogate pairs", () => {
+    const title = `${"a".repeat(199)}😀 trailing`;
+    const html = render([{ role: "user", content: `${"b".repeat(32_767)}😀 UNIQUE_TAIL_MARKER` }], {
+      title,
+    });
+    expect(html).toContain(`<title>${"a".repeat(199)} · OpenClaw</title>`);
+    expect(html).toContain(`property="og:title" content="${"a".repeat(199)}"`);
+    expect(html).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/u);
+    expect(html).toContain("Message shortened for this public view.");
+    expect(html).toContain("b".repeat(32_767));
+    expect(html).not.toContain("UNIQUE_TAIL_MARKER");
+    expect(html).not.toContain("😀");
+  });
+
+  it("keeps whole characters when the document budget leaves one code unit", () => {
+    const html = render([
+      { role: "user", content: "🙂 visible tail" },
+      { role: "user", content: "b".repeat(32_767) },
+      ...Array.from({ length: 7 }, () => ({ role: "user", content: "a".repeat(32_768) })),
+    ]);
+    expect(html.isWellFormed()).toBe(true);
+    expect(html).not.toContain("visible tail");
+    expect(html).toContain("Message shortened for this public view.");
+  });
 });

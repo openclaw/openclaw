@@ -1,31 +1,5 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export const WINDOWS_NODE_CI_ADVISORY: {
-  readonly id: "windows-node-ci";
-  readonly child: "normalCi";
-  readonly jobNamePattern: RegExp;
-  readonly aggregateJob: "checks-windows";
-};
-interface ReleaseAdvisoryJobBase {
-  child: "normalCi";
-  job: string;
-  conclusion: string;
-  runId: string;
-  url: string;
-}
-export type ReleaseAdvisoryJob = ReleaseAdvisoryJobBase &
-  (
-    | { class: "windows-node-ci" }
-    | {
-        class: "recorded-flake";
-        jobId: string;
-        trackingUrl: string;
-        reason: string;
-        receiptRunId: string;
-      }
-  );
-export function releaseChildClassificationEvidence(child: ReleaseRecord): ReleaseRecord;
-export function releaseAdvisoryJobs(children: ReleaseRecord[]): ReleaseAdvisoryJob[];
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseAdvisoryJob[];
+export function validateReleaseManifestAdvisoryJobs(manifest: unknown): [];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
@@ -33,6 +7,7 @@ export function classifyReleaseChangelogEvidenceComparison(
   identity: { baseSha: string; version?: unknown },
 ): { changedPaths: string[]; policy: string };
 export function serializeReleaseArtifact(payload: unknown): string;
+export function releaseManifestChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function buildReleaseValidationManifest(input: {
   plan: ReleaseRecord;
   drain?: ReleaseRecord;
@@ -183,7 +158,6 @@ export function selectReleaseStateArtifacts(
   };
 };
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
-export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],

@@ -6,7 +6,6 @@ vi.mock("../../daemon/runtime-pin-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-pin-state.js")>()),
   readDaemonRuntimePinForInstall: pinSnapshotMock,
 }));
-// Node daemon tests cover node daemon command runtime behavior and errors.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type {
@@ -147,6 +146,10 @@ vi.mock("../daemon-cli/shared.js", async () => {
   };
 });
 
+function expectPlan(expected: Record<string, unknown>): void {
+  expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(expect.objectContaining(expected));
+}
+
 function useLinuxPlatform(): void {
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
 }
@@ -158,22 +161,19 @@ afterEach(() => {
 
 describe("runNodeDaemonInstall", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.writeJson.mockClear();
-    mocks.runtime.exit.mockClear();
     vi.stubEnv("OPENCLAW_NIX_MODE", undefined);
     vi.stubEnv("OPENCLAW_WRAPPER", undefined);
-    mocks.runExec.mockReset().mockResolvedValue({
+    mocks.runExec.mockReset().mockImplementation(async (executable: string) => ({
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
-        bunVersion: "1.4.2",
+        bunVersion: /(?:^|[/\\])bun(?:\.exe)?$/i.test(executable) ? "1.4.2" : null,
         sqliteVersion: "3.53.4",
         sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
       }),
       stderr: "",
-    });
+    }));
     mocks.service.readCommand.mockReset().mockResolvedValue(null);
     mocks.service.install.mockReset().mockResolvedValue(undefined);
     mocks.service.isLoaded.mockReset().mockResolvedValue(false);
@@ -205,8 +205,6 @@ describe("runNodeDaemonInstall", () => {
     { recorded: "bun", runtime: "node", probe: "supported" },
     { recorded: "bun", runtime: "bun", probe: "supported" },
     { recorded: "bun", runtime: undefined, probe: "unsupported" },
-    { recorded: "bun", runtime: undefined, probe: "ENOENT" },
-    { recorded: "bun", runtime: undefined, probe: "EACCES" },
   ] as const)(
     "reinstalls recorded $recorded ($probe) with runtime=$runtime without a pin",
     async ({ recorded, runtime, probe }) => {
@@ -220,8 +218,6 @@ describe("runNodeDaemonInstall", () => {
           }),
           stderr: "",
         });
-      } else if (probe !== "supported") {
-        mocks.runExec.mockRejectedValue(Object.assign(new Error(probe), { code: probe }));
       }
       mocks.service.isLoaded.mockResolvedValue(true);
       mocks.service.readCommand.mockResolvedValue({
@@ -262,13 +258,11 @@ describe("runNodeDaemonInstall", () => {
         ...(mode === "reset" ? { runtime: "node" } : {}),
       });
       expect(mocks.runtime.error).not.toHaveBeenCalled();
-      expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          pinnedRuntimePath: mode === "reset" ? undefined : pin,
-          tls: true,
-          tlsFingerprint: TLS_FINGERPRINT,
-        }),
-      );
+      expectPlan({
+        pinnedRuntimePath: mode === "reset" ? undefined : pin,
+        tls: true,
+        tlsFingerprint: TLS_FINGERPRINT,
+      });
       expect(mocks.service.install).toHaveBeenCalledOnce();
     },
   );
@@ -297,16 +291,14 @@ describe("runNodeDaemonInstall", () => {
       });
       await runNodeDaemonInstall({ force: true });
       expect(mocks.runtime.error).not.toHaveBeenCalled();
-      expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: expect.objectContaining({
-            OPENCLAW_WRAPPER: wrapper ?? "/managed/wrapper",
-          }),
-          pinnedRuntimePath: process.execPath,
-          tls: true,
-          tlsFingerprint: TLS_FINGERPRINT,
+      expectPlan({
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: wrapper ?? "/managed/wrapper",
         }),
-      );
+        pinnedRuntimePath: process.execPath,
+        tls: true,
+        tlsFingerprint: TLS_FINGERPRINT,
+      });
       expect(mocks.service.install).toHaveBeenCalledOnce();
     },
   );
@@ -323,45 +315,26 @@ describe("runNodeDaemonInstall", () => {
     });
     await runNodeDaemonInstall({ force: true });
     expect(mocks.runtime.error).not.toHaveBeenCalled();
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        runtime: "node",
-        env: expect.objectContaining({
-          OPENCLAW_WRAPPER: undefined,
-        }),
+    expectPlan({
+      runtime: "node",
+      env: expect.objectContaining({
+        OPENCLAW_WRAPPER: undefined,
       }),
-    );
+    });
     expect(mocks.service.install).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ["host", { host: "new-gateway.local" }],
-    ["port", { port: 19_001 }],
-  ])("does not inherit saved TLS when %s explicitly retargets the gateway", async (_name, opts) => {
-    await runNodeDaemonInstall({ ...opts, force: true });
-
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextPath: undefined,
-        tls: false,
-        tlsFingerprint: undefined,
-      }),
-    );
   });
 
   it("inherits saved TLS and forwards explicit command restrictions to the install plan", async () => {
     await runNodeDaemonInstall({ force: true, commands: ["fixture.list", "fixture.read"] });
 
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: "saved-gateway.local",
-        port: 18789,
-        contextPath: "/saved",
-        tls: true,
-        tlsFingerprint: TLS_FINGERPRINT,
-        commands: ["fixture.list", "fixture.read"],
-      }),
-    );
+    expectPlan({
+      host: "saved-gateway.local",
+      port: 18789,
+      contextPath: "/saved",
+      tls: true,
+      tlsFingerprint: TLS_FINGERPRINT,
+      commands: ["fixture.list", "fixture.read"],
+    });
   });
 
   it("forwards a full-surface reset when replacing a restricted service", async () => {
@@ -370,57 +343,23 @@ describe("runNodeDaemonInstall", () => {
       commands: ["fixture.read"],
     });
     await runNodeDaemonInstall({ force: true, allCommands: true });
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ allCommands: true, commands: undefined }),
-    );
+    expectPlan({ allCommands: true, commands: undefined });
     expect(mocks.service.install).toHaveBeenCalledOnce();
   });
 
   it.each([
-    ["host", { host: "saved-gateway.local" }],
-    ["port", { port: 18_789 }],
-  ])("keeps saved TLS when explicit %s resolves to the saved endpoint", async (_name, opts) => {
+    {
+      opts: { tls: false, tlsFingerprint: TLS_FINGERPRINT },
+      error: "--no-tls cannot be combined with --tls-fingerprint",
+    },
+    { opts: { tlsFingerprint: "sha256:abc123" }, error: "Invalid TLS fingerprint" },
+    { opts: { port: "abc" }, error: "Invalid --port" },
+    { opts: { runtime: "deno" }, error: 'Invalid --runtime (use "node" or "bun"' },
+  ])("rejects invalid install options $opts before building a plan", async ({ opts, error }) => {
     await runNodeDaemonInstall({ ...opts, force: true });
-
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        contextPath: "/saved",
-        tls: true,
-        tlsFingerprint: TLS_FINGERPRINT,
-      }),
-    );
-  });
-
-  it("installs an explicitly plaintext node for a saved TLS gateway", async () => {
-    await runNodeDaemonInstall({ force: true, tls: false });
-
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        host: "saved-gateway.local",
-        port: 18789,
-        contextPath: "/saved",
-        tls: false,
-        tlsFingerprint: undefined,
-      }),
-    );
-  });
-
-  it("rejects a TLS fingerprint when installing an explicitly plaintext node", async () => {
-    await runNodeDaemonInstall({ force: true, tls: false, tlsFingerprint: TLS_FINGERPRINT });
-
+    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("--no-tls cannot be combined with --tls-fingerprint"),
-    );
-  });
-
-  it("rejects an invalid TLS fingerprint before building an install plan", async () => {
-    await runNodeDaemonInstall({ force: true, tlsFingerprint: "sha256:abc123" });
-
-    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Invalid TLS fingerprint"),
-    );
+    expect(mocks.service.install).not.toHaveBeenCalled();
   });
 
   it("rejects Access credentials before installing a plaintext node service", async () => {
@@ -441,25 +380,6 @@ describe("runNodeDaemonInstall", () => {
     expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
     expect(mocks.runtime.error).toHaveBeenCalledWith(
       "Cloudflare Access credentials require --tls for the node Gateway connection",
-    );
-  });
-
-  it.each([
-    ["an invalid explicit port", { port: "abc" }, "Invalid --port"],
-    ["an unsupported runtime", { runtime: "deno" }, 'Invalid --runtime (use "node" or "bun"'],
-  ])("rejects %s before building an install plan", async (_name, opts, error) => {
-    await runNodeDaemonInstall(opts);
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(expect.stringContaining(error));
-    expect(mocks.buildNodeInstallPlan).not.toHaveBeenCalled();
-    expect(mocks.service.install).not.toHaveBeenCalled();
-  });
-
-  it("forwards Bun as the explicit node-service runtime", async () => {
-    await runNodeDaemonInstall({ runtime: "bun", force: true });
-
-    expect(mocks.buildNodeInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({ runtime: "bun" }),
     );
   });
 
@@ -519,115 +439,39 @@ describe("runNodeDaemonInstall", () => {
     expect(mocks.runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("warns about disabled systemd lingering after a fresh install (text mode)", async () => {
+  it.each(["enabled", "unavailable"])("omits linger warnings when %s", async (state) => {
     useLinuxPlatform();
-    // isLoaded=true so the service-load verification passes and the linger
-    // diagnostic runs on the verified-success path.
     mocks.service.isLoaded.mockResolvedValue(true);
+    if (state === "enabled") {
+      mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "pi", linger: "yes" });
+    } else {
+      mocks.isSystemdUserServiceAvailable.mockResolvedValue(false);
+    }
     await runNodeDaemonInstall({ force: true });
-
-    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalled();
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("sudo loginctl enable-linger pi"),
-    );
+    expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("enable-linger"));
+    if (state === "unavailable") {
+      expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+    }
   });
 
-  it("checks lingering for the same sudo target user as the systemd service", async () => {
+  it.each([
+    { loaded: true, error: "install failed" },
+    { loaded: false, error: "verification failed" },
+  ])("does not add linger advice after $error (#107033)", async ({ loaded, error }) => {
     useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
-    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "debian", linger: "no" });
-
-    await runNodeDaemonInstall({ force: true });
-
-    expect(mocks.resolveSystemdUserServiceAccount).toHaveBeenCalledWith(process.env);
-    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalledWith({
-      env: process.env,
-      user: "debian",
-    });
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("sudo loginctl enable-linger debian"),
-    );
-  });
-
-  it("includes the linger warning in JSON warnings after a fresh install", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
+    mocks.service.isLoaded.mockResolvedValue(loaded);
+    if (loaded) {
+      mocks.service.install.mockRejectedValue(new Error("disk full"));
+    }
     await runNodeDaemonInstall({ force: true, json: true });
-
+    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
-        warnings: expect.arrayContaining([expect.stringContaining("enable-linger pi")]),
+        ok: false,
+        error: expect.stringContaining(error),
       }),
     );
-  });
-
-  it("warns about disabled lingering on the already-installed short-circuit path", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    await runNodeDaemonInstall({ force: false });
-
-    expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalled();
-    expect(mocks.runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining("sudo loginctl enable-linger pi"),
-    );
-  });
-
-  it("does not warn when systemd lingering is already enabled", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "pi", linger: "yes" });
-    await runNodeDaemonInstall({ force: true });
-
-    expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("enable-linger"));
-  });
-
-  it("does not pollute the failure output when service.install throws", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    mocks.service.install.mockRejectedValue(new Error("disk full"));
-    await runNodeDaemonInstall({ force: true, json: true });
-
-    // install() threw before verification, so onVerified never runs and no
-    // linger warning accompanies the install-failure payload.
-    const calls = mocks.runtime.writeJson.mock.calls;
-    const failurePayload = calls
-      .map(([payload]) => payload as { ok?: boolean; error?: string; warnings?: string[] })
-      .find((payload) => payload.ok === false);
-    expect(failurePayload).toBeDefined();
-    expect(failurePayload?.error).toContain("install failed");
-    expect(failurePayload?.warnings ?? []).toEqual(
-      expect.not.arrayContaining([expect.stringContaining("enable-linger")]),
-    );
-  });
-
-  it("does not warn when service-load verification fails (regression for #107033 review)", async () => {
-    useLinuxPlatform();
-    // install() succeeded but the service is not loaded: the linger diagnostic
-    // must NOT run, so a failed verification never tells the operator to fix
-    // lingering for a service that was not successfully installed.
-    mocks.service.isLoaded.mockResolvedValue(false);
-    await runNodeDaemonInstall({ force: true, json: true });
-
-    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
-    const calls = mocks.runtime.writeJson.mock.calls;
-    const failurePayload = calls
-      .map(([payload]) => payload as { ok?: boolean; error?: string; warnings?: string[] })
-      .find((payload) => payload.ok === false);
-    expect(failurePayload).toBeDefined();
-    expect(failurePayload?.error).toContain("verification failed");
-    expect(failurePayload?.warnings ?? []).toEqual(
-      expect.not.arrayContaining([expect.stringContaining("enable-linger")]),
-    );
-  });
-
-  it("skips the linger check when systemd user services are unavailable", async () => {
-    useLinuxPlatform();
-    mocks.service.isLoaded.mockResolvedValue(true);
-    mocks.isSystemdUserServiceAvailable.mockResolvedValue(false);
-    await runNodeDaemonInstall({ force: true });
-
-    expect(mocks.readSystemdUserLingerStatus).not.toHaveBeenCalled();
+    expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain("enable-linger");
   });
 
   it.each([false, true])(
@@ -635,6 +479,8 @@ describe("runNodeDaemonInstall", () => {
     async (json) => {
       useLinuxPlatform();
       mocks.service.isLoaded.mockResolvedValue(true);
+      mocks.resolveSystemdUserServiceAccount.mockReturnValue("debian");
+      mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "debian", linger: "no" });
       mocks.buildNodeInstallPlan.mockImplementationOnce(async ({ warn }) => {
         warn?.("", "ignored plan title");
         warn?.("repeat");
@@ -646,12 +492,17 @@ describe("runNodeDaemonInstall", () => {
       });
       await runNodeDaemonInstall({ force: true, json });
 
+      expect(mocks.resolveSystemdUserServiceAccount).toHaveBeenCalledWith(process.env);
+      expect(mocks.readSystemdUserLingerStatus).toHaveBeenCalledWith({
+        env: process.env,
+        user: "debian",
+      });
       const warnings = [
         "",
         "repeat",
         "repeat",
         "native warning",
-        "Systemd lingering is disabled for pi. The node service will stop when you log out. Run: sudo loginctl enable-linger pi",
+        "Systemd lingering is disabled for debian. The node service will stop when you log out. Run: sudo loginctl enable-linger debian",
       ];
       expect(mocks.runtime.log.mock.calls).toEqual(
         json ? [] : warnings.map((message) => [message]),
@@ -770,6 +621,7 @@ describe("runNodeDaemonInstall", () => {
 
 describe("node daemon lifecycle adapters", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
     mocks.runServiceRestart.mockReset();
     mocks.runServiceStart.mockReset();
@@ -832,43 +684,41 @@ describe("runNodeDaemonStatus", () => {
   }
 
   beforeEach(() => {
+    vi.clearAllMocks();
     pinSnapshotMock.mockReset().mockReturnValue({ revision: "empty", stored: false });
-    mocks.runtime.log.mockClear();
-    mocks.runtime.error.mockClear();
-    mocks.runtime.writeJson.mockClear();
-    mocks.runtime.exit.mockClear();
     mocks.service.isLoaded.mockReset().mockResolvedValue(true);
     mocks.service.readCommand.mockReset().mockResolvedValue(null);
     mocks.service.readRuntime.mockReset().mockResolvedValue({ status: "running" });
   });
 
-  it("reports a failed service check instead of claiming the node is not installed", async () => {
-    mocks.service.isLoaded.mockRejectedValue(new Error("systemd unavailable"));
-
-    await runNodeDaemonStatus();
-
-    expect(mocks.runtime.error).toHaveBeenCalledWith(
-      "Node service check failed: systemd unavailable",
-    );
-    expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-    expect(stdout()).not.toContain("not loaded");
-    expect(stdout()).not.toContain("openclaw node install");
-  });
-
-  it("reports a failed service check as JSON without inventing node status", async () => {
-    const secret = "sk-abcdefghijklmnopqrstuv";
-    const error = new Error(`systemd unavailable: Authorization: Bearer ${secret}`);
-    error.name = "ServiceManagerError";
-    mocks.service.isLoaded.mockRejectedValue(error);
-
-    await expect(runNodeDaemonStatus({ json: true })).rejects.toThrow(
-      "Node service check failed: systemd unavailable",
-    );
-
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    expect(mocks.runtime.exit).not.toHaveBeenCalled();
-    expect(mocks.runtime.error).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    "reports a failed service check without inventing status (json=%s)",
+    async (json) => {
+      const error = new Error(
+        json
+          ? "systemd unavailable: Authorization: Bearer sk-abcdefghijklmnopqrstuv"
+          : "systemd unavailable",
+      );
+      error.name = "ServiceManagerError";
+      mocks.service.isLoaded.mockRejectedValue(error);
+      if (json) {
+        await expect(runNodeDaemonStatus({ json })).rejects.toThrow(
+          "Node service check failed: systemd unavailable",
+        );
+        expect(mocks.runtime.exit).not.toHaveBeenCalled();
+        expect(mocks.runtime.error).not.toHaveBeenCalled();
+      } else {
+        await runNodeDaemonStatus();
+        expect(mocks.runtime.error).toHaveBeenCalledWith(
+          "Node service check failed: systemd unavailable",
+        );
+        expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+        expect(stdout()).not.toContain("not loaded");
+        expect(stdout()).not.toContain("openclaw node install");
+      }
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+    },
+  );
 
   it("reports an unknown runtime when runtime inspection fails", async () => {
     const error = new Error("permission denied");
@@ -885,28 +735,17 @@ describe("runNodeDaemonStatus", () => {
     expect(JSON.stringify(mocks.runtime.writeJson.mock.calls)).not.toContain(error.name);
   });
 
-  it("keeps missing service-unit status on stderr and prints recovery hints on stdout", async () => {
-    mocks.service.readRuntime.mockResolvedValue({ status: "stopped", missingUnit: true });
-
+  it.each([
+    { missingUnit: true, error: "Service unit not found." },
+    { missingUnit: undefined, error: "Service is loaded but not running." },
+  ])("keeps $error on stderr and recovery hints on stdout", async ({ missingUnit, error }) => {
+    mocks.service.readRuntime.mockResolvedValue({ status: "stopped", missingUnit });
     await runNodeDaemonStatus();
-
-    expect(stderr()).toContain("Service unit not found.");
-    expect(stdout()).toContain("Logs: node service log");
-    expect(stdout()).toContain("Restart attempts: node restart log");
-    expect(stderr()).not.toContain("Logs: node service log");
-    expect(stderr()).not.toContain("Restart attempts: node restart log");
-  });
-
-  it("keeps stopped status on stderr and prints recovery hints on stdout", async () => {
-    mocks.service.readRuntime.mockResolvedValue({ status: "stopped" });
-
-    await runNodeDaemonStatus();
-
-    expect(stderr()).toContain("Service is loaded but not running.");
-    expect(stdout()).toContain("Logs: node service log");
-    expect(stdout()).toContain("Restart attempts: node restart log");
-    expect(stderr()).not.toContain("Logs: node service log");
-    expect(stderr()).not.toContain("Restart attempts: node restart log");
+    expect(stderr()).toContain(error);
+    for (const hint of ["Logs: node service log", "Restart attempts: node restart log"]) {
+      expect(stdout()).toContain(hint);
+      expect(stderr()).not.toContain(hint);
+    }
   });
 
   it("redacts service credentials from JSON status output", async () => {

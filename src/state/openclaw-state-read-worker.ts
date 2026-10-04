@@ -1,13 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
-  ensureSqliteLibrarySelected,
-  getSqliteRuntimeCapabilities,
-} from "../infra/bun-sqlite-library.js";
-import {
   createRetainedOperation,
   flatMapRetainedOperation,
   type RetainedOperation,
-} from "../infra/retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import {
+  ensureSqliteLibrarySelected,
+  getSqliteRuntimeCapabilities,
+} from "../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -123,6 +123,21 @@ function readRuntimes() {
     });
     return sources;
   });
+}
+
+/** Retire cached workers only after every independently admitted reader has joined. */
+export async function retireIdleOpenClawStateReadWorkers(
+  nativeSource: RetainedNativeWorkerSource,
+): Promise<boolean> {
+  const state = readRuntimes().get(nativeSource);
+  if (!state) {
+    return true;
+  }
+  if (state.operations.size > 0) {
+    return false;
+  }
+  await closeReadPool(state);
+  return true;
 }
 
 function readPool(state: ReadRuntime, admitted: boolean): ReadPool {

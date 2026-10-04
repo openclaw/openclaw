@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
+import * as configModule from "../config/config.js";
 import { readConfigFileSnapshot, transformConfigFile } from "../config/config.js";
 import { hashConfigRaw } from "../config/io.read-helpers.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { runWriteConfigHealth } from "../flows/doctor-health-contribution-runners.config.js";
+import { recordGatewayBootStart } from "../infra/gateway-boot-lifecycle.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../infra/update-requester-authority.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -17,11 +19,328 @@ const noteMock = vi.hoisted(() => vi.fn<(message: string, title?: string) => voi
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: noteMock }));
 
+const discordEntry = {
+  voice: {
+    tts: {
+      openai: { voice: "alloy" },
+      elevenlabs: { voiceId: "fixture-voice" },
+      microsoft: { voice: "en-US-AriaNeural" },
+      edge: { voice: "en-US-GuyNeural" },
+    },
+  },
+  guilds: { "100": { channels: { "200": { allow: false, agentId: "main" } } } },
+};
+
 describe("doctor config persistence", () => {
   afterEach(() => {
     noteMock.mockClear();
     closeOpenClawStateDatabaseForTest();
   });
+
+  it.each([
+    {
+      name: "Telegram",
+      channels: {
+        telegram: {
+          groupMentionsOnly: false,
+          dm: {},
+          direct: { "42": { threadReplies: "always" } },
+          accounts: {
+            native: {
+              streaming: {
+                preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["42"] },
+              },
+            },
+            flat: {
+              streamMode: "partial",
+              chunkMode: "newline",
+              blockStreaming: true,
+              blockStreamingCoalesce: {},
+              draftChunk: {},
+            },
+            scalar: { streaming: "block" },
+            disabled: { streaming: false },
+          },
+        },
+      },
+      fields: [
+        "channels.telegram.groupMentionsOnly",
+        "channels.telegram.dm",
+        "channels.telegram.direct.42.threadReplies",
+        "channels.telegram.accounts.native.streaming.preview.nativeToolProgress",
+        "channels.telegram.accounts.native.streaming.preview.nativeToolProgressAllowFrom",
+        "channels.telegram.accounts.flat.streamMode",
+        "channels.telegram.accounts.flat.chunkMode",
+        "channels.telegram.accounts.flat.blockStreaming",
+        "channels.telegram.accounts.flat.blockStreamingCoalesce",
+        "channels.telegram.accounts.flat.draftChunk",
+        "channels.telegram.accounts.scalar.streaming",
+        "channels.telegram.accounts.disabled.streaming",
+      ],
+    },
+    {
+      name: "Nextcloud Talk",
+      channels: {
+        "nextcloud-talk": {
+          allowPrivateNetwork: true,
+          accounts: { work: { allowPrivateNetwork: false } },
+        },
+      },
+      fields: [
+        "channels.nextcloud-talk.allowPrivateNetwork",
+        "channels.nextcloud-talk.accounts.work.allowPrivateNetwork",
+      ],
+    },
+    {
+      name: "Matrix",
+      channels: {
+        matrix: {
+          allowPrivateNetwork: false,
+          dm: { policy: "trusted", allowFrom: ["@alice:example.org"] },
+          groups: { "!group:example.org": { allow: false } },
+          rooms: { "!room:example.org": { allow: true } },
+          accounts: {
+            ops: {
+              allowPrivateNetwork: true,
+              dm: { policy: "trusted", allowFrom: [] },
+              groups: { "!account-group:example.org": { allow: true } },
+              rooms: { "!account-room:example.org": { allow: false } },
+            },
+          },
+        },
+      },
+      fields: [
+        "channels.matrix.allowPrivateNetwork",
+        "channels.matrix.dm.policy",
+        "channels.matrix.groups.!group:example.org.allow",
+        "channels.matrix.rooms.!room:example.org.allow",
+        "channels.matrix.accounts.ops.allowPrivateNetwork",
+        "channels.matrix.accounts.ops.dm.policy",
+        "channels.matrix.accounts.ops.groups.!account-group:example.org.allow",
+        "channels.matrix.accounts.ops.rooms.!account-room:example.org.allow",
+      ],
+    },
+    {
+      name: "Slack",
+      channels: {
+        slack: {
+          channels: { C_ROOT: { allow: false } },
+          accounts: { ops: { channels: { C_ACCOUNT: { allow: true } } } },
+        },
+      },
+      fields: [
+        "channels.slack.channels.C_ROOT.allow",
+        "channels.slack.accounts.ops.channels.C_ACCOUNT.allow",
+      ],
+    },
+    {
+      name: "Discord",
+      channels: { discord: { ...discordEntry, accounts: { work: discordEntry } } },
+      fields: ["channels.discord", "channels.discord.accounts.work"].flatMap((prefix) =>
+        [
+          "voice.tts.openai",
+          "voice.tts.elevenlabs",
+          "voice.tts.microsoft",
+          "voice.tts.edge",
+          "guilds.100.channels.200.allow",
+          "guilds.100.channels.200.agentId",
+        ].map((field) => `${prefix}.${field}`),
+      ),
+    },
+  ])(
+    "refuses retired $name inputs before include repair or backup recovery",
+    async ({ name, channels, fields }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        const configPath = await writeOpenClawConfig(home, {
+          channels: { $include: "./channels.json" },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const includePath = path.join(path.dirname(configPath), "channels.json");
+        const includedBytes = JSON.stringify(channels);
+        await fs.writeFile(includePath, includedBytes);
+        const rootBytes = await fs.readFile(configPath, "utf8");
+        const backupBytes = '{"gateway":{"mode":"local"}}\n';
+        await fs.writeFile(`${configPath}.bak`, backupBytes);
+        const failure = await prepareDoctorContext(configPath).then(
+          () => null,
+          (error: unknown) => error,
+        );
+        expect(failure).toBeInstanceOf(Error);
+        expect(failure).toHaveProperty(
+          "message",
+          expect.stringContaining(
+            `Install OpenClaw ${name === "Discord" ? "2026.9.7" : "2026.9.5"}`,
+          ),
+        );
+        for (const field of fields) {
+          expect(failure).toHaveProperty("message", expect.stringContaining(field));
+        }
+        await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootBytes);
+        await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includedBytes);
+        await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupBytes);
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "Telegram streaming",
+      channels: { telegram: { streaming: { mode: "off" }, direct: { "42": {} } } },
+    },
+    {
+      name: "Nextcloud Talk private-network policy",
+      channels: { "nextcloud-talk": { network: { dangerouslyAllowPrivateNetwork: false } } },
+    },
+    {
+      name: "Matrix and Slack policy",
+      channels: {
+        matrix: {
+          network: { dangerouslyAllowPrivateNetwork: false },
+          dm: { policy: "allowlist", allowFrom: ["@alice:example.org"] },
+          groups: { "!group:example.org": { enabled: false } },
+          rooms: { "!room:example.org": { enabled: true } },
+          accounts: {
+            ops: {
+              network: { dangerouslyAllowPrivateNetwork: true },
+              dm: { policy: "pairing" },
+              groups: { "!account-group:example.org": { enabled: true } },
+              rooms: { "!account-room:example.org": { enabled: false } },
+            },
+          },
+        },
+        slack: {
+          channels: { C_ROOT: { enabled: false } },
+          accounts: { ops: { channels: { C_ACCOUNT: { enabled: true } } } },
+        },
+      },
+    },
+  ])("keeps canonical $name settings eligible for Doctor", async ({ channels }) => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      const configPath = await writeOpenClawConfig(home, {
+        channels,
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+      });
+      const ctx = await prepareDoctorContext(configPath);
+      expect(ctx.cfg.channels).toMatchObject(channels);
+      if ("nextcloud-talk" in channels) {
+        expect(ctx.cfg.channels?.["nextcloud-talk"]?.network).toEqual(
+          channels["nextcloud-talk"]?.network,
+        );
+      }
+    });
+  });
+
+  it.each(["canonical", "legacy port", "include drift"] as const)(
+    "publishes Teams webhook completion after included settings (%s)",
+    async (scenario) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined }, async () => {
+          const configPath = await writeOpenClawConfig(home, {
+            agents: { entries: { main: {} } },
+            channels: { msteams: { $include: "./teams.json" } },
+            gateway: { mode: "local" },
+            plugins: { enabled: false },
+          });
+          const includePath = path.join(path.dirname(configPath), "teams.json");
+          const endpoint = { port: 43878 };
+          const canonical = { legacyWebhook: endpoint };
+          const includeRaw = JSON.stringify(
+            scenario === "canonical" ? canonical : { webhook: endpoint },
+          );
+          await fs.writeFile(includePath, includeRaw);
+          const rootRaw = await fs.readFile(configPath, "utf8");
+          expect(recordGatewayBootStart(process.env, 1_800_000_000_000)).toBeDefined();
+          const ctx = await prepareDoctorContext(configPath);
+          expect(ctx.configResult.shouldWriteConfig).toBe(true);
+          const transform = configModule.transformConfigFile;
+          let firstCommit = false;
+          const writer = vi
+            .spyOn(configModule, "transformConfigFile")
+            .mockImplementation(async (params) => {
+              const result = await transform(params);
+              if (!firstCommit && scenario === "include drift") {
+                firstCommit = true;
+                await fs.appendFile(includePath, "\n");
+              }
+              return result;
+            });
+          try {
+            expect(await runWriteConfigHealth(ctx, { runPostWriteRepairs: false })).toBe(
+              scenario !== "include drift",
+            );
+          } finally {
+            writer.mockRestore();
+          }
+          if (scenario === "include drift") {
+            expect(ctx.configWriteRefusal).toBe("config-conflict");
+            expect(ctx.configResultWriteCommitted).not.toBe(true);
+            expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
+            expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual(canonical);
+            expect(
+              noteMock.mock.calls.some(([message]) =>
+                message.includes("Earlier config fixes were saved"),
+              ),
+            ).toBe(true);
+          } else {
+            expect(ctx.configWriteRefusal).toBeUndefined();
+            expect(ctx.configResultWriteCommitted).toBe(true);
+            const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+            expect(saved.channels.msteams).toEqual({ $include: "./teams.json", enabled: true });
+            expect(saved.meta.migrations.webhookListeners.msteams).toEqual([
+              ["channels", "msteams", "enabled"],
+            ]);
+            expect(JSON.parse(await fs.readFile(includePath, "utf8"))).toEqual(canonical);
+            expect(await fs.readFile(configPath + ".bak", "utf8")).toBe(rootRaw);
+          }
+          if (scenario === "canonical") {
+            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+            await expect(fs.stat(includePath + ".bak")).rejects.toMatchObject({ code: "ENOENT" });
+          } else {
+            expect(await fs.readFile(includePath + ".bak", "utf8")).toBe(includeRaw);
+          }
+        });
+      });
+    },
+  );
+
+  it.each([
+    { config: { exposeErrorText: true }, key: "channels.whatsapp.exposeErrorText" },
+    {
+      config: { accounts: { work: { exposeErrorText: false } } },
+      key: "channels.whatsapp.accounts.work.exposeErrorText",
+    },
+  ])(
+    "preserves retired $key and gives an intermediate upgrade during update",
+    async ({ config, key }) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync(
+          { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1", OPENCLAW_UPDATE_IN_PROGRESS: "1" },
+          async () => {
+            const configPath = await writeOpenClawConfig(home, {
+              channels: { $include: "./channels.json" },
+              gateway: { mode: "local" },
+              plugins: { enabled: false },
+            });
+            const includePath = path.join(path.dirname(configPath), "channels.json");
+            const includeRaw = JSON.stringify({ whatsapp: config });
+            await fs.writeFile(includePath, includeRaw);
+            const rootRaw = await fs.readFile(configPath, "utf8");
+            const backupRaw = JSON.stringify({ gateway: { mode: "local" } });
+            await fs.writeFile(`${configPath}.bak`, backupRaw);
+
+            const preparing = prepareDoctorContext(configPath);
+            await expect(preparing).rejects.toThrow(key);
+            await expect(preparing).rejects.toThrow("Install OpenClaw 2026.9.5");
+            await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
+            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
+            await expect(fs.readFile(`${configPath}.bak`, "utf8")).resolves.toBe(backupRaw);
+          },
+        );
+      });
+    },
+  );
 
   it("preserves browser references across authorized successive writes and environment rotation", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
@@ -33,11 +352,12 @@ describe("doctor config persistence", () => {
             browser: { $include: "./browser.json" },
             gateway: { mode: "local" },
             plugins: { enabled: false },
+            meta: { migrations: { webhookListeners: true } },
           });
           const includePath = path.join(path.dirname(configPath), "browser.json");
           const includeRaw = JSON.stringify({
             enabled: true,
-            relayBindHost: "127.0.0.1",
+            color: "#FF4500",
             executablePath: "${BROWSER_BIN}",
           });
           await fs.writeFile(includePath, includeRaw);
@@ -119,6 +439,7 @@ describe("doctor config persistence", () => {
             agents: { $include: "./agents.json5" },
             gateway: { mode: "local" },
             plugins: { enabled: false },
+            meta: { migrations: { webhookListeners: true } },
           });
           const dir = path.dirname(configPath);
           const defaults = { models: { "openai/gpt-5.5": { alias: "Config Lab" } } };
@@ -252,6 +573,7 @@ describe("doctor config persistence", () => {
             agents: { entries: { main: { $include: "./config/main-parent.json5" } } },
             gateway: { mode: "local" },
             plugins: { enabled: false },
+            meta: { migrations: { webhookListeners: true } },
           });
           const fragmentDir = path.join(path.dirname(configPath), "config");
           await fs.mkdir(fragmentDir);
@@ -369,84 +691,75 @@ describe("doctor config persistence", () => {
     });
   });
 
-  it("records the refusal and leaves the root and the included file untouched", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          agents: { list: [{ id: "ops" }] },
-          browser: { $include: "./browser.json" },
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
+  it.each(["include-ownership", "validation"] as const)(
+    "reports the %s refusal without publishing repairs or changing files",
+    async (refusal) => {
+      await withDoctorConfigPreflightHome(async (home) => {
+        await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+          const included = refusal === "include-ownership";
+          const configPath = await writeOpenClawConfig(
+            home,
+            included
+              ? {
+                  agents: { list: [{ id: "ops" }] },
+                  browser: { $include: "./browser.json" },
+                  gateway: { mode: "local" },
+                  plugins: { enabled: false },
+                }
+              : {
+                  gatway: { port: 12345 },
+                  agents: { defaults: { heartbeat: { every: 5 } } },
+                  plugins: { enabled: false },
+                },
+          );
+          const includePath = path.join(path.dirname(configPath), "browser.json");
+          const includeRaw = JSON.stringify({ enabled: true, actionTimeoutMs: 5000 });
+          if (included) {
+            await fs.writeFile(includePath, includeRaw);
+          }
+          const rootRaw = await fs.readFile(configPath, "utf8");
+          const ctx = await prepareDoctorContext(configPath);
+          expect(ctx.configResult.shouldWriteConfig).toBe(true);
+          if (included) {
+            expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
+            expect(ctx.cfg.browser).toEqual({ enabled: true });
+          } else {
+            expect(
+              (ctx.configResult.pendingChangePanels ?? []).some((panel) =>
+                panel.includes("gatway"),
+              ),
+            ).toBe(true);
+          }
+          const expectUnpublished = () => {
+            const panels = noteMock.mock.calls.filter(([, title]) => title === "Doctor changes");
+            if (included) {
+              const text = panels.map(([message]) => message).join("\n");
+              expect(text).not.toContain("retired runtime tuning knobs");
+              expect(text).not.toContain("canonical agent roster");
+            } else {
+              expect(panels).toEqual([]);
+            }
+          };
+          expectUnpublished();
+          await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
+          expect(ctx.configWriteRefusal).toBe(refusal);
+          expect(ctx.configResultWriteCommitted).not.toBe(true);
+          expectUnpublished();
+          const warning = noteMock.mock.calls.find(
+            ([message, title]) =>
+              title === "Doctor warnings" && message.includes("No config changes were written"),
+          );
+          expect(warning).toBeDefined();
+          if (included) {
+            expect(warning?.[0]).toContain("$include-owned config at browser");
+            expect(warning?.[0]).toContain("the included file ./browser.json");
+            await expect(fs.readFile(includePath, "utf8")).resolves.toBe(includeRaw);
+          } else {
+            expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
+          }
+          await expect(fs.readFile(configPath, "utf8")).resolves.toBe(rootRaw);
         });
-        const includePath = path.join(path.dirname(configPath), "browser.json");
-        const includeRaw = JSON.stringify({ enabled: true, actionTimeoutMs: 5000 });
-        await fs.writeFile(includePath, includeRaw);
-        const rootRaw = await fs.readFile(configPath, "utf-8");
-
-        const ctx = await prepareDoctorContext(configPath);
-        // The legacy roster is a root repair; the retired knob is an include repair.
-        expect(ctx.configResult.shouldWriteConfig).toBe(true);
-        expect(ctx.configResult.persistCanonicalAgentRoster).toBe(true);
-        expect(ctx.cfg.browser).toEqual({ enabled: true });
-        const repairPanels = () =>
-          noteMock.mock.calls
-            .filter(([, title]) => title === "Doctor changes")
-            .map(([message]) => message)
-            .join("\n");
-        expect(repairPanels()).not.toContain("retired runtime tuning knobs");
-        expect(repairPanels()).not.toContain("canonical agent roster");
-
-        await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
-
-        // Neither queued repair reached disk, so neither is reported as done.
-        expect(ctx.configWriteRefusal).toBe("include-ownership");
-        expect(ctx.configResultWriteCommitted).not.toBe(true);
-        expect(repairPanels()).not.toContain("retired runtime tuning knobs");
-        expect(repairPanels()).not.toContain("canonical agent roster");
-        const warning = noteMock.mock.calls.find(
-          ([message, title]) =>
-            title === "Doctor warnings" && message.includes("No config changes were written"),
-        );
-        expect(warning?.[0]).toContain("$include-owned config at browser");
-        expect(warning?.[0]).toContain("the included file ./browser.json");
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
-        await expect(fs.readFile(includePath, "utf-8")).resolves.toBe(includeRaw);
       });
-    });
-  });
-  it("never reports unpersisted fixes and leaves the config untouched", async () => {
-    await withDoctorConfigPreflightHome(async (home) => {
-      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
-        const configPath = await writeOpenClawConfig(home, {
-          gatway: { port: 12345 },
-          agents: { defaults: { heartbeat: { every: 5 } } },
-          plugins: { enabled: false },
-        });
-        const rawBefore = await fs.readFile(configPath, "utf-8");
-        const ctx = await prepareDoctorContext(configPath);
-        const { configResult } = ctx;
-
-        // The unknown-key repair is computed, but held until the write commits.
-        expect(configResult.shouldWriteConfig).toBe(true);
-        expect(
-          (configResult.pendingChangePanels ?? []).some((panel) => panel.includes("gatway")),
-        ).toBe(true);
-        expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
-
-        // The write must refuse gracefully — no throw, no change panel, no file write.
-        await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
-
-        expect(ctx.configWriteRefusal).toBe("validation");
-        expect(ctx.configResultWriteCommitted).not.toBe(true);
-        expect(noteMock.mock.calls.some(([, title]) => title === "Doctor changes")).toBe(false);
-        const warning = noteMock.mock.calls.find(
-          ([message, title]) =>
-            title === "Doctor warnings" && message.includes("No config changes were written"),
-        );
-        expect(warning).toBeDefined();
-        expect(warning?.[0]).toContain("agents.defaults.heartbeat.every");
-        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rawBefore);
-      });
-    });
-  });
+    },
+  );
 });

@@ -1,16 +1,11 @@
 import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import {
-  asNullableObjectRecord,
-  asNullableRecord,
-  isRecord,
-} from "@openclaw/normalization-core/record-coerce";
+import { asNullableObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
   readNonEmptyStringPreservingWhitespace,
 } from "@openclaw/normalization-core/string-coerce";
-import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveCronTriggerMinIntervalMs } from "../../../../src/config/cron-limits.js";
+import { hasCanonicalCronDeliveryMode } from "../../../../src/cron/store/delivery-codec.js";
 import { isSystemMonitorDeclaration } from "../../../../src/cron/system-owned-declaration.js";
 import { isSystemOwnedCronPayloadKind } from "../../../../src/cron/types.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
@@ -42,6 +37,7 @@ import { resolveCronWebhookDeliveryError } from "./webhook-url.ts";
 export { loadCronScopeStats } from "./scope.ts";
 export { loadCronJobsPage } from "./jobs.ts";
 export { getCronJobPayload } from "./payload.ts";
+export { resolveConfiguredCronModelSuggestions } from "./model-suggestions.ts";
 
 const CRON_CHANNEL_LAST = "last";
 
@@ -240,6 +236,9 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       }
     }
   }
+  if (!form.deliveryMode) {
+    errors.deliveryMode = "cron.errors.deliveryModeRequired";
+  }
   if (form.deliveryMode === "webhook") {
     const error = resolveCronWebhookDeliveryError(form.deliveryTo);
     if (error) {
@@ -370,57 +369,6 @@ export async function loadCronStatus(
       request.queued.resolve(trailing);
     }
   }
-}
-
-function addModelId(target: Set<string>, value: unknown) {
-  const trimmed = normalizeOptionalString(value);
-  if (trimmed) {
-    target.add(trimmed);
-  }
-}
-
-function addModelConfigIds(target: Set<string>, modelConfig: unknown) {
-  if (typeof modelConfig === "string") {
-    addModelId(target, modelConfig);
-    return;
-  }
-  const record = asNullableObjectRecord(modelConfig);
-  if (!record) {
-    return;
-  }
-  addModelId(target, record.primary);
-  addModelId(target, record.model);
-  addModelId(target, record.id);
-  addModelId(target, record.value);
-  const fallbacks = Array.isArray(record.fallbacks)
-    ? record.fallbacks
-    : Array.isArray(record.fallback)
-      ? record.fallback
-      : [];
-  for (const fallback of fallbacks) {
-    addModelId(target, fallback);
-  }
-}
-
-export function resolveConfiguredCronModelSuggestions(
-  configForm: Record<string, unknown> | null | undefined,
-): string[] {
-  const agents = asNullableObjectRecord(configForm?.agents);
-  if (!agents) {
-    return [];
-  }
-  const out = new Set<string>();
-  const defaults = asNullableObjectRecord(agents.defaults);
-  if (defaults) {
-    addModelConfigIds(out, defaults.model);
-    for (const modelId of Object.keys(asNullableObjectRecord(defaults.models) ?? {})) {
-      addModelId(out, modelId);
-    }
-  }
-  for (const entry of Object.values(asNullableRecord(agents.entries) ?? {})) {
-    addModelConfigIds(out, asNullableObjectRecord(entry)?.model);
-  }
-  return sortUniqueStrings([...out]);
 }
 
 async function withCronBusy(
@@ -566,7 +514,7 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     payloadModel: payload?.kind === "agentTurn" ? (payload.model ?? "") : "",
     payloadThinking: payload?.kind === "agentTurn" ? (payload.thinking ?? "") : "",
     payloadLightContext: payload?.kind === "agentTurn" ? payload.lightContext === true : false,
-    deliveryMode: job.delivery?.mode ?? "none",
+    deliveryMode: hasCanonicalCronDeliveryMode(job.delivery) ? (job.delivery?.mode ?? "none") : "",
     deliveryChannel: job.delivery?.channel ?? CRON_CHANNEL_LAST,
     deliveryTo: job.delivery?.to ?? "",
     deliveryAccountId: job.delivery?.accountId ?? "",

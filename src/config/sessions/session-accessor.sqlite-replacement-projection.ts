@@ -4,10 +4,8 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { deferOpenClawAgentPostCommitPublication } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import {
-  supportsOpenClawAgentDatabaseExecution,
-  type OpenClawAgentDatabaseExecution,
-} from "../../state/openclaw-agent-execution.js";
+import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
@@ -41,6 +39,7 @@ import {
   resolveSqliteTranscriptArchiveDirectory,
   toDatabaseOptions,
   withSqliteSessionDatabase,
+  type ResolvedSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionEntryCommitContext,
@@ -48,7 +47,10 @@ import type {
   SessionEntryReplacement,
 } from "./session-accessor.types.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
-import { captureSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
+import {
+  captureSessionMaintenancePreservation,
+  prepareSessionMaintenancePreservation,
+} from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
 export type SessionEntryCanonicalReplacement = SessionEntryReplacement & {
@@ -85,9 +87,17 @@ type ReplacementProjectionParams<T, TReplacement> = ReplacementProjectionOptions
     | { result: T; replacements?: Iterable<TReplacement> };
 };
 
+type CreationProjection = {
+  scope: ResolvedSqliteScope & { path: string; env: NodeJS.ProcessEnv };
+  sessionKey: string;
+  initializeTranscript?: { sessionKey: string; sessionId: string; cwd?: string };
+  onWriterAdmitted?: () => void;
+};
+
 async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
   params: ReplacementProjectionParams<T, TReplacement>,
   normalize: (replacements: Iterable<TReplacement> | undefined) => SqliteSessionEntryReplacement[],
+  creation?: CreationProjection,
 ): Promise<T> {
   const env = cloneEnvWithPlatformSemantics(params.env ?? process.env);
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
@@ -97,19 +107,28 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     storePath: params.storePath,
     env,
   };
-  const admission = isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
+  const admission =
+    !creation && isMainThread ? resolveSqliteWriteAdmissionScope(target) : undefined;
   const scope =
-    admission ?? (isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target));
+    creation?.scope ??
+    admission ??
+    (isMainThread ? await prepareSqliteScope(target) : resolveSqliteScope(target));
   scope.path ??= resolveOpenClawAgentSqlitePath(toDatabaseOptions(scope));
   const preparedWrite = await runPreparedSqliteSessionWrite(
     scope,
     async (preparedScope) => {
+      creation?.onWriterAdmitted?.();
+      if (creation) {
+        params.assertCommitAllowed?.();
+      }
       const resolved = { ...preparedScope, env };
       const databaseOptions = {
         ...toDatabaseOptions(resolved),
         path: resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved)),
       };
-      const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
+      const useWorker =
+        creation !== undefined ||
+        (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions));
       const readNative = () =>
         withSqliteSessionDatabase(databaseOptions, (database) => ({
           ...readSessionEntryReplacementState(database, params),
@@ -196,7 +215,9 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
 
       const applicable = replacements.filter(
         (replacement) =>
-          replacement.previousSessionKeys || expectedRows.has(replacement.sessionKey),
+          replacement.previousSessionKeys ||
+          expectedRows.has(replacement.sessionKey) ||
+          creation?.sessionKey === replacement.sessionKey,
       );
       if (params.requireWriteSuccess && replacements.length > 0 && applicable.length === 0) {
         throw new Error("session entry replacements did not persist any rows");
@@ -226,110 +247,121 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       return {
         deletedEntries: deletedOwners,
         commit: async (assertSourceCurrent) => {
-          const maintenance =
-            params.skipMaintenance === false
-              ? {
-                  activeSessionKey: params.activeSessionKey ?? "",
-                  archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-                  maintenance: resolveMaintenanceConfig(),
-                  preservation: captureSessionMaintenancePreservation(params.storePath),
-                  storePath: params.storePath,
-                }
+          // Native companions and process-held stores retain their synchronous transaction view.
+          const workerCommit = useWorker && !hasPreparedNativeSessionDeletion();
+          const preparedPreservation =
+            params.skipMaintenance === false && workerCommit
+              ? await prepareSessionMaintenancePreservation(params.storePath)
               : undefined;
-          const assertCurrent = () => {
-            assertSourceCurrent?.();
-            params.assertCommitAllowed?.();
-            if (
-              maintenance &&
-              !isDeepStrictEqual(
-                maintenance.preservation,
-                captureSessionMaintenancePreservation(params.storePath),
-              )
-            ) {
-              throw new Error("Session maintenance protection changed before replacement");
-            }
-          };
-          const input: SessionEntryReplacementCommit = {
-            expectedRows,
-            labelOwnerKeys,
-            includeLabelOwners: params.includeLabelOwners,
-            validationKeys: [...validationKeys],
-            replacements: applicable,
-            checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
-            consumePendingReset: params.consumePendingReset,
-            ownerAssignment: params.ownerAssignment,
-            labelClaim: params.labelClaim,
-            preparedTranscript: params.preparedTranscript,
-            maintenance,
-          };
-          // Native harness rollback closures and process-held databases cannot cross isolates.
-          if (!useWorker || hasPreparedNativeSessionDeletion()) {
-            return withSqliteSessionDatabase(
-              databaseOptions,
-              (owned) =>
-                withNativeSessionCommitContext(
-                  owned,
-                  resolved.env,
-                  (source) => {
-                    const committed = runOpenClawAgentWriteTransaction(
-                      (database) => {
-                        if (params.onLifecycleCommitted) {
-                          deferOpenClawAgentPostCommitPublication(database, () =>
-                            params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
-                          );
-                        }
-                        const result = commitSessionEntryReplacementsInDatabase(
-                          database,
-                          input,
-                          () => {
-                            assertCurrent();
-                            source?.assertCurrent();
-                          },
-                        );
-                        return {
-                          ...result,
-                          publish: prepareSessionIdentityPublication(
+          try {
+            const capturePreservation = () =>
+              preparedPreservation
+                ? preparedPreservation.capture()
+                : captureSessionMaintenancePreservation(params.storePath);
+            const maintenance =
+              params.skipMaintenance === false
+                ? {
+                    activeSessionKey: params.activeSessionKey ?? "",
+                    archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+                    maintenance: resolveMaintenanceConfig(),
+                    preservation: capturePreservation(),
+                    storePath: params.storePath,
+                  }
+                : undefined;
+            const assertCurrent = () => {
+              assertSourceCurrent?.();
+              params.assertCommitAllowed?.();
+              if (
+                maintenance &&
+                !isDeepStrictEqual(maintenance.preservation, capturePreservation())
+              ) {
+                throw new Error("Session maintenance protection changed before replacement");
+              }
+            };
+            const input: SessionEntryReplacementCommit = {
+              expectedRows,
+              labelOwnerKeys,
+              includeLabelOwners: params.includeLabelOwners,
+              validationKeys: [...validationKeys],
+              replacements: applicable,
+              checkPendingArchiveRecovery: params.checkPendingArchiveRecovery,
+              consumePendingReset: params.consumePendingReset,
+              ownerAssignment: params.ownerAssignment,
+              labelClaim: params.labelClaim,
+              preparedTranscript: params.preparedTranscript,
+              maintenance,
+              maintenanceRunBasis: preparedPreservation?.subagentRunBasis,
+            };
+            if (!workerCommit) {
+              return await withSqliteSessionDatabase(
+                databaseOptions,
+                (owned) =>
+                  withNativeSessionCommitContext(
+                    owned,
+                    resolved.env,
+                    (source) => {
+                      const committed = runOpenClawAgentWriteTransaction(
+                        (database) => {
+                          if (params.onLifecycleCommitted) {
+                            deferOpenClawAgentPostCommitPublication(database, () =>
+                              params.onLifecycleCommitted?.(result.pendingArchiveRecovery),
+                            );
+                          }
+                          const result = commitSessionEntryReplacementsInDatabase(
                             database,
-                            resolved.agentId,
-                            result.previous,
-                            result.current,
-                          ),
-                        };
-                      },
-                      databaseOptions,
-                      { operationLabel: "session.entry-replacements" },
-                    );
-                    committed.publish();
-                    return {
-                      maintenancePlans: committed.maintenancePlans,
-                      result: operation.result,
-                    };
-                  },
-                  params.afterCommitted
-                    ? (source) => params.afterCommitted!(operation.result, source)
-                    : undefined,
-                ),
+                            input,
+                            () => {
+                              assertCurrent();
+                              source?.assertCurrent();
+                            },
+                          );
+                          return {
+                            ...result,
+                            publish: prepareSessionIdentityPublication(
+                              database,
+                              resolved.agentId,
+                              result.previous,
+                              result.current,
+                            ),
+                          };
+                        },
+                        databaseOptions,
+                        { operationLabel: "session.entry-replacements" },
+                      );
+                      committed.publish();
+                      return {
+                        maintenancePlans: committed.maintenancePlans,
+                        result: operation.result,
+                      };
+                    },
+                    params.afterCommitted
+                      ? (source) => params.afterCommitted!(operation.result, source)
+                      : undefined,
+                  ),
+                assertCurrent,
+              );
+            }
+            if (typeof snapshot.databaseIdentity !== "string") {
+              throw new Error("Session replacement requires its durable database identity");
+            }
+            const committed = await commitSessionEntryReplacementsInWorker(
+              databaseOptions,
+              snapshot.databaseIdentity,
+              { ...input, initializeTranscript: creation?.initializeTranscript },
               assertCurrent,
+              {
+                identityAgentId: resolved.agentId,
+                onLifecycleCommitted: params.onLifecycleCommitted,
+                afterCommitted: params.afterCommitted
+                  ? (context) => params.afterCommitted!(operation.result, context)
+                  : undefined,
+              },
+              params.retainedExecution,
             );
+            return { maintenancePlans: committed.maintenancePlans, result: operation.result };
+          } finally {
+            preparedPreservation?.dispose();
           }
-          if (typeof snapshot.databaseIdentity !== "string") {
-            throw new Error("Session replacement requires its durable database identity");
-          }
-          const committed = await commitSessionEntryReplacementsInWorker(
-            databaseOptions,
-            snapshot.databaseIdentity,
-            input,
-            assertCurrent,
-            {
-              identityAgentId: resolved.agentId,
-              onLifecycleCommitted: params.onLifecycleCommitted,
-              afterCommitted: params.afterCommitted
-                ? (context) => params.afterCommitted!(operation.result, context)
-                : undefined,
-            },
-            params.retainedExecution,
-          );
-          return { maintenancePlans: committed.maintenancePlans, result: operation.result };
         },
       };
     },
@@ -344,6 +376,40 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
+}
+
+/** Worker creation admits an absent exact target; public replacement selection stays unchanged. */
+export async function applySessionEntryCreationReplacement(
+  params: ReplacementProjectionOptions &
+    CreationProjection & {
+      entry: SessionEntryReplacement["entry"];
+      previousSessionKeys: readonly string[];
+      afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
+    },
+): Promise<void> {
+  await applySqliteSessionEntryReplacementProjection(
+    {
+      ...params,
+      sessionKeys: [params.sessionKey, ...params.previousSessionKeys],
+      afterCommitted: params.afterCommitted
+        ? (_result, context) => params.afterCommitted!(context)
+        : undefined,
+      update: () => ({
+        result: undefined,
+        replacements: [
+          {
+            sessionKey: params.sessionKey,
+            entry: params.entry,
+            ...(params.previousSessionKeys.length
+              ? { previousSessionKeys: params.previousSessionKeys }
+              : {}),
+          },
+        ],
+      }),
+    },
+    (replacements) => [...(replacements ?? [])],
+    params,
+  );
 }
 
 export async function applySessionEntryExactReplacements<T>(params: {

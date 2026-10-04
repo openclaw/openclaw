@@ -85,6 +85,11 @@ export class CronService implements CronServiceContract {
     lifecycleOps.stop(this.state);
   }
 
+  /** Joins stopped timer generations from outside their callbacks. */
+  async waitForIdle(): Promise<void> {
+    await this.state.schedulerDrain;
+  }
+
   pauseScheduling() {
     lifecycleOps.pauseScheduling(this.state);
   }
@@ -169,6 +174,10 @@ export class CronService implements CronServiceContract {
       throw new Error("cron enqueueRun returned unresolved runnable disposition");
     }
     return result;
+  }
+
+  async waitForManualRun(runId: string, timeoutMs: number, signal?: AbortSignal) {
+    return await runOps.waitForManualRun(this.state, runId, timeoutMs, signal);
   }
 
   getJob(id: string): CronJob | undefined {

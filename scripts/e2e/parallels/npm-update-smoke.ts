@@ -574,14 +574,6 @@ function openClawVersionFamily(version: string): string {
   return /^(\d{4}\.\d{1,2}\.\d{1,2})(?:[-.]|$)/u.exec(version.trim())?.[1] ?? "";
 }
 
-function parseOpenClawPackageSpecVersion(spec: string): string {
-  const value = spec.trim();
-  if (!value) {
-    return "";
-  }
-  return resolveOpenClawRegistryVersion(value) || "";
-}
-
 export function parseRegistryPackageMetadata(raw: string): {
   gitHead: string;
   tarball: string;
@@ -862,7 +854,7 @@ export class NpmUpdateSmoke {
       rerunCommand: this.formatRerun("bash", args, commandEnv),
       startedAt,
     };
-    job.promise = this.spawnLogged(
+    job.promise = spawnLoggedCommand(
       "bash",
       args,
       logPath,
@@ -979,10 +971,7 @@ export class NpmUpdateSmoke {
     const output = run("npm", ["view", spec, "version", "dist.tarball", "gitHead", "--json"], {
       check: false,
       quiet: true,
-    }).stdout.trim();
-    if (!output) {
-      return { gitHead: "", tarball: "", version: "" };
-    }
+    }).stdout;
     return parseRegistryPackageMetadata(output);
   }
 
@@ -1005,7 +994,7 @@ export class NpmUpdateSmoke {
       const platform = this.platformFromLabel(job.label);
       const status = (await job.promise) === 0 ? "pass" : "fail";
       this.updateStatus[platform] = status;
-      this.updateVersion[platform] = await this.extractLastVersion(job.logPath);
+      this.updateVersion[platform] = await extractLastOpenClawVersionFromLog(job.logPath);
       this.recordTiming("update", job, status);
       if (status !== "pass") {
         this.dumpLogTail(job.logPath);
@@ -1089,17 +1078,6 @@ export class NpmUpdateSmoke {
     return platform === "windows" ? this.windowsAuth : this.auth;
   }
 
-  private spawnLogged(
-    command: string,
-    args: string[],
-    logPath: string,
-    env: NodeJS.ProcessEnv = {},
-    onOutput: (text: string) => void = () => undefined,
-    options: SpawnLoggedOptions = {},
-  ): Promise<number> {
-    return spawnLoggedCommand(command, args, logPath, env, onOutput, options);
-  }
-
   private async monitorJobs(label: string, jobs: Job[]): Promise<void> {
     const pending = new Set(jobs.map((job) => job.label));
     while (pending.size > 0) {
@@ -1140,14 +1118,17 @@ export class NpmUpdateSmoke {
       "openclaw-parallels-npm-update-macos",
       { execArgs: macosUpdateExec.execArgs, mode: "700", runCommand: runMacosHostCommand },
     );
-    runMacosHostCommand(
-      "prlctl",
-      ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
-      {
-        timeoutMs: 30_000,
-      },
-    );
+    const cleanup = () => this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
+    // Checked host commands can exit the process; finally only handles thrown failures.
+    process.once("exit", cleanup);
     try {
+      runMacosHostCommand(
+        "prlctl",
+        ["exec", this.macosVm, "/usr/sbin/chown", macosUpdateExec.ownerUser, scriptPath],
+        {
+          timeoutMs: 30_000,
+        },
+      );
       const invocation = resolveMacosPrlctlInvocation(
         "prlctl",
         ["exec", this.macosVm, ...macosUpdateExec.execArgs, "/bin/bash", scriptPath],
@@ -1163,7 +1144,8 @@ export class NpmUpdateSmoke {
         throw new Error(`macOS update command failed with exit code ${status}`);
       }
     } finally {
-      this.removeGuestScript(this.macosVm, scriptPath, runMacosHostCommand);
+      process.off("exit", cleanup);
+      cleanup();
     }
   }
 
@@ -1288,16 +1270,16 @@ export class NpmUpdateSmoke {
     const execArgs = options.execArgs ?? [];
     const mode = options.mode ?? "755";
     const scriptPath = `/tmp/${prefix}-${randomUUID()}.sh`;
-    const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
-      check: false,
-      input: script,
-      quiet: true,
-      timeoutMs: 120_000,
-    });
-    if (write.status !== 0) {
-      throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
-    }
     try {
+      const write = runCommand("prlctl", ["exec", vm, ...execArgs, "/usr/bin/tee", scriptPath], {
+        check: false,
+        input: script,
+        quiet: true,
+        timeoutMs: 120_000,
+      });
+      if (write.status !== 0) {
+        throw new Error(`failed to write guest script ${scriptPath}: ${write.stderr.trim()}`);
+      }
       const chmod = runCommand(
         "prlctl",
         ["exec", vm, ...execArgs, "/bin/chmod", mode, scriptPath],
@@ -1441,10 +1423,6 @@ export class NpmUpdateSmoke {
     return label.toLowerCase() as Platform;
   }
 
-  private async extractLastVersion(logPath: string): Promise<string> {
-    return await extractLastOpenClawVersionFromLog(logPath);
-  }
-
   private dumpLogTail(logPath: string): void {
     const log = run("tail", ["-n", "80", logPath], { check: false, quiet: true }).stdout;
     if (log) {
@@ -1572,9 +1550,7 @@ export class NpmUpdateSmoke {
     }
     const candidateVersion =
       this.targetTarballVersion ||
-      (this.freshTargetSpec
-        ? parseOpenClawPackageSpecVersion(this.freshTargetSpec)
-        : parseOpenClawPackageSpecVersion(this.options.updateTarget));
+      resolveOpenClawRegistryVersion(this.freshTargetSpec || this.options.updateTarget);
     const targetFamily = openClawVersionFamily(candidateVersion);
     if (!targetFamily) {
       return;

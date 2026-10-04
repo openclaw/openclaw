@@ -1,16 +1,16 @@
 import { ok } from "@openclaw/normalization-core/result";
 import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
-import { withSessionHistoryWorkerReadCandidates } from "../config/sessions/session-transcript-worker-resources.js";
+import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
-import { prepareOpenClawAgentDatabaseRegistrySnapshotRead } from "../state/openclaw-agent-db-registry-listing.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   prepareGatewaySessionStoreTargetReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
-  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
+import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
 /** Acquire the ordered lookup's data while its discovery and physical readers remain current. */
 export async function resolveGatewaySessionStoreTargetInWorker(params: {
@@ -19,6 +19,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
+  projection?: "full" | "list";
 }) {
   params.assertActive?.();
   const { agentId, canonicalKey } = resolveSessionStoreIdentity({
@@ -32,8 +33,8 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
       ...params,
       agentId,
       readOnly: true,
-      projection: "list",
-      listCandidatesOnly: true,
+      projection: params.projection ?? "list",
+      exactRead: true,
     });
   }
   const parsedAgent = parseAgentSessionKey(params.key)?.agentId;
@@ -42,37 +43,8 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
     [agentId, ...(parsedAgent ? [parsedAgent] : [])],
     params.env,
   );
-  const registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: inventory.env });
-  const target = await withSessionHistoryWorkerReadCandidates(candidates, async (discovery) => {
-    let registryStarted = false;
-    const assertCurrent = () => {
-      params.assertActive?.();
-      discovery.assertCurrent();
-      if (registryStarted) {
-        registry.assertCurrent();
-      }
-    };
-    let sources = await discovery.readTargetInventory({
-      ...inventory,
-      registeredDatabases: { status: "deferred" },
-    });
-    assertCurrent();
-    if (sources.kind === "session-target-registry-required") {
-      registryStarted = true;
-      const current = await registry.read();
-      assertCurrent();
-      sources = await discovery.readTargetInventory({
-        ...inventory,
-        registeredDatabases:
-          current.result.status === "available"
-            ? current.result.entries
-            : { status: "unavailable" },
-      });
-      assertCurrent();
-    }
-    if (sources.kind !== "session-target-inventory") {
-      throw new Error("Session store inventory requested registry rows twice");
-    }
+  const inventoryRead = prepareSessionStoreTargetInventoryRead({ ...inventory, candidates });
+  const target = await inventoryRead.withRead(async (sources, assertCurrent) => {
     const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
     for (const source of sources.agents) {
       if (!source.result.available && source.result.reason !== "database-missing") {
@@ -93,6 +65,7 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
         agentId,
         env: inventory.env,
         targetDiscoveryCache,
+        projection: params.projection,
       },
       async (reads, select) => {
         assertCurrent();
@@ -101,7 +74,8 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
             agentId: read.agentId ?? agentId,
             storePath: read.storePath,
             sessionKeys: read.options.exactKeys!,
-            projection: "list",
+            projection:
+              read.options.projection === "full" ? ("exact" as const) : read.options.projection,
             env: inventory.env,
           })),
           (loaded) => {
@@ -125,7 +99,25 @@ export async function resolveGatewaySessionStoreTargetInWorker(params: {
     );
     assertCurrent();
     return selected;
-  });
+  }, params.assertActive);
   params.assertActive?.();
   return target;
+}
+
+/** Full entry preparation shares the Gateway's alias, discovery, and reader owners. */
+export async function loadGatewaySessionEntryReadOnlyInWorker(
+  params: Parameters<typeof resolveGatewaySessionStoreTargetInWorker>[0],
+) {
+  const target = await resolveGatewaySessionStoreTargetInWorker({
+    ...params,
+    projection: "full",
+  });
+  params.assertActive?.();
+  const match = findCanonicalStoreMatch(target.store, target.storeKeys);
+  return {
+    ...target,
+    cfg: params.cfg,
+    entry: match?.entry,
+    legacyKey: match?.key !== target.canonicalKey ? match?.key : undefined,
+  };
 }

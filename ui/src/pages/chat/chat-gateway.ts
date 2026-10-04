@@ -12,8 +12,8 @@ import {
   isSilentReplyStream,
   shouldHideAssistantChatMessage,
 } from "../../lib/chat/message-visibility.ts";
+import { visibleSessionMatches } from "../../lib/sessions/navigation.ts";
 import { isUiGlobalSessionKey, resolveUiDefaultAgentId } from "../../lib/sessions/session-key.ts";
-import { chatScopedEventSessionMatches } from "./chat-history-state.ts";
 import { materializeVisibleAssistantStreamMessages } from "./chat-history-stream.ts";
 import type { ChatEventPayload } from "./chat-history.ts";
 import { reconcileChatRunStartup } from "./chat-run-startup.ts";
@@ -82,7 +82,11 @@ function resolveGatewayErrorText(
 ): string {
   const errorText = payload.errorMessage?.trim();
   if (errorText) {
-    if (payload.state === "error" && payload.errorKind === "state_contention") {
+    if (
+      payload.state === "error" &&
+      (payload.errorKind === "state_contention" ||
+        payload.stopReason === "aborted-partial-persistence-failed")
+    ) {
       return errorText;
     }
     const summary =
@@ -126,13 +130,15 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   const errorKind =
     payload.state === "error" && payload.errorKind === "state_contention"
       ? "state_contention"
-      : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
-        ? "auth_refresh"
-        : undefined;
+      : payload.state === "error" && payload.stopReason === "aborted-partial-persistence-failed"
+        ? "stop"
+        : payload.errorDetail?.providerRuntimeFailureKind === "auth_refresh"
+          ? "auth_refresh"
+          : undefined;
   const normalizedFinalMessage =
     payload.state === "final" ? normalizeFinalAssistantMessage(payload.message) : null;
   const hadActiveRunBeforeEvent = state.chatRunId !== null;
-  const sessionMatches = chatScopedEventSessionMatches(state, payload.sessionKey, payload.agentId);
+  const sessionMatches = visibleSessionMatches(state, payload.sessionKey, payload.agentId);
   const activeRunMatches =
     state.chatRunId !== null &&
     typeof payload.runId === "string" &&

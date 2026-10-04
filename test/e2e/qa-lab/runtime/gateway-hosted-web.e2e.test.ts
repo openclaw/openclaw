@@ -11,9 +11,12 @@ import { startGatewayServer } from "../../../../src/gateway/server.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
 } from "../../../../src/gateway/test-helpers.e2e.js";
 import { snapshotGatewayStartupEnv } from "../../../../src/gateway/test-helpers.env.js";
+import {
+  acquireGatewayE2ePortBlock,
+  startClaimedGateway,
+} from "../../../../src/gateway/test-helpers.listener.js";
 import {
   registerPluginHttpRoute,
   withPluginHttpRouteRegistry,
@@ -94,13 +97,15 @@ describe("Gateway hosted web surfaces", () => {
         async () => {
           clearConfigCache();
           clearRuntimeConfigSnapshot();
-          const port = await getGatewayE2ePortBlock();
-          const server = await startGatewayServer(port, {
-            auth: { mode: "token", token: TOKEN },
-            bind: "loopback",
-            controlUiEnabled: true,
-            sidecarStartup: "defer",
-          });
+          const claim = await acquireGatewayE2ePortBlock();
+          const server = await startClaimedGateway(claim, () =>
+            startGatewayServer(claim.port, {
+              auth: { mode: "token", token: TOKEN },
+              bind: "loopback",
+              controlUiEnabled: true,
+              sidecarStartup: "defer",
+            }),
+          );
           // Deferred startup replaces the bootstrap registry; register routes only after the
           // server publishes the settled runtime so requests do not target a retired registry.
           await server.startupSettled;
@@ -159,7 +164,7 @@ describe("Gateway hosted web surfaces", () => {
               expect.arrayContaining(["/api/v1/admin/rpc", "/__openclaw__/a2ui"]),
             );
 
-            const origin = `http://127.0.0.1:${port}`;
+            const origin = `http://127.0.0.1:${claim.port}`;
             const controlUi = await fetch(`${origin}/`, {
               headers: { authorization: `Bearer ${TOKEN}` },
             });
@@ -202,7 +207,7 @@ describe("Gateway hosted web surfaces", () => {
             vi.setSystemTime(capabilityIssuedAtMs);
             let helloCanvasUrl: string | undefined;
             operator = await connectGatewayClient({
-              url: `ws://127.0.0.1:${port}`,
+              url: `ws://127.0.0.1:${claim.port}`,
               token: TOKEN,
               role: "operator",
               scopes: OPERATOR_SCOPES,

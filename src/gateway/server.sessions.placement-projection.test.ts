@@ -562,7 +562,7 @@ test.each([
         claimId: "retained-claim",
         runId: "retained-run",
       });
-      placements.markWorkspaceResultPending(claim);
+      await placements.markWorkspaceResultPending(claim);
     } else {
       const basePack = Buffer.from("retained workspace rollback");
       await placements.beginWorkspaceReconciliation(journalOwner, {
@@ -580,19 +580,19 @@ test.each([
     if (recovery === "unstaged result") {
       seedFailedPlacementWithRetainedResult(database, identity.sessionId);
     } else {
-      const draining = placements.startDrain({
+      const draining = await placements.startDrain({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: active.generation,
       });
-      const reconciling = placements.startReconcile({
+      const reconciling = await placements.startReconcile({
         sessionId: identity.sessionId,
         environmentId: active.environmentId,
         ownerEpoch: active.activeOwnerEpoch,
         expectedGeneration: draining.generation,
       });
-      placements.fail({
+      await placements.fail({
         sessionId: identity.sessionId,
         expectedGeneration: reconciling.generation,
         recoveryError: "previous worker failure",
@@ -636,9 +636,9 @@ test.each([
     expect(blocked.payload?.session?.placement).not.toHaveProperty("workspaceResultReconciling");
 
     if (recovery === "unstaged result") {
-      const pending = placements.listPendingWorkspaceResults(identity.sessionId);
+      const pending = await placements.listPendingWorkspaceResultsAsync(identity.sessionId);
       expect(pending).toHaveLength(1);
-      placements.abandonWorkspaceResult(pending[0]!);
+      await placements.abandonWorkspaceResult(pending[0]!);
     } else {
       await placements.abortWorkspaceReconciliation(journalOwner, { force: true });
     }

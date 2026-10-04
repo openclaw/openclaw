@@ -1,8 +1,8 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it } from "vitest";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   replaceTranscriptEventsSync,
   resolveSessionTranscriptDatabasePath,
@@ -12,14 +12,14 @@ import {
 } from "./session-accessor.js";
 import { resolveTranscriptMessageAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");
 
 async function createTranscript(events: TranscriptEvent[]) {
   const scope = {
     agentId: "main",
     sessionId: "ancestry",
     sessionKey: "agent:main:ancestry",
-    storePath: path.join(tempDirs.make("openclaw-ancestry-"), "sessions.json"),
+    storePath: path.join(sessionDirs.make(), "sessions.json"),
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   replaceTranscriptEventsSync(scope, [

@@ -5,6 +5,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import type { ExecApprovalCommandSpan } from "../../../src/infra/exec-approvals-core.ts";
 
 export type ExecApprovalRequestPayload = {
   command: string;
@@ -17,10 +18,7 @@ export type ExecApprovalRequestPayload = {
   resolvedPath?: string | null;
   sessionKey?: string | null;
   runId?: string | null;
-  commandSpans?: readonly {
-    startIndex: number;
-    endIndex: number;
-  }[];
+  commandSpans?: readonly ExecApprovalCommandSpan[];
   allowedDecisions?: readonly ExecApprovalDecision[];
 };
 
@@ -35,18 +33,12 @@ export type ExecApprovalRequest = {
   pluginDetail?: string | null;
   pluginSeverity?: string | null;
   pluginId?: string | null;
+  pluginActions?: unknown;
   proposalHash?: string | null;
   /** Canonical raising session when this request is projected into an ancestor session. */
   sourceSessionKey?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
-};
-
-type ExecApprovalResolved = {
-  id: string;
-  decision?: string | null;
-  resolvedBy?: string | null;
-  ts?: number | null;
 };
 
 export type ExecApprovalPromptState = {
@@ -206,6 +198,7 @@ function parseApprovalRequested(
       pluginDetail: readStringValue(request.detail) ?? null,
       pluginSeverity: readStringValue(request.severity) ?? null,
       pluginId: readStringValue(request.pluginId) ?? null,
+      pluginActions: request.actions,
     };
   }
   const description = normalizeOptionalString(request.description);
@@ -223,10 +216,7 @@ function parseApprovalRequested(
   };
 }
 
-export function parseApprovalResolvedEvent(
-  event: string,
-  payload: unknown,
-): ExecApprovalResolved | null {
+export function parseApprovalResolvedEvent(event: string, payload: unknown): { id: string } | null {
   if (
     (event !== "exec.approval.resolved" &&
       event !== "plugin.approval.resolved" &&
@@ -239,12 +229,7 @@ export function parseApprovalResolvedEvent(
   if (!id) {
     return null;
   }
-  return {
-    id,
-    decision: typeof payload.decision === "string" ? payload.decision : null,
-    resolvedBy: typeof payload.resolvedBy === "string" ? payload.resolvedBy : null,
-    ts: typeof payload.ts === "number" ? payload.ts : null,
-  };
+  return { id };
 }
 
 export function parseApprovalRequestedEvent(

@@ -1,4 +1,6 @@
+import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -42,6 +44,12 @@ export class SystemsController {
   error: string | null = null;
   sampledAtMs: number | null = null;
   desktopSetupError: string | null = null;
+  backups: BackupStatusResult | null = null;
+  backupsLoading = false;
+  backupsError: string | null = null;
+  readonly storageProbes = new Map<string, StorageLocationsProbeResult>();
+  private backupsRequest: AbortController | undefined;
+  private readonly storageProbeRequests = new Map<string, AbortController>();
   private desktopSetupRequest: symbol | undefined;
   private readonly telemetry = new Map<string, readonly SystemsTelemetrySample[]>();
   private readonly listeners = new Set<() => void>();
@@ -87,6 +95,109 @@ export class SystemsController {
 
   get desktopSetupBusy(): boolean {
     return this.desktopSetupRequest !== undefined;
+  }
+
+  storageProbeBusy(name: string): boolean {
+    return this.storageProbeRequests.has(name);
+  }
+
+  private cancelBackups(): void {
+    this.backupsRequest?.abort();
+    this.backupsRequest = undefined;
+    this.backupsLoading = false;
+    for (const request of this.storageProbeRequests.values()) {
+      request.abort();
+    }
+    this.storageProbeRequests.clear();
+  }
+
+  async refreshBackups(): Promise<void> {
+    const scope = this.lifecycle.capture();
+    if (
+      !this.presented ||
+      !this.current ||
+      !scope ||
+      this.backupsRequest ||
+      document.visibilityState === "hidden" ||
+      !hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null)
+    ) {
+      return;
+    }
+    const request = new AbortController();
+    this.backupsRequest = request;
+    this.backupsLoading = true;
+    this.backupsError = null;
+    const isCurrent = () =>
+      this.presented &&
+      this.current &&
+      this.backupsRequest === request &&
+      this.lifecycle.isCurrent(scope) &&
+      hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+    this.notify();
+    try {
+      const result = await scope.client.request<BackupStatusResult>(
+        "backup.status",
+        {},
+        {
+          signal: request.signal,
+        },
+      );
+      if (isCurrent()) {
+        this.backups = result;
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.backupsError = formatUiError(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        this.backupsRequest = undefined;
+        this.backupsLoading = false;
+        this.notify();
+      }
+    }
+  }
+
+  async probeStorage(name: string): Promise<void> {
+    const scope = this.lifecycle.capture();
+    if (
+      !this.presented ||
+      !this.current ||
+      !scope ||
+      this.storageProbeBusy(name) ||
+      !hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null)
+    ) {
+      return;
+    }
+    const request = new AbortController();
+    this.storageProbeRequests.set(name, request);
+    this.storageProbes.delete(name);
+    const isCurrent = () =>
+      this.presented &&
+      this.current &&
+      this.storageProbeRequests.get(name) === request &&
+      this.lifecycle.isCurrent(scope) &&
+      hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+    this.notify();
+    try {
+      const result = await scope.client.request<StorageLocationsProbeResult>(
+        "storage.locations.probe",
+        { name },
+        { signal: request.signal },
+      );
+      if (isCurrent()) {
+        this.storageProbes.set(name, result);
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.storageProbes.set(name, { state: "error", message: formatUiError(error) });
+      }
+    } finally {
+      if (isCurrent()) {
+        this.storageProbeRequests.delete(name);
+        this.notify();
+      }
+    }
   }
 
   private resetDesktopSetup(): void {
@@ -155,10 +266,7 @@ export class SystemsController {
   }
 
   subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
+    return registerListener(this.listeners, listener);
   }
 
   private notify(): void {
@@ -261,6 +369,7 @@ export class SystemsController {
       }
       this.subscriptions = [];
       this.cancelRefresh();
+      this.cancelBackups();
       this.resetDesktopSetup();
       return;
     }
@@ -271,15 +380,29 @@ export class SystemsController {
           this.clear();
         } else if (changed) {
           this.cancelRefresh();
+          this.cancelBackups();
+          this.backups = null;
+          this.backupsError = null;
+          this.storageProbes.clear();
           this.resetDesktopSetup();
           this.telemetry.clear();
           if (snapshot.phase === "connected") {
             void this.refresh();
           }
         }
+        if (!hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+          this.cancelBackups();
+          this.backups = null;
+          this.storageProbes.clear();
+          this.backupsError = t("systems.backups.readAccessRequired");
+        }
         this.notify();
       }),
       this.context.gateway.subscribeEvents((event) => {
+        if (event.event === "config.changed") {
+          this.cancelBackups();
+          this.storageProbes.clear();
+        }
         if (
           event.event === "presence" ||
           event.event === "node.pair.resolved" ||
@@ -323,6 +446,10 @@ export class SystemsController {
 
   private clear(): void {
     this.cancelRefresh();
+    this.cancelBackups();
+    this.backups = null;
+    this.backupsError = null;
+    this.storageProbes.clear();
     this.inventory = null;
     this.rows = [];
     this.selectedId = null;
@@ -360,6 +487,7 @@ export class SystemsController {
       this.presented && this.current && this.request === request && this.lifecycle.isCurrent(scope);
     this.loading = true;
     this.error = null;
+    void this.refreshBackups();
     this.notify();
     try {
       const inventory = await loadSystemsInventory(this.context.gateway, {

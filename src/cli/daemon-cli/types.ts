@@ -19,6 +19,7 @@ export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
   runtimePath?: string;
+  expectedRuntimePin?: string;
   token?: string;
   wrapper?: string;
   allowUnconfigured?: boolean;

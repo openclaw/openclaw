@@ -82,7 +82,7 @@ export type PluginStateWorkerOperations = {
     input: PluginStateWorkerRequests[Request]["input"] extends undefined
       ? undefined
       : PluginStateWorkerRequests[Request]["input"] & {
-          sessionEntryCurrentSource?: SessionEntryCurrentSource;
+          sessionEntryCurrentSources?: readonly SessionEntryCurrentSource[];
         };
     output: Result<PluginStateWorkerRequests[Request]["output"], PluginStateWorkerFailure>;
   };

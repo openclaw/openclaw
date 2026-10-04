@@ -1,14 +1,10 @@
 // Covers diagnostic flag matching and normalization.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  isDiagnosticFlagEnabled,
-  matchesDiagnosticFlag,
-  resolveDiagnosticFlags,
-} from "./diagnostic-flags.js";
+import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 
-describe("resolveDiagnosticFlags", () => {
-  it("normalizes and dedupes config and env flags", () => {
+describe("isDiagnosticFlagEnabled", () => {
+  it("normalizes config and env flags", () => {
     const cfg = {
       diagnostics: { flags: [" Telegram.Http ", "cache.*", "CACHE.*"] },
     } as OpenClawConfig;
@@ -16,7 +12,10 @@ describe("resolveDiagnosticFlags", () => {
       OPENCLAW_DIAGNOSTICS: " foo, Cache.*  telegram.http  ",
     } as NodeJS.ProcessEnv;
 
-    expect(resolveDiagnosticFlags(cfg, env)).toEqual(["telegram.http", "cache.*", "foo"]);
+    for (const flag of ["telegram.http", "cache.hit", "foo"]) {
+      expect(isDiagnosticFlagEnabled(flag, cfg, env)).toBe(true);
+    }
+    expect(isDiagnosticFlagEnabled("missing", cfg, env)).toBe(false);
   });
 
   it("treats blank env values as no extra flags", () => {
@@ -25,10 +24,10 @@ describe("resolveDiagnosticFlags", () => {
     } as OpenClawConfig;
 
     expect(
-      resolveDiagnosticFlags(cfg, {
+      isDiagnosticFlagEnabled("telegram.http", cfg, {
         OPENCLAW_DIAGNOSTICS: "   ",
       } as NodeJS.ProcessEnv),
-    ).toEqual(["telegram.http"]);
+    ).toBe(true);
   });
 
   it("treats false-like env values as disable overrides", () => {
@@ -38,27 +37,37 @@ describe("resolveDiagnosticFlags", () => {
 
     for (const raw of ["0", "false", "off", "none"]) {
       expect(
-        resolveDiagnosticFlags(cfg, {
+        isDiagnosticFlagEnabled("telegram.http", cfg, {
           OPENCLAW_DIAGNOSTICS: raw,
         } as NodeJS.ProcessEnv),
-      ).toStrictEqual([]);
+      ).toBe(false);
     }
   });
 });
 
-describe("matchesDiagnosticFlag", () => {
+describe("diagnostic flag patterns", () => {
   it("matches exact, namespace, prefix, and wildcard rules", () => {
-    expect(matchesDiagnosticFlag("telegram.http", ["telegram.http"])).toBe(true);
-    expect(matchesDiagnosticFlag("cache", ["cache.*"])).toBe(true);
-    expect(matchesDiagnosticFlag("cache.hit", ["cache.*"])).toBe(true);
-    expect(matchesDiagnosticFlag("tool.exec.fast", ["tool.exec*"])).toBe(true);
-    expect(matchesDiagnosticFlag("anything", ["all"])).toBe(true);
-    expect(matchesDiagnosticFlag("anything", ["*"])).toBe(true);
+    for (const [flag, pattern] of [
+      ["telegram.http", "telegram.http"],
+      ["cache", "cache.*"],
+      ["cache.hit", "cache.*"],
+      ["tool.exec.fast", "tool.exec*"],
+      ["anything", "all"],
+      ["anything", "*"],
+    ] as const) {
+      expect(isDiagnosticFlagEnabled(flag, undefined, { OPENCLAW_DIAGNOSTICS: pattern })).toBe(
+        true,
+      );
+    }
   });
 
   it("rejects blank and non-matching flags", () => {
-    expect(matchesDiagnosticFlag("   ", ["*"])).toBe(false);
-    expect(matchesDiagnosticFlag("cache.hit", ["cache.miss", "tool.*"])).toBe(false);
+    expect(isDiagnosticFlagEnabled("   ", undefined, { OPENCLAW_DIAGNOSTICS: "*" })).toBe(false);
+    expect(
+      isDiagnosticFlagEnabled("cache.hit", undefined, {
+        OPENCLAW_DIAGNOSTICS: "cache.miss,tool.*",
+      }),
+    ).toBe(false);
   });
 });
 

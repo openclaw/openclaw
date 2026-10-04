@@ -414,14 +414,17 @@ describe("release validation no-push transport", () => {
     (backend) => {
       const release = readWorkflow(RELEASE_CHECKS);
       const runner = String(job(release, "qa_lab_runtime_pair_lane_release_checks")["runs-on"]);
-      const resolve = (vars: Record<string, string>) =>
+      const runsOn = (vars: Record<string, string>) =>
         runInNewContext(runner.slice(3, -2), runnerSandbox({ vars }));
-      expect(resolve({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-8vcpu-ubuntu-2404");
+      expect(runsOn({ OPENCLAW_CI_RUNNER_BACKEND: backend })).toBe("blacksmith-8vcpu-ubuntu-2404");
       expect(
-        resolve({ OPENCLAW_CI_RUNNER_BACKEND: backend, OPENCLAW_RELEASE_RUNNER_GROUP: "release" }),
+        runsOn({
+          OPENCLAW_CI_RUNNER_BACKEND: backend,
+          OPENCLAW_RELEASE_RUNNER_GROUP: "release",
+        }),
       ).toEqual({ group: "release", labels: "blacksmith-8vcpu-ubuntu-2404" });
       const notice = job(release, "resolve_target").steps?.find(
-        (step) => step.name === "Report release runner routing",
+        (candidate) => candidate.name === "Report release runner routing",
       );
       expect(notice?.if).toBe("vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'");
       expect(notice?.run).toContain("QA Lab runtime-pair stays pinned to Blacksmith");

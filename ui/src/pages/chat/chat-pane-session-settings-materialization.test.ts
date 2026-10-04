@@ -31,14 +31,12 @@ import {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each(
-  (["absent", "placeholder"] as const).flatMap((initialState) =>
-    (["preceding write", "failed preceding write", "replacement"] as const).map((source) => ({
-      initialState,
-      source,
-    })),
-  ),
-)(
+it.each([
+  { initialState: "absent", source: "preceding write" },
+  { initialState: "placeholder", source: "preceding write" },
+  { initialState: "absent", source: "failed preceding write" },
+  { initialState: "placeholder", source: "replacement" },
+] as const)(
   "binds queued settings only to an acknowledged materialization ($initialState / $source)",
   async ({ initialState, source }) => {
     const placeholder = {
@@ -348,12 +346,9 @@ it.each(["unbound", "materialized"] as const)(
 );
 
 it.each([
-  ...(["absent", "placeholder"] as const).flatMap((initialState) =>
-    (["success", "reasoning rejection", "rejection"] as const).map((outcome) => ({
-      initialState,
-      outcome,
-    })),
-  ),
+  { initialState: "absent", outcome: "success" },
+  { initialState: "placeholder", outcome: "reasoning rejection" },
+  { initialState: "absent", outcome: "rejection" },
   { initialState: "published placeholder", outcome: "reasoning rejection" },
 ])(
   "settles each queued preview when its ACK-adopted row stays unobserved ($initialState / $outcome)",

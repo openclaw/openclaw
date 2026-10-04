@@ -39,12 +39,9 @@ import {
   type UpdateTargetSelection,
 } from "./update-command-initialization.js";
 import { preparePackageUpdateRuntime } from "./update-command-node-runtime.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
-import {
-  assertUpdatePackageActivationAdmission,
-  recordUpdateCommandTarget,
-  type prepareUpdateCommand,
-} from "./update-command-run.js";
+import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
   resolveUpdateTargetEnv,
@@ -72,6 +69,7 @@ export async function initializeAndRunUpdate(
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
+  let disposePresentation: (() => void) | undefined;
   try {
     await withUpdateCommandTerminalResult(
       (registerRun) =>
@@ -135,8 +133,9 @@ export async function initializeAndRunUpdate(
                 runId,
                 executor,
                 callerLegacyConfigPlan,
-                registerRun: async (run) => {
+                registerRun: async (run, dispose) => {
                   registerRun(run);
+                  disposePresentation = dispose;
                   for (const result of selectedTarget?.preflightSteps ?? []) {
                     for (const step of updateRunStepsFromResultStep(result)) {
                       recordUpdateCommandTarget(run, { step });
@@ -537,5 +536,8 @@ export async function initializeAndRunUpdate(
     // The admitted run's prepared handler outlives both staged cleanup and the
     // executor, so no failure is reported while either mutation owner remains live.
     await handleFailure(error);
+  } finally {
+    // Terminal publication must flush the last committed phases before observation ends.
+    disposePresentation?.();
   }
 }

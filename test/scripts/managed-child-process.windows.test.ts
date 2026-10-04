@@ -91,10 +91,10 @@ it.runIf(process.platform === "win32")(
   },
 );
 
-it.runIf(process.platform === "win32").each(["abort", "normal exit"])(
+it.runIf(process.platform === "win32").for(["abort", "normal exit"])(
   "joins native Job descendants with independent output after %s",
   { timeout: 30_000 },
-  async (mode) => {
+  async (mode, { signal }) => {
     const koffi = (await import("koffi")).default;
     createWindowsJobBindings(koffi).assertLayouts();
     createWindowsJobBindings(koffi).assertLayouts();
@@ -149,7 +149,7 @@ ${mode === "normal exit" ? 'process.stdin.once("data", () => process.exit(0));' 
     const outcome = command.catch((error: unknown) => error);
     try {
       await Promise.race([
-        waitForFile(ready, 10_000),
+        waitForFile(ready, signal),
         outcome.then((error) => {
           throw new Error("command completed before descendant readiness", { cause: error });
         }),

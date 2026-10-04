@@ -17,7 +17,7 @@ export function databaseFileIdentityKey(file: Pick<BigIntStats, "dev" | "ino">):
   return `${file.dev}:${file.ino}`;
 }
 
-export function readDatabaseIdentityBirthtime(file: BigIntStats): string {
+export function readDatabaseIdentityBirthtime(file: Pick<BigIntStats, "birthtimeNs">): string {
   // Node does not expose Linux STATX_BTIME availability and can substitute ctime.
   // Keep the unknown creation-time value stable across ordinary database writes.
   return useDatabaseBirthtime ? file.birthtimeNs.toString() : "0";
@@ -27,7 +27,10 @@ export function readDatabaseIdentityBirthtime(file: BigIntStats): string {
 export function normalizeDatabasePath(location: string): string {
   const normalized =
     process.platform === "win32" ? normalizeWindowsPathPreservingCase(location) : location;
-  return process.platform === "win32" && !path.win32.isAbsolute(normalized) ? location : normalized;
+  // Preserve other path dialects and device namespaces that do not normalize to a drive or UNC.
+  return process.platform === "win32" && !/^(?:[a-z]:[\\/]|[\\/]{2})/iu.test(normalized)
+    ? location
+    : normalized;
 }
 
 export function readDatabaseFileIdentity(value: unknown): DatabaseFileIdentity {

@@ -184,7 +184,11 @@ final class RootSidebarModel {
         let generation: UInt64
     }
 
-    private(set) var sessions: [OpenClawChatSessionEntry] = []
+    private(set) var sessions: [OpenClawChatSessionEntry] = [] {
+        didSet { self.updateSnoozeWakeDeadline() }
+    }
+
+    private(set) var now: Date = .now
     private(set) var usage: CostUsageSummaryLite?
     private(set) var cronJobs: [CronJob] = []
     private(set) var isRefreshing = false
@@ -196,6 +200,8 @@ final class RootSidebarModel {
     private var sessionObserverGeneration: UInt64 = 0
     private var sessionObserverDeclaration: SessionObserverDeclaration<GatewayNodeSessionRoute>?
     private var sessionObserverSync: (id: UUID, task: Task<Void, Never>)?
+    @ObservationIgnored private var snoozeWakeUpdatesActive = false
+    @ObservationIgnored private var snoozeWakeTask: Task<Void, Never>?
 
     var failedCronJobCount: Int {
         self.cronJobs.count { Self.isFailedCronJob($0) }
@@ -216,15 +222,70 @@ final class RootSidebarModel {
         groups: [OpenClawChatSessionGroup],
         sessionRoutingContract: String? = nil) -> [ChatSessionSidebarModel.Section]
     {
-        ChatSessionSidebarModel.sections(
+        Self.sections(
             sessions: self.sessions,
+            query: query,
             currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            groups: groups,
+            sessionRoutingContract: sessionRoutingContract,
+            now: self.now)
+    }
+
+    static func sections(
+        sessions: [OpenClawChatSessionEntry],
+        query: String,
+        currentSessionKey: String,
+        mainSessionKey: String,
+        activeAgentID: String?,
+        groups: [OpenClawChatSessionGroup],
+        sessionRoutingContract: String? = nil,
+        now: Date = .now) -> [ChatSessionSidebarModel.Section]
+    {
+        let selectedSessionKey = ChatSessionSidebarModel.selectedSessionKey(
+            sessions: sessions,
+            currentSessionKey: currentSessionKey,
+            mainSessionKey: mainSessionKey,
+            activeAgentID: activeAgentID,
+            sessionRoutingContract: sessionRoutingContract)
+        let selectedIsSnoozed = sessions.contains {
+            $0.key == selectedSessionKey && $0.isSnoozed(at: now)
+        }
+        return ChatSessionSidebarModel.sections(
+            sessions: sessions.filter { !$0.isSnoozed(at: now) },
+            // The shared sidebar otherwise creates a placeholder for a missing selected row.
+            currentSessionKey: selectedIsSnoozed ? "" : currentSessionKey,
             mainSessionKey: mainSessionKey,
             activeAgentID: activeAgentID,
             groups: groups,
             excludesMainSession: true,
             query: query,
             sessionRoutingContract: sessionRoutingContract)
+    }
+
+    func setSnoozeWakeUpdatesActive(_ active: Bool) {
+        self.snoozeWakeUpdatesActive = active
+        self.updateSnoozeWakeDeadline()
+    }
+
+    private func updateSnoozeWakeDeadline() {
+        self.snoozeWakeTask?.cancel()
+        self.snoozeWakeTask = nil
+        self.now = .now
+        guard self.snoozeWakeUpdatesActive,
+              let wakeAt = OpenClawChatSessionSnooze.nextWake(in: self.sessions, now: self.now)
+        else { return }
+
+        self.snoozeWakeTask = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(max(0, wakeAt.timeIntervalSinceNow) + 0.001))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+            self?.updateSnoozeWakeDeadline()
+        }
     }
 
     func refresh(appModel: NodeAppModel) async {

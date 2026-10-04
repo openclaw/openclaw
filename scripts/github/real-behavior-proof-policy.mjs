@@ -1,5 +1,8 @@
 // Shared PR context and evidence policy for GitHub checks and label decisions.
-import { readBoundedResponseText } from "../lib/bounded-response.mjs";
+import {
+  createBoundedResponseTooLargeError,
+  readBoundedResponseText,
+} from "../lib/bounded-response.mjs";
 import { escapeRegExp } from "../lib/regexp.mjs";
 import { createTimeoutError } from "../lib/timeout-error.mjs";
 
@@ -62,12 +65,6 @@ const legacyProofFieldNames = [
 const missingValueRegex =
   /^(?:n\/?a|none|not applicable|tbd|todo|unknown|unsure|none provided|no evidence|not tested|untested|did not test|didn't test|could not test|couldn't test|-|(?:-{3,}|\*{3,}|_{3,})|\[[^\]]*\])\.?$/i;
 
-function createTooLargeGitHubApiBodyError(label, maxBytes) {
-  const error = new Error(`${label} response body exceeded ${maxBytes} bytes`);
-  error.code = "ETOOBIG";
-  return error;
-}
-
 async function withGitHubApiTimeout(label, timeoutMs, run) {
   const boundedTimeoutMs = Math.max(1, timeoutMs);
   const controller = new AbortController();
@@ -105,7 +102,8 @@ export async function readBoundedGitHubApiJson(
 ) {
   const text = await readBoundedResponseText(response, label, maxBytes, {
     ...options,
-    createTooLargeError: () => createTooLargeGitHubApiBodyError(label, maxBytes),
+    createTooLargeError: () =>
+      createBoundedResponseTooLargeError(`${label} response body exceeded ${maxBytes} bytes`),
   });
   return JSON.parse(text);
 }

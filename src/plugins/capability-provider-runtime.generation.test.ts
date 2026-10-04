@@ -190,7 +190,6 @@ function loadGatewayGeneration(
     pluginIds,
     pluginMetadataSnapshot,
     baseMethods: [],
-    log,
   });
   setActivePluginRegistry(pluginRegistry);
   return pluginRegistry;
@@ -487,7 +486,7 @@ describe("capability loading from a Gateway generation", () => {
     });
   });
 
-  it("retains catalog factories within a cache generation and replaces them on source reload", () => {
+  it("recreates bundled catalog providers while retaining process-loaded factory code", () => {
     withSpeechFixture((fixture) => {
       fixture.config.plugins = { enabled: true };
       const { pluginDir, runtimeImported } = declareCapabilityCatalog(fixture);
@@ -519,7 +518,7 @@ describe("capability loading from a Gateway generation", () => {
       withPluginRuntimeRegistryScope(current, () => {
         const replacement = speechProviders(fixture.config)[0];
         expect(replacement).not.toBe(first);
-        expect(replacement?.label).toBe("replacement:catalog");
+        expect(replacement?.label).toBe("source:catalog");
       });
       expect(fs.existsSync(runtimeImported)).toBe(false);
     });
@@ -650,7 +649,6 @@ describe("capability loading from a Gateway generation", () => {
         autoEnabledReasons: {},
         workspaceDir: fixture.workspaceDir,
         baseMethods: [],
-        log,
         pluginLookUpTable: {
           ...startupSnapshot,
           pluginIds: ["fixture-seed"],

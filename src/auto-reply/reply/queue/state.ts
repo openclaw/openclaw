@@ -75,14 +75,12 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
 }
 
 export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
-  const seen = new Set<string>();
   for (const key of keys) {
     const cleaned = normalizeOptionalString(key);
-    if (!cleaned || seen.has(cleaned)) {
+    if (!cleaned) {
       continue;
     }
-    seen.add(cleaned);
-    const queue = getExistingFollowupQueue(cleaned);
+    const queue = FOLLOWUP_QUEUES.get(cleaned);
     if (queue && (queue.items.length > 0 || queue.inFlight.size > 0 || queue.droppedCount > 0)) {
       return true;
     }

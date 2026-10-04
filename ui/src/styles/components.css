@@ -2265,6 +2265,18 @@ select.input {
   font-size: 13px;
 }
 
+.agent-startup-state {
+  margin: auto;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
 .lazy-view-error {
   margin: auto;
@@ -2328,7 +2340,13 @@ select.input {
   margin-top: 8px;
 }
 
+.lazy-view-error__details {
+  max-width: 100%;
+  color: var(--muted);
+}
+
 .lazy-view-error__detail {
+  display: block;
   margin-top: 8px;
   max-width: 100%;
   color: var(--muted);
@@ -2336,12 +2354,6 @@ select.input {
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-@keyframes compaction-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .code-block {
@@ -2891,16 +2903,19 @@ select.input {
   z-index: 2;
 }
 
-.data-table th.data-table-checkbox-col {
+.data-table th.data-table-checkbox-col,
+.data-table th.data-table-key-col {
   z-index: 4;
   background: var(--bg-elevated);
 }
 
-td.data-table-checkbox-col {
+td.data-table-checkbox-col,
+td.data-table-key-col {
   background: var(--card);
 }
 
-.data-table tbody tr:hover td.data-table-checkbox-col {
+.data-table tbody tr:hover td.data-table-checkbox-col,
+.data-table tbody tr:hover td.data-table-key-col {
   background: var(--bg-hover);
 }
 
@@ -2919,18 +2934,8 @@ td.data-table-checkbox-col {
   min-width: 180px;
 }
 
-.data-table th.data-table-key-col {
-  z-index: 4;
-  background: var(--bg-elevated);
-}
-
 td.data-table-key-col {
-  background: var(--card);
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.08);
-}
-
-.data-table tbody tr:hover td.data-table-key-col {
-  background: var(--bg-hover);
 }
 
 .data-table-bulk-bar {
@@ -3484,7 +3489,9 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.agent-select__chevron svg {
+.agent-select__chevron svg,
+.agent-select__avatar--icon svg,
+.agent-select__footer-icon svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -3548,17 +3555,6 @@ td.data-table-key-col {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
-}
-
-.agent-select__avatar--icon svg,
-.agent-select__footer-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-select__badge {
@@ -5195,13 +5191,7 @@ td.data-table-key-col {
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: device-pair-setup-spin 0.8s linear infinite;
-}
-
-@keyframes device-pair-setup-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 0.8s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5739,18 +5729,13 @@ td.data-table-key-col {
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: session-run-spin 1.6s linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 
 .session-glyph__ring--queued,
+.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
-}
-
-@keyframes session-run-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @keyframes session-run-trace {

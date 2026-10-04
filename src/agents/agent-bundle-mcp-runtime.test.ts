@@ -41,11 +41,7 @@ import { createMcpProbeFixture } from "./agent-bundle-mcp-probe.test-support.js"
 import { runWithSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
 import { startRequesterScopedMcpProofServer } from "./agent-bundle-mcp-requester.test-support.js";
 import { SESSION_MCP_RUNTIME_MANAGER_KEY } from "./agent-bundle-mcp-runtime-shared.js";
-import {
-  createBundleMcpJsonSchemaValidator,
-  createSessionMcpRuntime,
-  testing,
-} from "./agent-bundle-mcp-runtime.js";
+import { createSessionMcpRuntime, testing } from "./agent-bundle-mcp-runtime.js";
 import {
   createBundleMcpToolRuntime,
   materializeBundleMcpToolsForRun,
@@ -55,7 +51,7 @@ import {
 } from "./agent-bundle-mcp-tools.js";
 import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { writeExecutable } from "./bundle-mcp-shared.test-harness.js";
-import { updateMcpAppModelContext } from "./mcp-app-model-context.js";
+import { getMcpAppModelContext, updateMcpAppModelContext } from "./mcp-app-model-context.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
@@ -655,7 +651,13 @@ describe("session MCP runtime", () => {
         {
           name: "canonical",
           inputSchema: { type: "object" },
-          _meta: { ui: { resourceUri: "ui://demo/app", visibility: ["app"] } },
+          _meta: {
+            ui: { resourceUri: "ui://demo/app", visibility: ["app"] },
+            "openai/ui": {
+              entrypoints: [{ type: "global" }, { type: "settings", searchTerms: ["account"] }],
+            },
+            "openai/extensions": { "mentions/search": {} },
+          },
         },
         {
           name: "deprecated",
@@ -689,6 +691,10 @@ describe("session MCP runtime", () => {
             toolName: "canonical",
             uiResourceUri: "ui://demo/app",
             uiVisibility: ["app"],
+            appExtensions: {
+              entrypoints: [{ type: "global" }, { type: "settings", searchTerms: ["account"] }],
+              mentionSearch: true,
+            },
           }),
           expect.objectContaining({
             toolName: "deprecated",
@@ -701,63 +707,6 @@ describe("session MCP runtime", () => {
       await runtime.dispose();
       await fs.rm(tempDir, { recursive: true, force: true });
     }
-  });
-
-  it("reports malformed annotation formats at their original schema path", () => {
-    expect(() =>
-      createBundleMcpJsonSchemaValidator().getValidator({
-        $schema: "https://json-schema.org/draft/2020-12/schema",
-        type: "object",
-        properties: {
-          node: {
-            type: ["object", "null"],
-            // Deliberately malformed external schema must reach runtime shape validation.
-            $defs: { Leaf: { type: "string", format: 42 as never } },
-          },
-        },
-      }),
-    ).toThrow(
-      expect.objectContaining({
-        message: expect.stringContaining("<schema>.properties.node.$defs.Leaf.format"),
-        cause: expect.any(Error),
-      }),
-    );
-  });
-
-  it("attributes draft-2020-12 compiler failures to the MCP schema", () => {
-    let thrown: unknown;
-    try {
-      createBundleMcpJsonSchemaValidator().getValidator({
-        $schema: "https://json-schema.org/draft/2020-12/schema",
-        type: "object",
-        properties: {
-          value: { type: "string", pattern: "[" },
-        },
-      });
-    } catch (error) {
-      thrown = error;
-    }
-    expect(thrown).toMatchObject({
-      message: expect.stringContaining(
-        "Invalid MCP draft-2020-12 JSON Schema: Invalid regular expression",
-      ),
-      cause: expect.any(Error),
-    });
-  });
-
-  it("compiles draft-2020-12 patterns with redundant unicode-invalid escapes", () => {
-    const validator = createBundleMcpJsonSchemaValidator().getValidator({
-      $schema: "https://json-schema.org/draft/2020-12/schema",
-      type: "object",
-      properties: {
-        url: { type: "string", pattern: "^https\\:\\/\\/" },
-      },
-      required: ["url"],
-      additionalProperties: false,
-    });
-
-    expect(validator({ url: "https://example.com/path" }).valid).toBe(true);
-    expect(validator({ url: "http://example.com" }).valid).toBe(false);
   });
 
   it.each([
@@ -2096,13 +2045,10 @@ describe("session MCP runtime", () => {
       cfg: unopenedMcpConfig,
     });
     const release = runtime.acquireLease?.();
-    updateMcpAppModelContext(
-      runtime,
-      {},
-      {
-        content: [{ type: "text", text: "clear on reset" }],
-      },
-    );
+    const contextOwner = {};
+    updateMcpAppModelContext(runtime, contextOwner, {
+      content: [{ type: "text", text: "clear on reset" }],
+    });
 
     await expect(
       retireSessionMcpRuntime({
@@ -2113,7 +2059,7 @@ describe("session MCP runtime", () => {
       }),
     ).resolves.toBe(true);
     expect(testing.getCachedSessionIds()).toContain("session-view-reset");
-    expect(runtime.pendingMcpAppModelContext).toBeUndefined();
+    expect(getMcpAppModelContext(runtime, contextOwner)).toBeNull();
     expect(() =>
       updateMcpAppModelContext(
         runtime,
@@ -3840,65 +3786,14 @@ describe("disposeSession timeout", () => {
     { timeout: 15_000 },
     async () => {
       testing.setBundleMcpDisposeTimeoutMsForTest(50);
-      const sessionId = "test-session-" + Date.now();
-      const server = http.createServer((req, res) => {
-        if (req.method === "GET") {
-          res.writeHead(405).end();
-          return;
-        }
-        if (req.method === "DELETE") {
-          // Never respond — simulates a hung terminateSession() DELETE.
-          return;
-        }
-        if (req.method !== "POST") {
-          res.writeHead(405).end();
-          return;
-        }
-        let body = "";
-        req.on("data", (chunk: Buffer) => {
-          body += chunk.toString();
-        });
-        req.on("end", () => {
-          const message = JSON.parse(body);
-          res.setHeader("content-type", "application/json");
-          res.setHeader("mcp-session-id", sessionId);
-          if (message.method === "initialize") {
-            res.writeHead(200).end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: message.id,
-                result: {
-                  protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
-                  capabilities: { tools: {} },
-                  serverInfo: { name: "hanging-delete-server", version: "1.0.0" },
-                },
-              }),
-            );
-          } else if (message.method === "notifications/initialized") {
-            res.writeHead(202).end();
-          } else if (message.method === "tools/list") {
-            res.writeHead(200).end(
-              JSON.stringify({
-                jsonrpc: "2.0",
-                id: message.id,
-                result: {
-                  tools: [{ name: "probe", description: "probe", inputSchema: { type: "object" } }],
-                },
-              }),
-            );
-          } else {
-            res.writeHead(200).end(JSON.stringify({ jsonrpc: "2.0", id: message.id, result: {} }));
-          }
-        });
+      const manager = createSessionMcpRuntimeManager();
+      const termination = createDeferred();
+      const server = await startCatalogRecoveryMcpServer("hanging-delete-server", {
+        holdTermination: termination.promise,
       });
-
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const addr = server.address() as { port: number };
 
       try {
-        const runtime = await getOrCreateSessionMcpRuntime({
+        const runtime = await manager.getOrCreate({
           sessionId: "session-streamable-http-dispose",
           sessionKey: "agent:test:session-streamable-http-dispose",
           workspaceDir: "/workspace",
@@ -3906,7 +3801,7 @@ describe("disposeSession timeout", () => {
             mcp: {
               servers: {
                 hangingDelete: {
-                  url: `http://127.0.0.1:${addr.port}/mcp`,
+                  url: server.url,
                   transport: "streamable-http",
                 },
               },
@@ -3923,10 +3818,9 @@ describe("disposeSession timeout", () => {
         const elapsed = Date.now() - start;
 
         expect(elapsed).toBeLessThan(1_000);
-        await retireSessionMcpRuntime({
-          sessionId: runtime.sessionId,
-          reason: "external retirement before final run cleanup",
-        });
+        expect(server.terminationCount()).toBe(1);
+        await manager.disposeSession(runtime.sessionId);
+        expect(manager.listRuntimeKeys()).toEqual([]);
         const cleanupScope = createAgentCleanupScope();
         await cleanupScope.run(async () => {
           await expect(materialized.dispose()).rejects.toThrow("could not confirm closure");
@@ -3934,7 +3828,9 @@ describe("disposeSession timeout", () => {
         });
         expect(cleanupScope.outcome).toBe("uncertain");
       } finally {
-        server.close();
+        termination.resolve();
+        await manager.disposeAll();
+        await server.close();
       }
     },
   );

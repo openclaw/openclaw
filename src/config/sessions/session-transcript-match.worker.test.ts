@@ -105,6 +105,11 @@ it("recovers the exact complete child answer without preventing host event progr
       const child = {
         runId,
         childSessionKey: sessionKey,
+        requesterSessionKey: "agent:main:requester",
+        requesterDisplayKey: "main",
+        task: "Read the matching transcript result",
+        cleanup: "keep" as const,
+        createdAt: 1,
         execution: {
           status: "terminal" as const,
           outcome: { status: "ok" as const },
@@ -125,6 +130,7 @@ it("recovers the exact complete child answer without preventing host event progr
       const started = performance.now();
       try {
         const prepared = await readSubagentRunAnnounceResultUsing(child, {
+          readSubagentRun: () => child,
           getRuntimeConfig: () => ({}),
           readSubagentSessionEntry: () => {
             throw new Error("Unexpected session fallback");

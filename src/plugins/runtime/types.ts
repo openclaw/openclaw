@@ -144,12 +144,26 @@ export type PluginRuntime = PluginRuntimeCore & {
       params?: Record<string, unknown>,
       options?: RuntimeGatewayRequestOptions,
     ) => Promise<T>;
+    /** Open this plugin's native panel in the requesting Control UI, preserving caller authority. */
+    openPluginPanel: (params: {
+      panelId: string;
+      sessionKey: string;
+      agentId?: string;
+    }) => Promise<{ ok: true }>;
     /** Bounded redacted facts for up to 40 sessions; excludes incognito and rechecks the bound caller/lifecycle. */
     readSessionFacts: (params: {
       sessionKeys: readonly string[];
     }) => Promise<RuntimeSessionFactsResult>;
+    /** Keyed fact invalidations; callers own unsubscribe. Broad store changes are excluded. */
+    subscribeSessionChanges: (
+      listener: (event: { agentId: string; sessionKey: string; factsInvalidated?: string }) => void,
+    ) => () => void;
     withUserProfileIdentity?: <T>(
-      params: { profileId: string; emails: readonly string[] },
+      params: {
+        profileId: string;
+        emails: readonly string[];
+        githubAccountIds?: readonly number[];
+      },
       run: (assertCurrent: () => void) => Promise<T>,
     ) => Promise<T>;
   };
@@ -188,20 +202,11 @@ export type PluginRuntime = PluginRuntimeCore & {
       workspaceAccess: "none" | "ro" | "rw";
       confinementError?: string;
     };
-    prepareWorkspaceAuthority: (params: {
-      config: OpenClawConfig;
-      agentId?: string;
-      confinedToolNames?: readonly string[];
-      requiredToolNames?: readonly string[];
-      modelProvider?: string;
-      modelId?: string;
-      sessionKey: string;
-      workspaceDir: string;
-    }) => Promise<{
-      sandboxed: boolean;
-      workspaceAccess: "none" | "ro" | "rw";
-      confinementError?: string;
-    }>;
+    prepareWorkspaceAuthority: (
+      params: Parameters<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>[0] & {
+        workspaceDir: string;
+      },
+    ) => Promise<ReturnType<PluginRuntime["sandbox"]["resolveWorkspaceAuthority"]>>;
   };
   worktrees: {
     resolveCheckoutRoot: (params: { path: string }) => Promise<string | undefined>;

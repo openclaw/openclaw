@@ -149,12 +149,7 @@ function preserveGenerationPrivateFields(
 }
 
 /** Resolves the configured session store path without selecting a row-operation agent. */
-export function resolveStorePath(
-  store?: string,
-  options?: { agentId?: string; env?: NodeJS.ProcessEnv },
-): string {
-  return resolveSessionStorePathCore(store, options);
-}
+export { resolveSessionStorePathCore as resolveStorePath } from "../config/sessions/paths.js";
 
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
@@ -367,6 +362,7 @@ export async function cleanupSessionLifecycleArtifacts(
   return await cleanupAccessorSessionLifecycleArtifacts({
     storePath,
     ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    ...(params.env !== undefined ? { env: params.env } : {}),
     archiveRemovedEntryTranscripts: params.archiveRemovedEntryTranscripts,
     ...(params.pluginOwnerId !== undefined ? { pluginOwnerId: params.pluginOwnerId } : {}),
     sessionKeySegmentPrefix: params.sessionKeySegmentPrefix,

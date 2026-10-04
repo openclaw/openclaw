@@ -217,12 +217,23 @@ describe("media-generation candidate lifecycle", () => {
   it("preserves missing, skipped, and failed attempts before the first usable result", async () => {
     const calls: string[] = [];
     const result = await runMediaGenerationCandidates({
-      candidates: ["missing", "skipped", "failed", "success", "unused"].map((provider) => ({
-        provider,
-        model: "model",
-      })),
+      request: {
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: {
+                  primary: "missing/model",
+                  fallbacks: ["skipped/model", "failed/model", "success/model", "unused/model"],
+                },
+              },
+            },
+          },
+        },
+        autoProviderFallback: false,
+      },
+      listProviders: () => [],
       capability: "image",
-      includeSkipFailureDetails: true,
       getProvider(id) {
         calls.push(`lookup:${id}`);
         return id === "missing" ? undefined : { id };
@@ -282,10 +293,17 @@ describe("media-generation candidate lifecycle", () => {
       const lookedUp: string[] = [];
       let executions = 0;
       const result = runMediaGenerationCandidates({
-        candidates: [
-          { provider: "primary", model: "model" },
-          { provider: "fallback", model: "model" },
-        ],
+        request: {
+          cfg: {
+            agents: {
+              defaults: {
+                mediaModels: { video: { primary: "primary/model", fallbacks: ["fallback/model"] } },
+              },
+            },
+          },
+          autoProviderFallback: false,
+        },
+        listProviders: () => [],
         capability: "video",
         getProvider(id) {
           lookedUp.push(id);
@@ -376,6 +394,37 @@ describe("media-generation runtime shared normalization", () => {
         order: ["360P", "480P", "540P", "720P", "768P", "1080P"],
       }),
     ).toBeUndefined();
+  });
+
+  it("keeps geometry tie-breaking independent of provider declaration order", () => {
+    for (const reverse of [false, true]) {
+      const ordered = <T>(values: T[]) => (reverse ? values.toReversed() : values);
+      expect(
+        resolveClosestAspectRatio({
+          requestedAspectRatio: "3:3",
+          supportedAspectRatios: ordered(["invalid", "2:2", "1:1"]),
+        }),
+      ).toBe("1:1");
+      expect(
+        resolveClosestSize({
+          requestedAspectRatio: "1:1",
+          supportedSizes: ordered(["invalid", "128x128", "64x64"]),
+        }),
+      ).toBe("64x64");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "480P",
+          supportedResolutions: ordered(["invalid", "360P", "600P"]),
+        }),
+      ).toBe("600P");
+      expect(
+        resolveClosestResolution({
+          requestedResolution: "medium",
+          supportedResolutions: ordered(["invalid", "small", "large"]),
+          order: ["small", "medium", "large"],
+        }),
+      ).toBe("small");
+    }
   });
 
   it("clamps durations to the closest supported max", () => {

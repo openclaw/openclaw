@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -8,16 +7,20 @@ import {
   recoverConfigFromJsonRootSuffix,
   type ConfigSnapshotReadMeasure,
 } from "../config/io.js";
+import { coerceConfig } from "../config/io.read-helpers.js";
 import { resolveCanonicalConfigPath, resolveIsConfigReadOnly } from "../config/paths.js";
-import { inspectShippedPluginInstallConfigRecords } from "../config/plugin-install-config-migration.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { resolveCronJobsStorePathFromConfig } from "../cron/store/paths.js";
+import { listRetiredCronStateFiles } from "../infra/state-migrations.retired-cron-files.js";
+import { assertNoRetiredStateFiles } from "../infra/state-migrations.retired-files.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
-import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-records.js";
-import { resolveHomeDir } from "../utils.js";
 import type { ConfigPreflightSnapshotRead } from "./config-preflight-snapshot.js";
+import { listLegacyOAuthSidecarPaths } from "./doctor-auth-legacy-paths.js";
 import { shouldSkipPluginValidationForDoctorConfigPreflight } from "./doctor-config-preflight-plugin-index.js";
-import { planAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
+import {
+  canPlanAutomaticConfigRepair,
+  planAutomaticConfigRepair,
+} from "./doctor/shared/automatic-config-repair.js";
 import type { DoctorConfigPreflightOptions } from "./doctor/shared/config-migration-result.js";
 import {
   prepareDoctorConfigRecoverySnapshot,
@@ -29,17 +32,12 @@ export function createDoctorConfigRepairPlanner(params: {
   options: DoctorConfigPreflightOptions;
   stateMigrationsRequested: boolean;
   skipLegacyParentConfigWrite: boolean;
-  hasImportedPluginConfig: () => boolean;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
 }) {
   const planScopedConfigRepair = (snapshot: ConfigFileSnapshot) => {
-    // Read in the caller's lease cache before entering a retained Doctor metadata scope.
-    const installRecords = params.hasImportedPluginConfig()
-      ? loadInstalledPluginIndexInstallRecordsSync()
-      : undefined;
     return params.runWithPluginMetadataSnapshot(
       { config: snapshot.sourceConfig ?? snapshot.config ?? {} },
-      () => planAutomaticConfigRepair(snapshot, { installRecords }),
+      () => planAutomaticConfigRepair(snapshot),
     );
   };
   const planAdmittedConfigRepair = (
@@ -48,7 +46,7 @@ export function createDoctorConfigRepairPlanner(params: {
   ) =>
     (params.options.repairPrefixedConfig === true ||
       (params.stateMigrationsRequested && params.options.migrateLegacyConfig !== false)) &&
-    !snapshot.valid &&
+    canPlanAutomaticConfigRepair(snapshot) &&
     !params.skipLegacyParentConfigWrite &&
     (params.options.repairPrefixedConfig === true ||
       !shouldSkipPluginValidationForDoctorConfigPreflight()) &&
@@ -63,7 +61,7 @@ export async function migrateLegacyDoctorConfig(params: {
   enabled: boolean;
   measure: ConfigSnapshotReadMeasure;
 }): Promise<void> {
-  if (!params.enabled) {
+  if (!params.enabled || resolveIsConfigReadOnly(process.env)) {
     return;
   }
   const changes = await params.measure("legacy-config-migration", maybeMigrateLegacyConfig);
@@ -82,12 +80,25 @@ export async function prepareDoctorConfigRecovery(params: {
   let snapshotRead = params.snapshotRead;
   let snapshot = snapshotRead.snapshot;
   // Refuse before backup recovery or unknown-key cleanup can discard authored settings.
-  const retired = findRetiredConfigUpgradeRequirement(
-    snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
+  const assertSupportedConfig = (config: unknown) => {
+    const retired = findRetiredConfigUpgradeRequirement(config);
+    if (retired) {
+      throw new Error(`${retired.message} ${retired.nextAction}`);
+    }
+    assertNoRetiredStateFiles(
+      "OAuth credential sidecars",
+      listLegacyOAuthSidecarPaths(process.env, coerceConfig(config)),
+    );
+  };
+  assertSupportedConfig(snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig);
+  assertNoRetiredStateFiles(
+    "Cron state",
+    await listRetiredCronStateFiles(
+      resolveCronJobsStorePathFromConfig(
+        snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig ?? snapshot.config,
+      ),
+    ),
   );
-  if (retired) {
-    throw new Error(`${retired.message} ${retired.nextAction}`);
-  }
   let activeConfigRepair: ReturnType<typeof planAutomaticConfigRepair> = null;
   const recoveryEnabled =
     params.enabled && !resolveFutureConfigActionBlock({ action: "recover config", snapshot });
@@ -103,21 +114,20 @@ export async function prepareDoctorConfigRecovery(params: {
     }
   }
   if (recoveryEnabled && snapshot.exists && !snapshot.valid) {
-    const pendingPluginInstallConfig =
-      inspectShippedPluginInstallConfigRecords(snapshot.sourceConfig).status !== "missing";
     // One retired key must not discard newer valid settings by restoring an older backup.
     activeConfigRepair =
       typeof snapshot.raw === "string" && parseConfigJson5(snapshot.raw).ok
         ? params.planRepair(snapshot)
         : null;
     let configRepaired = false;
-    if (!activeConfigRepair && (await recoverConfigFromJsonRootSuffix(snapshot))) {
+    if (
+      !activeConfigRepair &&
+      (await recoverConfigFromJsonRootSuffix(snapshot, assertSupportedConfig))
+    ) {
       note("Removed non-JSON prefix from openclaw.json.", "Config");
       configRepaired = true;
     } else if (
       !activeConfigRepair &&
-      // Config preparation imports these records; backup recovery would erase its source.
-      !pendingPluginInstallConfig &&
       (await recoverDoctorConfigFromLastKnownGood({ snapshot, reason: "doctor-invalid-config" }))
     ) {
       note(
@@ -140,41 +150,13 @@ export async function prepareDoctorConfigRecovery(params: {
 }
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
-  const changes: string[] = [];
-  const home = resolveHomeDir();
-  if (!home) {
-    return changes;
+  if (
+    process.env.OPENCLAW_STATE_DIR?.trim() ||
+    process.env.OPENCLAW_HOME?.trim() ||
+    process.env.OPENCLAW_CONFIG_PATH?.trim()
+  ) {
+    return [];
   }
-
-  const targetPath = resolveCanonicalConfigPath();
-  const targetDir = path.dirname(targetPath);
-  try {
-    await fs.access(targetPath);
-    return changes;
-  } catch {
-    // missing config
-  }
-
-  const legacyPath = path.join(home, ".clawdbot", "clawdbot.json");
-  try {
-    await fs.access(legacyPath);
-  } catch {
-    return changes;
-  }
-
-  await fs.mkdir(targetDir, { recursive: true });
-  try {
-    await fs.copyFile(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
-    changes.push(`Migrated legacy config: ${legacyPath} -> ${targetPath}`);
-  } catch (error) {
-    // A concurrently created target wins; every other failure must remain actionable.
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    if (code !== "EEXIST") {
-      throw new Error(
-        `Failed to migrate legacy config ${legacyPath} -> ${targetPath}: ${formatErrorMessage(error)}`,
-        { cause: error },
-      );
-    }
-  }
-  return changes;
+  const { renameLegacyConfigFile } = await import("../infra/state-migrations.state-dir.js");
+  return renameLegacyConfigFile(path.dirname(resolveCanonicalConfigPath()));
 }

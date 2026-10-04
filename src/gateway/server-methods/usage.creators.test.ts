@@ -4,7 +4,8 @@ import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
 import type { SessionsUsageResult } from "../../shared/usage-types.js";
-import { ensureProfileForEmail, linkEmail, setDisplayName } from "../../state/user-profiles.js";
+import { linkEmail, setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import type { GatewayClient } from "./types.js";
@@ -31,7 +32,7 @@ vi.mock("../../infra/session-cost-usage.js", async () => ({
 import { usageHandlers } from "./usage.js";
 
 function fixture(rows: Record<string, SessionEntry>, tokens: Record<string, number>) {
-  const config: OpenClawConfig = { agents: { entries: { main: { default: true } } } };
+  const config: OpenClawConfig = { agents: { entries: { main: {} } } };
   mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
     store: rows,
     targetsBySessionKey: new Map(
@@ -265,7 +266,7 @@ describe("usage creator attribution", () => {
         authenticatedUserProfile: { profileId: ada.id },
       } as GatewayClient;
       const restrictedConfig: OpenClawConfig = {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         gateway: {
           roles: {
             default: "guest",

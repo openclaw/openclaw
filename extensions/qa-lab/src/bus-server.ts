@@ -1,6 +1,10 @@
 import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type {
+  QaBusPollInput,
+  QaBusSearchMessagesInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -10,7 +14,6 @@ import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-gu
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
-import type { QaBusPollInput, QaBusSearchMessagesInput } from "./runtime-api.js";
 
 const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
 const QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES = 16 * 1024 * 1024;
@@ -436,8 +439,9 @@ export async function handleQaBusRequest(params: {
   }
 }
 
-function createQaBusServer(state: QaBusState): Server {
-  return createServer((req, res) => {
+export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
+  const { state } = params;
+  const server = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const handled = await handleQaBusRequest({ req, res, state });
       if (!handled) {
@@ -445,10 +449,6 @@ function createQaBusServer(state: QaBusState): Server {
       }
     });
   });
-}
-
-export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
-  const server = createQaBusServer(params.state);
   await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {

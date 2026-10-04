@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+// Route tests mock the public facade in shared workers; exercise the real owners here.
 import {
-  ChromeMcpDocumentUnavailableError,
   clickChromeMcpElement,
   evaluateChromeMcpScript,
-  listChromeMcpTabs,
-  setChromeMcpSessionFactoryForTest,
   takeChromeMcpSnapshot,
   withChromeMcpDocument,
-} from "./chrome-mcp.js";
+} from "./chrome-mcp-actions.js";
+import {
+  ChromeMcpDocumentUnavailableError,
+  type ChromeMcpToolResult,
+} from "./chrome-mcp-contracts.js";
+import { setChromeMcpSessionFactoryForTest } from "./chrome-mcp-session.js";
+import { listChromeMcpTabs } from "./chrome-mcp-tabs.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import {
   createPageSession,
@@ -33,6 +37,18 @@ function snapshotResult(snapshot: ChromeMcpSnapshotNode) {
   return { structuredContent: { snapshot } };
 }
 
+function buttonDocument(suffix = "", name?: string): ChromeMcpSnapshotNode {
+  return {
+    id: `root${suffix}`,
+    role: "RootWebArea",
+    children: [{ id: `button${suffix}`, role: "button", ...(name ? { name } : {}) }],
+  };
+}
+
+function textResult(text: string, isError = false): ChromeMcpToolResult {
+  return { ...(isError ? { isError } : {}), content: [{ type: "text", text }] };
+}
+
 describe("Chrome MCP snapshot identity and lifetime", () => {
   installChromeMcpSessionTestHooks();
 
@@ -52,11 +68,7 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
       child: { id: "button", role: "button" },
     },
   ])("rejects ambiguous $operation refs across $label", async ({ child, operation }) => {
-    let root: ChromeMcpSnapshotNode = {
-      id: "root",
-      role: "RootWebArea",
-      children: [{ id: "button", role: "button", name: "Run" }],
-    };
+    let root = buttonDocument("", "Run");
     const clicks: unknown[] = [];
     const { session, targets } = await setupSnapshotSession((call) => {
       if (call.name === "take_snapshot") {
@@ -126,16 +138,9 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
             refPresentAtDispatch.push(
               session.routing!.snapshotsByTarget.get(target.targetId)?.refs.has(oldRef) ?? false,
             );
-            return {
-              isError: true,
-              content: [{ type: "text", text: "snapshot failed after refresh" }],
-            };
+            return textResult("snapshot failed after refresh", true);
           }
-          return snapshotResult({
-            id: `root-${pageId}`,
-            role: "RootWebArea",
-            children: [{ id: `button-${pageId}`, role: "button", name: "Run" }],
-          });
+          return snapshotResult(buttonDocument(`-${pageId}`, "Run"));
         }
         if (call.name === "click") {
           clicks.push([pageId, call.arguments?.uid]);
@@ -164,15 +169,11 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
     const { targets } = await setupSnapshotSession((call) => {
       if (call.name === "take_snapshot") {
         snapshots += 1;
-        return snapshotResult({
-          id: `root-${snapshots}`,
-          role: "RootWebArea",
-          children: [{ id: `button-${snapshots}`, role: "button" }],
-        });
+        return snapshotResult(buttonDocument(`-${snapshots}`));
       }
       if (call.name === "evaluate_script") {
         expect(call.arguments).toMatchObject({ args: ["root-1"], waitForStableDom: false });
-        return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+        return textResult("```json\ntrue\n```");
       }
       if (call.name === "click") {
         clicks.push(call.arguments?.uid);
@@ -209,27 +210,18 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
           }
           snapshots.push(pageId);
           const documentId = pageId === 1 && navigated ? "new" : "initial";
-          return snapshotResult({
-            id: `root-${pageId}-${documentId}`,
-            role: "RootWebArea",
-            children: [{ id: `button-${pageId}-${documentId}`, role: "button" }],
-          });
+          return snapshotResult(buttonDocument(`-${pageId}-${documentId}`));
         }
         if (call.name === "evaluate_script") {
           const args = call.arguments?.args;
           evaluatedUids.push(args);
           if (navigated && Array.isArray(args) && args[0] === "root-1-initial") {
-            return {
-              isError: true,
-              content: [
-                {
-                  type: "text",
-                  text: "Element with uid root-1-initial no longer exists on the page.",
-                },
-              ],
-            };
+            return textResult(
+              "Element with uid root-1-initial no longer exists on the page.",
+              true,
+            );
           }
-          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+          return textResult("```json\ntrue\n```");
         }
         if (call.name === "click") {
           clicks.push([pageId, call.arguments?.uid]);
@@ -266,14 +258,11 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
       if (call.name === "take_snapshot") {
         snapshots += 1;
         return snapshots === 1
-          ? {
-              isError: true,
-              content: [{ type: "text", text: "Snapshot document changed. Take a new snapshot." }],
-            }
+          ? textResult("Snapshot document changed. Take a new snapshot.", true)
           : snapshotResult({ id: "root", role: "RootWebArea" });
       }
       if (call.name === "evaluate_script") {
-        return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+        return textResult("```json\ntrue\n```");
       }
       return undefined;
     });
@@ -303,7 +292,7 @@ describe("Chrome MCP snapshot identity and lifetime", () => {
           });
         }
         if (call.name === "evaluate_script") {
-          return { content: [{ type: "text", text: "```json\ntrue\n```" }] };
+          return textResult("```json\ntrue\n```");
         }
         return undefined;
       });

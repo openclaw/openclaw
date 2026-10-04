@@ -2,12 +2,25 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ClassificationInput } from "./models/types.js";
 import { InferenceWorkerClient } from "./worker-client.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const clients: InferenceWorkerClient[] = [];
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 afterEach(async () => {
   await Promise.all(clients.splice(0).map((client) => client.stop()));
   vi.unstubAllEnvs();
@@ -25,8 +38,13 @@ function fixture(options: { holdInit?: boolean } = {}) {
     `
 import fs from 'node:fs';
 import path from 'node:path';
+${fixtureReceiptClientSource(receipts.endpoint)}
 let dir;
-const record = (event) => fs.appendFileSync(path.join(dir, 'events.jsonl'), JSON.stringify({ ...event, pid: process.pid }) + '\\n');
+const record = (event) => {
+  const eventsPath = path.join(dir, 'events.jsonl');
+  fs.appendFileSync(eventsPath, JSON.stringify({ ...event, pid: process.pid }) + '\\n');
+  if (event.text === 'wait') sendReceipt(eventsPath, 'classify wait');
+};
 process.on('disconnect', () => process.exit(0));
 process.on('message', async (request) => {
   if (request.kind === 'init') {
@@ -85,6 +103,33 @@ process.on('message', async (request) => {
     client,
     events,
     waitFor,
+    waitForHeldClassification: async (operation: PromiseLike<unknown>, signal: AbortSignal) => {
+      const observed = () => events().find((event) => event.text === "wait");
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(eventsPath, "classify wait"),
+          // The event log is durable before any reply; receipts use a separate pipe.
+          Promise.resolve(operation).then(
+            () => {
+              if (!observed()) {
+                throw new Error("Fixture did not reach the requested IPC boundary");
+              }
+            },
+            (error: unknown) => {
+              if (!observed()) {
+                throw error;
+              }
+            },
+          ),
+        ]),
+        signal,
+      );
+      const started = observed();
+      if (!started) {
+        throw new Error("Fixture did not reach the requested IPC boundary");
+      }
+      return started;
+    },
     release: () => fs.writeFileSync(path.join(dir, "release"), ""),
   };
 }
@@ -138,30 +183,40 @@ describe("InferenceWorkerClient", () => {
     expect(alive(pid)).toBe(false);
   });
 
-  it("removes canceled queued work without killing active work and enforces FIFO capacity", async () => {
-    const { client, events, waitFor, release } = fixture();
+  it("removes canceled queued work without killing active work and enforces FIFO capacity", async ({
+    signal: testSignal,
+  }) => {
+    const { client, events, waitForHeldClassification, release } = fixture();
     const active = client.classify("test-model", input("wait"), signal());
-    const started = await waitFor((event) => event.text === "wait");
-    const canceled = new AbortController();
-    const queued = client.classify("test-model", input("canceled"), canceled.signal);
-    const queuedRejected = expect(queued).rejects.toThrow("queued canceled");
-    const second = client.classify("test-model", input("second"), signal());
-    const third = client.classify("test-model", input("third"), signal());
-    await expect(client.classify("test-model", input("overflow"), signal())).rejects.toMatchObject({
-      code: "runtime",
-    });
-    canceled.abort(new Error("queued canceled"));
-    await queuedRejected;
-    const fourth = client.classify("test-model", input("fourth"), signal());
-    expect(alive(started.pid)).toBe(true);
-    release();
-    const results = await Promise.all([active, second, third, fourth]);
-    expect(results.every((result) => result[0]?.logits[0] === started.pid)).toBe(true);
-    expect(
-      events()
-        .filter((event) => event.kind === "classify")
-        .map((event) => event.text),
-    ).toEqual(["wait", "second", "third", "fourth"]);
+    void active.catch(() => {});
+    try {
+      const started = await waitForHeldClassification(active, testSignal);
+      const canceled = new AbortController();
+      const queued = client.classify("test-model", input("canceled"), canceled.signal);
+      const queuedRejected = expect(queued).rejects.toThrow("queued canceled");
+      const second = client.classify("test-model", input("second"), signal());
+      const third = client.classify("test-model", input("third"), signal());
+      await expect(
+        client.classify("test-model", input("overflow"), signal()),
+      ).rejects.toMatchObject({
+        code: "runtime",
+      });
+      canceled.abort(new Error("queued canceled"));
+      await queuedRejected;
+      const fourth = client.classify("test-model", input("fourth"), signal());
+      expect(alive(started.pid)).toBe(true);
+      release();
+      const results = await Promise.all([active, second, third, fourth]);
+      expect(results.every((result) => result[0]?.logits[0] === started.pid)).toBe(true);
+      expect(
+        events()
+          .filter((event) => event.kind === "classify")
+          .map((event) => event.text),
+      ).toEqual(["wait", "second", "third", "fourth"]);
+    } finally {
+      release();
+      await client.stop();
+    }
   });
 
   it("joins native process exit before settling active cancellation and restarts surviving queued work", async () => {

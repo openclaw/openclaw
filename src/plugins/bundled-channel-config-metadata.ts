@@ -16,9 +16,9 @@ import type {
   PluginManifest,
   PluginManifestChannelConfig,
 } from "./manifest.js";
+import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./package-entrypoints.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 const SOURCE_CONFIG_SCHEMA_CANDIDATES = [
   path.join("src", "config-schema.ts"),

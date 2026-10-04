@@ -66,4 +66,6 @@ export type DispatchCronDeliveryState = {
   outputText?: string;
   synthesizedText?: string;
   deliveryPayloads: ReplyPayload[];
+  /** Explanation from a settled descendant answer that reported AUTOMATION_FAILED. */
+  agentReportedFailure?: string;
 };

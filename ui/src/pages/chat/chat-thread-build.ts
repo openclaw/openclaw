@@ -33,6 +33,7 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import { hasSessionsYieldCall, projectSessionsYieldItems } from "./chat-sessions-yield.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
 import {
@@ -273,7 +274,7 @@ export function buildChatItems(
       });
     }
 
-    if (!props.showToolCalls && isToolResult) {
+    if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
       continue;
     }
 
@@ -511,7 +512,7 @@ export function buildChatItems(
       }
     }
     const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
+    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
       const before = toolBeforeBoundaries.get(tool.runId, tool.callId);
       const after = toolAfterBoundaries.get(tool.runId, tool.callId);
       tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
@@ -636,8 +637,16 @@ export function buildChatItems(
     hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
       ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
       : undefined;
-  return groupMessages(coalesceToolActivityMessages(items, hidden), {
-    items: hidden ? coalesceToolActivityMessages(items) : undefined,
+  const projectYields = (source: ChatItem[]) =>
+    projectSessionsYieldItems(
+      source,
+      props.runActive || props.runWorking
+        ? { runId: currentRunId, startedAt: props.streamStartedAt }
+        : undefined,
+      props.showToolCalls,
+    );
+  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden)), {
+    items: hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined,
     people: props.replyPeople,
     localPerson: props.replyLocalPerson,
   });

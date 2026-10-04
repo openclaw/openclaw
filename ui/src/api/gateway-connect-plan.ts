@@ -23,6 +23,7 @@ import type {
   NativeGatewayAuthorization,
   NativeGatewayConnectAuth,
 } from "../app/native-gateway-auth.ts";
+import { i18n } from "../i18n/index.ts";
 import { loadOrCreateDeviceIdentity } from "../lib/nodes/index.ts";
 import { buildGatewayConnectDevice } from "./gateway-connect-device.ts";
 
@@ -79,7 +80,6 @@ export async function buildBrowserGatewayConnectPlan({
   serverCapabilities,
   nativeSignal,
   selectAuth,
-  onDeviceIdentityReady,
 }: {
   opts: GatewayBrowserConnectOptions;
   connectNonce: string | null;
@@ -88,7 +88,6 @@ export async function buildBrowserGatewayConnectPlan({
   serverCapabilities: readonly string[];
   nativeSignal: AbortSignal;
   selectAuth: (input: { role: string; deviceId: string }) => GatewayConnectAuthSelection;
-  onDeviceIdentityReady: (hasDeviceIdentity: boolean) => void;
 }): Promise<ConnectPlan> {
   const role = CONTROL_UI_OPERATOR_ROLE;
   // Gateway Coupling makes the connect handshake the only version-skew gate.
@@ -147,7 +146,6 @@ export async function buildBrowserGatewayConnectPlan({
   // Native devices retain their signing key and grants in the app. Never mint
   // a browser identity or persist hello credentials for this connection path.
   const deviceIdentity = nativeAuth ? null : await loadOrCreateDeviceIdentity().catch(() => null);
-  onDeviceIdentityReady(deviceIdentity !== null);
   if (deviceIdentity) {
     selectedAuth = selectAuth({ role, deviceId: deviceIdentity.deviceId });
   }
@@ -211,7 +209,7 @@ export async function buildBrowserGatewayConnectPlan({
       }),
       auth: nativeAuth?.auth ?? buildGatewayConnectAuth(selectedAuth),
       userAgent: navigator.userAgent,
-      locale: navigator.language,
+      locale: i18n.getRequestedLocale(),
     },
     explicitGatewayToken: nativeAuth ? undefined : explicitGatewayToken,
     selectedAuth,

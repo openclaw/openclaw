@@ -1,8 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../../test-support/runtime-spies.js";
+import { resolveDiscordRestFetch } from "./rest-fetch.js";
 
 type AgentOptions = {
   allowH2?: boolean;
@@ -105,12 +106,8 @@ function dispatchRequest(dispatcher: unknown): void {
 describe("resolveDiscordRestFetch", () => {
   const depsKey = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
   const restUrl = "https://discord.com/api/v10/oauth2/applications/@me";
-  let resolveDiscordRestFetch: typeof import("./rest-fetch.js").resolveDiscordRestFetch;
   let runtime: ReturnType<typeof createRuntimeSpies>;
   let tempDir: string | undefined;
-  beforeAll(async () => {
-    ({ resolveDiscordRestFetch } = await import("./rest-fetch.js"));
-  });
   beforeEach(() => {
     vi.unstubAllEnvs();
     for (const key of [

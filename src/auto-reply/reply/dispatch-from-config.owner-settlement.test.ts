@@ -262,7 +262,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     let mutationRan = false;
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
-        await runExclusiveSessionLifecycleMutation({
+        await runExclusiveSessionLifecycleMutation("patch", {
           scope: "/tmp/mock-sessions.json",
           identities: [sessionKey, sessionId],
           prepare: async () => {

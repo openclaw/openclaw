@@ -2,6 +2,19 @@ import path from "node:path";
 
 type GlobMatcher = (value: string, pattern: string) => boolean;
 
+export const nonBrowserTestBasenamePattern = "!(*.browser.test.ts|!(*.test.ts))";
+
+export function resolveNonBrowserTestPattern(pattern: string): string | null {
+  if (!pattern.endsWith(nonBrowserTestBasenamePattern)) {
+    return null;
+  }
+  const prefix = pattern.slice(0, -nonBrowserTestBasenamePattern.length);
+  if (prefix && !prefix.endsWith("/") && !prefix.endsWith("\\")) {
+    return null;
+  }
+  return prefix + "!(*.browser).test.ts";
+}
+
 export function filterFilesByPatterns(
   files: readonly string[],
   include: readonly string[],
@@ -113,10 +126,11 @@ function isAtOrUnder(value: string, root: string): boolean {
 
 function patternIsFullyUnderDirectory(pattern: string, root: string): boolean {
   const normalized = pattern.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
-  if (!normalized.endsWith(".test.ts")) {
+  const testPattern = resolveNonBrowserTestPattern(normalized) ?? normalized;
+  if (!testPattern.endsWith(".test.ts")) {
     return false;
   }
-  const literalPrefix = literalPrefixForGlobPattern(normalized).replace(/\/+$/u, "");
+  const literalPrefix = literalPrefixForGlobPattern(testPattern).replace(/\/+$/u, "");
   return isAtOrUnder(literalPrefix, root);
 }
 

@@ -371,6 +371,7 @@ describe("Telegram retained message history", () => {
   it("atomically promotes legacy roots once without trusting their embedded observations", async () => {
     const { bounded, retained } = openStores();
     const legacy = {
+      version: 1,
       sourceMessage: message(9, { reply_to_message: message(8) }),
     };
     await bounded.register(`${keyPrefix}9`, legacy);
@@ -417,6 +418,7 @@ describe("Telegram retained message history", () => {
 
   it("preserves embedded-only reply ancestry after legacy promotion and database reopen", async () => {
     const legacy = {
+      version: 1,
       sourceMessage: message(9, {
         message_thread_id: 77,
         reply_to_message: message(8, { caption: "Original photo", photo: photo("photo-1") }),

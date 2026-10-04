@@ -58,7 +58,7 @@ async function seedActiveNode(
     { to: "active", patch: { activeOwnerEpoch: environment.ownerEpoch } },
   ] as const;
   for (const transition of transitions) {
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId,
       from: placement.state,
       expectedGeneration: placement.generation,
@@ -132,7 +132,7 @@ describe("worker placement startup concurrency", () => {
             agentId: "main",
             executionMode: "worker-turn",
           });
-          placements.transition({
+          await placements.transition({
             sessionId: duplicate.sessionId,
             from: "requested",
             to: "provisioning",

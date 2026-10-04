@@ -42,12 +42,12 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip pointer ownership", 
     }
     document.body.append(tooltip);
     await tooltip.updateComplete;
-    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     const shown = new Promise<Event>((resolve) => {
-      popup.addEventListener("wa-after-show", resolve, { once: true });
+      tooltip.addEventListener("wa-after-show", resolve, { once: true });
     });
     trigger.focus();
     await shown;
+    const popup = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     const body = popup.shadowRoot!.querySelector<HTMLElement>('[part="body"]')!;
     await expect.poll(() => body.getBoundingClientRect().width).toBeGreaterThan(0);
     return { tooltip, trigger, popup, body, link };
@@ -109,6 +109,11 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
     tooltip.append(trigger);
     document.body.append(tooltip);
     await tooltip.updateComplete;
+    // Materialize with canceled intent so each transition test starts closed.
+    trigger.focus();
+    trigger.blur();
+    await tooltip.updateComplete;
+    await customElements.whenDefined("wa-tooltip");
     const native = tooltip.shadowRoot!.querySelector("wa-tooltip")!;
     await native.updateComplete;
     await native.popup.updateComplete;
@@ -126,7 +131,11 @@ describe.runIf("__vitest_browser__" in globalThis)("tooltip transition ownership
     async (zeroDuration) => {
       const { tooltip, trigger, native, events } = await fixture(zeroDuration);
       const shown = afterTransition(native, "show");
+      const opening = new Promise<void>((resolve) => {
+        native.addEventListener("wa-show", () => resolve(), { once: true });
+      });
       trigger.focus();
+      await opening;
       await native.updateComplete;
       const duration = Number.parseFloat(getComputedStyle(native.popup.popup).animationDuration);
       if (zeroDuration) {
@@ -224,26 +233,12 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome tooltip public l
     await expectVisibility(tooltip, !disabled);
   });
 
-  it.each(["click", "click manual"])("toggles only on click for the %s trigger", async (mode) => {
-    const { page } = await import("vitest/browser");
-    const { trigger, tooltip, events } = await fixture();
-    tooltip.trigger = mode;
-    await tooltip.updateComplete;
-    trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-    expect(tooltip.open).toBe(false);
-    expect(events).toEqual([]);
-    const shown = afterTransition(tooltip, "show");
-    await page.elementLocator(trigger).click();
-    await shown;
-    await expectVisibility(tooltip, true);
-    const hidden = afterTransition(tooltip, "hide");
-    await page.elementLocator(trigger).click();
-    await hidden;
-    await expectVisibility(tooltip, false);
-    expect(events).toEqual(["wa-show", "wa-after-show", "wa-hide", "wa-after-hide"]);
-  });
-
-  it.each(["click", "hover"])("reveals from %s and dismisses outside its anchor", async (mode) => {
+  it.each([
+    { mode: "click", dismissal: "trigger" },
+    { mode: "click manual", dismissal: "trigger" },
+    { mode: "click", dismissal: "outside" },
+    { mode: "hover", dismissal: "outside" },
+  ])("reveals from $mode and dismisses on $dismissal click", async ({ mode, dismissal }) => {
     const { page } = await import("vitest/browser");
     const { host, trigger, tooltip, events } = await fixture();
     const outside = document.createElement("button");
@@ -254,6 +249,11 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome tooltip public l
     tooltip.showDelay = 0;
     tooltip.hideDelay = 0;
     await tooltip.updateComplete;
+    if (dismissal === "trigger") {
+      trigger.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+      expect(tooltip.open).toBe(false);
+      expect(events).toEqual([]);
+    }
     const shown = afterTransition(tooltip, "show");
     if (mode === "hover") {
       await page.elementLocator(trigger).hover();
@@ -263,7 +263,7 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome tooltip public l
     await shown;
     await expectVisibility(tooltip, true);
     const hidden = afterTransition(tooltip, "hide");
-    await page.elementLocator(outside).click();
+    await page.elementLocator(dismissal === "trigger" ? trigger : outside).click();
     await hidden;
     await expectVisibility(tooltip, false);
     expect(events).toEqual(["wa-show", "wa-after-show", "wa-hide", "wa-after-hide"]);
@@ -420,49 +420,40 @@ describe.runIf("__vitest_browser__" in globalThis)("Web Awesome tooltip public l
     await expectVisibility(tooltip, false);
   });
 
-  it.each(["show", "hide"] as const)(
-    "settles a public %s interrupted before its animation sample without stale completion",
-    async (operation) => {
+  it.each([
+    { operation: "show", veto: false },
+    { operation: "hide", veto: false },
+    { operation: "show", veto: true },
+    { operation: "hide", veto: true },
+  ] as const)(
+    "settles an interrupted public $operation without stale completion (veto=$veto)",
+    async ({ operation, veto }) => {
       const { tooltip, events } = await fixture();
       if (operation === "hide") {
         await tooltip.show();
         events.length = 0;
       }
-      const opposite = operation === "show" ? "hide" : "show";
-      const pending = tooltip[operation]();
-      await tooltip.updateComplete;
-      expect(events).toEqual([`wa-${operation}`]);
-      const replacement = tooltip[opposite]();
-      await Promise.all([pending, replacement]);
-
-      await expectVisibility(tooltip, opposite === "show");
-      expect(events).toEqual([`wa-${operation}`, `wa-${opposite}`, `wa-after-${opposite}`]);
-    },
-  );
-
-  it.each(["show", "hide"] as const)(
-    "settles a vetoed public %s and accepts the next request",
-    async (operation) => {
-      const { tooltip, events } = await fixture();
-      if (operation === "hide") {
-        await tooltip.show();
-        events.length = 0;
+      if (veto) {
+        tooltip.addEventListener(`wa-${operation}`, (event) => event.preventDefault(), {
+          once: true,
+        });
       }
-      tooltip.addEventListener(`wa-${operation}`, (event) => event.preventDefault(), {
-        once: true,
-      });
       let settled = false;
-      const vetoed = tooltip[operation]().then(() => {
+      const pending = tooltip[operation]().then(() => {
         settled = true;
       });
-      await expect.poll(() => settled).toBe(true);
-      await vetoed;
-      await expectVisibility(tooltip, operation === "hide");
+      await tooltip.updateComplete;
       expect(events).toEqual([`wa-${operation}`]);
-
-      await tooltip[operation]();
-      await expectVisibility(tooltip, operation === "show");
-      expect(events).toEqual([`wa-${operation}`, `wa-${operation}`, `wa-after-${operation}`]);
+      if (veto) {
+        await expect.poll(() => settled).toBe(true);
+        await pending;
+        await expectVisibility(tooltip, operation === "hide");
+        expect(events).toEqual([`wa-${operation}`]);
+      }
+      const replacement = veto ? operation : operation === "show" ? "hide" : "show";
+      await Promise.all([pending, tooltip[replacement]()]);
+      await expectVisibility(tooltip, replacement === "show");
+      expect(events).toEqual([`wa-${operation}`, `wa-${replacement}`, `wa-after-${replacement}`]);
     },
   );
 

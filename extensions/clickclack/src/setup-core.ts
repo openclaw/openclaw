@@ -38,19 +38,11 @@ type ClickClackSetupInput = ChannelSetupInput & {
 };
 
 export function normalizeClickClackBaseUrl(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) {
+  const parsed = URL.parse(value?.trim() ?? "");
+  if (!parsed || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     return undefined;
   }
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString().replace(/\/+$/, "");
-  } catch {
-    return undefined;
-  }
+  return parsed.toString().replace(/\/+$/, "");
 }
 
 function normalizeClickClackSetupCode(value: string): string | undefined {
@@ -86,10 +78,8 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
   let baseUrl: string;
   let exactClaimUrl: string | undefined;
   if (/^[a-z][a-z\d+.-]*:\/\//iu.test(rawCode)) {
-    let setupUrl: URL;
-    try {
-      setupUrl = new URL(rawCode);
-    } catch {
+    const setupUrl = URL.parse(rawCode);
+    if (!setupUrl) {
       throw new Error("ClickClack --code must be a valid HTTP(S) setup URL or a bare setup code.");
     }
     if (setupUrl.protocol !== "http:" && setupUrl.protocol !== "https:") {

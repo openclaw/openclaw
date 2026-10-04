@@ -3,7 +3,6 @@ import type {
   OAuthClientInformationMixed,
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
-import type { OpenClawStateLeaseIdentity } from "../state/openclaw-state-lease-store.js";
 
 type McpOAuthAuthorizationChallenge = {
   resourceMetadataUrl?: string;
@@ -49,16 +48,3 @@ export type McpOAuthMutation =
       rejectedAccessToken?: string;
     }
   | { kind: "completeAuthorization" };
-
-type McpOAuthOwnedStore = { storeKey: string; identity: OpenClawStateLeaseIdentity };
-export type McpOAuthWriteOperations = {
-  "mcpOAuth.mutate": {
-    input: McpOAuthOwnedStore & { mutation: McpOAuthMutation };
-    output: { store: McpOAuthStore; applied: boolean };
-  };
-  "mcpOAuth.consumePending": { input: McpOAuthOwnedStore & { state: string }; output: boolean };
-  "mcpOAuth.writePending": { input: McpOAuthOwnedStore & { state: string }; output: void };
-  "mcpOAuth.deletePending": { input: McpOAuthOwnedStore; output: void };
-  "mcpOAuth.clear": { input: McpOAuthOwnedStore; output: void };
-  "mcpOAuth.clearPendingPrefix": { input: string; output: void };
-};

@@ -10,24 +10,11 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
-import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
-import {
-  loadCronRows,
-  loadedCronStoreFromRows,
-  upsertCronJobRow,
-} from "../cron/store/row-codec.js";
-import type { CronStoredJob } from "../cron/types.js";
-import { buildCronExecOperationBinding } from "../gateway/operator-approval-standing-grants.js";
-import {
-  insertOperatorApproval,
-  resolveOperatorApproval,
-} from "../gateway/operator-approval-store.js";
 import { onAgentEvent } from "../infra/agent-events.js";
-import { registerCronRunExecSource } from "../infra/cron-run-exec-source.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
-  type DiagnosticSecurityEvent,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import type {
   ExecAllowlistEntry,
@@ -48,7 +35,6 @@ import {
   buildCwdBoundHashedArgPattern,
   resolvePolicyTargetCandidatePath,
 } from "../infra/exec-command-resolution.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
@@ -58,12 +44,8 @@ import {
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { registerCronStandingGrantTests } from "./bash-tools.exec-host-gateway.cron-grants.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -105,9 +87,6 @@ function exactCommandMarker(command: string): string {
 }
 
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
-  vi.fn<typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget>(),
-);
 const evaluateShellAllowlistWithAuthorizationMock = vi.hoisted(() =>
   vi.fn<() => MockAllowlistResult>(),
 );
@@ -207,11 +186,9 @@ vi.mock("./tools/gateway.js", () => ({
 vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bash-tools.exec-host-shared.js")>();
   createExecApprovalRequestRouteMock.mockImplementation(actual.createExecApprovalRequestRoute);
-  buildExecApprovalFollowupTargetMock.mockImplementation(actual.buildExecApprovalFollowupTarget);
   return {
     ...actual,
     resolveExecHostApprovalContext: resolveExecHostApprovalContextMock,
-    buildExecApprovalFollowupTarget: buildExecApprovalFollowupTargetMock,
     buildExecApprovalPendingToolResult: buildExecApprovalPendingToolResultMock,
     createExecApprovalRequestRoute: createExecApprovalRequestRouteMock,
     sendExecApprovalFollowupResult: sendExecApprovalFollowupResultMock,
@@ -220,6 +197,7 @@ vi.mock("./bash-tools.exec-host-shared.js", async (importOriginal) => {
 
 vi.mock("./bash-tools.exec-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./bash-tools.exec-runtime.js")>()),
+  createApprovalSlug: vi.fn(() => "slug"),
   runExecProcess: runExecProcessMock,
 }));
 
@@ -257,10 +235,10 @@ function captureProcessUnhandledRejections() {
 }
 
 function captureSecurityEvents(): {
-  events: DiagnosticSecurityEvent[];
+  events: Extract<DiagnosticEventPayload, { type: "security.event" }>[];
   stop: () => void;
 } {
-  const events: DiagnosticSecurityEvent[] = [];
+  const events: Extract<DiagnosticEventPayload, { type: "security.event" }>[] = [];
   const stop = onInternalDiagnosticEvent((event, metadata) => {
     if (metadata.trusted && event.type === "security.event") {
       events.push(event);
@@ -278,7 +256,6 @@ describe("processGatewayAllowlist", () => {
     resetGatewayWorkAdmission();
     resetDiagnosticEventsForTest();
     buildExecApprovalPendingToolResultMock.mockReset();
-    buildExecApprovalFollowupTargetMock.mockClear();
     evaluateShellAllowlistWithAuthorizationMock.mockReset();
     mockAllowlist({
       allowlistSatisfied: true,
@@ -1235,7 +1212,6 @@ describe("processGatewayAllowlist", () => {
 
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledOnce());
-    expect(buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0].direct).toBe(true);
 
     const followupTarget = sendExecApprovalFollowupResultMock.mock.calls[0]?.[0];
     expect(followupTarget?.direct).toBe(true);
@@ -1425,7 +1401,7 @@ describe("processGatewayAllowlist", () => {
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
-      turnSourceChannel: "feishu",
+      turnSourceChannel: "webchat",
       approvalFollowupMode: "agent",
     });
     expect(result.pendingResult?.details.status).toBe("approval-pending");
@@ -1485,7 +1461,7 @@ describe("processGatewayAllowlist", () => {
       const result = await runGatewayAllowlist({
         command,
         workdir,
-        turnSourceChannel: "feishu",
+        turnSourceChannel: "webchat",
         approvalFollowupMode: "agent",
       });
 
@@ -1512,7 +1488,7 @@ describe("processGatewayAllowlist", () => {
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
-      turnSourceChannel: "feishu",
+      turnSourceChannel: "webchat",
       approvalFollowupMode: "agent",
     });
     expect(result.pendingResult?.details.status).toBe("approval-pending");
@@ -1578,7 +1554,7 @@ describe("processGatewayAllowlist", () => {
       try {
         const result = await runGatewayAllowlist({
           command,
-          turnSourceChannel: "feishu",
+          turnSourceChannel: "webchat",
           approvalFollowupMode: "agent",
           env,
           requestedEnv: env,
@@ -1627,7 +1603,7 @@ describe("processGatewayAllowlist", () => {
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
-      turnSourceChannel: "feishu",
+      turnSourceChannel: "webchat",
       approvalFollowupMode: "agent",
       signal: controller.signal,
       env: { PATH: "/usr/bin:/bin" },
@@ -1646,7 +1622,7 @@ describe("processGatewayAllowlist", () => {
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
-      turnSourceChannel: "feishu",
+      turnSourceChannel: "webchat",
       approvalFollowupMode: "agent",
       runId: "run-aborted",
       toolCallId: "tool-aborted",
@@ -1731,210 +1707,17 @@ describe("processGatewayAllowlist", () => {
     expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
   });
 
-  describe("cron standing grants", () => {
-    const CRON_STORE_KEY = "/tmp/openclaw-exec-host-cron-store";
-    const grantCommand = "run-nightly-backup --verbose";
-    const grantTempDirs: string[] = [];
-    let stateDirBackup: string | undefined;
-    let hadStateDirBackup = false;
-    let workdir: string;
-    let unregisterCronSource: (() => void) | undefined;
-
-    beforeEach(() => {
-      hadStateDirBackup = "OPENCLAW_STATE_DIR" in process.env;
-      stateDirBackup = process.env.OPENCLAW_STATE_DIR;
-      const stateDir = fs.realpathSync(
-        fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cron-grant-state-")),
-      );
-      grantTempDirs.push(stateDir);
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      workdir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cron-grant-cwd-")));
-      grantTempDirs.push(workdir);
-      // Grants are consulted only when policy would otherwise prompt, before
-      // any JSON allowlist digest can satisfy the command.
+  registerCronStandingGrantTests({
+    prepareApprovalPolicy() {
       requiresExecApprovalMock.mockReturnValue(true);
       hasDurableExecApprovalMock.mockReturnValue(false);
       mockHostPolicy({ hostAsk: "on-miss" });
-    });
-
-    afterEach(() => {
-      unregisterCronSource?.();
-      unregisterCronSource = undefined;
-      closeOpenClawStateDatabaseForTest();
-      if (hadStateDirBackup) {
-        process.env.OPENCLAW_STATE_DIR = stateDirBackup;
-      } else {
-        delete process.env.OPENCLAW_STATE_DIR;
-      }
-      for (const dir of grantTempDirs.splice(0)) {
-        fs.rmSync(dir, { recursive: true, force: true });
-      }
-    });
-
-    function databaseOptions() {
-      return { env: { ...process.env } };
-    }
-
-    function seedCronJobRow(): string {
-      const database = openOpenClawStateDatabase(databaseOptions());
-      // SAFETY: minimal valid cron job shape for the storage codec round-trip.
-      const job = {
-        id: "job-1",
-        agentId: "main",
-        name: "Nightly backup",
-        enabled: true,
-        createdAtMs: Date.now() - 1_000,
-        updatedAtMs: Date.now() - 1_000,
-        schedule: { kind: "cron", expr: "* * * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        wakeMode: "now",
-        payload: { kind: "agentTurn", message: "run the backup" },
-      } as CronStoredJob;
-      upsertCronJobRow(database.db, CRON_STORE_KEY, job, 0);
-      const loaded = loadedCronStoreFromRows(loadCronRows(database.db, CRON_STORE_KEY));
-      const loadedJob = loaded.store.jobs.find((entry) => entry.id === "job-1");
-      if (!loadedJob) {
-        throw new Error("seeded cron job did not load back");
-      }
-      return resolveCronJobConfigRevision(loadedJob);
-    }
-
-    async function mintStandingGrant(revision: string): Promise<void> {
-      await insertOperatorApproval({
-        approval: {
-          id: "cron-approval-1",
-          kind: "exec",
-          presentation: {
-            kind: "exec",
-            commandText: grantCommand,
-            commandPreview: grantCommand,
-            warningText: null,
-            host: "gateway",
-            nodeId: null,
-            agentId: "main",
-            allowedDecisions: ["allow-once", "allow-always", "deny"],
-          },
-          reviewerDeviceIds: [],
-          source: {
-            agentId: "main",
-            sessionKey: "agent:main:cron:job-1",
-            sessionId: "session-1",
-            runId: "cron-run-0",
-            toolCallId: null,
-            toolName: "exec",
-          },
-          audienceSessionKeys: [],
-          runtimeEpoch: "epoch-1",
-          createdAtMs: Date.now() - 500,
-          expiresAtMs: Date.now() + 60_000,
-        },
-        databaseOptions: databaseOptions(),
-      });
-      const resolved = await resolveOperatorApproval({
-        id: "cron-approval-1",
-        decision: "allow-always",
-        resolver: { kind: "device", id: "reviewer-1" },
-        databaseOptions: databaseOptions(),
-        standingGrant: {
-          kind: "cron",
-          agentId: "main",
-          cronJobId: "job-1",
-          jobConfigRevision: revision,
-          operationBinding: buildCronExecOperationBinding({
-            command: grantCommand,
-            cwd: workdir,
-            env: undefined,
-          }),
-          expiresAtMs: null,
-        },
-      });
-      expect(resolved.outcome).toBe("resolved");
-    }
-
-    function readGrantUseCounts(): number[] {
-      const database = openOpenClawStateDatabase(databaseOptions());
-      const stateDb = getNodeSqliteKysely<
-        Pick<OpenClawStateKyselyDatabase, "operator_approval_standing_grants">
-      >(database.db);
-      return executeSqliteQuerySync(
-        database.db,
-        stateDb.selectFrom("operator_approval_standing_grants").select(["use_count"]),
-      ).rows.map((row) => row.use_count);
-    }
-
-    async function prepareCronRun(mintGrant: boolean) {
-      const revision = seedCronJobRow();
-      if (mintGrant) {
-        await mintStandingGrant(revision);
-      }
-      unregisterCronSource = registerCronRunExecSource("cron-run-1", {
-        agentId: "main",
-        jobId: "job-1",
-        jobConfigRevision: revision,
-        jobName: "Nightly backup",
-      });
-    }
-
-    function runCron() {
-      return runGatewayAllowlist({
-        command: grantCommand,
-        workdir,
-        agentId: "main",
-        runId: "cron-run-1",
-        ask: "on-miss",
-      });
-    }
-
-    it("executes a cron occurrence via a standing grant without prompting", async () => {
-      await prepareCronRun(true);
-      const security = captureSecurityEvents();
-      const result = await runCron();
-      expect(result.pendingResult).toBeUndefined();
-      expect(result.deniedResult).toBeUndefined();
-      expect(createExecApprovalRequestRouteMock).not.toHaveBeenCalled();
-      // Authority is recorded at the final effect: validation skips the prompt
-      // but the use is consumed only by the pre-spawn revalidation closure.
-      expect(readGrantUseCounts()).toEqual([0]);
-      expect(result.revalidateBeforeExecution).toBeDefined();
-      await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
-      security.stop();
-      expect(JSON.stringify(security.events)).toContain("standing-grant");
-      expect(readGrantUseCounts()).toEqual([1]);
-    });
-
-    it("denies at the spawn boundary when the grant is invalidated after consult", async () => {
-      await prepareCronRun(true);
-      const security = captureSecurityEvents();
-      const result = await runCron();
-      expect(result.pendingResult).toBeUndefined();
-      expect(result.deniedResult).toBeUndefined();
-      expect(result.revalidateBeforeExecution).toBeDefined();
-      // Revoke the parent approval between consult and spawn: the closure
-      // must deny instead of executing on the stale authority.
-      const database = openOpenClawStateDatabase(databaseOptions());
-      // sqlite-allow-raw -- test-only reversal of the minting approval row.
-      database.db
-        .prepare("update operator_approvals set status = 'denied', decision = 'deny'")
-        .run();
-      const denied = await result.revalidateBeforeExecution?.();
-      security.stop();
-      expect(denied?.details.status).toBe("failed");
-      expect(denied?.content[0]).toMatchObject({
-        text: expect.stringContaining("standing grant no longer valid"),
-      });
-      expect(readGrantUseCounts()).toEqual([0]);
-      expect(JSON.stringify(security.events)).toContain("standing-grant-invalidated");
-    });
-
-    it("skips the JSON allowlist digest when a cron allow-always resolves", async () => {
-      await prepareCronRun(false);
-      approvalDecisionMock.mockResolvedValue("allow-always");
-      const result = await runCron();
-      expect(result.pendingResult).toBeUndefined();
-      expect(result.deniedResult).toBeUndefined();
-      await vi.waitFor(() => expect(commitExecAuthorizationMock).toHaveBeenCalledOnce());
-      expect(commitExecAuthorizationMock.mock.calls[0]?.[0].allowAlwaysDecision).toBeUndefined();
-    });
+    },
+    runGatewayAllowlist,
+    approvalDecisionMock,
+    createExecApprovalRequestRouteMock,
+    commitExecAuthorizationMock,
+    captureSecurityEvents,
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

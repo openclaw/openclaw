@@ -89,23 +89,6 @@ function isFailedToolResultRecord(record: Record<string, unknown>): boolean {
   );
 }
 
-function hasSuccessfulToolResultMessage(message: HeartbeatTranscriptMessage): boolean {
-  const resultBlocks = collectToolResultBlocks(message.content);
-  if (resultBlocks.length > 0) {
-    return resultBlocks.some((block) => !isFailedToolResultRecord(block));
-  }
-  return isToolResultMessage(message) && !isFailedToolResultRecord(message);
-}
-
-function collectSuccessfulToolResultCallIds(message: HeartbeatTranscriptMessage): string[] {
-  const resultBlocks = collectToolResultBlocks(message.content);
-  const records = resultBlocks.length > 0 ? resultBlocks : [message];
-  const ids = records.flatMap((record) =>
-    isFailedToolResultRecord(record) ? [] : collectToolCallIds(record),
-  );
-  return [...new Set(ids)];
-}
-
 function matchesHeartbeatPromptText(text: string, prompt: string | undefined): boolean {
   const normalized = prompt?.trim();
   return Boolean(normalized) && (text === normalized || text.startsWith(`${normalized}\n`));
@@ -216,10 +199,6 @@ function advancePastAdjacentToolResults(
   return index;
 }
 
-function isToolResultCompletionCandidate(message: HeartbeatTranscriptMessage): boolean {
-  return isToolResultMessage(message) || collectToolResultBlocks(message.content).length > 0;
-}
-
 function hasCompletedVisibleHeartbeatResponseToolCall(
   messages: HeartbeatTranscriptMessage[],
   index: number,
@@ -228,19 +207,19 @@ function hasCompletedVisibleHeartbeatResponseToolCall(
   const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
   for (let resultIndex = index + 1; resultIndex < messages.length; resultIndex++) {
     const result = expectDefined(messages[resultIndex], "messages entry at resultIndex");
-    if (!isToolResultCompletionCandidate(result)) {
+    const blocks = collectToolResultBlocks(result.content);
+    if (blocks.length === 0 && !isToolResultMessage(result)) {
       break;
     }
-    if (!hasSuccessfulToolResultMessage(result)) {
-      continue;
-    }
-    if (callIds.size === 0) {
+    const records = blocks.length > 0 ? blocks : [result];
+    if (
+      records.some(
+        (record) =>
+          !isFailedToolResultRecord(record) &&
+          (callIds.size === 0 || collectToolCallIds(record).some((id) => callIds.has(id))),
+      )
+    ) {
       return true;
-    }
-    for (const resultId of collectSuccessfulToolResultCallIds(result)) {
-      if (callIds.has(resultId)) {
-        return true;
-      }
     }
   }
   return false;

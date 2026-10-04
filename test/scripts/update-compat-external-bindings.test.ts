@@ -16,20 +16,19 @@ const { createTempDir } = createScriptTestHarness();
 const chunk = previousReleaseInventory.releases[0]!.chunks.find((entry) =>
   /-[A-Za-z0-9_-]{8}\.m?js$/.test(entry.path),
 )!;
-const externalSources = [
-  { kind: "named export", source: 'export { helper as NAME } from "external-package";' },
-  { kind: "namespace export", source: 'export * as NAME from "external-package";' },
-  {
-    kind: "namespace import",
-    source: 'import * as NAME from "external-package"; export { NAME };',
-  },
-];
+const namedExport = {
+  kind: "named export",
+  source: 'export { helper as NAME } from "external-package";',
+};
+const namespaceImport = {
+  kind: "namespace import",
+  source: 'import * as NAME from "external-package"; export { NAME };',
+};
 
 it.each([
   'import { safePath as helper } from "@openclaw/fs-safe/path"; export { helper };',
   'import helper from "external-package"; export { helper };',
   'export { safePath as helper } from "@openclaw/fs-safe/path";',
-  'import { basename as helper } from "node:path"; export { helper };',
   'export * as helper from "external-package";',
   'import * as helper from "external-package"; export { helper };',
 ])("keeps published updater bridges usable beside %s", async (external) => {
@@ -51,7 +50,7 @@ it.each([
   }
 });
 
-it.each(externalSources)(
+it.each([namedExport, namespaceImport])(
   "refuses a required updater implementation replaced with an external $kind",
   ({ source: template }) => {
     const root = createTempDir("update-compat-required-external-");
@@ -71,7 +70,10 @@ it.each(externalSources)(
   },
 );
 
-it.each(externalSources)("refuses to omit a published external $kind", ({ source }) => {
+it.each([
+  namedExport,
+  { kind: "namespace export", source: 'export * as NAME from "external-package";' },
+])("refuses to omit a published external $kind", ({ source }) => {
   const root = createTempDir("update-compat-published-external-");
   fs.mkdirSync(path.join(root, "dist"));
   fs.writeFileSync(

@@ -75,8 +75,3 @@ export function normalizeScpRemotePath(value: string | null | undefined): string
 
   return trimmed;
 }
-
-/** Return true when a value is safe for the SCP remote path position. */
-export function isSafeScpRemotePath(value: string | null | undefined): boolean {
-  return normalizeScpRemotePath(value) !== undefined;
-}

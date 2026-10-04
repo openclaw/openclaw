@@ -422,11 +422,17 @@ async function runWithAdvisoryLimits(
   }
 }
 
-/**
- * Returns whether oxlint args need package-boundary declaration artifacts first.
- */
+/** Ordinary lint is type-aware; focused guards and metadata commands need no types. */
+export function shouldPrepareOxlintArtifacts(args: readonly string[]) {
+  return (
+    !args.includes(OPENCLAW_FOCUSED_CONFIG_FLAG) &&
+    !args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))
+  );
+}
+
+/** Returns whether oxlint args also need plugin package-boundary declarations. */
 export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
-  if (args.some((arg) => OXLINT_PREPARE_SKIP_FLAGS.has(arg))) {
+  if (!shouldPrepareOxlintArtifacts(args)) {
     return false;
   }
 
@@ -660,11 +666,10 @@ export async function runOxlint(
     return { status: 0 };
   }
 
-  const root = process.cwd();
   const run = async (ownedDirectory?: string) => {
-    if (!focusedConfig) {
-      // Type-aware rules resolve Kysely schema projections, which are generated, not tracked.
-      await ensureKyselyTypes(root);
+    if (shouldPrepareOxlintArtifacts(argv) && env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1") {
+      // Source-backed core lint skips plugin declarations, not generated schema types.
+      await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
     }
     if (needsArtifactPreparation) {
       // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
@@ -678,8 +683,9 @@ export async function runOxlint(
     );
   };
   // Skip-prepare callers still consume shared declarations. Hold one owner across
-  // preparation and lint; source-only lint acquires it only for transient config.
-  return !focusedConfig && shouldPrepareExtensionPackageBoundaryArtifacts(argv)
+  // generation and lint; syntax-only guards need it only for transient config.
+  const root = process.cwd();
+  return shouldPrepareOxlintArtifacts(argv)
     ? await withDistArtifactOwnership(root, () => run(resolveDistArtifactLockPath(root)))
     : await run();
 }

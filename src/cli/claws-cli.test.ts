@@ -204,6 +204,7 @@ describe("claws cli", () => {
       },
       path: "state.sqlite",
       walMaintenance: {
+        stop: async () => {},
         checkpoint: () => false,
         close: mocks.closeReadOnlyDatabase,
         reclaimFreePages: createSqliteWalReclamationResult,
@@ -490,7 +491,8 @@ describe("claws cli", () => {
   it("resumes when config committed before the workspace-ready phase advanced", async () => {
     const { plan, workspace, resume } = await preparePendingAdd("workspace_ready");
     await mkdir(workspace);
-    mocks.loadConfig.mockReturnValue({ agents: { list: [plan.agent.config] } });
+    const { id, ...entry } = plan.agent.config;
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { [id]: entry } } });
 
     await resume();
 
@@ -516,7 +518,7 @@ describe("claws cli", () => {
 
   it("preserves a real agent collision while an add is still pending", async () => {
     const { workspace, resume } = await preparePendingAdd("pending");
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "demo-agent", workspace }] } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { "demo-agent": { workspace } } } });
 
     await resume();
 
@@ -529,7 +531,7 @@ describe("claws cli", () => {
 
   it("does not resume through another agent's configured workspace", async () => {
     const { workspace, resume } = await preparePendingAdd("workspace_ready");
-    mocks.loadConfig.mockReturnValue({ agents: { list: [{ id: "other-agent", workspace }] } });
+    mocks.loadConfig.mockReturnValue({ agents: { entries: { "other-agent": { workspace } } } });
 
     await resume();
 

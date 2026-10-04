@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -55,6 +59,8 @@ function expectOAuthFormCall(expectedUrl: string, expectedForm: Record<string, s
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("GitHub OAuth client", () => {
@@ -87,6 +93,26 @@ describe("GitHub OAuth client", () => {
     );
     expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
       "failed with [REDACTED]",
+    );
+  });
+
+  it.each([
+    ["https://api.ghe.example.test", "https://api.ghe.example.test/user"],
+    ["https://ghe.example.test/api/v3", "https://ghe.example.test/api/v3/user"],
+  ])("verifies enterprise credentials at %s", async (apiBaseUrl, expectedUrl) => {
+    setRuntimeConfigSnapshot({ gateway: { github: { apiBaseUrl } } });
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 303, login: "enterprise-user", avatar_url: null }));
+    await expect(
+      verifyGitHubCredential("synthetic-enterprise-token", { apiBaseUrl }),
+    ).resolves.toMatchObject({
+      status: "available",
+      account: { accountId: 303, login: "enterprise-user" },
+    });
+    expect(probe).toHaveBeenCalledExactlyOnceWith(
+      expectedUrl,
+      expect.objectContaining({ method: "GET" }),
     );
   });
 

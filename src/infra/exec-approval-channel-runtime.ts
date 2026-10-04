@@ -114,8 +114,6 @@ export function createExecApprovalChannelRuntime<
   let startPromise: Promise<void> | null = null;
   let replayPromise: Promise<void> | null = null;
 
-  const shouldKeepRunning = (): boolean => shouldRun;
-
   const spawn = (label: string, promise: Promise<void>): void => {
     void promise.catch((err: unknown) => {
       const message = formatErrorMessage(err);
@@ -124,7 +122,7 @@ export function createExecApprovalChannelRuntime<
   };
 
   const stopClientIfInactive = (client: GatewayClient): boolean => {
-    if (shouldKeepRunning()) {
+    if (shouldRun) {
       return false;
     }
     gatewayClient = null;
@@ -149,7 +147,7 @@ export function createExecApprovalChannelRuntime<
     requestInput: TRequest,
     opts?: { ignoreIfInactive?: boolean; alreadyAccepted?: boolean },
   ): Promise<void> => {
-    if (opts?.ignoreIfInactive && !shouldKeepRunning()) {
+    if (opts?.ignoreIfInactive && !shouldRun) {
       return;
     }
     const request = normalizeApprovalRequest(requestInput);
@@ -250,7 +248,7 @@ export function createExecApprovalChannelRuntime<
         }
       }
     } catch (error) {
-      if (!shouldKeepRunning()) {
+      if (!shouldRun) {
         return;
       }
       throw error;
@@ -307,8 +305,7 @@ export function createExecApprovalChannelRuntime<
             eventKinds,
             // SAFETY: Gateway-owned subscribers publish the canonical normalized request union.
             shouldHandle: (request) =>
-              shouldKeepRunning() &&
-              adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
+              shouldRun && adapter.shouldHandle(request as NormalizedApprovalRequest<TRequest>),
             onRequested: (request) => {
               spawn(
                 "error handling approval request",

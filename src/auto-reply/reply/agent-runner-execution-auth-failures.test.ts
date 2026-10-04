@@ -390,7 +390,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-6-astra` with the OpenAI OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
+        "⚠️ OpenAI needs a different sign-in for this model. Open Models in the Control UI or run `openclaw configure` to choose how to connect.",
       );
     }
   });
@@ -409,7 +409,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.',
+        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.",
       );
     }
   });
@@ -432,7 +432,7 @@ describe("executeAgentTurn: authentication failures", () => {
     if (result.kind === "final") {
       expect(result.payload.text).toContain("Couldn't sign in to openai.");
       expect(result.payload.text).toContain("openclaw configure");
-      expect(result.payload.text).toContain("(invalid_grant)");
+      expect(result.payload.text).not.toContain("invalid_grant");
       expect(result.payload.text).not.toContain("Auth profile failover exhausted");
     }
   });
@@ -456,7 +456,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "The selected auth profile is unavailable in this agent's OpenClaw credential store. Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.",
+        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
       );
       expect(result.payload.text).not.toContain("openai:private");
       expect(result.payload.text).not.toContain("arbitrary plugin detail");
@@ -481,13 +481,13 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toContain("Couldn't reach openai");
-      expect(result.payload.text).toContain("messages must alternate roles");
+      expect(result.payload.text).not.toContain("messages must alternate roles");
       expect(result.payload.text).not.toContain("models auth login");
       expect(result.payload.text).not.toContain("openclaw configure");
     }
   });
 
-  it("points stale openai missing-key failures at doctor repair with re-auth fallback", async () => {
+  it("points missing-key failures to account setup", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new ProviderAuthError(
         "missing-provider-auth",
@@ -502,7 +502,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        '⚠️ Missing API key for provider "openai". Run `openclaw doctor --fix` to repair stale OpenAI model/session routes, restart the gateway if doctor asks, then try again. If doctor has nothing to repair or the error persists, re-auth with `openclaw models auth login --provider openai` or run `openclaw configure`.',
+        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.",
       );
     }
   });
@@ -522,7 +522,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for the selected provider on the gateway. Configure provider auth, then try again.",
+        "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
       );
     }
   });

@@ -10,10 +10,10 @@ import {
 } from "./update-command-executor.js";
 import type { InitializedUpdate } from "./update-command-initialization.js";
 import { admitUpdateRequesterContinuation } from "./update-command-managed-context.js";
+import { assertUpdatePackageActivationAdmission } from "./update-command-package-activation.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   admitUpdateCommandRun,
-  assertUpdatePackageActivationAdmission,
   resolveUpdateCommandAdmissionRoot,
   withUpdatePreviewSignals,
   type prepareUpdateCommand,
@@ -84,7 +84,7 @@ export async function runAdmittedUpdate(
   try {
     assertInitializationCurrent?.();
     run.executorFence = initializedFence;
-    await initialization?.registerRun(run);
+    await initialization?.registerRun(run, () => disposePresentation?.());
     const presentation = createUpdateProgress(!opts.json, run);
     disposePresentation = presentation.dispose;
     const executeWith = (executor: UpdateCommandExecutor) =>
@@ -152,6 +152,8 @@ export async function runAdmittedUpdate(
     }
     throw error;
   } finally {
-    disposePresentation?.();
+    if (!initialization) {
+      disposePresentation?.();
+    }
   }
 }

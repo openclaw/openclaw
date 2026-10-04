@@ -183,10 +183,6 @@ NODE
   )" || return $?
 
   if [[ "$capability" == "missing-export" ]]; then
-    if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
-      echo "Staged target does not export resolveCliBackendDockerPackages; preserving historical no-package-setup behavior."
-      return 0
-    fi
     echo "staged target does not export resolveCliBackendDockerPackages" >&2
     return 1
   fi

@@ -4,6 +4,7 @@ import { syncBuiltinESMExports } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   CONTROL_UI_ASSET_MANIFEST_FILENAME,
@@ -19,6 +20,30 @@ export function createRetentionManifest(entries: ControlUiAssetManifestEntry[]) 
     generation: hashControlUiAssetManifestEntries(assets),
     assets,
   };
+}
+
+export function holdRetentionAssetRead(assetPath: string) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+    const handle = await open(...args);
+    if (args[0] === assetPath) {
+      const read = handle.read.bind(handle);
+      vi.spyOn(handle, "read").mockImplementation((async (
+        buffer: Buffer,
+        offset: number,
+        length: number,
+        position: number | null,
+      ) => {
+        entered.resolve();
+        await release.promise;
+        return read(buffer, offset, length, position);
+      }) as typeof handle.read);
+    }
+    return handle;
+  });
+  return { entered: entered.promise, release: release.resolve };
 }
 
 export async function writeRetentionBuild(

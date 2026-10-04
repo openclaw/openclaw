@@ -695,7 +695,7 @@ describe("gateway server cron", () => {
 
     await writeCronConfig({
       session: { mainKey: "main" },
-      agents: { entries: { ops: { default: true } } },
+      agents: { entries: { ops: {} } },
       channels: { telegram: { botToken: "telegram-token" } },
     });
 
@@ -714,7 +714,7 @@ describe("gateway server cron", () => {
 
     await writeCronConfig({
       session: { mainKey: "main" },
-      agents: { entries: { main: { default: true }, ops: {} } },
+      agents: { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {}, ops: {} } },
       channels: { telegram: { botToken: "telegram-token" } },
     });
 
@@ -767,7 +767,7 @@ describe("gateway server cron", () => {
       cronEnabled: true,
     });
     await writeCronConfig({
-      agents: { entries: { main: { default: true }, writer: {} } },
+      agents: { defaults: { systemAgent: { agentId: "main" } }, entries: { main: {}, writer: {} } },
     });
     const events = createCronEventCollector();
     const cronState = await createDirectCronState({ broadcast: events["broadcast"] });
@@ -989,6 +989,48 @@ describe("gateway server cron", () => {
     });
     expect(disabledRuns.ok).toBe(true);
     expect((disabledRuns.payload as { entries?: unknown[] }).entries).toEqual([]);
+  });
+
+  test("cron.run waitTimeoutMs returns the finished run, or only its runId when the wait ends first", async () => {
+    const runnerEntered = createDeferred();
+    const slowResult = createDeferred<{ status: "ok"; summary: string }>();
+    cronIsolatedRun.mockImplementationOnce(() => {
+      runnerEntered.resolve();
+      return slowResult.promise;
+    });
+    await setupCronTestRun();
+    const ws = await startCronClient();
+    const jobId = await addWebhookCronJob({
+      ws,
+      name: "waited job",
+      sessionTarget: "isolated",
+      payloadText: "report",
+      delivery: { mode: "none" },
+    });
+
+    const pending = await rpcReq(ws, "cron.run", { id: jobId, waitTimeoutMs: 50 }, 5_000);
+    expect(pending.ok).toBe(true);
+    expect(pending.payload).toEqual({
+      ok: true,
+      enqueued: true,
+      runId: expect.any(String),
+      processInstanceId: getGatewayProcessInstanceId(),
+    });
+    await runnerEntered.promise;
+    const slowFinished = waitForCronEvent(
+      ws,
+      (payload) => payload?.jobId === jobId && payload?.action === "finished",
+    );
+    slowResult.resolve({ status: "ok", summary: "late report" });
+    await slowFinished;
+
+    cronIsolatedRun.mockResolvedValueOnce({ status: "ok", summary: "waited report" });
+    const done = await rpcReq(ws, "cron.run", { id: jobId, waitTimeoutMs: 10_000 }, 15_000);
+    expect(done.ok).toBe(true);
+    const runId = expectEnqueuedRunPayload(done.payload);
+    expect(done.payload).toMatchObject({
+      run: { runId, status: "ok", completionStatus: "succeeded", summary: "waited report" },
+    });
   });
 
   test("returns already-running without starting background work", async () => {

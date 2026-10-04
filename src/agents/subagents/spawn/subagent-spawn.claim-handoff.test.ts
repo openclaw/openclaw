@@ -70,6 +70,7 @@ function claimFixture() {
     canLaunch: () => !claimed,
     canCleanupSession: () => true,
     canAcceptLaunch: () => true,
+    canAbortAcceptedRun: () => true,
     canRetireReservation: () => true,
     settleFailedLaunch: settle,
     waitForClaim: () => (claimed ? gate.promise : undefined),

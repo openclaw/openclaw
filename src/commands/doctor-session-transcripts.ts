@@ -32,6 +32,7 @@ import {
 } from "./doctor-session-canonical-keys.js";
 import {
   repairCanonicalSessionDeliveryStates,
+  repairLegacySessionEntryStates,
   repairCanonicalSessionResolvedSkills,
   type SessionDeliveryStateRepairReport,
 } from "./doctor-session-delivery-state.js";
@@ -208,7 +209,8 @@ export async function noteSessionTranscriptHealth(options?: {
   };
   // Public doctor owns the operator-facing SQLite import; the targeted
   // --session-sqlite subcommand remains the diagnostic/proof surface.
-  const { runDoctorSessionSqlite } = await import("./doctor-session-sqlite.js");
+  const { hasRetainedDoctorSessionSources, runDoctorSessionSqlite } =
+    await import("./doctor-session-sqlite.js");
   let reservedKeyReport: ReservedIncognitoKeyRepairReport = { found: 0, repaired: 0 };
   let deliveryReport: SessionDeliveryStateRepairReport = {
     found: 0,
@@ -216,6 +218,11 @@ export async function noteSessionTranscriptHealth(options?: {
     scannedStores: 0,
   };
   let resolvedSkillsReport: SessionDeliveryStateRepairReport = {
+    found: 0,
+    repaired: 0,
+    scannedStores: 0,
+  };
+  let entryStateReport: SessionDeliveryStateRepairReport = {
     found: 0,
     repaired: 0,
     scannedStores: 0,
@@ -261,12 +268,29 @@ export async function noteSessionTranscriptHealth(options?: {
     return postSessionPluginReceipt;
   };
   const runSessionSqlite = async (maintenanceAuthority?: DoctorSqliteMaintenanceAuthority) => {
-    const report = await runDoctorSessionSqlite({
-      allAgents: true,
-      ...(params.cfg ? { cfg: params.cfg } : {}),
-      env: params.env,
-      mode: params.shouldRepair ? "import" : "dry-run",
-    });
+    const previewTargets = params.shouldRepair
+      ? undefined
+      : listExistingAgentDatabaseTargets(params.cfg ?? {}, params.env);
+    if (!params.shouldRepair) {
+      entryStateReport = await repairLegacySessionEntryStates({
+        apply: false,
+        cfg: params.cfg ?? {},
+        env: params.env,
+        targets: previewTargets,
+      });
+      if (entryStateReport.found > 0) {
+        return undefined;
+      }
+    }
+    const report = await runDoctorSessionSqlite(
+      {
+        allAgents: true,
+        ...(params.cfg ? { cfg: params.cfg } : {}),
+        env: params.env,
+        mode: params.shouldRepair ? "import" : "dry-run",
+      },
+      maintenanceAuthority,
+    );
     const { migrateLegacyMainSessionKeys } =
       await import("../config/sessions/legacy-main-session-migration.js");
     legacyMainSessionResult = await migrateLegacyMainSessionKeys({
@@ -280,10 +304,10 @@ export async function noteSessionTranscriptHealth(options?: {
       env: params.env,
     };
     canonicalKeyReport = await repairCanonicalSessionKeys(repairParams);
-    // Import and key repair can create stores; later row repairs share their settled inventory.
+    // Preview reuses its read-only inventory; import and key repair can create stores.
     const rowRepairParams = {
       ...repairParams,
-      targets: listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
+      targets: previewTargets ?? listExistingAgentDatabaseTargets(repairParams.cfg, params.env),
     };
     // Canonical-key ties compare complete entry JSON, so select their winner before stripping it.
     resolvedSkillsReport = repairCanonicalSessionResolvedSkills(rowRepairParams);
@@ -292,7 +316,7 @@ export async function noteSessionTranscriptHealth(options?: {
     deliveryReport = repairCanonicalSessionDeliveryStates(rowRepairParams);
     repairLegacySessionExecPolicy(rowRepairParams);
     acpKeyReport = await repairAcpSessionMetaKeysForDoctor({
-      ...repairParams,
+      ...rowRepairParams,
       authority: maintenanceAuthority,
     });
     titleReport = await repairLegacySessionTitles({
@@ -330,7 +354,8 @@ export async function noteSessionTranscriptHealth(options?: {
         config: params.cfg ?? {},
         env: params.env,
         maintenanceAuthority,
-        ...(maintenanceAuthority
+        // The hook also tells the writer that completion certification has a consumer.
+        ...(maintenanceAuthority && hasRetainedDoctorSessionSources(report)
           ? {
               beforeCompletion: async (
                 completedPluginIds: readonly string[],
@@ -399,6 +424,15 @@ export async function noteSessionTranscriptHealth(options?: {
     });
     return postSessionPluginReceipt;
   }
+  if (entryStateReport.found > 0) {
+    note(
+      `- Found ${entryStateReport.found} durable session row(s) with legacy pending-delivery, fallback, or memory-flush state. Run "openclaw doctor --fix" before further session inspection.`,
+      "Session SQLite",
+    );
+  }
+  if (!report) {
+    return postSessionPluginReceipt;
+  }
   if (worktreeWorkspaceReport.found > 0) {
     note(
       params.shouldRepair
@@ -408,11 +442,13 @@ export async function noteSessionTranscriptHealth(options?: {
     );
   }
   if (acpKeyReport.found > 0 || acpKeyReport.warnings.length > 0) {
+    params.onWarnings?.(acpKeyReport.warnings);
     note(
       [
         params.shouldRepair
-          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata key(s).`
-          : `- Found ${acpKeyReport.found} legacy ACP metadata key(s). Run "openclaw doctor --fix" to repair them.`,
+          ? `- Repaired ${acpKeyReport.repaired} of ${acpKeyReport.found} legacy ACP metadata record(s).`
+          : `- Found ${acpKeyReport.found} legacy ACP metadata record(s). Run "openclaw doctor --fix" to repair them.`,
+        ...(acpKeyReport.backups ?? []).map((backup) => `- Saved ACP metadata backup: ${backup}`),
         ...acpKeyReport.warnings,
       ].join("\n"),
       "ACP session keys",

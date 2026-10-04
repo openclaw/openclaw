@@ -32,30 +32,6 @@ type JsonRpcMessage = Record<string, unknown>;
 
 type McpToolPayload = Record<string, unknown>;
 
-function mcpHeaders(params: {
-  sessionId?: string;
-  protocolVersion?: string;
-}): Record<string, string> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "User-Agent": USER_AGENT,
-    // The Search MCP may answer either as a single JSON object or as an SSE
-    // stream; advertise both so the server can pick.
-    Accept: "application/json, text/event-stream",
-  };
-  // After `initialize` the Streamable-HTTP spec expects the negotiated session
-  // id and protocol version echoed on every follow-up request.
-  if (params.sessionId) {
-    headers["Mcp-Session-Id"] = params.sessionId;
-  }
-  if (params.protocolVersion) {
-    headers["MCP-Protocol-Version"] = params.protocolVersion;
-  }
-  // No Authorization header: the free tier is anonymous, and sending an
-  // empty/garbage bearer would flip the server to a 401 instead of serving it.
-  return headers;
-}
-
 /**
  * Select the first result/error matching requestId from a fully read JSON or SSE body,
  * falling back to the last result/error when no id matches. JSON batches are flattened
@@ -162,10 +138,13 @@ async function postMcp(params: {
       signal: params.signal,
       init: {
         method: "POST",
-        headers: mcpHeaders({
-          sessionId: params.sessionId,
-          protocolVersion: params.protocolVersion,
-        }),
+        headers: {
+          "Content-Type": "application/json",
+          "User-Agent": USER_AGENT,
+          Accept: "application/json, text/event-stream",
+          ...(params.sessionId ? { "Mcp-Session-Id": params.sessionId } : {}),
+          ...(params.protocolVersion ? { "MCP-Protocol-Version": params.protocolVersion } : {}),
+        },
         body: JSON.stringify(params.body),
       },
     },
@@ -188,22 +167,34 @@ async function postMcp(params: {
   );
 }
 
-/**
- * Run the MCP handshake then a single `tools/call`, returning the tool payload.
- *
- * initialize -> (capture `Mcp-Session-Id` header + negotiated protocolVersion)
- * -> notifications/initialized -> tools/call. Anonymous (no bearer token).
- */
-async function mcpCall(
-  toolName: string,
-  args: Record<string, unknown>,
-  timeoutSeconds: number,
-  signal?: AbortSignal,
-): Promise<McpToolPayload> {
+export async function runParallelMcpSearch(params: {
+  objective?: string;
+  searchQueries: readonly string[];
+  maxResults: number;
+  sessionId?: string;
+  modelName?: string;
+  timeoutSeconds?: number;
+  signal?: AbortSignal;
+}): Promise<ParallelSearchResponse & { results: unknown[] }> {
+  // Search sessions are distinct from the server's MCP transport session.
+  const sessionId = params.sessionId?.trim() || randomUUID();
+  const timeoutSeconds = params.timeoutSeconds ?? MCP_TIMEOUT_SECONDS;
+  const args: Record<string, unknown> = {
+    // MCP requires a non-empty objective (REST treats it as optional); when the
+    // caller only supplied keyword queries, use them as the objective rather
+    // than failing the call.
+    objective: params.objective ?? params.searchQueries.join(" "),
+    search_queries: [...params.searchQueries],
+    session_id: sessionId,
+  };
+  if (params.modelName) {
+    args.model_name = params.modelName;
+  }
+
   const initId = randomUUID();
   const init = await postMcp({
     timeoutSeconds,
-    signal,
+    signal: params.signal,
     body: {
       jsonrpc: "2.0",
       id: initId,
@@ -217,7 +208,7 @@ async function mcpCall(
   });
   // Only echo a server-assigned session id. Stateless Streamable HTTP servers
   // omit Mcp-Session-Id; inventing one can make such servers reject follow-ups.
-  const sessionId = init.sessionIdHeader ?? undefined;
+  const mcpSessionId = init.sessionIdHeader ?? undefined;
   const initEnvelope = selectMcpEnvelope(init.text, initId);
   const negotiatedVersion =
     (isRecord(initEnvelope.result) && typeof initEnvelope.result.protocolVersion === "string"
@@ -226,10 +217,10 @@ async function mcpCall(
 
   await postMcp({
     body: { jsonrpc: "2.0", method: "notifications/initialized" },
-    sessionId,
+    sessionId: mcpSessionId,
     protocolVersion: negotiatedVersion,
     timeoutSeconds,
-    signal,
+    signal: params.signal,
   });
   const callId = randomUUID();
   const call = await postMcp({
@@ -237,58 +228,14 @@ async function mcpCall(
       jsonrpc: "2.0",
       id: callId,
       method: "tools/call",
-      params: { name: toolName, arguments: args },
+      params: { name: "web_search", arguments: args },
     },
-    sessionId,
+    sessionId: mcpSessionId,
     protocolVersion: negotiatedVersion,
     timeoutSeconds,
-    signal,
+    signal: params.signal,
   });
-  return extractMcpToolPayload(selectMcpEnvelope(call.text, callId));
-}
-
-function normalizeMcpSessionId(value: string | undefined): string {
-  // Use the caller-supplied id verbatim — the runtime already applies the
-  // shared session-id contract before building the cache key, so reusing it
-  // here keeps the MCP session, cache key, and reported sessionId in agreement
-  // (re-minting a valid id would silently break session grouping). The Search
-  // MCP requires a session_id, so mint a per-call uuid only when none was given.
-  return value?.trim() || randomUUID();
-}
-
-/**
- * Run a `web_search` tool call against the free hosted Search MCP and return a
- * `ParallelSearchResponse`-compatible object so the runtime's existing result
- * normalization (`normalizeParallelResults`) is reused verbatim.
- */
-export async function runParallelMcpSearch(params: {
-  objective?: string;
-  searchQueries: readonly string[];
-  maxResults: number;
-  sessionId?: string;
-  modelName?: string;
-  timeoutSeconds?: number;
-  signal?: AbortSignal;
-}): Promise<ParallelSearchResponse & { results: unknown[] }> {
-  const sessionId = normalizeMcpSessionId(params.sessionId);
-  const args: Record<string, unknown> = {
-    // MCP requires a non-empty objective (REST treats it as optional); when the
-    // caller only supplied keyword queries, use them as the objective rather
-    // than failing the call.
-    objective: params.objective ?? params.searchQueries.join(" "),
-    search_queries: [...params.searchQueries],
-    session_id: sessionId,
-  };
-  if (params.modelName) {
-    args.model_name = params.modelName;
-  }
-
-  const payload = await mcpCall(
-    "web_search",
-    args,
-    params.timeoutSeconds ?? MCP_TIMEOUT_SECONDS,
-    params.signal,
-  );
+  const payload = extractMcpToolPayload(selectMcpEnvelope(call.text, callId));
   const allResults = Array.isArray(payload.results) ? payload.results : [];
   // The MCP serves a fixed result count, so apply the caller's count client-side
   // to match the REST path's max_results behavior.

@@ -155,9 +155,7 @@ function finalizeInboundContextImpl<T extends Record<string, unknown>>(
   normalized.BodyForAgent = normalized.agentText;
   normalized.BodyForCommands = normalized.commandText;
 
-  const label =
-    normalizeOptionalString(normalized.ConversationLabel) ??
-    normalizeOptionalString(resolveConversationLabel(normalized));
+  const label = resolveConversationLabel(normalized);
   if (label) {
     normalized.ConversationLabel = label;
   }

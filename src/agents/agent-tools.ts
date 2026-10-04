@@ -1,14 +1,7 @@
-/**
- * Builds the effective OpenClaw agent tool surface.
- * Assembles core, shell, channel, OpenClaw, plugin, and Tool Search tools, then
- * applies sandbox, profile, provider, sender, group, and sub-agent policy.
- */
-
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
-import { logWarn } from "../logger.js";
 import type { PluginHookToolRequesterContext } from "../plugins/hook-types.js";
 import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
@@ -23,11 +16,13 @@ import {
 } from "./agent-tool-metadata.js";
 import { createCodingToolsGatewayCaller } from "./agent-tools.caller.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
-import { projectMemoryFlushTools } from "./agent-tools.memory-flush.js";
 import {
-  filterToolsByMessageProvider,
-  messageProviderExcludesTool,
-} from "./agent-tools.message-provider-policy.js";
+  assertMemoryFlushPersistenceToolAvailable,
+  projectMemoryFlushTools,
+  resolveMemoryFlushToolSetup,
+  warnIfMemoryFlushFileWriterUnavailable,
+} from "./agent-tools.memory-flush.js";
+import { filterToolsByMessageProvider } from "./agent-tools.message-provider-policy.js";
 import { applyModelProviderToolPolicy } from "./agent-tools.model-provider-policy.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
 import {
@@ -92,11 +87,8 @@ export function createOpenClawCodingToolsInternal(
 ): AnyAgentTool[] {
   const preparedTools = preparedSurface?.tools;
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
-  const isMemoryFlushRun = options?.trigger === "memory";
-  if (isMemoryFlushRun && !options?.memoryFlushWritePath) {
-    throw new Error("memoryFlushWritePath required for memory-triggered tool runs");
-  }
-  const memoryFlushWritePath = isMemoryFlushRun ? options.memoryFlushWritePath : undefined;
+  const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
+    resolveMemoryFlushToolSetup(options);
   const cronSelfRemoveOnlyJobId =
     options?.trigger === "cron" && options.jobId?.trim() ? options.jobId.trim() : undefined;
   // Prefer the already-resolved sandbox context policy. Recomputing from
@@ -218,7 +210,7 @@ export function createOpenClawCodingToolsInternal(
     sessionId: options?.sessionId,
     sessionKey: options?.runSessionKey ?? options?.sessionKey,
   });
-  const includeCoreTools = preparedTools === undefined && options?.includeCoreTools !== false;
+  const includeCoreTools = options?.includeCoreTools !== false;
   const toolConstructionPlan = options?.toolConstructionPlan ?? {
     includeBaseCodingTools: includeCoreTools,
     includeShellTools: includeCoreTools,
@@ -229,9 +221,8 @@ export function createOpenClawCodingToolsInternal(
   const includeBaseCodingTools = includeCoreTools && toolConstructionPlan.includeBaseCodingTools;
   const includeShellTools = includeCoreTools && toolConstructionPlan.includeShellTools;
   const includeOpenClawTools = includeCoreTools && toolConstructionPlan.includeOpenClawTools;
-  const includeChannelTools =
-    preparedTools === undefined && toolConstructionPlan.includeChannelTools;
-  const includePluginTools = preparedTools === undefined && toolConstructionPlan.includePluginTools;
+  const includeChannelTools = toolConstructionPlan.includeChannelTools;
+  const includePluginTools = toolConstructionPlan.includePluginTools;
   const fsPolicy = {
     workspaceOnly: coreToolPolicy.workspaceOnly,
     ...(sessionPermissionPolicy ? { root: sessionPermissionPolicy.root } : {}),
@@ -364,6 +355,7 @@ export function createOpenClawCodingToolsInternal(
     workspaceDir: workspaceRoot,
     fsPolicy,
     requesterSenderId: options?.senderId,
+    memoryFlush,
     sandboxBrowserBridgeUrl: sandbox?.browser?.bridgeUrl,
     allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
     sandboxed: Boolean(sandbox),
@@ -381,9 +373,13 @@ export function createOpenClawCodingToolsInternal(
         }),
     options?.clientCaps,
   );
-  const ringZeroTools = includeOpenClawTools ? getActiveAgentRingZeroTools() : [];
+  // Provider flushes must not regain setup tools outside their declared projection.
+  const ringZeroTools =
+    includeOpenClawTools && !(isMemoryFlushRun && options?.memoryFlushTools)
+      ? getActiveAgentRingZeroTools()
+      : [];
   const toolSearchTools =
-    preparedTools === undefined && toolSearchControlsEnabled && ringZeroTools.length === 0
+    toolSearchControlsEnabled && ringZeroTools.length === 0
       ? createToolSearchTools({
           ...options,
           runtimeConfig: options?.config,
@@ -414,7 +410,7 @@ export function createOpenClawCodingToolsInternal(
     }),
     isAvailable: (): boolean => authorizedTools.some((tool) => tool.name === "message"),
   });
-  const tools: AnyAgentTool[] = preparedTools ?? [
+  const assembledTools: AnyAgentTool[] = [
     ...scheduledCoreTools,
     // Include channel-defined agent tools (login, etc.).
     ...(includeChannelTools ? listChannelAgentTools({ cfg: options?.config }) : []),
@@ -424,6 +420,7 @@ export function createOpenClawCodingToolsInternal(
           createOpenClawTools({
             ...pluginToolOptions,
             sessionPortalTarget,
+            sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             sessionPermissionPolicy,
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
@@ -484,6 +481,9 @@ export function createOpenClawCodingToolsInternal(
     ...toolSearchTools,
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
+  const tools = preparedTools
+    ? [...new Map([...assembledTools, ...preparedTools].map((tool) => [tool.name, tool])).values()]
+    : assembledTools;
   const swarmStructuredOutputTool =
     options?.swarmCollector && options.swarmOutputSchema
       ? tools.find((tool) => tool.name === "structured_output")
@@ -501,7 +501,9 @@ export function createOpenClawCodingToolsInternal(
               ? { root: sandboxRoot, bridge: sandboxFsBridge }
               : undefined,
         }
-      : undefined,
+      : isMemoryFlushRun
+        ? options?.memoryFlushTools
+        : undefined,
   );
   const unavailableCoreToolReason =
     isMemoryFlushRun && memoryFlushWritePath
@@ -539,6 +541,7 @@ export function createOpenClawCodingToolsInternal(
       structuredOutputTool: swarmStructuredOutputTool,
     },
   );
+  assertMemoryFlushPersistenceToolAvailable(authorizedTools, options?.memoryFlushTools);
   authorizedTools.forEach(bindAssembledAgentToolActionDescriptor);
   if (shouldInheritEffectiveToolAllowlist) {
     // Snapshot exporter only: this copies authorizedTools for descendants and
@@ -548,27 +551,11 @@ export function createOpenClawCodingToolsInternal(
   replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, authorizedTools, (tool) =>
     getPluginToolMeta(tool),
   );
-  if (
-    isMemoryFlushRun &&
-    memoryFlushWritePath &&
-    !authorizedTools.some((tool) => tool.name === "write") &&
-    // A transport whose allowlist never carries `write`, such as node, is an intended
-    // configuration, not a lost writer, so it stays quiet instead of warning per flush.
-    !messageProviderExcludesTool(
-      options?.toolPolicyMessageProvider ?? options?.messageProvider,
-      "write",
-    )
-  ) {
-    // Checked on the final authorized list, not the earlier flush surface: tools.deny,
-    // the model-provider policy and the rest of the pipeline all run after that surface
-    // is built, so a flush can hold `write` there and lose it here.
-    // Otherwise the run completes normally, the model reports the save as done, and the
-    // memory is lost with no record that it was never persisted. The text names no
-    // single config key because any of those filters can be the one that removed it.
-    logWarn(
-      `memory flush cannot persist ${memoryFlushWritePath}: no write tool survived this agent's tool policy, so this run will not save anything.`,
-    );
-  }
+  warnIfMemoryFlushFileWriterUnavailable({
+    tools: authorizedTools,
+    relativePath: memoryFlushWritePath,
+    messageProvider: options?.toolPolicyMessageProvider ?? options?.messageProvider,
+  });
   options?.recordToolPrepStage?.("authorization-policy");
   const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
   const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
@@ -609,6 +596,11 @@ export function createOpenClawCodingToolsInternal(
   return finalizeAgentTools({
     ...options,
     tools: filterRequesterYieldTools(authorizedTools, executionSessionKey),
+    wrapBeforeToolCallHook: preparedTools
+      ? (tool) =>
+          options?.wrapBeforeToolCallHook !== false &&
+          !preparedTools.some((prepared) => prepared.name === tool.name)
+      : options?.wrapBeforeToolCallHook,
     hookContext,
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   }).map(wrapGatewayCaller);

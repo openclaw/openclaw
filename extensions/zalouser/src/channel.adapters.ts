@@ -174,11 +174,6 @@ const sendZalouserOutbound: NonNullable<ChannelOutboundAdapter["sendMedia"]> = a
     }),
   );
 
-const zalouserRawSendResultAdapter = {
-  sendText: sendZalouserOutbound,
-  sendMedia: sendZalouserOutbound,
-};
-
 export const zalouserMessageAdapter = defineChannelMessageAdapter({
   id: "zalouser",
   durableFinal: {
@@ -445,18 +440,15 @@ export const zalouserOutboundAdapter = {
   deliveryMode: "direct" as const,
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown" as const,
-  sendPayload: async (
-    ctx: { payload: object } & Parameters<
-      NonNullable<typeof zalouserRawSendResultAdapter.sendText>
-    >[0],
-  ) =>
+  sendPayload: async (ctx: { payload: object } & Parameters<typeof sendZalouserOutbound>[0]) =>
     await sendPayloadWithChunkedTextAndMedia({
       ctx,
-      sendText: zalouserRawSendResultAdapter.sendText,
-      sendMedia: zalouserRawSendResultAdapter.sendMedia,
+      sendText: sendZalouserOutbound,
+      sendMedia: sendZalouserOutbound,
       emptyResult: createEmptyChannelResult("zalouser"),
     }),
-  ...zalouserRawSendResultAdapter,
+  sendText: sendZalouserOutbound,
+  sendMedia: sendZalouserOutbound,
   sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
 } satisfies ChannelOutboundAdapter;
 

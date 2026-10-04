@@ -179,9 +179,7 @@ function normalizeExplicitSystemAgentId(agentId: string): string {
   return normalized.ok ? normalized.value : agentId;
 }
 
-function parseConfigSetCommand(
-  input: string,
-): { path: string; value: string; valid: true } | { valid: false } | undefined {
+function parseConfigSetCommand(input: string): SystemAgentOperation | undefined {
   const prefix = input.match(CONFIG_SET_PREFIX_RE)?.[0];
   if (!prefix) {
     return undefined;
@@ -198,16 +196,16 @@ function parseConfigSetCommand(
       // through to model-visible text while remaining valid config commands.
       parseConfigSetPath(path);
       if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
-        return { valid: false };
+        return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
       }
-      return { path, value, valid: true };
+      return { kind: "config-set", path, value };
     } catch {
       continue;
     }
   }
   // Keep malformed writes on the host side so their values never reach the
   // model. This outcome is deliberately non-executable.
-  return body.trim() ? { valid: false } : undefined;
+  return body.trim() ? { kind: "none", message: INVALID_CONFIG_SET_MESSAGE } : undefined;
 }
 
 function parseConfigReadCommand(
@@ -236,16 +234,7 @@ function parseConfigReadCommand(
   return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
 }
 
-function parseConfigSetRefCommand(input: string):
-  | {
-      path: string;
-      source: "env" | "file" | "exec" | "store";
-      id: string;
-      provider?: string;
-      valid: true;
-    }
-  | { valid: false }
-  | undefined {
+function parseConfigSetRefCommand(input: string): SystemAgentOperation | undefined {
   const prefix = input.match(CONFIG_SET_REF_PREFIX_RE)?.[0];
   if (!prefix) {
     return undefined;
@@ -260,7 +249,7 @@ function parseConfigSetRefCommand(input: string):
     try {
       parseConfigSetPath(path);
       if (isSystemAgentSensitiveConfigPathEmbedding(path)) {
-        return { valid: false };
+        return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
       }
     } catch {
       continue;
@@ -273,17 +262,17 @@ function parseConfigSetRefCommand(input: string):
     const id = args.groups.id.trim();
     const provider = args.groups.provider ?? DEFAULT_SECRET_PROVIDER_ALIAS;
     if (!isValidSecretRef({ source, provider, id })) {
-      return { valid: false };
+      return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
     }
     return {
+      kind: "config-set-ref",
       path,
       source,
       id,
       ...(args.groups.provider ? { provider: args.groups.provider } : {}),
-      valid: true,
     };
   }
-  return body.trim() ? { valid: false } : undefined;
+  return body.trim() ? { kind: "none", message: INVALID_CONFIG_SET_MESSAGE } : undefined;
 }
 
 /** Stable name prefix; the secret-store writer allocates a fresh entry for every save. */
@@ -317,28 +306,12 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     }
   }
   const configSetRef = parseConfigSetRefCommand(trimmed);
-  if (configSetRef?.valid) {
-    return {
-      kind: "config-set-ref",
-      path: configSetRef.path,
-      source: configSetRef.source,
-      id: configSetRef.id,
-      ...(configSetRef.provider ? { provider: configSetRef.provider } : {}),
-    };
-  }
-  if (configSetRef && !configSetRef.valid) {
-    return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
+  if (configSetRef) {
+    return configSetRef;
   }
   const configSet = parseConfigSetCommand(trimmed);
   if (configSet) {
-    if (!configSet.valid) {
-      return { kind: "none", message: INVALID_CONFIG_SET_MESSAGE };
-    }
-    return {
-      kind: "config-set",
-      path: configSet.path,
-      value: configSet.value,
-    };
+    return configSet;
   }
   for (const [kind, prefix] of [
     ["config-unset", CONFIG_UNSET_PREFIX_RE],

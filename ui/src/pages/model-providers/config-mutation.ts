@@ -103,12 +103,6 @@ const PROBE_FAILURE_PRIORITY: readonly ModelsProbeResult["status"][] = [
   "unknown",
 ];
 
-export function isMissingMethodError(error: unknown): boolean {
-  return /method (?:not found|not supported)|unknown method/iu.test(
-    modelProviderErrorMessage(error),
-  );
-}
-
 export function mergeProbeResults(cardId: string, results: ModelsProbeResult[]): ModelsProbeResult {
   if (results.length === 1) {
     return results[0]!;
@@ -150,8 +144,7 @@ export function modelProviderConfigBusy(context: ApplicationContext): boolean {
   );
 }
 
-export type ModelProviderConfigMutation = {
-  key: string;
+type ModelProviderConfigMutation = {
   raw: Record<string, unknown>;
   note: string;
   replacePaths?: string[];

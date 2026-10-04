@@ -310,11 +310,7 @@ internal class ChatDictationController(
       synchronized(lock) {
         if (operation != null && operation != generation) return
         generation += 1
-        val active = completion
-        completion = null
-        _partialTranscript.value = ""
-        _state.value = ChatDictationState.Idle
-        active
+        resetLocked(ChatDictationState.Idle)
       }
     retireRecognizerAndReleaseMic()
     pending?.complete(null)
@@ -369,9 +365,7 @@ internal class ChatDictationController(
         if (operation != generation) return
         generation += 1
         val active = completion ?: return
-        completion = null
-        _partialTranscript.value = ""
-        _state.value = ChatDictationState.Idle
+        resetLocked(ChatDictationState.Idle)
         active
       }
     retireRecognizerAndReleaseMic()
@@ -386,15 +380,18 @@ internal class ChatDictationController(
       synchronized(lock) {
         if (operation != generation) return
         generation += 1
-        val active = completion
-        completion = null
-        _partialTranscript.value = ""
-        _state.value = ChatDictationState.Failure(reason)
-        active
+        resetLocked(ChatDictationState.Failure(reason))
       }
     retireRecognizerAndReleaseMic()
     pending?.complete(null)
   }
+
+  private fun resetLocked(nextState: ChatDictationState): CompletableDeferred<String?>? =
+    completion.also {
+      completion = null
+      _partialTranscript.value = ""
+      _state.value = nextState
+    }
 
   private fun retireRecognizerAndReleaseMic() {
     // Keep shared microphone ownership until the platform recognizer is retired;
@@ -440,7 +437,7 @@ internal fun rememberChatDictationController(viewModel: MainViewModel): ChatDict
     remember(context, viewModel) {
       ChatDictationController(
         recognizer = AndroidChatDictationRecognizer(context),
-        requestPermission = viewModel::requestDictationPermission,
+        requestPermission = viewModel::requestRecordAudioPermission,
         acquireMic = viewModel::tryAcquireDictationMic,
         releaseMic = viewModel::releaseDictationMic,
       )

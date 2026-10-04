@@ -139,14 +139,14 @@ function renderElement(
       }
       return applyInlineStyles(renderMentionElement(element), element.style);
     case "img": {
-      const imageKey = normalizeFeishuExternalKey(toStringOrEmpty(element.image_key));
+      const imageKey = normalizeFeishuExternalKey(element.image_key);
       if (imageKey) {
         attachments.push({ kind: "image", key: imageKey });
       }
       return renderMediaPlaceholders ? "![image]" : "";
     }
     case "media": {
-      const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(element.file_key));
+      const fileKey = normalizeFeishuExternalKey(element.file_key);
       if (fileKey) {
         const fileName = toStringOrEmpty(element.file_name) || undefined;
         attachments.push({ kind: "file", key: fileKey, ...(fileName ? { fileName } : {}) });
@@ -190,7 +190,7 @@ function appendTopLevelPostFiles(
     if (!isRecord(entry) || entry.is_folder === true) {
       continue;
     }
-    const fileKey = normalizeFeishuExternalKey(toStringOrEmpty(entry.file_key));
+    const fileKey = normalizeFeishuExternalKey(entry.file_key);
     if (!fileKey || seenFileKeys.has(fileKey)) {
       continue;
     }

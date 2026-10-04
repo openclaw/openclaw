@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 describe("tool detail sidebar", () => {

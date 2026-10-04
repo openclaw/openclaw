@@ -126,224 +126,138 @@ function restrictedSelection(options: { empty?: boolean; assertCurrent?: () => v
   };
 }
 
-it.each([false, true])(
-  "constrains Default to permitted automatic models without granting manual fallback selection (%s)",
-  async (reset) => {
-    const { params, run } = restrictedSelection();
-    params.request = {
-      provider: "fixture",
-      model: "fallback",
-      isDefault: false,
-      ...(reset ? { resetToDefault: true as const } : {}),
-      runtime: { kind: "unchanged" },
-    };
+it.each([
+  { model: "fallback", reset: false, empty: false, applied: false },
+  { model: "fallback", reset: true, empty: false, applied: true },
+  { model: "primary", reset: false, empty: false, applied: false },
+  { model: "primary", reset: true, empty: true, applied: false },
+])(
+  "enforces operator policy for $model (reset=$reset, empty=$empty)",
+  async ({ model, reset, empty, applied }) => {
+    const { params, run } = restrictedSelection({ empty });
+    params.request.model = model;
+    if (reset) {
+      params.request.resetToDefault = true;
+    }
     const before = structuredClone(params.sessionEntry);
     const result = await run();
-
-    expect(result).toMatchObject(
-      reset
-        ? { status: "applied", provider: "fixture", model: "fallback" }
-        : { status: "rejected", reason: "not-allowed" },
-    );
-    if (reset) {
+    if (applied) {
+      expect(result).toMatchObject({ status: "applied", provider: "fixture", model: "fallback" });
       expect(params.sessionEntry.modelOverride).toBeUndefined();
     } else {
+      expect(result).toMatchObject({ status: "rejected", reason: "not-allowed" });
       expect(params.sessionEntry).toEqual(before);
+      if (model === "primary") {
+        expect(result).toMatchObject({ message: expect.stringContaining("operator role") });
+        expectNoSelectionEffects();
+      }
     }
   },
 );
 
-it.each([false, true])(
-  "rejects denied manual selection or an empty role before effects (empty=%s)",
-  async (empty) => {
-    const { params, run } = restrictedSelection({ empty });
-    params.request = {
-      provider: "fixture",
-      model: "primary",
-      isDefault: false,
-      ...(empty ? { resetToDefault: true as const } : {}),
-      runtime: { kind: "unchanged" },
-    };
-    const before = structuredClone(params.sessionEntry);
-    const result = await run();
-
-    expect(result).toMatchObject({
-      status: "rejected",
-      reason: "not-allowed",
-      message: expect.stringContaining("operator role"),
-    });
-    expect(params.sessionEntry).toEqual(before);
-    expect(lifecycleEvents).toEqual([]);
-    expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
-  },
-);
-
-it("rechecks original operator authority after model preparation before selection mutation", async () => {
-  let current = true;
-  const { params, run } = restrictedSelection({
-    assertCurrent: () => {
-      if (!current) {
-        throw new Error("operator policy changed");
-      }
-    },
-  });
-  params.request.runtime = { kind: "set", runtime: "openclaw" };
-  vi.mocked(preparePublishedModelRuntimeChoice).mockImplementationOnce(
-    async ({ runtimeId, preferredRuntimeId }) => {
-      current = false;
-      return {
-        kind: "ready",
-        runtimeId: runtimeId ?? preferredRuntimeId ?? "openclaw",
-        validate: () => undefined,
-      };
-    },
-  );
-  const before = structuredClone(params.sessionEntry);
-
-  expect(await run()).toMatchObject({
-    status: "rejected",
-    message: "operator policy changed",
-  });
-  expect(params.sessionEntry).toEqual(before);
+function expectNoSelectionEffects() {
   expect(lifecycleEvents).toEqual([]);
+  expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
   expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-});
+  expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
+  expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+}
 
-it.each(["operator", "unprofiled"] as const)(
-  "preserves direct invocation boundaries for %s callers",
+it.each(["caller", "operator", "unprofiled"] as const)(
+  "rechecks %s authority after model preparation before mutation",
   async (source) => {
-    const { params, operatorAuthority } = restrictedSelection();
-    const isOperator = source === "operator";
     let current = true;
+    const message =
+      source === "caller" ? "operator policy changed" : "direct invocation authority expired";
+    const assertCurrent = () => {
+      if (!current) {
+        throw new Error(message);
+      }
+    };
+    const { params, operatorAuthority, run } = restrictedSelection(
+      source === "caller" ? { assertCurrent } : {},
+    );
     params.request.runtime = { kind: "set", runtime: "openclaw" };
-    params.request.model = isOperator ? "manual" : "primary";
+    params.request.model = source === "unprofiled" ? "primary" : "manual";
     vi.mocked(preparePublishedModelRuntimeChoice).mockImplementationOnce(async () => {
-      current = !isOperator;
+      current = source === "unprofiled";
       return { kind: "ready", runtimeId: "openclaw", validate: () => undefined };
     });
     const before = structuredClone(params.sessionEntry);
-    const result = await withOperatorToolGatewayAuthority(
-      {
-        scopes: ["operator.write"],
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("direct invocation authority expired");
-          }
-        },
-        ...(isOperator
-          ? {
-              authenticatedUserProfile: {
-                profileId: operatorAuthority.profileId,
-                displayName: "Operator Fixture",
-                hasAvatar: false,
-                updatedAt: 1,
-              },
-              operatorRunAuthority: operatorAuthority,
-            }
-          : {}),
-      },
-      () => applySessionModelSelection(params),
-    );
-
-    expect(operatorAuthority.assertCurrent).not.toThrow();
-    if (isOperator) {
-      expect(result).toMatchObject({
-        status: "rejected",
-        reason: "not-allowed",
-        message: "direct invocation authority expired",
-      });
-      expect(params.sessionEntry).toEqual(before);
-      expect(lifecycleEvents).toEqual([]);
-      expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-      expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    } else {
+    const result =
+      source === "caller"
+        ? await run()
+        : await withOperatorToolGatewayAuthority(
+            {
+              scopes: ["operator.write"],
+              assertCurrent,
+              ...(source === "operator"
+                ? {
+                    authenticatedUserProfile: {
+                      profileId: operatorAuthority.profileId,
+                      displayName: "Operator Fixture",
+                      hasAvatar: false,
+                      updatedAt: 1,
+                    },
+                    operatorRunAuthority: operatorAuthority,
+                  }
+                : {}),
+            },
+            () => applySessionModelSelection(params),
+          );
+    if (source !== "caller") {
+      expect(operatorAuthority.assertCurrent).not.toThrow();
+    }
+    if (source === "unprofiled") {
       expect(result).toMatchObject({ status: "applied", provider: "fixture", model: "primary" });
       expect(params.sessionEntry.modelOverride).toBeUndefined();
       expect(lifecycleEvents).toHaveLength(1);
       expect(effects.refreshQueuedFollowupSession).toHaveBeenCalledOnce();
+    } else {
+      expect(result).toMatchObject({ status: "rejected", reason: "not-allowed", message });
+      expect(params.sessionEntry).toEqual(before);
+      expect(lifecycleEvents).toEqual([]);
+      expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
+      expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
     }
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
   },
 );
 
-it.each(["agent-tool", "request", "direct-tool", "unbound-operator"] as const)(
+it.each(["request", "direct-tool", "unbound-operator"] as const)(
   "the public SDK cannot omit operator model policy in %s context",
   async (source) => {
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { defaults: { model: "fixture/allowed" } },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            agentRuntime: { id: "openclaw" },
-            models: [],
-          },
-        },
-      },
-    };
-    const authority = createAdmittedRunOperatorAuthority({
-      profileId: "operator-fixture",
-      scopes: ["operator.write"],
-      assertCurrent: () => {},
-      modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { allow: ["fixture/allowed"] } }),
-    });
+    const { params, operatorAuthority: authority } = restrictedSelection();
+    params.request.model = "primary";
     const profile = {
       profileId: authority.profileId,
       displayName: "Operator Fixture",
       hasAvatar: false,
       updatedAt: 1,
     };
-    const catalog = ["allowed", "blocked"].map((id) => ({ provider: "fixture", id, name: id }));
-    const { createParams, createEntry } = createModelSelectionInputs();
-    const params = createParams({
-      cfg,
-      defaultProvider: "fixture",
-      defaultModel: "allowed",
-      currentProvider: "fixture",
-      currentModel: "allowed",
-      sessionEntry: createEntry({ providerOverride: "fixture", modelOverride: "allowed" }),
-      modelCatalog: catalog,
-      thinkingCatalog: catalog,
-      request: {
-        provider: "fixture",
-        model: "blocked",
-        isDefault: false,
-        runtime: { kind: "unchanged" },
-      },
-    });
     const before = structuredClone(params.sessionEntry);
     const run = () => applySessionModelSelection(params);
     const result =
-      source === "agent-tool"
-        ? await withGatewayToolCallerIdentity(
-            { agentId: "main", sessionKey: params.sessionKey, operatorAuthority: authority },
+      source === "request"
+        ? await withPluginRuntimeGatewayRequestScope(
+            {
+              client: createSyntheticPluginRuntimeClient({
+                authenticatedUserProfile: profile,
+                operatorRunAuthority: authority,
+                scopes: ["operator.write"],
+              }),
+              isWebchatConnect: () => false,
+            },
             run,
           )
-        : source === "request"
-          ? await withPluginRuntimeGatewayRequestScope(
-              {
-                client: createSyntheticPluginRuntimeClient({
-                  authenticatedUserProfile: profile,
-                  operatorRunAuthority: authority,
-                  scopes: ["operator.write"],
-                }),
-                isWebchatConnect: () => false,
-              },
-              run,
-            )
-          : await withOperatorToolGatewayAuthority(
-              {
-                authenticatedUserProfile: profile,
-                scopes: ["operator.write"],
-                ...(source === "direct-tool" ? { operatorRunAuthority: authority } : {}),
-              },
-              run,
-            );
+        : await withOperatorToolGatewayAuthority(
+            {
+              authenticatedUserProfile: profile,
+              scopes: ["operator.write"],
+              ...(source === "direct-tool" ? { operatorRunAuthority: authority } : {}),
+            },
+            run,
+          );
 
     expect(result).toMatchObject({
       status: "rejected",
@@ -355,9 +269,6 @@ it.each(["agent-tool", "request", "direct-tool", "unbound-operator"] as const)(
       ),
     });
     expect(params.sessionEntry).toEqual(before);
-    expect(loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
-    expect(effects.triggerSessionPatchHook).not.toHaveBeenCalled();
-    expect(effects.refreshQueuedFollowupSession).not.toHaveBeenCalled();
-    expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    expectNoSelectionEffects();
   },
 );

@@ -68,7 +68,6 @@ import type {
 import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { redactStatusSecrets } from "../status-all/format.js";
 import { createAuthProbeWork } from "./list.probe.cleanup.js";
@@ -81,10 +80,6 @@ const PROBE_PROMPT = "Reply with OK. Do not use tools.";
 export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
-
-const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/embedded-agent.js"),
-);
 
 export type AuthProbeStatus =
   | "ok"
@@ -781,7 +776,7 @@ async function probeTarget(params: {
         throw new Error("Could not prepare isolated auth probe profile");
       }
     }
-    const { runEmbeddedAgent } = await embeddedRunnerModuleLoader.load();
+    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const probeSessionTarget = sessionTarget;
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       probeConfig,
@@ -826,11 +821,7 @@ async function probeTarget(params: {
     );
     const terminalError = extractAgentRunTerminalError(runResult);
     if (terminalError) {
-      const described = describeFailoverError(new Error(terminalError));
-      return buildResult(
-        mapFailoverReasonToProbeStatus(described.reason),
-        redactAuthProbeError(described.message),
-      );
+      throw new Error(terminalError);
     }
     if (!agentRunHasVisibleReply(runResult)) {
       return buildResult("format", "The model did not return a visible probe response.");
@@ -1036,10 +1027,6 @@ export async function runAuthProbes(params: {
       results: [...plan.results, ...results],
     };
   });
-}
-
-export function formatProbeLatency(latencyMs?: number | null) {
-  return formatMs(latencyMs);
 }
 
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {

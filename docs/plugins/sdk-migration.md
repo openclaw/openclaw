@@ -23,10 +23,11 @@ from a single entry point:
 - **`openclaw/plugin-sdk/infra-runtime`** - a broad barrel mixing system
   events, heartbeat state, delivery queues, fetch/proxy helpers, file helpers,
   approval types, and unrelated utilities.
-- **`openclaw/plugin-sdk/config-runtime`** - a broad config barrel retained
-  for compatibility, including deprecated direct `loadConfig` and
-  `writeConfigFile` exports. Those methods were removed from the injected
-  plugin runtime, not from this retained barrel.
+- **`openclaw/plugin-sdk/config-runtime`** - a removed broad config barrel,
+  including its deprecated direct `loadConfig` and `writeConfigFile` exports.
+- **`openclaw/plugin-sdk/channel-lifecycle`**, **`channel-message`**, and
+  **`channel-reply-pipeline`** - removed channel compatibility facades. Use
+  the focused outbound and inbound contracts, checking each named export.
 - **`openclaw/extension-api`** - a removed bridge that gave plugins direct
   access to host-side helpers like the embedded agent runner.
 - **`api.registerEmbeddedExtensionFactory(...)`** - a removed embedded-runner-only
@@ -34,12 +35,13 @@ from a single entry point:
   tool-result middleware instead (see [Migrate embedded tool-result extensions
   to middleware](/plugins/sdk-migration/how-to-migrate#how-to-migrate)).
 
-The root SDK, compat barrel, extension bridge, and embedded extension factory
-have been removed. `infra-runtime` and `config-runtime` remain only for their
-separately recorded later windows. New plugins should use focused subpaths.
+The root SDK, compat barrel, extension bridge, embedded extension factory, and
+five channel/config/infrastructure compatibility facades have been removed.
+The latter retirement received explicit SDK-owner approval on September 30,
+2026; see the [removal timeline](/plugins/sdk-migration/removal-timeline).
 
 <Warning>
-  Plugins importing the removed root, compat, or extension surfaces no longer
+  Plugins importing the removed SDK or extension surfaces no longer
   load. Follow the [import path mappings](/plugins/sdk-migration/import-paths) before upgrading.
 </Warning>
 
@@ -108,6 +110,10 @@ The anchors from the single-page version still resolve here.
 
 [How to migrate a plugin](/plugins/sdk-migration/how-to-migrate) — the ordered migration steps.
 
+- [Await personal model-account operations](/plugins/sdk-migration/how-to-migrate#await-personal-model-account-operations)
+- [Await session transcript persistence](/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence)
+- [Await extension session changes](/plugins/sdk-migration/how-to-migrate#await-extension-session-changes)
+- [Await provider replay metadata](/plugins/sdk-migration/how-to-migrate#await-provider-replay-metadata)
 - <a id="how-to-migrate"></a>[How to migrate](/plugins/sdk-migration/how-to-migrate#how-to-migrate)
 - <a id="migrate-runtime-config-load%2Fwrite-helpers"></a>[Migrate runtime config load/write helpers](/plugins/sdk-migration/how-to-migrate#migrate-runtime-config-load%2Fwrite-helpers)
 - <a id="migrate-embedded-tool-result-extensions-to-middleware"></a>[Migrate embedded tool-result extensions to middleware](/plugins/sdk-migration/how-to-migrate#migrate-embedded-tool-result-extensions-to-middleware)
@@ -124,7 +130,7 @@ The anchors from the single-page version still resolve here.
 [Import path reference](/plugins/sdk-migration/import-paths) — which typed-public subpath replaces each legacy import.
 
 - <a id="import-path-reference"></a>[Import path reference](/plugins/sdk-migration/import-paths#import-path-reference)
-- <a id="retained-channel-facade-mappings"></a>[Retained channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
+- <a id="retained-channel-facade-mappings"></a>[Removed channel facade mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
 
 ### Removed surfaces and replacements
 

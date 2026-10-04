@@ -22,6 +22,72 @@ function source(request: GatewayBrowserClient["request"]) {
 }
 
 describe("shared system information reads", () => {
+  it.each([
+    ["session-only", ["operator.sessions.read", "operator.sessions.write"], true],
+    ["unadvertised", ["operator.admin"], false],
+  ] as const)(
+    "does not request unavailable system information for %s connections",
+    async (_name, scopes, advertised) => {
+      const request = vi.fn().mockResolvedValue(deviceSystemInfo);
+      const current = source(request);
+      current.publish({
+        ...current.gateway.snapshot,
+        hello: gatewayHelloForMethods(advertised ? ["system.info"] : [], scopes),
+      });
+      await expect(readSystemInfo(current.gateway)).rejects.toMatchObject({ name: "AbortError" });
+      expect(request).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["scopes", "client", "hello", "credentials"] as const)(
+    "retires pending and cached samples after a %s change",
+    async (change) => {
+      vi.useFakeTimers();
+      for (const settled of [false, true]) {
+        const pending = createDeferred<typeof deviceSystemInfo>();
+        const refreshed = { ...deviceSystemInfo, machineName: "New host" };
+        const request = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(refreshed);
+        const current = source(request);
+        const signal = new AbortController().signal;
+        const result = readSystemInfo(current.gateway, signal);
+        const rejected = settled
+          ? undefined
+          : expect(result).rejects.toMatchObject({ name: "AbortError" });
+        if (settled) {
+          pending.resolve(deviceSystemInfo);
+          expect((await result).value).toEqual(deviceSystemInfo);
+        }
+        if (change === "scopes") {
+          current.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+        } else if (change === "credentials") {
+          Object.assign(current.gateway, { connectionRevision: 1 });
+        } else {
+          current.publish({
+            ...current.gateway.snapshot,
+            ...(change === "client"
+              ? { client: source(request).gateway.snapshot.client }
+              : { hello: gatewayHelloForMethods(["system.info"]) }),
+          });
+        }
+        if (!settled) {
+          pending.resolve(deviceSystemInfo);
+          await rejected;
+          expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
+        }
+        if (change === "scopes") {
+          await expect(readSystemInfo(current.gateway)).rejects.toMatchObject({
+            name: "AbortError",
+          });
+          expect(request).toHaveBeenCalledOnce();
+          expect(request.mock.calls[0]?.[2].signal.aborted).toBe(true);
+          current.gateway.snapshot.hello!.auth!.scopes = ["operator.read"];
+        }
+        expect((await readSystemInfo(current.gateway, signal)).value).toEqual(refreshed);
+        expect(request).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
   it("defers hidden reads until a visible consumer returns", async () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const request = vi.fn().mockResolvedValue(deviceSystemInfo);
@@ -32,32 +98,6 @@ describe("shared system information reads", () => {
     expect((await readSystemInfo(gateway)).value).toEqual(deviceSystemInfo);
     expect(request).toHaveBeenCalledOnce();
   });
-
-  it.each(["client", "hello", "credentials"] as const)(
-    "retires a fresh cached sample when the %s generation changes",
-    async (change) => {
-      vi.useFakeTimers();
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(deviceSystemInfo)
-        .mockResolvedValue({ ...deviceSystemInfo, machineName: "New host" });
-      const current = source(request);
-      const signal = new AbortController().signal;
-      expect((await readSystemInfo(current.gateway, signal)).value).toEqual(deviceSystemInfo);
-      if (change === "credentials") {
-        Object.assign(current.gateway, { connectionRevision: 1 });
-      } else {
-        current.publish({
-          ...current.gateway.snapshot,
-          ...(change === "client"
-            ? { client: source(request).gateway.snapshot.client }
-            : { hello: gatewayHelloForMethods(["system.info"]) }),
-        });
-      }
-      expect((await readSystemInfo(current.gateway, signal)).value.machineName).toBe("New host");
-      expect(request).toHaveBeenCalledTimes(2);
-    },
-  );
 
   it("shares pending manual reads, preserves sample metadata, and refreshes only settled results", async () => {
     vi.useFakeTimers();

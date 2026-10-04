@@ -46,7 +46,6 @@ export function isUpdateRunReportInProgress(markdown: string): boolean {
   return markdown.startsWith(IN_PROGRESS_REPORT_PREFIX);
 }
 
-export type UpdateRunNoticeKind = "ack" | "parking" | "activating" | "verifying" | "finished";
 type ReportInput = Pick<
   UpdateRunRecord,
   | "status"
@@ -110,6 +109,22 @@ export function formatUpdateRunCurrentHealth(health: UpdateRunReportHealth): str
     : "Current health unavailable; saved verification describes the update attempt only.";
 }
 
+/** Serving observation is independent of permission to restart or roll back. */
+export function resolveUpdateRunVerifiedServingVersion(
+  verification: UpdateRunRecord["verification"],
+  observation: Pick<UpdateRunRecord["steps"][number], "failureFacts" | "exitCode"> | undefined,
+): string | undefined {
+  if (observation?.exitCode !== 0 || observation.failureFacts?.length) {
+    return undefined;
+  }
+  const { recovery } = verification;
+  return recovery?.serviceRestartSafe && recovery.service === "healthy"
+    ? recovery.version
+    : verification.versionMatch && verification.readyz && verification.settled
+      ? verification.runningVersion
+      : undefined;
+}
+
 /** Public-report callers redact identifiers before using this shared formatter. */
 export function formatUpdateRunRecovery(
   verification: UpdateRunRecord["verification"],
@@ -137,13 +152,8 @@ export function formatUpdateRunRecovery(
       : "runtime files verified";
     return `${packageOutcome}; Gateway health ${recovery.service === "failed" ? "failed" : "unverified"} (${reason}). Run \`openclaw gateway status --deep\` to check the serving version and readiness.`;
   }
-  const version =
-    recovery?.serviceRestartSafe && recovery.service === "healthy"
-      ? recovery.version
-      : verification.versionMatch && verification.readyz && verification.settled
-        ? verification.runningVersion
-        : undefined;
-  if (observation.exitCode === 0 && version && !observation.failureFacts?.length) {
+  const version = resolveUpdateRunVerifiedServingVersion(verification, observation);
+  if (version) {
     const constraint =
       recovery?.serviceRestartSafe === false ? `; restart remains unsafe (${reason})` : "";
     return `${recovery?.packageRollbackVerified ? "package rollback verified; " : ""}verified serving ${bounded(version, 120)}${constraint}`;
@@ -157,37 +167,13 @@ export function formatUpdateRunRecovery(
     : `not serving (${code})`;
 }
 
-/** The four conversation milestones share the run's recorded versions and final report. */
-export function renderUpdateRunNotice(
-  run: UpdateRunRecord,
-  kind: UpdateRunNoticeKind,
-  options: { currentHealth?: UpdateRunReportHealth } = {},
-): string | null {
-  if (kind === "finished") {
-    return run.status === "running" ? null : renderUpdateRunReport(run, options).markdown;
-  }
-  // Managed parking precedes updater staging; its notice must not advance the ledger phase.
-  const noticePhase = kind === "ack" || kind === "parking" ? "requested" : kind;
-  if (run.status !== "running" || run.phase !== noticePhase) {
-    return null;
-  }
-  const from = run.before.version ? bounded(run.before.version, 120) : undefined;
-  const target = run.after.version ?? run.target.version;
-  const to = target ? bounded(target, 120) : undefined;
-  if (kind === "ack") {
-    return `⬆️ Updating OpenClaw ${from ?? "the current version"} → ${to ?? "the latest release"}. The gateway stays available while the update is validated; you'll get a message here when it finishes.`;
-  }
-  if (kind === "activating" || kind === "parking") {
-    return `⏳ Restarting the gateway now${from && to ? ` (v${from} → v${to})` : ""}…`;
-  }
-  const running = run.verification.runningVersion
-    ? bounded(run.verification.runningVersion, 120)
-    : to;
-  return `🔁 Back${running ? ` on v${running}` : ""}, verifying…`;
-}
-
 function bounded(text: string, limit: number): string {
   return text.length <= limit ? text : `${sliceUtf16Safe(text, 0, limit - 1)}…`;
+}
+
+function formatUpdateVersion(identity: UpdateRunRecord["after"]): string | undefined {
+  const sha = identity.sha?.slice(0, 8);
+  return identity.version ? `${identity.version}${sha ? ` (${sha})` : ""}` : sha;
 }
 
 function recoveryHints(run: ReportInput, nextAction?: string): string[] {
@@ -239,9 +225,9 @@ export function renderUpdateRunReport(
     run.origin.nextAction
       ? { kind: "unavailable" }
       : undefined);
-  // Git updates can change commits without changing the package version.
-  const before = run.before.sha?.slice(0, 8) ?? run.before.version;
-  const after = run.after.sha?.slice(0, 8) ?? run.after.version;
+  // Keep the version visible and distinguish Git updates within the same version.
+  const before = formatUpdateVersion(run.before);
+  const after = formatUpdateVersion(run.after);
   const reason = bounded(
     run.reason?.trim() ||
       (run.status === "failed" &&
@@ -253,6 +239,12 @@ export function renderUpdateRunReport(
     !currentHealth && run.verification.serviceRunning === true
       ? run.verification.runningVersion
       : undefined;
+  // These producer codes also cover unreadable runtimes and failed capability probes.
+  // They do not establish that Node is old or that upgrading it will repair the update.
+  const runtimeCheckFailed =
+    run.status === "failed" &&
+    (run.reason === "node-runtime-preflight" ||
+      run.reason === "preflight-node-runtime-incompatible");
   let headline: string;
   switch (run.status) {
     case "succeeded":
@@ -265,7 +257,9 @@ export function renderUpdateRunReport(
         ? "ℹ️ OpenClaw abandoned update reconciled."
         : run.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON
           ? `ℹ️ OpenClaw update abandoned: ${reason}.`
-          : `⚠️ OpenClaw update failed: ${reason}.${running ? ` The gateway is running ${running}.` : ""}`;
+          : runtimeCheckFailed
+            ? "⚠️ OpenClaw could not complete the update. A required system check failed."
+            : `⚠️ OpenClaw update failed: ${reason}.`;
       break;
     case "skipped":
       headline =
@@ -284,6 +278,9 @@ export function renderUpdateRunReport(
   }
   headline = bounded(headline, 500);
   const lines: string[] = [];
+  if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
+    lines.push(formatUpdateRunCurrentHealth(currentHealth));
+  }
   if (opts.mode && opts.mode !== "unknown") {
     lines.push(`Update mode: ${opts.mode}`);
   }
@@ -352,6 +349,9 @@ export function renderUpdateRunReport(
   )) {
     const failure = `Failed: ${step.step}${step.detail ? ` — ${step.detail}` : ""}`;
     lines.push(bounded(failure, 300));
+    if (step.termination === "signal" && step.stderrTail) {
+      lines.push(`Stderr (${step.signal ?? "unknown signal"}):\n${step.stderrTail}`);
+    }
     lines.push(
       ...(step.failureFacts ?? []).slice(0, 5).map((fact) =>
         formatUpdateFailureFact({
@@ -371,14 +371,14 @@ export function renderUpdateRunReport(
   const observation = run.steps.findLast((step) => step.step === "gateway recovery verification");
   const recovery = observation && formatUpdateRunRecovery(facts, observation);
   if (recovery) {
-    lines.push(`Recovery: ${recovery}.`);
+    lines.push(`Recorded recovery: ${recovery}.`);
   }
   const verification = [
     facts.booted ? "gateway booted" : undefined,
     facts.serviceRunning === undefined
       ? undefined
       : facts.serviceRunning
-        ? "service running"
+        ? `service running${facts.runningVersion ? ` (${bounded(facts.runningVersion, 120)})` : ""}`
         : "service stopped",
     formatUpdateRunIdentity(facts, run.after),
     facts.channelsReady === undefined
@@ -392,12 +392,7 @@ export function renderUpdateRunReport(
       : undefined,
   ].filter(Boolean);
   if (verification.length) {
-    lines.push(
-      `${currentHealth ? "Recorded verification" : "Verification"}: ${verification.join("; ")}.`,
-    );
-  }
-  if (currentHealth && !run.origin.nextAction && !opts.nextAction) {
-    lines.push(formatUpdateRunCurrentHealth(currentHealth));
+    lines.push(`Recorded verification: ${verification.join("; ")}.`);
   }
   for (const attempt of run.repair.slice(-3)) {
     lines.push(
@@ -460,8 +455,24 @@ export function renderUpdateRunReport(
               ].filter((line): line is string => Boolean(line)),
             ),
           ];
-  lines.push(...hints);
   const next = hints.at(-1);
+  if (runtimeCheckFailed) {
+    // Keep the owner's selected action ahead of the diagnostic dump, including
+    // historical-advice qualifications. Neither this layout nor truncation selects recovery.
+    const details = [
+      "Details:",
+      `Reason code: ${reason}`,
+      ...lines,
+      ...hints.filter((line) => line !== next),
+    ];
+    const lead = [headline, ...(next ? [bounded(next, 1100)] : []), ""].join("\n");
+    return {
+      headline,
+      lines: [...(next ? [next, ""] : []), ...details],
+      markdown: `${lead}\n${bounded(details.join("\n"), 1500 - lead.length - 1)}`,
+    };
+  }
+  lines.push(...hints);
   const body = [headline, ...lines.filter((line) => line !== next)].join("\n");
   const suffix = next ? `\n${bounded(next, 1100)}` : "";
   return { headline, lines, markdown: `${bounded(body, 1500 - suffix.length)}${suffix}` };

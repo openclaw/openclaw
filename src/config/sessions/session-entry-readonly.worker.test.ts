@@ -2,6 +2,7 @@ import { mkdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync
 import { dirname, join } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import {
@@ -22,9 +23,61 @@ import { captureCanonicalSessionReaderContinuation } from "./session-canonical-k
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import { captureSessionEntryCurrentRead } from "./session-entry-current-runtime.js";
 import type { SessionEntryCurrentCheck } from "./session-entry-current.types.js";
-import { withSessionEntryReadOnlyInWorker } from "./session-entry-read-runtime.js";
+import {
+  readSessionEntryReadOnlyInWorker,
+  withSessionEntryReadOnlyInWorker,
+} from "./session-entry-read-runtime.js";
 import { readSessionStoreTargetResult } from "./session-store-target-inventory.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
+
+function createEntryFixture(env: NodeJS.ProcessEnv) {
+  const database = openOpenClawAgentDatabase({ agentId: "main", env });
+  const sessionKey = "agent:main:readonly-entry";
+  writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+  const scope = {
+    agentId: "main",
+    databaseAgentId: "main",
+    storePath: database.path,
+    sessionKey,
+    env,
+  };
+  return { database, scope };
+}
+
+it("reads session projections in the worker and observes the next foreign commit", async () => {
+  await withOpenClawTestState({ label: "readonly-entry-projection-boundary" }, async ({ env }) => {
+    const { database, scope } = createEntryFixture(env);
+    const before = await readSessionEntryReadOnlyInWorker(scope);
+    expect(before).toMatchObject({ sessionId: "original" });
+    const peer = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(database.path);
+    try {
+      peer
+        .prepare(
+          `INSERT INTO session_participants
+           (session_key, identity_namespace, actor_id, contribution_count)
+           VALUES (?, ?, ?, 1)`,
+        )
+        .run(scope.sessionKey, JSON.stringify({ type: "profile" }), "foreign-participant");
+      const sql = observeHostDataSql();
+      try {
+        const after = await readSessionEntryReadOnlyInWorker(scope);
+        expect(after).toMatchObject({
+          sessionId: "original",
+          participants: [{ identity: { type: "profile", id: "foreign-participant" } }],
+          participantCount: 1,
+        });
+        expect(before?.participants).toBeUndefined();
+        expect(
+          sql.queries.filter((query) => /\bsession_(?:nodes|windows|participants)\b/.test(query)),
+        ).toEqual([]);
+      } finally {
+        sql.restore();
+      }
+    } finally {
+      peer.close();
+    }
+  });
+});
 
 it.each([false, true])(
   "returns unreadable-store data only after its connection closes (close failure: %s)",
@@ -83,145 +136,88 @@ it.each([false, true])(
   },
 );
 
-it.each([false, true])(
-  "keeps schema error classification with a disposable reader: %s",
-  async (disposable) => {
-    await withOpenClawTestState({ label: "readonly-entry-schema-error" }, async ({ env }) => {
-      const database = openOpenClawAgentDatabase({ agentId: "main", env });
-      const sessionKey = "agent:main:schema-error";
-      writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-      database.db.exec("DROP TABLE board_widgets");
-      if (disposable) {
-        await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+it.each(["schema-retained", "schema-disposable", "row", "rollback"] as const)(
+  "classifies selected-row failures only after reader cleanup: %s",
+  async (mode) => {
+    await withOpenClawTestState({ label: "readonly-entry-error" }, async ({ env }) => {
+      const { database, scope } = createEntryFixture(env);
+      const schema = mode.startsWith("schema");
+      const disposable = mode === "schema-disposable";
+      if (schema) {
+        database.db.exec("DROP TABLE board_widgets");
+        if (disposable) {
+          await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
+        }
+      } else {
+        loadSessionEntryReadOnlyInScope(scope);
       }
-      const failure = Object.assign(new Error("native selected-row query failed"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 1,
-      });
+      const continuation = schema ? undefined : captureCanonicalSessionReaderContinuation(database);
+      if (!schema && !continuation) {
+        throw new Error("Expected the committed reader admission");
+      }
+      const failure = schema
+        ? Object.assign(new Error("native selected-row query failed"), {
+            code: "ERR_SQLITE_ERROR",
+            errcode: 1,
+          })
+        : new Error("selected row could not be decoded");
       let reader: typeof database.db | undefined;
       const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation((source) => {
         reader = source.db;
         throw failure;
       });
+      const exec = database.db.exec.bind(database.db);
+      const rollback =
+        mode === "rollback"
+          ? vi.spyOn(database.db, "exec").mockImplementation((sql) => {
+              if (sql === "ROLLBACK") {
+                throw new Error("native rollback failed");
+              }
+              return exec(sql);
+            })
+          : undefined;
       try {
-        const result = loadSessionEntryReadOnlyResultInScope({
-          agentId: "main",
-          databaseAgentId: "main",
-          storePath: database.path,
-          sessionKey,
-          env,
-        });
-        expect(result.ok).toBe(false);
-        if (result.ok) {
-          throw new Error("Expected a selected-row failure");
+        const load = () => loadSessionEntryReadOnlyResultInScope(scope, continuation?.receipt);
+        if (mode === "rollback") {
+          expect(load).toThrow();
+          expect(database.db.isOpen).toBe(false);
+        } else if (schema) {
+          const result = load();
+          expect(result.ok).toBe(false);
+          if (result.ok) {
+            throw new Error("Expected a selected-row failure");
+          }
+          expect(result.error).toBeInstanceOf(SessionMetadataUnavailableError);
+          expect(result.error).toMatchObject({
+            reason: "table-missing",
+            missingTables: ["board_widgets"],
+          });
+          expect(reader?.isOpen).toBe(!disposable);
+        } else {
+          expect(load()).toEqual({ ok: false, error: failure });
+          expect(database.db.isTransaction).toBe(false);
+          expect(database.db.isOpen).toBe(true);
         }
-        expect(result.error).toBeInstanceOf(SessionMetadataUnavailableError);
-        expect(result.error).toMatchObject({
-          reason: "table-missing",
-          missingTables: ["board_widgets"],
-        });
-        expect(reader?.isOpen).toBe(!disposable);
       } finally {
+        rollback?.mockRestore();
         read.mockRestore();
+        continuation?.release();
       }
     });
   },
 );
 
-it("returns row data failures only after the native snapshot rolled back", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-error" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:entry-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const scope = {
-      agentId: "main",
-      databaseAgentId: "main",
-      storePath: database.path,
-      sessionKey,
-      env,
-    };
-    loadSessionEntryReadOnlyInScope(scope);
-    const continuation = captureCanonicalSessionReaderContinuation(database);
-    if (!continuation) {
-      throw new Error("Expected the committed reader admission");
-    }
-    const failure = new Error("selected row could not be decoded");
-    const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation(() => {
-      throw failure;
-    });
-    try {
-      const result = loadSessionEntryReadOnlyResultInScope(scope, continuation.receipt);
-      expect(result).toEqual({ ok: false, error: failure });
-      expect(database.db.isTransaction).toBe(false);
-      expect(database.db.isOpen).toBe(true);
-    } finally {
-      read.mockRestore();
-      continuation.release();
-    }
-  });
-});
-
-it("does not downgrade a failed rollback to an ordinary row failure", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-rollback" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:rollback-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const scope = {
-      agentId: "main",
-      databaseAgentId: "main",
-      storePath: database.path,
-      sessionKey,
-      env,
-    };
-    loadSessionEntryReadOnlyInScope(scope);
-    const continuation = captureCanonicalSessionReaderContinuation(database);
-    if (!continuation) {
-      throw new Error("Expected the committed reader admission");
-    }
-    const exec = database.db.exec.bind(database.db);
-    const read = vi.spyOn(entryReads, "readSessionEntryRow").mockImplementation(() => {
-      throw new Error("selected row failed");
-    });
-    const rollback = vi.spyOn(database.db, "exec").mockImplementation((sql) => {
-      if (sql === "ROLLBACK") {
-        throw new Error("native rollback failed");
-      }
-      return exec(sql);
-    });
-    try {
-      expect(() => loadSessionEntryReadOnlyResultInScope(scope, continuation.receipt)).toThrow();
-      expect(database.db.isOpen).toBe(false);
-    } finally {
-      rollback.mockRestore();
-      read.mockRestore();
-      continuation.release();
-    }
-  });
-});
-
 it("keeps source refusal outside the ordinary row-error result", async () => {
   await withOpenClawTestState({ label: "readonly-entry-source" }, async ({ env }) => {
-    const database = openOpenClawAgentDatabase({ agentId: "main", env });
-    const sessionKey = "agent:main:source-error";
-    writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
+    const { scope } = createEntryFixture(env);
     const refusal = Object.assign(new Error("retained source changed"), {
       code: "ERR_SQLITE_ERROR",
       errcode: 26,
     });
     expect(() =>
-      loadSessionEntryReadOnlyResultInScope(
-        {
-          agentId: "main",
-          databaseAgentId: "main",
-          storePath: database.path,
-          sessionKey,
-          env,
-        },
-        undefined,
-        () => {
-          throw refusal;
-        },
-      ),
+      loadSessionEntryReadOnlyResultInScope(scope, undefined, () => {
+        throw refusal;
+      }),
     ).toThrow(refusal);
   });
 });
@@ -251,43 +247,86 @@ it("propagates raw worker failure without calling the optional-data consumer", a
   });
 });
 
-it("rejects registry revocation during the retained asynchronous consumer", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-retained" }, async ({ env, path }) => {
-    const storePath = path("shared.sqlite");
-    const sessionKey = "agent:main:retained";
-    replaceSessionEntrySync(
-      { agentId: "main", storePath, env, sessionKey },
-      {
-        sessionId: "retained-session",
-        updatedAt: 1,
-        skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
-      },
-    );
-    let consumed = false;
-    await expect(
-      withSessionEntryReadOnlyInWorker(
-        {
-          sessionKey,
-          storePath,
-          env,
-          hydrateSkillPromptRefs: false,
-        },
-        () => {},
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          expect(read.value?.skillsSnapshot?.prompt).toBe("Full stored prompt");
-          consumed = true;
-          await Promise.resolve();
+it.each(["consumer", "cleanup"] as const)(
+  "rejects registry revocation during %s",
+  async (phase) => {
+    await withOpenClawTestState({ label: "readonly-entry-registry" }, async ({ env, path }) => {
+      const storePath = path("shared.sqlite");
+      const sessionKey =
+        phase === "consumer" ? "agent:main:retained" : "agent:main:cron:job:run:cleanup";
+      if (phase === "consumer") {
+        replaceSessionEntrySync(
+          { agentId: "main", storePath, env, sessionKey },
+          {
+            sessionId: "retained-session",
+            updatedAt: 1,
+            skillsSnapshot: { prompt: "Full stored prompt", skills: [] },
+          },
+        );
+      } else {
+        const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
+        writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
+      }
+      const pool = historyLane.pool;
+      const rotate = pool.rotate.bind(pool);
+      const closeResources = pool.closeResources.bind(pool);
+      let cleanupCalled = false;
+      const invalidateAfterCleanup = () => {
+        if (!cleanupCalled) {
+          cleanupCalled = true;
           invalidateRegisteredAgentDatabasesMemo({ env });
-          return read.value;
-        },
-      ),
-    ).rejects.toThrow("registry changed");
-    expect(consumed).toBe(true);
-  });
-});
+        }
+      };
+      const rotateCleanup =
+        phase === "cleanup"
+          ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
+              await rotate();
+              invalidateAfterCleanup();
+            })
+          : undefined;
+      const resourceCleanup =
+        phase === "cleanup"
+          ? vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
+              await closeResources(key);
+              invalidateAfterCleanup();
+            })
+          : undefined;
+      let consumed = false;
+      try {
+        await expect(
+          withSessionEntryReadOnlyInWorker(
+            {
+              sessionKey,
+              storePath,
+              env,
+              ...(phase === "consumer" ? { hydrateSkillPromptRefs: false } : {}),
+            },
+            () => {},
+            async (read) => {
+              if (!read.ok) {
+                throw read.error;
+              }
+              consumed = true;
+              if (phase === "consumer") {
+                expect(read.value?.skillsSnapshot?.prompt).toBe("Full stored prompt");
+                await Promise.resolve();
+                invalidateRegisteredAgentDatabasesMemo({ env });
+              }
+              return read.value;
+            },
+          ),
+        ).rejects.toThrow("registry changed");
+        if (phase === "cleanup") {
+          expect(cleanupCalled).toBe(true);
+        }
+        expect(consumed).toBe(true);
+      } finally {
+        rotateCleanup?.mockRestore();
+        resourceCleanup?.mockRestore();
+      }
+    });
+  },
+);
 
 it("retains the registry witness even when the first read rejects before returning a snapshot", async () => {
   await withOpenClawTestState({ label: "readonly-registry-witness" }, async ({ env }) => {
@@ -296,49 +335,6 @@ it("retains the registry witness even when the first read rejects before returni
     invalidateRegisteredAgentDatabasesMemo({ env });
     await expect(pending).rejects.toThrow("registry changed");
     expect(() => prepared.assertCurrent()).toThrow("registry changed");
-  });
-});
-
-it("checks the captured registry after logical data cleanup", async () => {
-  await withOpenClawTestState({ label: "readonly-entry-cleanup" }, async ({ env, path }) => {
-    const storePath = path("shared.sqlite");
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: storePath, env });
-    const sessionKey = "agent:main:cron:job:run:cleanup";
-    writeSessionEntry(database, sessionKey, { sessionId: "cleanup-session", updatedAt: 1 });
-    const pool = historyLane.pool;
-    const rotate = pool.rotate.bind(pool);
-    const closeResources = pool.closeResources.bind(pool);
-    let cleanupCalled = false;
-    const cleanup = process.versions.bun
-      ? vi.spyOn(pool, "rotate").mockImplementation(async () => {
-          await rotate();
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        })
-      : vi.spyOn(pool, "closeResources").mockImplementation(async (key) => {
-          await closeResources(key);
-          cleanupCalled = true;
-          invalidateRegisteredAgentDatabasesMemo({ env });
-        });
-    let consumed = false;
-    try {
-      const pending = withSessionEntryReadOnlyInWorker(
-        { sessionKey, storePath, env },
-        () => {},
-        async (read) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          consumed = true;
-          return read.value;
-        },
-      );
-      await expect(pending).rejects.toThrow("registry changed");
-      expect(cleanupCalled).toBe(true);
-      expect(consumed).toBe(true);
-    } finally {
-      cleanup.mockRestore();
-    }
   });
 });
 
@@ -358,13 +354,19 @@ it("returns unavailable registry facts as locator data without catching candidat
   });
 });
 
-it.runIf(process.platform !== "win32").each([false, true])(
-  "retains a custom store alias through its data consumer (retargeted: %s)",
-  async (retarget) => {
+it.runIf(process.platform !== "win32").each([
+  { retarget: true, logicalAgentId: "main" },
+  { retarget: false, logicalAgentId: "ops" },
+])(
+  "retains logical $logicalAgentId through its alias consumer (retargeted: $retarget)",
+  async ({ retarget, logicalAgentId }) => {
     await withOpenClawTestState({ label: "readonly-store-alias" }, async ({ env, path }) => {
       const original = openOpenClawAgentDatabase({ agentId: "main", env });
-      const sessionKey = "agent:main:alias";
+      const sessionKey = `agent:${logicalAgentId}:alias`;
       writeSessionEntry(original, sessionKey, { sessionId: "original", updatedAt: 1 });
+      if (logicalAgentId !== "main") {
+        writeSessionEntry(original, "agent:main:alias", { sessionId: "other-agent", updatedAt: 1 });
+      }
       const replacement = retarget
         ? openOpenClawAgentDatabase({ agentId: "main", path: path("replacement.sqlite"), env })
         : undefined;
@@ -372,13 +374,23 @@ it.runIf(process.platform !== "win32").each([false, true])(
       symlinkSync(original.path, alias);
       let consumed = false;
       const pending = withSessionEntryReadOnlyInWorker(
-        { agentId: "main", sessionKey, storePath: path("custom.json"), env },
+        {
+          agentId: logicalAgentId,
+          sessionKey,
+          storePath: logicalAgentId === "main" ? path("custom.json") : alias,
+          env,
+        },
         () => {},
-        async (read) => {
+        async (read, owner) => {
           if (!read.ok) {
             throw read.error;
           }
           expect(read.value?.sessionId).toBe("original");
+          expect(owner.scope).toMatchObject({
+            agentId: logicalAgentId,
+            databaseAgentId: "main",
+            storePath: original.path,
+          });
           consumed = true;
           await Promise.resolve();
           if (replacement) {
@@ -398,7 +410,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
   },
 );
 
-it.each(["logical", "omitted"] as const)(
+it.each(["logical", "omitted", "empty"] as const)(
   "fences the selected SQLite alias after a %s store read releases its initial owner",
   async (locator) => {
     await withOpenClawTestState({ label: "currency-selected-store-alias" }, async (state) => {
@@ -433,7 +445,11 @@ it.each(["logical", "omitted"] as const)(
         agentId: "main",
         sessionKey,
         env: state.env,
-        ...(locator === "logical" ? { storePath: join(state.sessionsDir(), "sessions.json") } : {}),
+        ...(locator === "logical"
+          ? { storePath: join(state.sessionsDir(), "sessions.json") }
+          : locator === "empty"
+            ? { storePath: "" }
+            : {}),
       };
       const current = await withSessionEntryReadOnlyInWorker(
         scope,

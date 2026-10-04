@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { FACETIME_FEED_DEVICE_NAME, FACETIME_MIC_DEVICE_NAME } from "./audio-pump.js";
 import { FaceTimeCallRegistry } from "./call-lifecycle.js";
 import type { FaceTimeConfig } from "./config.js";
@@ -10,10 +11,11 @@ import {
   FaceTimeHelperAmbiguousError,
   projectCompleteFaceTimeAbsence,
   projectFaceTimeNativeAction,
-  type FaceTimeHelperSocketServer,
   type HelperActionResult,
-} from "./helper-rpc.js";
+} from "./helper-results.js";
+import type { FaceTimeHelperSocketServer } from "./helper-rpc.js";
 import { terminateExactCarrierProcesses } from "./runtime-carrier-process.js";
+import { retainHelperResultPeers } from "./runtime-helper-results.js";
 import type { ActiveFaceTimeCall } from "./runtime-state.js";
 import { startFaceTimeTalkDriver } from "./talk-driver.js";
 
@@ -27,7 +29,6 @@ export function createFaceTimeCallControl(params: {
   captureBinary: string;
   isStopping: () => boolean;
   getHelperTopologyVersion: () => number;
-  retainHelperResultPeers: (call: ActiveFaceTimeCall, result: HelperActionResult) => void;
 }) {
   const runCarrierActionAcrossAliases = async (request: {
     call: ActiveFaceTimeCall;
@@ -41,13 +42,15 @@ export function createFaceTimeCallControl(params: {
     ].filter((candidate, index, all) => all.indexOf(candidate) === index);
     let lastAbsent: FaceTimeHelperAmbiguousError | undefined;
     for (const candidate of candidates) {
-      let result: HelperActionResult;
       try {
-        result = await request.call.runCarrierCommand({
+        const result = await request.call.runCarrierCommand({
           generation: request.generation,
           allowClosing: true,
           action: async () => await request.run(candidate),
         });
+        projectFaceTimeNativeAction(request.action, result);
+        request.call.promoteCarrierCallUUID(candidate);
+        return result;
       } catch (error) {
         if (!(error instanceof FaceTimeHelperAmbiguousError)) {
           throw error;
@@ -55,25 +58,6 @@ export function createFaceTimeCallControl(params: {
         try {
           projectCompleteFaceTimeAbsence(error.result);
           lastAbsent = error;
-        } catch {
-          throw error;
-        }
-        continue;
-      }
-      try {
-        projectFaceTimeNativeAction(request.action, result);
-        request.call.promoteCarrierCallUUID(candidate);
-        return result;
-      } catch (error) {
-        try {
-          projectCompleteFaceTimeAbsence(result);
-          lastAbsent =
-            error instanceof FaceTimeHelperAmbiguousError
-              ? error
-              : new FaceTimeHelperAmbiguousError(
-                  `FaceTime ${request.action} carrier owner is missing`,
-                  result,
-                );
         } catch {
           throw error;
         }
@@ -128,14 +112,14 @@ export function createFaceTimeCallControl(params: {
       action: async () => await params.helper.setMuted(call.carrierCallUUID, false),
     });
     call.lastHelperAction = mutedResult;
-    params.retainHelperResultPeers(call, mutedResult);
+    retainHelperResultPeers(call, mutedResult);
     projectFaceTimeNativeAction("unmute", mutedResult);
     const transmissionResult = await call.runCarrierCommand({
       generation,
       action: async () => await params.helper.startTransmission(call.carrierCallUUID),
     });
     call.lastHelperAction = transmissionResult;
-    params.retainHelperResultPeers(call, transmissionResult);
+    retainHelperResultPeers(call, transmissionResult);
     projectFaceTimeNativeAction("activate", transmissionResult);
     call.markCarrierActive(generation);
     if (call.audioTransport) {
@@ -219,7 +203,7 @@ export function createFaceTimeCallControl(params: {
             action: "safe-mute",
             run: async (callUUID) => await params.helper.safetyMute(callUUID),
           });
-          params.retainHelperResultPeers(call, muted);
+          retainHelperResultPeers(call, muted);
         } catch (error) {
           if (readCompleteAbsenceGeneration(error) === undefined) {
             params.logger.warn(
@@ -234,7 +218,7 @@ export function createFaceTimeCallControl(params: {
             action: "terminate",
             run: async (callUUID) => await params.helper.leaveCall(callUUID),
           });
-          params.retainHelperResultPeers(call, leave);
+          retainHelperResultPeers(call, leave);
         } catch (error) {
           if (readCompleteAbsenceGeneration(error) === undefined) {
             params.logger.warn(
@@ -256,10 +240,7 @@ export function createFaceTimeCallControl(params: {
                 ),
             });
           const first = projectCompleteFaceTimeAbsence(await inspect());
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 100);
-            timer.unref?.();
-          });
+          await sleepWithAbort(100, undefined, { ref: false });
           const second = projectCompleteFaceTimeAbsence(await inspect());
           return (
             first.topologyGeneration === second.topologyGeneration &&
@@ -320,10 +301,7 @@ export function createFaceTimeCallControl(params: {
           ) {
             return true;
           }
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(resolve, 1_000);
-            timer.unref?.();
-          });
+          await sleepWithAbort(1_000, undefined, { ref: false });
         }
         return true;
       })(),
@@ -410,16 +388,14 @@ export function createFaceTimeCallControl(params: {
       }
     }
   };
-  const activateCallTalk = async (call: ActiveFaceTimeCall, options: { unmute: boolean }) => {
+  const activateCallTalk = async (call: ActiveFaceTimeCall) => {
     const generation = call.captureGeneration();
     if (!call.talkActivation) {
       call.talkActivation = (async () => {
         await call.talk?.readyForAudio();
         call.assertCurrent(generation);
         call.markModelReady(generation);
-        if (options.unmute) {
-          await enableCallAudio(call);
-        }
+        await enableCallAudio(call);
         call.assertCurrent(generation);
         call.markModelActive(generation);
         call.talk?.activate();
@@ -429,7 +405,7 @@ export function createFaceTimeCallControl(params: {
     try {
       await activation;
       call.assertCurrent(generation);
-      if (options.unmute && call.carrierMode !== "active") {
+      if (call.carrierMode !== "active") {
         await enableCallAudio(call);
       }
     } finally {

@@ -119,7 +119,7 @@ it("models.list retains a failed renewal before shared worker recovery", async (
           model: { primary: `${provider}/original` },
           modelPolicy: { allow: providers.map((id) => `${id}/*`) },
         },
-        list: [{ id: "main", workspace: state.workspaceDir }],
+        entries: { main: { workspace: state.workspaceDir } },
       },
       plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
       gateway: { mode: "local", auth: { mode: "token", token } },

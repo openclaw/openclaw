@@ -50,7 +50,10 @@ function collectCronDeliveryTargetAdvisory(params: {
 describe("collectCronDeliveryTargetAdvisory", () => {
   it("advises when a concrete delivery channel has no active plugin", () => {
     const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } })],
+      jobs: [
+        job({ id: "needs-doctor", delivery: { channel: "slack" } }),
+        job({ id: "report", delivery: { mode: "announce", channel: "missing-channel" } }),
+      ],
       resolveAvailableChannelIds: availableChannels(),
     });
     expect(advisory).not.toBeNull();
@@ -61,9 +64,8 @@ describe("collectCronDeliveryTargetAdvisory", () => {
   });
 
   it("returns null when the concrete channel resolves to an active plugin", () => {
-    // Omitting `mode` defaults to announce, so a bare channel still counts as a concrete target.
     const advisory = collectCronDeliveryTargetAdvisory({
-      jobs: [job({ delivery: { channel: "slack" } })],
+      jobs: [job({ delivery: { mode: "announce", channel: "slack" } })],
       resolveAvailableChannelIds: availableChannels("slack", "telegram"),
     });
     expect(advisory).toBeNull();

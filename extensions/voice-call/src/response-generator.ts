@@ -14,8 +14,6 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  isRecord,
-  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -39,7 +37,7 @@ type VoiceResponseParams = {
   /** Caller ownership prepared by the call boundary. */
   senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
-  agentId?: string;
+  agentId: string;
   /** Audible call transcript, used only for bounded first-turn opening context. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
   userMessage: string;
@@ -59,26 +57,6 @@ type VoiceResponsePayload = {
   isError?: boolean;
   isReasoning?: boolean;
 };
-
-function readExplicitToolsAllow(value: unknown): string[] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const allow = value.allow;
-  if (!Array.isArray(allow)) {
-    return undefined;
-  }
-
-  return filterStringEntries(allow);
-}
-
-function resolveVoiceAgentToolsAllow(
-  config: OpenClawConfig,
-  agentId: string,
-): string[] | undefined {
-  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
-}
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "Output format requirements:",
@@ -201,30 +179,15 @@ function tryParseSpokenJson(text: string): string | null {
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(paragraph);
-  if (!lower) {
-    return false;
-  }
-
-  if (lower.startsWith("thinking process")) {
-    return true;
-  }
-  if (lower.startsWith("reasoning:") || lower.startsWith("analysis:")) {
-    return true;
-  }
-  if (
-    lower.startsWith("the user ") &&
-    (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))
-  ) {
-    return true;
-  }
-  if (
+  return (
+    lower.startsWith("thinking process") ||
+    lower.startsWith("reasoning:") ||
+    lower.startsWith("analysis:") ||
+    (lower.startsWith("the user ") &&
+      (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))) ||
     lower.includes("this is a natural continuation of the conversation") ||
     lower.includes("keep the conversation flowing")
-  ) {
-    return true;
-  }
-
-  return false;
+  );
 }
 
 function sanitizePlainSpokenText(text: string): string | null {
@@ -316,15 +279,8 @@ export async function generateVoiceResponse(
     onEarlyText,
   } = params;
 
-  if (!coreConfig) {
-    return {
-      text: null,
-      deliveredEarly: false,
-      error: "Core config unavailable for voice response",
-    };
-  }
   const cfg = coreConfig;
-  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
+  const agentId = resolveCallAgentId(params);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
     config: { ...voiceConfig, agentId },
@@ -333,7 +289,7 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
     coreSession: coreConfig.session,
   });
-  const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
+  const toolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
 
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
@@ -521,7 +477,7 @@ export async function generateVoiceResponse(
         });
 
         const text =
-          extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]) ??
+          extractSpokenTextFromPayloads(result.payloads ?? []) ??
           lastFlushedText ??
           extractSpokenTextFromPayloads(blockReplyPayloads);
 

@@ -70,6 +70,7 @@ function coldContext() {
       },
     },
     agents: { state: { agentsList: null } },
+    sessions: createChatPageSessions(),
   } as unknown as ApplicationContext;
   return {
     context,

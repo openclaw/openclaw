@@ -1,3 +1,5 @@
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { SessionBranch } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import type {
   InternalSessionTranscriptUpdate,
@@ -195,6 +197,8 @@ export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "se
   expectedWriterRunId?: string;
   /** Optional lifecycle fence paired with sessionId for run-owned writes. */
   expectedLifecycleRevision?: string;
+  /** Exact owner facts, including absent fields, checked inside the write transaction. */
+  expectedOwner?: Pick<SessionEntry, "lifecycleRevision" | "activeWriterRunId">;
 };
 
 export type SessionEntrySummary = {
@@ -373,6 +377,14 @@ export type SessionTranscriptWriteTransactionContext = SessionTranscriptRuntimeT
 export type SessionTranscriptTurnUpdateMode = "inline" | "file-only" | "none";
 
 export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<unknown> & {
+  /** Audited preparation runs once on the host against worker-read idempotency facts. */
+  workerPreparation?: Pick<
+    TranscriptMessageAppendOptions<unknown>,
+    "prepareMessageAfterIdempotencyCheck" | "beforeFreshMessageCommit"
+  >;
+  predicate?:
+    | { kind: "latest-assistant-differs"; runId: string; text: string }
+    | { kind: "active-entry"; entryId: string; errorMessage: string };
   /**
    * Runs inside the session writer queue before the SQLite transaction begins.
    * The commit phase revalidates session ownership and database idempotency
@@ -390,6 +402,9 @@ export type SessionTranscriptTurnMessageAppend = TranscriptMessageAppendOptions<
 export type SessionTranscriptTurnWriteContext = Partial<SessionTranscriptRuntimeTarget>;
 
 export type SessionTranscriptTurnPersistOptions = {
+  /** Retained caller authority, with no same-database reads inside worker grants. */
+  assertCurrent?: () => void;
+  acceptedResultGuard?: { expectedWriterRunId: string | null; errorMessage: string };
   /** Runtime config used for lock settings, redaction, and header metadata. */
   config?: OpenClawConfig;
   /** Working directory recorded in a newly created transcript header. */
@@ -439,6 +454,7 @@ export type SessionTranscriptTurnPersistOptions = {
 };
 
 export interface SessionTranscriptTurnPersistResult {
+  predicateSkipped?: boolean;
   sessionTurnMutationResult?: SessionTranscriptTurnMutationResult;
   appendedCount: number;
   messages: TranscriptMessageAppendResult<unknown>[];
@@ -555,12 +571,8 @@ export type SessionEntryPatchContext = {
   existingEntry?: SessionEntry;
 };
 
-export type SessionEntryPatchResult = {
-  /** Exact persisted key for the patched entry after alias normalization. */
-  sessionKey: string;
-  /** Persisted entry returned by the backing store. */
-  entry: SessionEntry;
-};
+/** Persisted row returned after alias normalization. */
+export type SessionEntryPatchResult = SessionEntrySummary;
 
 export type SessionEntryTargetPatchScope = {
   env?: NodeJS.ProcessEnv;
@@ -573,19 +585,11 @@ export type SessionEntryTargetPatchScope = {
   target: SessionLifecycleStoreTarget;
 };
 
-export type SessionEntryReplacementSnapshot = {
-  /** Exact persisted key for the candidate row. */
-  sessionKey: string;
-  /** Detached entry snapshot; mutating it does not persist unless returned as a replacement. */
-  entry: SessionEntry;
-};
+/** Detached candidate row; changes persist only when returned as a replacement. */
+export type SessionEntryReplacementSnapshot = SessionEntrySummary;
 
-export type SessionEntryReplacement = {
-  /** Exact persisted key to replace. Missing keys are ignored. */
-  sessionKey: string;
-  /** Full replacement row to persist for this transaction. */
-  entry: SessionEntry;
-};
+/** Full row to replace in the transaction; missing keys are ignored. */
+export type SessionEntryReplacement = SessionEntrySummary;
 
 export type SessionEntryReplacementUpdate<T> = {
   /** Caller-owned result returned after replacements are persisted. */
@@ -728,13 +732,7 @@ export type SessionMessageCutMutationParams = {
   repositoryWorkspaceId?: string;
 };
 
-export type SessionBranchSummary = {
-  leafEntryId: string;
-  headline: string;
-  messageCount: number;
-  updatedAt?: string;
-  active: boolean;
-};
+export type SessionBranchSummary = SchemaContract<SessionBranch>;
 
 export type SessionBranchListResult =
   | { status: "ok"; branches: SessionBranchSummary[] }
@@ -841,17 +839,6 @@ export type SessionPatchProjectionFailure = { ok: false };
 export type SessionPatchProjectionResult<TFailure extends SessionPatchProjectionFailure> =
   | { ok: true; entry: SessionEntry }
   | TFailure;
-
-export type SessionPatchProjectionOperation<TFailure extends SessionPatchProjectionFailure> = {
-  /** Revalidates request-scoped authorization after projection and before persistence. */
-  authorize?: () => TFailure | undefined;
-  /** Converts a target-local projection exception without aborting sibling targets. */
-  onError?: (error: unknown) => TFailure;
-  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
-  project: (
-    context: SessionPatchProjectionContext,
-  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
-};
 
 export type {
   DeleteSessionEntryLifecycleParams,

@@ -15,6 +15,7 @@ import {
   describeSessionLinkRule,
   describeSessionsListTool,
   describeSessionVisibilityScope,
+  SESSION_LINK_RULE_DESCRIPTION,
   SESSIONS_LIST_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
@@ -94,11 +95,7 @@ const SessionsListOutputSchema = Type.Object(
           "Inline messages and transcript previews were omitted to fit the byte budget; read session history separately.",
       }),
     ),
-    sessionLinkRule: Type.Optional(
-      Type.String({
-        description: "How to build Control UI URLs for sessionKey values in this result.",
-      }),
-    ),
+    sessionLinkRule: Type.Optional(Type.String({ description: SESSION_LINK_RULE_DESCRIPTION })),
     visibility: Type.Optional(
       Type.Object(
         {
@@ -377,7 +374,7 @@ export function createSessionsListTool(opts?: {
         offset = pageNextOffset;
       }
 
-      const stateVersions = getSessionStateVersions(
+      const stateVersions = await getSessionStateVersions(
         sessions.map(({ entry, agentId: stateAgentId }) => ({
           sessionKey: entry.key,
           agentId: stateAgentId,
@@ -515,20 +512,12 @@ export function createSessionsListTool(opts?: {
               updatedAt: typeof row.updatedAt === "number" ? row.updatedAt : 0,
             },
             sessionId,
-            sessionKey: resolveInternalSessionKey({
-              key,
-              alias,
-              mainKey,
-            }),
+            sessionKey: resolveInternalSessionKey({ key, alias }),
             agentId: resolvedAgentId,
           });
         }
         if (messageLimit > 0) {
-          const resolvedKey = resolveInternalSessionKey({
-            key,
-            alias,
-            mainKey,
-          });
+          const resolvedKey = resolveInternalSessionKey({ key, alias });
           historyTargets.push({ row, resolvedKey });
         }
         rows.push(row);

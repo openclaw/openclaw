@@ -22,6 +22,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
+import { bindExecutionGuards } from "./update-command-execution.test-support.js";
 import type * as fixtures from "./update-command-execution.test-support.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import * as gitAdmission from "./update-command-git-admission.js";
@@ -41,7 +42,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
     exercise: (fixture: {
       root: string;
       run: Run;
-      params: Parameters<typeof executeMutableUpdate>[0];
+      params: Omit<Parameters<typeof executeMutableUpdate>[0], "executionGuards">;
       events: string[];
       beforeCall: { run?: () => void };
       start: () => ReturnType<typeof executeMutableUpdate>;
@@ -128,7 +129,7 @@ export function registerExecutionPhaseReceiptTests(inputs: FixtureInputs) {
             params,
             events,
             beforeCall,
-            start: () => executeMutableUpdate(params),
+            start: async () => executeMutableUpdate(await bindExecutionGuards(params)),
           });
         });
       } finally {

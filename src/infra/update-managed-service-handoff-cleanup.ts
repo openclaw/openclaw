@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { positiveSecondsToSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ManagedHandoffRepairFacts } from "./update-managed-service-handoff-database.js";
@@ -12,12 +13,7 @@ export function canCleanupLegacyManagedHandoff(
   payload: string,
   processState: (identity: { pid: number; startIdentity: string }) => "live" | "dead" | "unknown",
 ): boolean {
-  let value: unknown;
-  try {
-    value = JSON.parse(payload);
-  } catch {
-    return false;
-  }
+  const value = safeParseJson(payload);
   return (
     isRecord(value) &&
     Object.keys(value).length === 3 &&

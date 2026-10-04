@@ -7,7 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   readSessionProgressCard,
@@ -18,13 +18,14 @@ import {
   onSessionTranscriptUpdate,
 } from "../../sessions/transcript-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   isOpenClawAgentDatabaseOpen,
   listOpenClawRegisteredAgentDatabases,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
@@ -32,7 +33,7 @@ import {
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,
-  applySessionPatchProjections,
+  applySessionPatchProjection,
   appendTranscriptEvent,
   appendTranscriptMessage,
   appendTranscriptMessageSync,
@@ -60,7 +61,6 @@ import {
   replaceSessionEntry,
   resetSessionEntryLifecycle,
   SessionInitializationAgentScopeMismatchError,
-  type SessionPatchProjectionOperation,
   resolveSessionEntryAccessTarget,
   resolveSessionEntryCandidateTarget,
   resolveSessionEntrySelection,
@@ -82,13 +82,17 @@ import {
   replaceTranscriptEvents,
   trimTranscriptForManualCompact,
 } from "./session-accessor.sqlite-transcript-write.js";
+import { createLegacyUnsequencedTurnFixture } from "./session-accessor.transcript-turn.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  createManualCompactRecords,
+  transcriptMessage,
+} from "./transcript-message.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
@@ -97,25 +101,6 @@ vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
     cleanupArchivedSessionTranscripts: cleanupArchivedSessionTranscriptsMock,
   };
 });
-
-function createManualCompactRecords(sessionId: string, cwd?: string) {
-  return [
-    {
-      type: "session",
-      version: 3,
-      id: sessionId,
-      timestamp: "2026-06-19T12:00:00.000Z",
-      ...(cwd ? { cwd } : {}),
-    },
-    ...[1, 2, 3, 4].map((index) => ({
-      type: "message",
-      id: `entry-${index}`,
-      parentId: index === 1 ? null : `entry-${index - 1}`,
-      timestamp: `2026-06-19T12:00:0${index}.000Z`,
-      message: { role: "user", content: `message ${index}`, timestamp: index },
-    })),
-  ];
-}
 
 describe("session accessor seam", () => {
   let tempDir: string;
@@ -131,17 +116,15 @@ describe("session accessor seam", () => {
 
   beforeEach(() => {
     cleanupArchivedSessionTranscriptsMock.mockReset();
-    tempDir = makeTempDir(tempDirs, "openclaw-session-accessor-");
+    tempDir = tempDirs.make("openclaw-session-accessor-");
     storePath = path.join(tempDir, "sessions.json");
   });
 
-  function cleanupSessionDatabasesAndTempDirs() {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    cleanupTempDirs(tempDirs);
-  }
-
-  afterEach(cleanupSessionDatabasesAndTempDirs);
+    await closeStateDatabaseForTest();
+  });
 
   it("returns typed sync append outcomes for missing, rebound, and duplicate rows", async () => {
     const scope = transcriptScope("expected-session", "agent:main:typed-append");
@@ -695,6 +678,10 @@ describe("session accessor seam", () => {
       "focused session database path",
     );
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
+    // Admit the reader before injecting an unrelated corrupt row.
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.sessionId).toBe(
+      "focused-session",
+    );
     const unrelatedEntryJson = "{ unrelated, intentionally invalid JSON";
     database.db
       .prepare(
@@ -859,7 +846,7 @@ describe("session accessor seam", () => {
       sessionKey: "agent:main:default-rotate",
     };
     await replaceSessionEntry(
-      { sessionKey: scope.sessionKey, storePath: expectedStorePath },
+      { ...scope, storePath: expectedStorePath },
       { sessionId: scope.sessionId, updatedAt: Date.now() },
     );
 
@@ -869,7 +856,7 @@ describe("session accessor seam", () => {
           message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
           shouldAppend: () => {
             replaceSessionEntrySync(
-              { sessionKey: scope.sessionKey, storePath: expectedStorePath },
+              { ...scope, storePath: expectedStorePath },
               { sessionId: "new-default-rotate", updatedAt: Date.now() },
             );
             return true;
@@ -883,9 +870,7 @@ describe("session accessor seam", () => {
     expect(result.rejectedReason).toBe("session-rebound");
     await expect(
       loadTranscriptEvents({
-        agentId: "main",
-        sessionId: "old-default-rotate",
-        sessionKey: scope.sessionKey,
+        ...scope,
         storePath: expectedStorePath,
       }),
     ).resolves.not.toContainEqual(
@@ -1233,7 +1218,8 @@ describe("session accessor seam", () => {
         { sessionId: "wrong-owner-session", updatedAt: 10 },
       ),
     ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
-    const insertRawEntry = (sessionKey: string, sessionId: string, updatedAt: number) => {
+    const insertRawEntry = async (sessionKey: string, sessionId: string, updatedAt: number) => {
+      await closeOpenClawAgentDatabasesAsync();
       const database = openOpenClawAgentDatabase({
         agentId: "ops",
         path: resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "ops" }).path,
@@ -1251,7 +1237,7 @@ describe("session accessor seam", () => {
       ["agent:ops:nbsp\u00a0", "agent:ops:nbsp"],
     ] as const) {
       const sessionId = `${canonicalKey}-session`;
-      insertRawEntry(storedKey, sessionId, 5);
+      await insertRawEntry(storedKey, sessionId, 5);
       await expect(
         upsertSessionEntryCore(
           { agentId: "ops", sessionKey: canonicalKey, storePath },
@@ -1260,7 +1246,7 @@ describe("session accessor seam", () => {
       ).rejects.toMatchObject({ code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" });
       closeOpenClawAgentDatabasesForTest();
       const canonicalSessionId = `${canonicalKey}-canonical-session`;
-      insertRawEntry(canonicalKey, canonicalSessionId, 6);
+      await insertRawEntry(canonicalKey, canonicalSessionId, 6);
       expect(() =>
         loadSessionEntry({ agentId: "ops", sessionKey: canonicalKey, storePath }),
       ).toThrow("openclaw doctor --fix");
@@ -1453,7 +1439,7 @@ describe("session accessor seam", () => {
       "agent:main:other",
       "agent:main:shared-running",
     ]);
-    const doneSessions = listSessionEntriesByStatus({ storePath }, ["done"]);
+    const doneSessions = await listSessionEntriesByStatus({ storePath }, ["done"]);
     expect(doneSessions.map((entry) => entry.sessionKey)).toEqual([
       "agent:main:done",
       "agent:main:shared-done",
@@ -1535,54 +1521,39 @@ describe("session accessor seam", () => {
     });
   });
 
-  it("projects ordered patches against one mutable store view", async () => {
-    const keys = ["a", "b", "c", "d"].map((suffix) => `agent:main:batch-${suffix}`);
+  it("projects session patches with label ownership and current request authority", async () => {
+    const keys = ["a", "b"].map((suffix) => `agent:main:project-${suffix}`);
     for (const [index, sessionKey] of keys.entries()) {
       await upsertSessionEntryCore(
         { sessionKey, storePath },
-        { sessionId: `batch-${index}`, updatedAt: index + 1 },
+        { sessionId: `project-${index}`, updatedAt: index + 1 },
       );
     }
-    const snapshots = new Set<object>();
-    const operation = (
-      index: number,
-      label: string,
-      authorize?: () => { ok: false; error: string } | undefined,
-    ): SessionPatchProjectionOperation<{ ok: false; error: string }> => ({
-      resolveTarget: (snapshot) => {
-        snapshots.add(snapshot.store);
-        return { primaryKey: keys[index]! };
-      },
-      project: ({ existingEntry, isLabelInUse }) => {
-        if (isLabelInUse(label)) {
-          return { ok: false as const, error: `duplicate:${label}` };
-        }
-        return { ok: true as const, entry: { ...existingEntry!, label } };
-      },
-      ...(authorize ? { authorize } : {}),
-    });
+    const project = (index: number, label: string, assertCurrent?: () => void) =>
+      applySessionPatchProjection<{ ok: false; error: string }>({
+        storePath,
+        assertCurrent,
+        resolveTarget: () => ({ primaryKey: keys[index]! }),
+        project: ({ existingEntry, isLabelInUse }) => {
+          if (isLabelInUse(label)) {
+            return { ok: false, error: `duplicate:${label}` };
+          }
+          return { ok: true, entry: { ...existingEntry!, label } };
+        },
+      });
 
-    const results = await applySessionPatchProjections({
-      storePath,
-      operations: [
-        operation(0, "Shared"),
-        operation(1, "Shared"),
-        operation(2, "Blocked", () => ({ ok: false, error: "authorization changed" })),
-        operation(3, "Blocked"),
-      ],
+    await expect(project(0, "Shared")).resolves.toMatchObject({
+      ok: true,
+      entry: { label: "Shared" },
     });
-
-    expect(snapshots.size).toBe(1);
-    expect(results.map((result) => (result.ok ? result.entry.label : result.error))).toEqual([
-      "Shared",
-      "duplicate:Shared",
-      "authorization changed",
-      "Blocked",
-    ]);
+    await expect(project(1, "Shared")).resolves.toEqual({ ok: false, error: "duplicate:Shared" });
+    await expect(
+      project(1, "Blocked", () => {
+        throw new Error("authorization changed");
+      }),
+    ).rejects.toThrow("authorization changed");
     expect(loadSessionEntry({ sessionKey: keys[0]!, storePath })?.label).toBe("Shared");
     expect(loadSessionEntry({ sessionKey: keys[1]!, storePath })?.label).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: keys[2]!, storePath })?.label).toBeUndefined();
-    expect(loadSessionEntry({ sessionKey: keys[3]!, storePath })?.label).toBe("Blocked");
   });
 
   it("inserts and canonically rekeys through the bulk replacement owner", async () => {
@@ -1875,6 +1846,7 @@ describe("session accessor seam", () => {
     const competingEntry = { sessionId: "label-competitor", label: "Claimed", updatedAt: 1 };
     await upsertSessionEntryCore(target, { sessionId: "label-target", updatedAt: 1 });
     await upsertSessionEntryCore(competing, competingEntry);
+    expect(loadSessionEntry(competing)?.label).toBe("Claimed");
     const databasePath = expectDefined(
       resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path,
       "label race database path",
@@ -2645,29 +2617,7 @@ describe("session accessor seam", () => {
   });
 
   it("invalidates a legacy multi-message turn when active cursors cannot be proven", async () => {
-    const scope = transcriptScope(
-      "session-legacy-unsequenced-turn",
-      "agent:main:legacy-unsequenced-turn",
-    );
-    await upsertSessionEntryCore(scope, {
-      lifecycleRevision: "legacy-unsequenced-revision",
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("legacy-unsequenced-root", null, {
-          role: "user",
-          content: "canonical root",
-        }),
-      ],
-      updateMode: "none",
-    });
-    await appendTranscriptEvent(scope, {
-      id: "legacy-unsequenced-child",
-      parentId: "legacy-unsequenced-root",
-      message: { role: "assistant", content: "legacy raw event" },
-    });
+    const scope = await createLegacyUnsequencedTurnFixture(storePath);
 
     const publicUpdates: Array<{ target: unknown; message?: unknown; messageSeq?: number }> = [];
     const internalUpdates: Array<{

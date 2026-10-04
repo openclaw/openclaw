@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Googlechat tests cover monitor.reply delivery plugin behavior.
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { createGoogleChatTypingMessage, deliverGoogleChatReply } from "./monitor-reply-delivery.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,15 +46,10 @@ function createCore(params?: {
   } as unknown as GoogleChatCoreRuntime;
 }
 
-let createGoogleChatTypingMessage: typeof import("./monitor-reply-delivery.js").createGoogleChatTypingMessage;
-let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliverGoogleChatReply;
-
-beforeEach(async () => {
+beforeEach(() => {
   vi.clearAllMocks();
   mocks.sendGoogleChatMessage.mockResolvedValue(null);
   mocks.updateGoogleChatMessage.mockResolvedValue({});
-  ({ createGoogleChatTypingMessage, deliverGoogleChatReply } =
-    await import("./monitor-reply-delivery.js"));
 });
 
 afterAll(() => {

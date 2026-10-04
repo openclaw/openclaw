@@ -166,7 +166,7 @@ Outside heartbeats, stray `HEARTBEAT_OK` at the start/end of a message is stripp
 
 - `agents.defaults.heartbeat` sets global heartbeat behavior.
 - `agents.entries.*.heartbeat` merges on top. If any agent has a `heartbeat` block, **only those agents** run heartbeats.
-- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, the legacy default owner, then the sole agent. When no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
+- Ambient ownership resolves through `agents.defaults.heartbeat.agentId`, `agents.defaults.systemAgent.agentId`, then the sole agent. When no per-agent or default heartbeat block applies and that chain leaves a multi-agent roster ownerless, heartbeats stay disabled and emit validation and Gateway warnings.
 - `channels.defaults.heartbeatVisibility` sets visibility defaults for all channels.
 - `channels.<channel>.heartbeatVisibility` overrides channel defaults.
 - `channels.<channel>.accounts.<id>.heartbeatVisibility` (multi-account channels) overrides per-channel settings.
@@ -180,14 +180,16 @@ Example: two agents, only the second agent runs heartbeats.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
+      systemAgent: { agentId: "main" },
       heartbeat: {
         every: "30m",
         target: "owner", // default: operator DM
       },
     },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       ops: {
         heartbeat: {
           every: "1h",
@@ -199,6 +201,7 @@ Example: two agents, only the second agent runs heartbeats.
       },
     },
   },
+  talk: { agentId: "main" },
 }
 ```
 
@@ -246,7 +249,6 @@ Use `accountId` to target a specific account on multi-account channels like Tele
   agents: {
     entries: {
       ops: {
-        default: true,
         heartbeat: {
           every: "1h",
           target: "telegram",
@@ -340,7 +342,8 @@ Heartbeat configuration is strict: only the fields listed above are accepted. Ac
 <AccordionGroup>
   <Accordion title="Session and target routing">
     - Heartbeats run in the agent's main session by default (`agent:<id>:main`), or `global` when `session.scope = "global"`. Set `session` to override to a specific channel session (Discord/WhatsApp/etc.).
-    - `session` only affects the run context. Delivery is controlled by `target` and `to`.
+    - `session` only affects the run context. Delivery is controlled by `target` and `to`, except for session-owned events in an internal session (see below).
+    - A wake whose pending events are all session-owned (background exec completions, or the continuation of a turn interrupted by a Gateway restart) in an internal session (Control UI/WebChat, or another operator-owned session without an external route) publishes the reply into that session's transcript instead of the `target`/`to` channel. `target: "none"` still suppresses it. If the session write fails, the event stays queued for a later wake and does not fall back to the channel. Batches that also contain other events use `target`/`to` as usual.
     - The default `owner` target chooses an explicitly configured owner identity. It reuses the exact account/thread only when the session's last route is a direct chat to that owner.
     - A wake that carries a channel and recipient uses that named origin before owner discovery. This event destination can be a group because it is explicit, not inferred.
     - To deliver to a specific channel/recipient, set a channel `target` plus `to`. `target: "last"` is an explicit opt-in to the last external conversation, including groups.

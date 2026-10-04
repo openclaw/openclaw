@@ -178,8 +178,8 @@ vi.mock("../registry/subagent-registry-read.js", () => ({
   shouldIgnorePostCompletionAnnounceForSession: () => shouldIgnorePostCompletion,
   resolveRequesterForChildSession: () => fallbackRequesterResolution,
 }));
-vi.mock("../registry/subagent-registry-runtime.js", () => ({
-  replaceSubagentRunAfterSteer: () => true,
+vi.mock("../registry/subagent-registry.js", () => ({
+  replaceSubagentRunAfterSteerCore: () => true,
 }));
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
@@ -195,12 +195,10 @@ const defaultSessionConfig = {
 const baseAnnounceFlowParams = {
   childSessionKey: "agent:main:subagent:worker",
   requesterSessionKey: "agent:main:main",
-  requesterDisplayKey: "main",
   task: "do thing",
   timeoutMs: 1_000,
   cleanup: "keep",
   roundOneReply: "done",
-  waitForCompletion: false,
   outcome: { status: "ok" as const },
 } satisfies Omit<AnnounceFlowParams, "childRunId">;
 
@@ -263,7 +261,6 @@ describe("subagent announce timeout config", () => {
 
     const didAnnounce = await runAnnounceFlowForTest("run-pending-descendants", {
       requesterSessionKey: "agent:main:subagent:parent",
-      requesterDisplayKey: "agent:main:subagent:parent",
     });
 
     expect(didAnnounce).toBe("retryable");
@@ -272,28 +269,11 @@ describe("subagent announce timeout config", () => {
     ).toBeUndefined();
   });
 
-  it("regression, supports cron announceType without declaration order errors", async () => {
-    const didAnnounce = await runAnnounceFlowForTest("run-announce-type", {
-      announceType: "cron job",
-      expectsCompletionMessage: true,
-      requesterOrigin: { channel: "discord", to: "channel:cron" },
-    });
-
-    expect(didAnnounce).toBe("delivered");
-    const directAgentCall = findGatewayCall(
-      (call) => call.method === "agent" && call.expectFinal === true,
-    );
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ announceType?: string }>) ?? [];
-    expect(internalEvents[0]?.announceType).toBe("cron job");
-  });
-
   it("regression, keeps child announce internal when requester is a cron run session", async () => {
     const cronSessionKey = "agent:main:cron:daily-check:run:run-123";
 
     await runAnnounceFlowForTest("run-cron-internal", {
       requesterSessionKey: cronSessionKey,
-      requesterDisplayKey: cronSessionKey,
       requesterOrigin: { channel: "discord", to: "channel:cron-results", accountId: "acct-1" },
     });
 
@@ -312,7 +292,6 @@ describe("subagent announce timeout config", () => {
 
     await runAnnounceFlowForTest("run-parent-route", {
       requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
       childSessionKey: `${parentSessionKey}:subagent:child`,
     });
 
@@ -327,7 +306,6 @@ describe("subagent announce timeout config", () => {
 
     await runAnnounceFlowForTest("run-parent-fallback", {
       requesterSessionKey: parentSessionKey,
-      requesterDisplayKey: parentSessionKey,
       childSessionKey: `${parentSessionKey}:subagent:child`,
     });
 

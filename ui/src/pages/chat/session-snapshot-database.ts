@@ -3,7 +3,11 @@ import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-
 export const CHAT_SNAPSHOT_DB_NAME = "openclaw-chat-snapshots";
 export const CHAT_SNAPSHOT_STORE_NAME = "snapshots";
 export const CHAT_SNAPSHOT_METADATA_STORE_NAME = "snapshotMetadata";
-const CHAT_SNAPSHOT_DB_VERSION = 3;
+const CHAT_SNAPSHOT_DB_VERSION = 4;
+
+export function isPersistableChatSnapshotKey(key: string): boolean {
+  return key.startsWith("scope:[") && !isIncognitoSessionKey(key.slice(key.indexOf("\u0000") + 1));
+}
 
 export function debugSnapshotStore(message: string, error?: unknown): void {
   if (error === undefined) {
@@ -27,29 +31,13 @@ function openIndexedDb(factory: IDBFactory): Promise<IDBDatabase> {
     const request = factory.open(CHAT_SNAPSHOT_DB_NAME, CHAT_SNAPSHOT_DB_VERSION);
     request.addEventListener("upgradeneeded", (event) => {
       const database = request.result;
-      if (event.oldVersion < 2) {
+      // Unscoped derived transcripts have no provable account owner. Never adopt them.
+      if (event.oldVersion < 4) {
         for (const name of Array.from(database.objectStoreNames)) {
           database.deleteObjectStore(name);
         }
         database.createObjectStore(CHAT_SNAPSHOT_STORE_NAME, { keyPath: "sessionKey" });
         database.createObjectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME, { keyPath: "sessionKey" });
-        return;
-      }
-      // Version two admitted Incognito history. Retire those records atomically,
-      // including orphan metadata, without throwing away ordinary cached history.
-      for (const name of Array.from(database.objectStoreNames)) {
-        const store = request.transaction!.objectStore(name);
-        const cursorRequest = store.openKeyCursor();
-        cursorRequest.addEventListener("success", () => {
-          const cursor = cursorRequest.result;
-          if (!cursor) {
-            return;
-          }
-          if (typeof cursor.primaryKey === "string" && isIncognitoSessionKey(cursor.primaryKey)) {
-            store.delete(cursor.primaryKey);
-          }
-          cursor.continue();
-        });
       }
     });
     request.addEventListener("success", () => resolve(request.result));
@@ -122,7 +110,7 @@ export async function readStoredChatSnapshotRecord(sessionKey: string): Promise<
     return undefined;
   }
   try {
-    if (isIncognitoSessionKey(sessionKey)) {
+    if (!isPersistableChatSnapshotKey(sessionKey)) {
       return undefined;
     }
     return await new Promise<unknown>((resolve, reject) => {
@@ -171,6 +159,40 @@ export async function deleteSessionSnapshotDatabaseRecord(sessionKey: string): P
       transaction.objectStore(CHAT_SNAPSHOT_METADATA_STORE_NAME).delete(sessionKey);
     });
   } catch {
+  } finally {
+    database.close();
+  }
+}
+
+export async function deleteSessionSnapshotScope(prefix: string): Promise<void> {
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    return;
+  }
+  try {
+    await new Promise<void>((resolve) => {
+      const transaction = database.transaction(
+        [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
+        "readwrite",
+      );
+      for (const event of ["complete", "error", "abort"]) {
+        transaction.addEventListener(event, () => resolve(), { once: true });
+      }
+      for (const name of [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME]) {
+        const store = transaction.objectStore(name);
+        const request = store.openKeyCursor();
+        request.onsuccess = () => {
+          const cursor = request.result;
+          if (!cursor) {
+            return;
+          }
+          if (typeof cursor.primaryKey === "string" && cursor.primaryKey.startsWith(prefix)) {
+            store.delete(cursor.primaryKey);
+          }
+          cursor.continue();
+        };
+      }
+    });
   } finally {
     database.close();
   }

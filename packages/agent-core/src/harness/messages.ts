@@ -1,6 +1,14 @@
-import type { ImageContent, Message, TextContent } from "@openclaw/llm-core";
+import {
+  hasLegacyRuntimeContextEnvelope,
+  labelRuntimeContextContent,
+  RUNTIME_CONTEXT_CUSTOM_TYPE,
+  type ImageContent,
+  type Message,
+  type TextContent,
+} from "@openclaw/llm-core";
 import { parseDateStringTimestampMs as parseSessionTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { getOpenClawSystemUpdateKind } from "../operator-messages.js";
 import type {
   AgentMessage,
   BashExecutionMessage,
@@ -114,9 +122,16 @@ export function createCustomMessage(
 }
 
 /** Recognize the structured carrier marker shared with provider replay. */
-export function isRuntimeContextCarrier(message: AgentMessage): boolean {
+export function isRuntimeContextCarrier(message: unknown): message is CustomMessage {
+  const candidate = asOptionalRecord(message);
+  const details = candidate?.role === "custom" ? asOptionalRecord(candidate.details) : undefined;
   return (
-    message.role === "custom" && asOptionalRecord(message.details)?.runtimeContextCarrier === true
+    candidate?.role === "custom" &&
+    ((candidate.customType === RUNTIME_CONTEXT_CUSTOM_TYPE &&
+      ((details?.source === "openclaw-runtime-context" &&
+        details.runtimeContextCarrier !== false) ||
+        (details?.source === undefined && details?.runtimeContextCarrier === true))) ||
+      getOpenClawSystemUpdateKind(message) === "runtime-context")
   );
 }
 
@@ -163,17 +178,54 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
       default:
         return;
     }
-    // Preserve carrier identity so provider-owned replay and cache policy can
-    // distinguish transient context from append-only context.
-    llmMessages.push({
-      role: "user",
-      content,
-      timestamp:
-        message.role === "compactionSummary"
-          ? normalizeCompactionSummaryTimestamp(message.timestamp)
-          : message.timestamp,
-      ...(isRuntimeContextCarrier(message) ? { runtimeContextCarrier: true } : {}),
-    });
+    const turnScoped = message.role === "custom" && asOptionalRecord(message.details)?.turnScoped;
+    if (
+      message.role === "custom" &&
+      getOpenClawSystemUpdateKind(message) &&
+      typeof turnScoped === "boolean"
+    ) {
+      llmMessages.push({
+        role: "user",
+        content: message.content,
+        timestamp: message.timestamp,
+        operatorMessage: { turnScoped },
+      });
+      return;
+    }
+    const timestamp =
+      message.role === "compactionSummary"
+        ? normalizeCompactionSummaryTimestamp(message.timestamp)
+        : message.timestamp;
+    if (isRuntimeContextCarrier(message)) {
+      if (content.some((block) => block.type === "image")) {
+        llmMessages.push({
+          role: "user",
+          content,
+          timestamp,
+          runtimeContextCarrier: true,
+        });
+        return;
+      }
+      // Prefix-bound providers may have signed this exact v2026.9.7 projection.
+      // Keep its historical bytes while attaching the canonical semantic marker.
+      const textContent = content.filter((block): block is TextContent => block.type === "text");
+      const legacyContent = hasLegacyRuntimeContextEnvelope(
+        textContent.map((block) => block.text).join(""),
+      )
+        ? textContent
+        : undefined;
+      const runtimeContent =
+        legacyContent ?? (typeof message.content === "string" ? message.content : textContent);
+      llmMessages.push({
+        role: "user",
+        content: legacyContent ?? labelRuntimeContextContent(runtimeContent),
+        timestamp,
+        runtimeContext: {},
+        runtimeContextCarrier: true,
+      });
+    } else {
+      llmMessages.push({ role: "user", content, timestamp });
+    }
   });
   return llmMessages;
 }

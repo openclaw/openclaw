@@ -2,13 +2,14 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import type { Transferable, Worker } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { createRetainedOperation } from "./retained-operation.js";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { trackNativeWorkerForCpu } from "./worker-cpu.js";
 import { decodeNativeWorkerFailure } from "./worker-native-error.js";
 import type {
   NativeWorkerEvents,
   NativeWorkerRuntime,
   NativeWorkerReply,
+  NativeWorkerRequest,
   NativeWorkerResourceConnection,
   NativeWorkerResourceDescriptor,
   RetainedNativeWorker,
@@ -212,33 +213,29 @@ export class NativeWorker extends EventEmitter<NativeWorkerEvents> implements Re
   }
 
   cpuUsage(previous?: NodeJS.CpuUsage): Promise<NodeJS.CpuUsage> {
-    if (this.joined) {
-      return Promise.reject(new Error("Native worker exited"));
-    }
-    const pending = createRetainedOperation<NodeJS.CpuUsage>(() => this.service());
-    const requestId = ++this.requestId;
-    this.cpuRequests.set(requestId, pending);
-    try {
-      this.runtime.post({ type: "cpu", id: this.id, requestId, previous });
-    } catch (error) {
-      this.cpuRequests.delete(requestId);
-      pending.reject(error);
-    }
-    this.runtime.refreshReference();
-    return pending.operation.result;
+    return this.requestSample(this.cpuRequests, { type: "cpu", previous });
   }
 
   getHeapStatistics(): Promise<HeapStatistics> {
+    return this.requestSample(this.heapRequests, { type: "heap" });
+  }
+
+  private requestSample<T>(
+    requests: Map<number, ReturnType<typeof createRetainedOperation<T>>>,
+    request:
+      | Omit<Extract<NativeWorkerRequest, { type: "cpu" }>, "id" | "requestId">
+      | Omit<Extract<NativeWorkerRequest, { type: "heap" }>, "id" | "requestId">,
+  ): Promise<T> {
     if (this.joined) {
       return Promise.reject(new Error("Native worker exited"));
     }
-    const pending = createRetainedOperation<HeapStatistics>(() => this.service());
+    const pending = createRetainedOperation<T>(() => this.service());
     const requestId = ++this.requestId;
-    this.heapRequests.set(requestId, pending);
+    requests.set(requestId, pending);
     try {
-      this.runtime.post({ type: "heap", id: this.id, requestId });
+      this.runtime.post({ ...request, id: this.id, requestId });
     } catch (error) {
-      this.heapRequests.delete(requestId);
+      requests.delete(requestId);
       pending.reject(error);
     }
     this.runtime.refreshReference();

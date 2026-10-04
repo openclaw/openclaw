@@ -83,6 +83,7 @@ type CodexDynamicToolFunctionSpec = {
   name: string;
   description?: string;
   inputSchema?: unknown;
+  deferLoading?: boolean;
 };
 
 type CodexDynamicToolNamespaceSpec = {
@@ -301,7 +302,7 @@ const baseConfig: OpenClawConfig = {
         every: "30m",
       },
     },
-    entries: { main: { default: true } },
+    entries: { main: {} },
   },
 };
 

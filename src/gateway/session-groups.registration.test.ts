@@ -2,8 +2,8 @@ import { expect, it, vi } from "vitest";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { ensureSessionGroupCatalog } from "./session-group-catalog.js";
-import { ensureSessionGroupRegistered, listSessionGroups } from "./session-groups.js";
+import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "./session-group-catalog.js";
+import { ensureSessionGroupRegistered } from "./session-groups.js";
 
 it.each(["transaction", "commit"] as const)(
   "refuses registration revoked at %s admission",
@@ -36,7 +36,7 @@ it.each(["transaction", "commit"] as const)(
           }),
         ).rejects.toThrow("source revoked");
         expect(stages).toContain(stage);
-        expect(listSessionGroups().map(({ name }) => name)).toEqual(["Existing"]);
+        expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toEqual(["Existing"]);
       } finally {
         hook.mockRestore();
       }
@@ -70,6 +70,6 @@ it("reconciles a granted registration after close without replaying the mutation
       await closing;
     }
     await ensureSessionGroupCatalog();
-    expect(listSessionGroups().map(({ name }) => name)).toEqual(["Committed"]);
+    expect(readSessionGroupCatalog().groups.map(({ name }) => name)).toEqual(["Committed"]);
   });
 });

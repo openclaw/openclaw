@@ -13,10 +13,9 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
-import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient, type AgentsApiItem } from "./agentsapi-client.js";
@@ -40,7 +39,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useSessionStoreTempDirs(afterAll, "agentsapi-completed-reply-");
 
 beforeEach(() => {
   vi.spyOn(AgentsApiClient.prototype, "create").mockResolvedValue("session-fixture");
@@ -71,7 +70,6 @@ afterEach(() => {
   createSession.mockReset();
   registerRun.mockReset();
   resetGlobalHookRunner();
-  closeOpenClawAgentDatabasesForTest();
 });
 
 describe("Agents API completed reply settlement", () => {
@@ -410,7 +408,7 @@ describe("Agents API retry prompt history", () => {
 });
 
 async function createAttempt() {
-  const workspaceDir = tempDirs.make("agentsapi-completed-reply-");
+  const workspaceDir = tempDirs.make();
   const target = {
     agentId: "main",
     sessionId: "artifact-reply",

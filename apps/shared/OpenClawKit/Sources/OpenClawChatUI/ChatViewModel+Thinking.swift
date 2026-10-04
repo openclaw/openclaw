@@ -342,8 +342,7 @@ extension OpenClawChatViewModel {
 
     private func modelChoice(modelID: String?, provider: String?) -> OpenClawChatModelChoice? {
         guard let modelID = ChatPayloadDecoding.trimmedNonEmptyString(modelID) else { return nil }
-        let provider = provider?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let provider, !provider.isEmpty {
+        if let provider = ChatPayloadDecoding.trimmedNonEmptyString(provider) {
             let selectionID = Self.providerQualifiedModelSelectionID(modelID: modelID, provider: provider)
             return modelChoices.first(where: {
                 $0.selectionID == selectionID ||

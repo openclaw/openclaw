@@ -17,8 +17,8 @@ import {
   ensureExtensionMemoryBuild,
   findBuiltExtensionMemoryEntries,
 } from "./ensure-extension-memory-build.mts";
-import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
-import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
+import { requireOptionArgument, stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
+import { appendBoundedTail, formatBoundedTail } from "./lib/bounded-output-tail.mjs";
 import { formatErrorMessage } from "./lib/error-format.mts";
 import {
   captureImportIdentity,
@@ -131,10 +131,7 @@ export function parseArgs(argv: string[]): {
         break parseArgv;
       case "--extension":
       case "-e": {
-        const next = args[index + 1];
-        if (!next || next.startsWith("-")) {
-          throw new Error(`${arg} requires a value`);
-        }
+        const next = requireOptionArgument(args, index, arg);
         options.extensions.push(next);
         index += 1;
         break;
@@ -154,10 +151,7 @@ export function parseArgs(argv: string[]): {
         break;
       }
       case "--json": {
-        const next = args[index + 1];
-        if (!next || next.startsWith("-")) {
-          throw new Error(`${arg} requires a value`);
-        }
+        const next = requireOptionArgument(args, index, arg);
         options.jsonPath = path.resolve(next);
         index += 1;
         break;
@@ -179,13 +173,6 @@ export function parseArgs(argv: string[]): {
 
 function createOutputCapture(): OutputCapture {
   return { text: "", truncatedChars: 0 };
-}
-
-function formatCapturedOutput(capture: OutputCapture): string {
-  if (capture.truncatedChars === 0) {
-    return capture.text;
-  }
-  return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
 }
 
 function summarizeStderr(stderr: string, lines = 8, maxChars = STDERR_PREVIEW_MAX_CHARS): string {
@@ -438,14 +425,14 @@ export function runCase({
           }
         }
       }
-      const stderrText = formatCapturedOutput(stderr);
+      const stderrText = formatBoundedTail(stderr);
       const result: RunCaseResult = {
         name,
         code,
         signal,
         timedOut,
         error: null,
-        stdout: formatCapturedOutput(stdout),
+        stdout: formatBoundedTail(stdout),
         stderr: stderrText,
         maxRssMb: observation.resources ? observation.resources.maxRssKb / 1024 : null,
         resources: observation.resources,

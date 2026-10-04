@@ -2,11 +2,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AgentWaitResult } from "../../agents/run-wait.types.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { loadSubagentRegistryFromSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   getSubagentRunByChildSessionKey,
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { bindInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { bindParentSubagentResume } from "../session-subagent-resume.js";
@@ -32,6 +35,93 @@ const mocks = getAgentTestMocks();
 
 describe("gateway agent handler yielded orchestrator follow-ups", () => {
   afterEach(describe0AfterEach0);
+
+  it("settles the adopted native row when parent resume admission fails after commit", async () => {
+    await withPluginSubagentTestState(
+      "openclaw-parent-resume-postcommit-rejection-",
+      async ({ stateDir: root }) => {
+        const childSessionKey = "agent:main:subagent:postcommit-resume";
+        const previousRunId = "postcommit-paused";
+        const runId = "postcommit-successor";
+        await seedPersistedSubagentRunForAgentTest({
+          runId: previousRunId,
+          childSessionKey,
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          task: "Wait for the parent's answer",
+          startedAt: Date.now() - 10,
+          endedAt: Date.now(),
+          pauseReason: "sessions_yield",
+          expectsCompletionMessage: true,
+        });
+        mockSpawnedChildSessionEntry(childSessionKey, root);
+        mocks.registryCallGateway.mockResolvedValue({ status: "pending" });
+        const client = requireValue(backendGatewayClient(), "backend client");
+        client.internal = bindInProcessSubagentResume(
+          { syntheticClient: true as const },
+          bindParentSubagentResume({
+            cfg: {},
+            caller: { agentId: "main", sessionKey: "agent:main:main", assertCurrent: vi.fn() },
+            childSessionKey,
+            childSessionId: "spawned-child-session",
+          }),
+        );
+        const context = makeContext();
+        const failure = new Error("parent resume admission retired after commit");
+        let adopted: SubagentRunRecord | undefined;
+        const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
+          const current = getSubagentRunByChildSessionKey(childSessionKey);
+          if (adopted || current?.runId !== runId || current.execution.status !== "running") {
+            return;
+          }
+          // Publication follows the native ACK; abort before the admission frame resumes.
+          adopted = loadSubagentRegistryFromSqlite().get(runId);
+          context.chatAbortControllers.get(runId)?.controller.abort(failure);
+        });
+        const respond = vi.fn();
+        try {
+          await invokeAgent(
+            {
+              message: "Continue with the supplied answer",
+              sessionKey: childSessionKey,
+              idempotencyKey: runId,
+              inputProvenance: {
+                kind: "inter_session",
+                sourceSessionKey: "agent:main:main",
+                sourceTool: "sessions_send",
+              },
+            },
+            { context, client, respond, reqId: runId, flushDispatch: false },
+          );
+        } finally {
+          unsubscribe();
+        }
+        expect(adopted).toMatchObject({
+          runId,
+          taskRunId: previousRunId,
+          execution: { status: "running" },
+        });
+        expectRespondError(respond, { message: expect.stringContaining(failure.message) });
+        expect(respond.mock.calls.some(([accepted]) => accepted === true)).toBe(false);
+        expect(mocks.agentCommand).not.toHaveBeenCalled();
+        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        const terminal = {
+          runId,
+          taskRunId: previousRunId,
+          execution: {
+            status: "terminal",
+            endedAt: expect.any(Number),
+            outcome: { status: "error", error: expect.stringContaining(failure.message) },
+            suppressSessionEffects: true,
+          },
+        };
+        expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject(terminal);
+        const stored = loadSubagentRegistryFromSqlite();
+        expect(stored.has(previousRunId)).toBe(false);
+        expect(stored.get(runId)).toMatchObject(terminal);
+      },
+    );
+  });
 
   it.for(
     [
@@ -64,7 +154,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
       await withPluginSubagentTestState(
         "openclaw-gateway-yield-completion-",
         async ({ stateDir: root }) => {
-          resetSubagentRegistryForTests({ persist: false });
+          await resetSubagentRegistryForTests({ persist: false });
           const childSessionKey = "agent:main:subagent:orchestrator";
           const workerSessionKey = "agent:main:subagent:worker";
           const previousRunId = "orchestrator-before-yield";
@@ -74,7 +164,7 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           const completion = createDeferred<AgentWaitResult>();
           const announce = mocks.registryAnnounce.mockResolvedValue("delivered");
           mocks.registryCallGateway.mockReturnValue(completion.promise);
-          seedPersistedSubagentRunForAgentTest({
+          await seedPersistedSubagentRunForAgentTest({
             runId: previousRunId,
             childSessionKey,
             requesterSessionKey,
@@ -181,8 +271,12 @@ describe("gateway agent handler yielded orchestrator follow-ups", () => {
           });
           await racePromiseWithAbortSignal(cleanup.cleanupCompleted, signal);
           expect(announce).toHaveBeenCalledTimes(1);
-          expectRecordFields(continued, { cleanupCompletedAt: expect.any(Number) });
-          expectRecordFields(continued.delivery, { status: "delivered" });
+          const completed = requireValue(
+            getSubagentRunByChildSessionKey(childSessionKey),
+            "expected the orchestrator's completed run",
+          );
+          expectRecordFields(completed, { cleanupCompletedAt: expect.any(Number) });
+          expectRecordFields(completed.delivery, { status: "delivered" });
           expect(announce).toHaveBeenCalledWith(
             expect.objectContaining({
               childSessionKey,

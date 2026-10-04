@@ -60,6 +60,7 @@ export const DISCORD_GATEWAY_WS_CLIENT_OPTIONS = Object.freeze({
 const INVALID_SESSION_MIN_DELAY_MS = 1_000;
 const INVALID_SESSION_JITTER_MS = 4_000;
 const RESUME_FAILURE_THRESHOLD = 3;
+const MAX_RECONNECT_ATTEMPTS = 50;
 
 export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   readonly id = "gateway";
@@ -69,8 +70,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   public sequence: number | null = null;
   public lastHeartbeatAck = true;
   public emitter = new EventEmitter();
-  public shardId?: number;
-  public totalShards?: number;
   protected gatewayInfo?: APIGatewayBotInfo;
   public isConnected = false;
   private sessionId: string | null = null;
@@ -96,8 +95,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     super();
     this.options = {
       ...options,
-      reconnect: { maxAttempts: 50, ...options.reconnect },
-      autoInteractions: options.autoInteractions ?? true,
       intents: options.intents ?? 0,
     };
     this.gatewayInfo = gatewayInfo;
@@ -117,12 +114,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
 
   override async registerClient(client: Client): Promise<void> {
     this.client = client;
-    if (this.options.shard) {
-      client.shardId = this.options.shard[0];
-      client.totalShards = this.options.shard[1];
-      this.shardId = this.options.shard[0];
-      this.totalShards = this.options.shard[1];
-    }
     this.shouldReconnect = true;
     this.connect(false);
   }
@@ -321,7 +312,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
           token: this.client?.options.token ?? "",
           intents: this.options.intents ?? 0,
           properties: { os: process.platform, browser: "openclaw", device: "openclaw" },
-          shard: this.options.shard,
         },
       } as GatewayIdentify,
       true,
@@ -329,10 +319,7 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
   }
 
   private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
-    await sharedGatewayIdentifyLimiter.wait({
-      shardId: this.shardId,
-      maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
-    });
+    await sharedGatewayIdentifyLimiter.wait();
     const socket = sourceSocket ?? this.ws;
     if (!socket || socket !== this.ws) {
       return;
@@ -394,9 +381,6 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
         ? payload.d
         : mapGatewayDispatchData(this.client, payload.t, payload.d);
     await this.client.dispatchGatewayEvent(payload.t, data);
-    if (payload.t === GatewayDispatchEvents.InteractionCreate && this.options.autoInteractions) {
-      await this.client.handleInteraction(payload.d);
-    }
   }
 
   private resetSessionState(): void {
@@ -425,12 +409,11 @@ export class GatewayPlugin extends Plugin implements GatewayPluginContract {
     this.isConnected = false;
     this.outboundLimiter.clear();
     this.reconnectAttempts += 1;
-    if (this.reconnectAttempts > (this.options.reconnect?.maxAttempts ?? 50)) {
-      const maxAttempts = this.options.reconnect?.maxAttempts ?? 50;
+    if (this.reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
       this.emitter.emit(
         "error",
         new Error(
-          `Max reconnect attempts (${maxAttempts}) reached${options.closeCode !== undefined ? ` after close code ${options.closeCode}` : ""}`,
+          `Max reconnect attempts (${MAX_RECONNECT_ATTEMPTS}) reached${options.closeCode !== undefined ? ` after close code ${options.closeCode}` : ""}`,
         ),
       );
       return;

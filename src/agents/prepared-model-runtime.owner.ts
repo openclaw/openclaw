@@ -13,6 +13,7 @@ import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
+  groupBuildCandidates,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -494,15 +495,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(
       owner,
     };
   });
-  const groups = new Map<PreparedModelRuntimeOwner["catalogMode"], typeof candidates>();
-  for (const candidate of candidates) {
-    const group = groups.get(candidate.catalogMode);
-    if (group) {
-      group.push(candidate);
-    } else {
-      groups.set(candidate.catalogMode, [candidate]);
-    }
-  }
+  const groups = groupBuildCandidates(candidates, (candidate) => candidate.catalogMode);
   const results = new Map<PreparedModelRuntimeOwner, PreparedModelRuntimeBuildResult>();
   const publishCandidate = (candidate: (typeof candidates)[number]) => {
     if (!candidate.isCurrent()) {

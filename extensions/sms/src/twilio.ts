@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asNullableObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asNullableObjectRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { assertSmsCredentialOwnerAvailable } from "./credential-availability.js";
@@ -137,11 +137,7 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
 }
 
 function requestSearch(req: IncomingMessage): string {
-  try {
-    return new URL(req.url ?? "/", "http://localhost").search;
-  } catch {
-    return "";
-  }
+  return URL.parse(req.url ?? "/", "http://localhost")?.search ?? "";
 }
 
 function stripUrlFragment(url: string): string {
@@ -468,27 +464,11 @@ function parseTwilioListPayload<T>(
   key: string,
   parseEntry: (record: Record<string, unknown>) => T,
 ): T[] {
-  if (!text.trim()) {
-    return [];
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(text);
-  } catch {
-    return [];
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return [];
-  }
-  const items = (parsed as Record<string, unknown>)[key];
+  const items = asNullableObjectRecord(safeParseJson<unknown>(text))?.[key];
   if (!Array.isArray(items)) {
     return [];
   }
-  return items
-    .filter((item): item is Record<string, unknown> =>
-      Boolean(item && typeof item === "object" && !Array.isArray(item)),
-    )
-    .map(parseEntry);
+  return items.filter(isRecord).map(parseEntry);
 }
 
 export async function listTwilioIncomingPhoneNumbers(params: {
@@ -534,16 +514,11 @@ export async function retrieveTwilioMessagingService(params: {
   if (!response.ok) {
     throw new TwilioSmsApiError(response.status, response.text, "messaging-service lookup");
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(response.text);
-  } catch {
+  const parsed = safeParseJson<unknown>(response.text);
+  if (!isRecord(parsed)) {
     throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error("Twilio Messaging Service lookup returned malformed JSON.");
-  }
-  return parseTwilioMessagingService(parsed as Record<string, unknown>);
+  return parseTwilioMessagingService(parsed);
 }
 
 export async function listTwilioMessages(params: {

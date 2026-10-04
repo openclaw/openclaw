@@ -16,6 +16,7 @@ export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & {
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   storePath: string;
   archiveRemovedEntryTranscripts?: boolean;
   /** Preserve explicitly foreign plugin-owned state while retaining ownerless legacy rows. */
@@ -158,12 +159,7 @@ export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
       }
   );
 
-export class SessionEntryLifecycleUpsertConflictError extends Error {
-  constructor(readonly sessionKey: string) {
-    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
-    this.name = "SessionEntryLifecycleUpsertConflictError";
-  }
-}
+export { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;

@@ -83,7 +83,9 @@ function prepareSqliteWorkerOperationAdmission(
   assertDispatchable: () => void,
   assertCurrentJob: () => void,
 ) {
-  const databasePath = job.request.stateDatabasePath ?? actor?.databasePath;
+  const databasePath = actor?.target
+    ? undefined
+    : (job.request.stateDatabasePath ?? actor?.databasePath);
   if (!job.createAdmission && !databasePath) {
     return undefined;
   }
@@ -451,7 +453,11 @@ export function settleFailedSqliteWorkerJobs({
         current.nativeDispatched
           ? retired && openOutcome === "refused-before-agent-open"
             ? { kind: "completed" }
-            : { kind: "unknown", error: currentError ?? error }
+            : {
+                kind: "unknown",
+                error: currentError ?? error,
+                ...(retired ? { nativeStopped: true as const } : {}),
+              }
           : { kind: "not-entered", error },
       );
     }
@@ -476,21 +482,23 @@ export function settleSqliteWorkerJob(
   );
   job.operationAdmission?.admission.finish();
   job.operationAdmission?.releaseService();
-  let failure = error;
+  // finish() drains the receipt port before the separate command reply can acknowledge success.
+  const admission = job.operationAdmission?.admission;
+  let failure = error ?? (admission?.failureSource === "domain" ? undefined : admission?.failure);
   const admissionCleanupFailures = job.operationAdmission?.admission.cleanupFailures ?? [];
   if (admissionCleanupFailures.length > 0) {
     const cleanupError = new AggregateError(
       admissionCleanupFailures,
       "SQLite worker admission cleanup failed",
     );
-    if (error === undefined && job.request.type === "execute") {
+    if (failure === undefined && job.request.type === "execute") {
       process.emitWarning(cleanupError);
     } else {
       failure =
-        error === undefined
+        failure === undefined
           ? cleanupError
           : withSqliteWorkerCleanupFailure(
-              toErrorObject(error, "SQLite worker failed"),
+              toErrorObject(failure, "SQLite worker failed"),
               cleanupError,
             );
     }

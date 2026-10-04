@@ -1,3 +1,4 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../packages/markdown-core/src/image-spans.js", () => {

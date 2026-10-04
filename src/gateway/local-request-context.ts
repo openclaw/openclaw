@@ -63,6 +63,7 @@ const unavailableCron: GatewayCronServiceContract = {
   quiesceJobs: cronUnavailable,
   run: cronUnavailable,
   enqueueRun: cronUnavailable,
+  waitForManualRun: cronUnavailable,
   getJob: () => undefined,
   readJob: async () => undefined,
   readScratch: cronUnavailable,

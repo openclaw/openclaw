@@ -27,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
@@ -39,10 +40,15 @@ those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
 that still contains these retired keys and directs you through the same bridge.
 
+The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
+before canonical tables are created. Preserve the original state and configuration,
+then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
+Unrelated tables with these generic names remain untouched.
+
 If a newer release has already upgraded your SQLite databases, use a compatible
 pre-update backup for the bridge. Older releases cannot open newer database
 schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
-before running `2026.9.5` against that state.
+before running either bridge release against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -181,6 +187,12 @@ Node and Bun readers run only one child per read. An attempted nested reader
 stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
+
+Bun-hosted updates from 2026.9.7 can finish candidate Doctor and restart the
+Gateway after package replacement. Idle candidate workers release their IPC
+references after native work closes, so a completed Doctor does not leave the
+installed updater waiting indefinitely for its exit. This fix runs in the
+updated package; the published updater and its handoff markers are unchanged.
 
 The running Gateway retains its shutdown code before an in-place update can
 replace the package's bundled files. Transcript shutdown drains captures and
@@ -391,8 +403,8 @@ read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until
 the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
 commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
-time in the update ledger, then checks, compacts, and publishes the private
-copy for validation. Source databases and recovery backups retain their existing
+time in the update ledger, then checks and publishes the private copy with row IDs
+preserved for validation. Source databases and recovery backups retain their existing
 protection; the faster preparation takes effect when the newer updater runs.
 
 Package updates also check npm availability for enabled configured plugins before
@@ -424,7 +436,8 @@ checks still prevent completion.
 
 ### Package-publication recovery
 
-Supported POSIX npm updates print an external-Node recovery command before
+Supported POSIX npm updates print a recovery command using the selected external
+Node or Bun executable before
 transferring the staged package into recovery custody. Keep the printed commands;
 each names one operation with required `--anchor` and `--operation` arguments.
 The initial journal and helper are published together in a private control
@@ -438,6 +451,12 @@ package publication, and `retire` removes only its recorded obsolete objects.
 These commands do not replace post-update plugin, migration or service recovery.
 Keep other package managers stopped while recovering the operation.
 
+Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
+run without Node installed. The installed updater controls the first upgrade:
+older releases may omit the recovery command on Bun or refuse a Bun recovery
+runtime. Installing a newer candidate does not change that first-hop behavior;
+subsequent updates use the candidate's recovery support.
+
 Retirement records removal of the disposable directory before recording the
 helper's final unlink intent. The helper is then removed. The bounded last
 receipt remains in the control directory and is readable through
@@ -450,6 +469,10 @@ update. They are not silently migrated or deleted. Preserve them and use their
 original recovery owner; do not recreate the journal or remove them to bypass
 the refusal.
 
+SQLite recovery and rollback custody verify file identity, size, and content.
+Timestamp-only changes are accepted after verifying identical bytes; replaced
+files or changed database or journal bytes still require recovery by their owner.
+
 For older in-directory activation journals, `openclaw update status --json`
 reports the recorded phase and the original helper's `status` command. The
 current updater only inspects these journals; use their original helper to
@@ -460,6 +483,11 @@ migrations. Automatic rollback keeps compatible databases in place, preserving
 newer writes. If the previous runtime cannot read the current databases, the
 updater retains the candidate and recovery artifacts and reports why rollback
 was refused.
+
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
 
 Switch channels or target a specific version:
 

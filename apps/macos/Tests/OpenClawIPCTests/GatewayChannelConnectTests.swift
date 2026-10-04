@@ -4,7 +4,7 @@ import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
 
-@Suite(.serialized)
+@Suite(.serialized, .testWaitLimit)
 struct GatewayChannelConnectTests {
     private actor NonCooperativeGate {
         private var isOpen = false
@@ -385,19 +385,20 @@ struct GatewayChannelConnectTests {
             Task { try await channel.connect() }
         }
         await gate.waitUntilStarted()
-        try await AsyncTimeout.withTimeout(
-            seconds: 2,
-            onTimeout: {
-                NSError(
-                    domain: "GatewayChannelConnectTests",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "retry callers did not join the shared connect attempt"])
-            },
-            operation: {
-                while await channel._test_connectWaiterCount() < retries.count {
-                    await Task.yield()
-                }
-            })
+        do {
+            try await TestWait.state("shared retry callers") {
+                await channel._test_connectWaiterCount() >= retries.count
+            }
+        } catch {
+            await gate.open()
+            retries.forEach { $0.cancel() }
+            for retry in retries {
+                _ = await retry.result
+            }
+            await channel._test_setConnectFailureBackoffWaitHandler(nil)
+            await channel.shutdown()
+            throw error
+        }
         #expect(session.snapshotMakeCount() == 1)
         await gate.open()
 

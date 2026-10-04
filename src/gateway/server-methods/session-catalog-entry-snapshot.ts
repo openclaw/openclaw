@@ -59,8 +59,8 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
   /** Bound one delivery's lookups; provider planning retains the full snapshot. */
   sessionKeys?: readonly string[];
 }): SessionCatalogRequestEntrySnapshot {
-  if (params.projection.needsMaterialization) {
-    throw new Error("Await session projection materialization before capturing catalog entries");
+  if (params.projection.needsSelectionPreparation()) {
+    throw new Error("Prepare current session metadata before capturing catalog entries");
   }
   const cachedPlanning =
     params.sessionKeys === undefined
@@ -105,9 +105,16 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       const entries = selectedKeysByAgentId
         ? [...(selectedKeysByAgentId.get(agentId) ?? [])].flatMap((key) =>
             // An empty canonical alias must not become an unscoped projection query.
-            key ? prepareSessionRowSelection(params.projection, { agentId }, { key }).entries : [],
+            key
+              ? prepareSessionRowSelection(
+                  params.projection,
+                  { agentId },
+                  { key, metadataPrepared: true },
+                ).entries
+              : [],
           )
-        : prepareSessionRowSelection(params.projection, { agentId }).entries;
+        : prepareSessionRowSelection(params.projection, { agentId }, { metadataPrepared: true })
+            .entries;
       entriesByAgentId.set(
         agentId,
         entries.map(([sessionKey, entry]) => ({ sessionKey, entry })),
@@ -151,15 +158,11 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       agentId,
       sessionKey,
     });
-    const candidates = new Set([sessionKey, canonicalKey]);
-    let freshest: SessionEntry | undefined;
-    for (const key of candidates) {
-      const entry = index.get(key);
-      if (entry && (!freshest || (entry.updatedAt ?? 0) > (freshest.updatedAt ?? 0))) {
-        freshest = entry;
-      }
-    }
-    return freshest;
+    const requested = index.get(sessionKey);
+    const canonical = index.get(canonicalKey);
+    return canonical && (!requested || (canonical.updatedAt ?? 0) > (requested.updatedAt ?? 0))
+      ? canonical
+      : requested;
   };
 
   const createdActorForSession = (sessionKey: string): SessionCatalogSession["createdActor"] => {
@@ -185,7 +188,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
       // A key first resolved after deletion/recreation cannot prove the original adoption.
       const entries = entriesForCatalog();
       if (params.sessionKeys === undefined) {
-        // Selection may materialize archived rows; publish under the resulting revision.
+        // Selection retains current metadata independently of display materialization.
         const revision = params.projection.state.revision;
         let configs = planningEntriesByRevision.get(revision);
         if (!configs) {

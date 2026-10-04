@@ -53,6 +53,29 @@ export function registerGatewayRequestTests({
     systemctl,
   });
 
+  it.each(["SIGTERM", "SIGUSR2"] as const)(
+    "closes root admission before the %s listener returns",
+    async (signal) => {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { exited } = await createSignaledLoopHarness();
+        const admission = await vi.importActual<
+          typeof import("../../process/gateway-work-admission.js")
+        >("../../process/gateway-work-admission.js");
+        restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "supervised" });
+        expect(admission.isGatewayWorkAdmissionClosed()).toBe(false);
+
+        captureSignal(signal)();
+        const late = admission.tryBeginGatewayRootWorkAdmission("test:after-shutdown-signal");
+        try {
+          expect(late).toBeNull();
+        } finally {
+          late?.release();
+          await expect(exited).resolves.toBe(0);
+        }
+      });
+    },
+  );
+
   it("keeps a captured pre-park Stop ahead of native budget refresh and drain completion", async () => {
     const nativeReply = {
       code: 0,

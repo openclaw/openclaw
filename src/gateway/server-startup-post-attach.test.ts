@@ -11,7 +11,6 @@ import {
 } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeRestartSentinel } from "../infra/restart-sentinel.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";
 import type { PluginHookHandlerMap } from "../plugins/hook-types.js";
@@ -46,6 +45,7 @@ import {
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 import { registerGatewayStartupAdmissionTests } from "./server-startup-admission.test-support.js";
+import { restartSentinelMocks } from "./server-startup-background.test-support.js";
 import "./server-startup-outcomes.test-support.js";
 import { registerGatewayStartupReadinessTests } from "./server-startup-readiness.test-support.js";
 import { transcriptSidecarMocks } from "./server-startup-transcripts.test-support.js";
@@ -84,11 +84,6 @@ const hoisted = vi.hoisted(() => {
     skipped: 0,
   }));
   const scheduleRestartAbortedMainSessionRecovery = vi.fn();
-  const scheduleRestartSentinelWake =
-    vi.fn<typeof import("./server-restart-sentinel.js").scheduleRestartSentinelWake>();
-  const refreshLatestUpdateRestartSentinel = vi.fn<
-    typeof import("./server-restart-sentinel.js").refreshLatestUpdateRestartSentinel
-  >(async () => null);
   const getAcpRuntimeBackend = vi.fn<(id?: string) => unknown>(() => null);
   const reconcilePendingSessionIdentities = vi.fn(async () => ({
     checked: 0,
@@ -133,8 +128,6 @@ const hoisted = vi.hoisted(() => {
     activateSubagentRegistry,
     markStartupOrphanedMainSessionsForRecovery,
     scheduleRestartAbortedMainSessionRecovery,
-    scheduleRestartSentinelWake,
-    refreshLatestUpdateRestartSentinel,
     getAcpRuntimeBackend,
     reconcilePendingSessionIdentities,
     isCliProvider,
@@ -149,10 +142,6 @@ const hoisted = vi.hoisted(() => {
     scheduleGatewayHandlerPrewarm,
   };
 });
-
-vi.mock("../agents/session-dirs.js", () => ({
-  resolveAgentSessionDirs: vi.fn(async () => []),
-}));
 
 vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   activateSubagentRegistry: hoisted.activateSubagentRegistry,
@@ -212,11 +201,6 @@ vi.mock("../acp/runtime/registry.js", () => ({
   getAcpRuntimeBackend: hoisted.getAcpRuntimeBackend,
 }));
 
-vi.mock("./server-restart-sentinel.js", () => ({
-  refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
-  scheduleRestartSentinelWake: hoisted.scheduleRestartSentinelWake,
-}));
-
 vi.mock("./server-startup-log.js", () => ({
   logGatewayStartup: hoisted.logGatewayStartup,
 }));
@@ -255,7 +239,6 @@ const {
   startGatewayPostAttachRuntime: startGatewayPostAttachRuntimeImpl,
   startGatewaySidecars: startGatewaySidecarsImpl,
 } = await import("./server-startup-post-attach.js");
-const sentinelStartup = await import("./server-startup-restart-sentinel.js");
 const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-method-policy.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntimeImpl>[0];
@@ -501,9 +484,6 @@ describe("startGatewayPostAttachRuntime", () => {
       skipped: 0,
     });
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockClear();
-    hoisted.scheduleRestartSentinelWake.mockClear();
-    hoisted.refreshLatestUpdateRestartSentinel.mockReset();
-    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(null);
     hoisted.getAcpRuntimeBackend.mockReset();
     hoisted.getAcpRuntimeBackend.mockReturnValue(null);
     hoisted.reconcilePendingSessionIdentities.mockClear();
@@ -580,7 +560,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const unavailableGatewayMethods = new Set<string>(["chat.history", "models.list"]);
     const startupOrder: string[] = [];
     const methodsAtRecoveryRegistration: string[][] = [];
-    const currentConfig = { agents: { list: [{ id: "main" }, { id: "work" }] } };
+    const currentConfig = { agents: { entries: { main: {}, work: {} } } };
     hoisted.scheduleRestartAbortedMainSessionRecovery.mockImplementationOnce(
       (params: { getConfig: () => unknown }) => {
         methodsAtRecoveryRegistration.push([...unavailableGatewayMethods]);
@@ -1113,19 +1093,6 @@ describe("startGatewayPostAttachRuntime", () => {
     });
   });
 
-  it("refreshes only an existing restart sentinel", async () => {
-    await expect(sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent()).resolves.toBeNull();
-    expect(hoisted.refreshLatestUpdateRestartSentinel).not.toHaveBeenCalled();
-
-    const sentinel = { kind: "update", status: "ok", ts: 1 } as const;
-    await writeRestartSentinel(sentinel, testState.env);
-    hoisted.refreshLatestUpdateRestartSentinel.mockResolvedValue(sentinel);
-    await expect(sentinelStartup.refreshLatestUpdateRestartSentinelIfPresent()).resolves.toBe(
-      sentinel,
-    );
-    expect(hoisted.refreshLatestUpdateRestartSentinel).toHaveBeenCalledOnce();
-  });
-
   it("publishes Control UI cleanup before pending plugin startup", async () => {
     const { promise: pluginStartup, resolve: finishPluginStartup } = createDeferred();
     const buildController = new AbortController();
@@ -1393,7 +1360,11 @@ describe("startGatewayPostAttachRuntime", () => {
         expect.any(Object),
       );
     expect(log.info).toHaveBeenCalledWith("http server listening (1 plugin: replacement)");
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.warn.mock.calls).toEqual([
+      [
+        "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; legacy direct writers remain supported.",
+      ],
+    ]);
   });
 
   it("keeps transcripts auto-start alive when Gmail post-ready sidecars stop", async () => {
@@ -1950,9 +1921,10 @@ describe("startGatewayPostAttachRuntime", () => {
       const registry = createEmptyPluginRegistry();
       const service = { id: "admission", start: vi.fn(), stop: vi.fn() };
       registry.services.push(createServiceRegistration(service, { pluginId: "admission" }));
+      const scheduler = createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined);
       const replacementHandle =
         transition === "commit" || transition === "recovery"
-          ? await actualServices.startPluginServices({ registry, config: {} })
+          ? await actualServices.startPluginServices({ registry, config: {}, scheduler })
           : null;
       hoisted.startPluginServices.mockImplementationOnce(actualServices.startPluginServices);
       const owner = createPluginServicesOwner();
@@ -1966,6 +1938,7 @@ describe("startGatewayPostAttachRuntime", () => {
       const trace = createStartupTraceRecorder();
       const runtime = await startGatewayPostAttachRuntime(
         createPostAttachParams({
+          scheduler,
           sidecarStartup: "defer",
           pluginRegistry: registry,
           pluginRuntimeClaim: startupClaim,
@@ -2016,9 +1989,7 @@ describe("startGatewayPostAttachRuntime", () => {
       } finally {
         reservation?.reject();
         await runtime.startupSettled;
-        await owner.currentServices()?.stop();
-        await replacementHandle?.stop();
-        for (const [handle] of onPluginServices.mock.calls) {
+        for (const handle of new Set([replacementHandle, ...onPluginServices.mock.calls.flat()])) {
           await handle?.stop();
         }
       }
@@ -3412,7 +3383,7 @@ function createPostAttachRuntimeDeps(
   return {
     createHookRunner: vi.fn(createHookRunner),
     logGatewayStartup: hoisted.logGatewayStartup,
-    refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
+    refreshLatestUpdateRestartSentinel: restartSentinelMocks.prepareLatestUpdateRestartSentinel,
     createGatewayUpdateCheck: hoisted.createGatewayUpdateCheck,
     startGatewaySidecars: vi.fn(async () => 0),
     warmSystemCa: vi.fn(async () => {}),
@@ -3434,7 +3405,6 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     isNixMode: false,
     broadcastToConnIds: vi.fn(),
     getClientConnIds: () => new Set(),
-    controlUiBasePath: "/",
     gatewayPluginConfigAtStart: { hooks: { internal: { enabled: false } } } as never,
     activationSourceConfig: { hooks: { internal: { enabled: false } } } as never,
     pluginManifestRecords: [],

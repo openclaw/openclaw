@@ -41,6 +41,6 @@ export type StartChatDispatchParams = {
     chatSendAckedAtMs: number;
     chatSendTiming: ChatRunTiming | undefined;
   };
-  turn: ReturnType<typeof prepareChatSendUserTurn>;
+  turn: Awaited<ReturnType<typeof prepareChatSendUserTurn>>;
   userTurn: ReturnType<typeof createGatewayChatUserTurnController>;
 };

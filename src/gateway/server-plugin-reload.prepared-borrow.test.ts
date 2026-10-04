@@ -177,11 +177,13 @@ it.each(["plugins.reload", "auth refresh"] as const)(
       });
       activatePluginRegistry(initial.pluginRegistry, null, "gateway-bindable", state.workspaceDir);
       const registryOwner = createPluginRegistryOwner(initial.pluginRegistry, state.workspaceDir);
-      const metadata = retainGatewayPluginMetadata(createTestGatewayScheduler());
+      const scheduler = createTestGatewayScheduler();
+      const metadata = retainGatewayPluginMetadata(scheduler);
       metadata.publish(metadataSnapshot);
       const loaded = [initial];
       const lifetime = createGatewaySidecarStopOwner();
       const runtime = {
+        scheduler,
         requestEntryLifetime: new GatewayRequestEntryLifetime(),
         pluginMetadataSnapshot: metadataSnapshot,
         pluginRuntime: registryOwner,
@@ -338,10 +340,14 @@ it.each(["plugins.reload", "auth refresh"] as const)(
               reason: "reload",
               operationId: "borrow-reload",
             },
-            prepareConfigEffects: () => {
-              markPreparedModelRuntimeSnapshotsStale("plugin reload", { waitForReplacement: true });
-              return async () => {};
-            },
+            prepareConfigEffects: () => ({
+              retire: () => {
+                markPreparedModelRuntimeSnapshotsStale("plugin reload", {
+                  waitForReplacement: true,
+                });
+              },
+              rollback: async () => {},
+            }),
             env,
             commitRuntime: async (publication) => {
               publication?.publish();
@@ -391,6 +397,7 @@ it.each(["plugins.reload", "auth refresh"] as const)(
         loaded.forEach((entry) => entry.retireGatewayRuntimeBindings());
         await registryOwner.close();
         await metadata.close();
+        await scheduler.stop();
         vi.unstubAllEnvs();
       }
     });

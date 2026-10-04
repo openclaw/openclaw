@@ -124,14 +124,8 @@ type MemoryReadNotFoundResult = {
 export type MemoryReadResult = MemoryReadSuccessResult | MemoryReadNotFoundResult;
 
 /** Pre-status result accepted only from registered memory managers during migration. */
-export type LegacyMemoryReadResult = {
+export type LegacyMemoryReadResult = Omit<MemoryReadSuccessResult, "status"> & {
   status?: never;
-  text: string;
-  path: string;
-  truncated?: boolean;
-  from?: number;
-  lines?: number;
-  nextFrom?: number;
 };
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */

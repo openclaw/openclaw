@@ -12,6 +12,7 @@ import {
 } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runtimeProcessDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { materializeDeclarationPackages } from "./declaration-fixture-packages.js";
 
 const sourceRoot = process.cwd();
@@ -65,7 +66,7 @@ export function runFixture(
   privateQa = false,
   env: NodeJS.ProcessEnv = {},
 ) {
-  return command.run(process.execPath, args, fixtureOptions(root, privateQa, env));
+  return command.run(requireNodeTool("node"), args, fixtureOptions(root, privateQa, env));
 }
 
 export function runFixtureModule(
@@ -91,7 +92,7 @@ function readConfigEntries(
   groups: readonly string[],
 ): ConfigEntries {
   const result = spawnSync(
-    process.execPath,
+    requireNodeTool("node"),
     [
       "--input-type=module",
       "--eval",
@@ -182,6 +183,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "generate-kysely-types.mts",
     "tsdown-build.mts",
     "pnpm-runner.mts",
+    "run-node-watch-paths.mts",
     "windows-cmd-helpers.mjs",
     "write-plugin-sdk-entry-dts.ts",
     "write-unified-entry-dts.ts",
@@ -208,6 +210,7 @@ export function createFixture(groups: readonly string[], root: string) {
     "src/shared/freebsd-process-identity.ts",
     "src/shared/freebsd-process-identity-native.ts",
     "src/shared/pid-alive.ts",
+    "src/shared/worker-bundle-hash.ts",
     "src/infra/errno.ts",
     "src/infra/process-env.ts",
     "src/infra/windows-process-start.ts",
@@ -235,6 +238,7 @@ export function createFixture(groups: readonly string[], root: string) {
   // The full config resolves these runtime inputs before selecting declaration groups.
   for (const source of [
     "src/worker/worker-deploy-browser-runtime.ts",
+    "src/agents/utils/syntax-highlight.ts",
     "src/plugin-sdk/facade-runtime.ts",
     "extensions/browser/src/browser/playwright-core.runtime.ts",
     "src/infra/net/undici-dispatcher-options.ts",

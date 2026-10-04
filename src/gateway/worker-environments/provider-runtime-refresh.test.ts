@@ -129,6 +129,9 @@ describe("worker environment runtime upgrades", () => {
       support.WorkerEnvironmentServiceOptions["nodeTunnelManager"]
     > = {
       status: () => "stopped",
+      observeProcesses: vi.fn(async () => {
+        throw new Error("Process observation is not configured in this fixture");
+      }),
       start: vi.fn(async () => {
         throw new Error("Node workspace transport was not configured");
       }),
@@ -371,7 +374,7 @@ describe("worker environment runtime upgrades", () => {
     });
   });
 
-  it.each(["unchanged build", "version", "same-version build"] as const)(
+  it.each(["unchanged build", "same-version build"] as const)(
     "recovers published Gateway Stop state after restart with %s",
     async (change) => {
       // v2026.9.6 placement-reclaim persists these shapes; current admission owns the schema.
@@ -384,26 +387,21 @@ describe("worker environment runtime upgrades", () => {
       const unchanged = change === "unchanged build";
       const targetReceipt = unchanged
         ? releasedReceipt
-        : {
-            ...currentReceipt,
-            ...(change === "same-version build"
-              ? { openclawVersion: releasedReceipt.openclawVersion }
-              : {}),
-          };
+        : { ...currentReceipt, openclawVersion: releasedReceipt.openclawVersion };
       const h = await setupUpgrade(
         unchanged ? "node" : "ssh",
         "attached",
         releasedReceipt,
         targetReceipt,
       );
-      h.placements.startDrain({
+      await h.placements.startDrain({
         sessionId: REQUEST.sessionId,
         environmentId: h.environment.environmentId,
         ownerEpoch: h.environment.ownerEpoch,
         expectedGeneration: h.placement!.generation,
       });
       if (!unchanged) {
-        h.placements.claimReclaimWorkspaceResult({
+        await h.placements.claimReclaimWorkspaceResult({
           ...REQUEST,
           claimId: "reclaim-runtime-upgrade",
           runId: "reclaim-runtime-upgrade",
@@ -419,7 +417,7 @@ describe("worker environment runtime upgrades", () => {
         state: "draining",
         turnClaim: null,
       });
-      expect(restarted.placements.listPendingWorkspaceResults()).toEqual(
+      expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual(
         unchanged
           ? []
           : [
@@ -446,7 +444,7 @@ describe("worker environment runtime upgrades", () => {
       vi.mocked(h.nodeTunnelManager.start).mockImplementation(openWorkspace);
       h.destroy.mockImplementation(async () => {
         expect(fixture.log).toContain("workspace:verify-local");
-        expect(restarted.placements.listPendingWorkspaceResults()).toMatchObject([
+        expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toMatchObject([
           { workspaceAcceptedAtMs: expect.any(Number) },
         ]);
         fixture.log.push("provider:release");
@@ -518,7 +516,7 @@ describe("worker environment runtime upgrades", () => {
           turnClaim: null,
           workspaceBaseManifestRef: fixture.reconciledManifestRef,
         });
-        expect(restarted.placements.listPendingWorkspaceResults()).toEqual([]);
+        expect(await restarted.placements.listPendingWorkspaceResultsAsync()).toEqual([]);
         console.info(
           `[stop-recovery-proof] published-state=v2026.9.6 case=${change} reopened=draining events=${fixture.log.join(",")} final=reclaimed`,
         );

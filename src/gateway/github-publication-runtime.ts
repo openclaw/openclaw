@@ -62,7 +62,7 @@ export function createGitHubPublicationRuntime(params: {
   };
   const reconcilePublications = async () => {
     try {
-      coordinator.deferOrphanedRequests();
+      await coordinator.deferOrphanedRequestsAsync();
       await coordinator.resumeSessionRequests();
     } catch (error) {
       params.warn(`GitHub publication recovery deferred: ${formatErrorMessage(error)}`);

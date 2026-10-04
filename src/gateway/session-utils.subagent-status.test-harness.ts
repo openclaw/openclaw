@@ -43,7 +43,7 @@ export function registerSubagentSessionStatusTests(
       } as SessionEntry,
     };
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent",
       childSessionKey: "agent:main:subagent:parent",
       controllerSessionKey: "agent:main:main",
@@ -56,7 +56,7 @@ export function registerSubagentSessionStatusTests(
       { sessionKey: "agent:main:subagent:parent" },
       { trackOwner: true, ownsContext: true },
     );
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-child",
       childSessionKey: "agent:main:subagent:child",
       controllerSessionKey: "agent:main:subagent:parent",
@@ -66,7 +66,7 @@ export function registerSubagentSessionStatusTests(
       outcome: { status: "ok" },
       model: "openai/gpt-5.4",
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-failed",
       childSessionKey: "agent:main:subagent:failed",
       controllerSessionKey: "agent:main:main",
@@ -125,7 +125,7 @@ export function registerSubagentSessionStatusTests(
     async ({ lifecycleRunId, status }) => {
       const now = Date.now();
       const childSessionKey = "agent:main:subagent:restart-delivery";
-      addSubagentRunForTests({
+      await addSubagentRunForTests({
         runId: "restart-run",
         childSessionKey,
         controllerSessionKey: "agent:main:main",

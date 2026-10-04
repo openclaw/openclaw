@@ -25,6 +25,17 @@ const INSTALL_EVENT: &str = "install-progress";
 #[cfg(not(target_os = "windows"))]
 const ERROR_TAIL_LINES: usize = 24;
 
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn managed_launcher_absent(prefix: &std::path::Path) -> Result<bool, String> {
+    match std::fs::symlink_metadata(prefix.join("bin/openclaw")) {
+        Ok(_) => Ok(false),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(format!(
+            "Could not inspect the existing CLI launcher: {error}"
+        )),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum InstallChannel {
@@ -53,7 +64,7 @@ struct InstallProgress<'a> {
 }
 
 #[cfg(target_os = "windows")]
-pub fn install(_app: &AppHandle, _channel: InstallChannel) -> Result<(), String> {
+pub fn install(_app: &AppHandle, _channel: InstallChannel, _fresh: bool) -> Result<(), String> {
     Err("CLI installation is unavailable in this Windows test build.".to_string())
 }
 
@@ -68,9 +79,19 @@ fn configure_installer_environment(command: &mut Command) {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn install(app: &AppHandle, channel: InstallChannel) -> Result<(), String> {
+pub fn install(app: &AppHandle, channel: InstallChannel, fresh: bool) -> Result<(), String> {
     let prefix = openclaw_home().map_err(|error| error.to_string())?;
-    install_at(app, channel, prefix, channel.version(), false, None)
+    let app_version = app.package_info().version.to_string();
+    let version = if fresh
+        && matches!(channel, InstallChannel::Stable)
+        && crate::is_release_version(&app_version)
+    {
+        app_version.as_str()
+    } else {
+        channel.version()
+    };
+    // Fresh setup publishes its service only after the app has admitted Bun.
+    install_at(app, channel, prefix, version, fresh, None)
 }
 
 #[cfg(target_os = "windows")]
@@ -143,6 +164,18 @@ pub(crate) fn browser_runtime(
     if !cli.matches_version(&version) {
         return Err("The browser runtime does not match this app version.".into());
     }
+    if !is_current() {
+        return Err("The native browser document changed.".into());
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let runtime = crate::bundled_runtime::seed(app)?;
+        crate::runtime_action::bind_runtime(
+            &cli,
+            &runtime,
+            crate::runtime_action::Purpose::Browser,
+        )?;
+    }
     Ok(cli)
 }
 
@@ -167,7 +200,10 @@ fn install_at(
         .arg(&prefix)
         .args(["--version", version]);
     if runtime_only {
-        command.args(["--runtime-only", "--npm"]);
+        command.arg("--runtime-only");
+        if !matches!(channel, InstallChannel::Dev) {
+            command.arg("--npm");
+        }
     }
     if matches!(channel, InstallChannel::Dev) {
         command
@@ -198,7 +234,7 @@ fn install_at(
     let stderr_thread = stream_lines("stderr", stderr, sender);
     let mut tail = VecDeque::with_capacity(ERROR_TAIL_LINES);
     for (stream, line) in receiver {
-        if !runtime_only {
+        if spawn.is_none() {
             let _ = app.emit_to(
                 "main",
                 INSTALL_EVENT,
@@ -258,8 +294,29 @@ where
 
 #[cfg(all(test, not(target_os = "windows")))]
 mod tests {
-    use super::configure_installer_environment;
+    use super::{configure_installer_environment, managed_launcher_absent};
     use std::process::Command;
+
+    #[test]
+    fn existing_state_is_not_a_cli_install_but_a_dangling_launcher_is() {
+        let prefix =
+            std::env::temp_dir().join(format!("openclaw-install-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::write(
+            prefix.join("openclaw.json"),
+            "{\"gateway\":{\"mode\":\"local\"}}\n",
+        )
+        .unwrap();
+        assert!(managed_launcher_absent(&prefix).unwrap());
+        std::os::unix::fs::symlink(
+            prefix.join("missing-external-cli"),
+            prefix.join("bin/openclaw"),
+        )
+        .unwrap();
+        assert!(!managed_launcher_absent(&prefix).unwrap());
+        assert!(prefix.join("openclaw.json").is_file());
+        std::fs::remove_dir_all(prefix).unwrap();
+    }
 
     #[test]
     fn installer_child_does_not_inherit_the_appimage_library_path() {

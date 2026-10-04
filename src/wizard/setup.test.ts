@@ -14,14 +14,13 @@ import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-loc
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import { committedConfigFiles } from "../commands/committed-config.test-support.js";
 import { createConfigIO as createRealConfigIO } from "../config/io.factory.js";
-import { coerceConfig } from "../config/io.read-helpers.js";
 import { createConfigFileSnapshot } from "../config/io.snapshot-shared.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { materializeRuntimeConfig } from "../config/materialize.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { WizardCancelledError, type WizardPrompter, type WizardSelectParams } from "./prompts.js";
 import { runSetupWizard } from "./setup.js";
 import {
@@ -167,14 +166,14 @@ function remotePromptCalls() {
 }
 
 function modelConfig(primary: string): OpenClawConfig {
-  return { agents: { defaults: { model: { primary } }, entries: { main: { default: true } } } };
+  return { agents: { defaults: { model: { primary } }, entries: { main: {} } } };
 }
 
 function modelConfigWithApiKey(apiKey: string, agentDir: string): OpenClawConfig {
   return {
     agents: {
       defaults: { model: { primary: "openai/gpt-5.5" } },
-      entries: { main: { default: true, agentDir } },
+      entries: { main: { agentDir } },
     },
     auth: {
       profiles: { "openai:default": { provider: "openai", mode: "api_key" } },
@@ -468,7 +467,7 @@ describe("runSetupWizard", () => {
   }
 
   function configSnapshot(config: OpenClawConfig, exists = true): ConfigFileSnapshot {
-    const sourceConfig = coerceConfig(migratePersistedImplicitMainRoster(config).config);
+    const sourceConfig = createCanonicalAgentConfigFixture(config).config;
     return createConfigFileSnapshot({
       path: "/tmp/.openclaw/openclaw.json",
       exists,
@@ -517,7 +516,6 @@ describe("runSetupWizard", () => {
         bind: "loopback",
         authMode: "token",
         gatewayToken: "test-token",
-        tailscaleMode: "off",
       },
     }));
     let authoredConfig: OpenClawConfig | undefined;
@@ -905,21 +903,14 @@ describe("runSetupWizard", () => {
     async (accepted) => {
       const currentWorkspace = await makeCaseDir("fleet-current-");
       const requestedWorkspace = await makeCaseDir("fleet-requested-");
-      const config: OpenClawConfig = accepted
-        ? {
-            wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" },
-            agents: {
-              defaults: { workspace: currentWorkspace },
-              list: [{ id: "main", default: true }, { id: "ops" }],
-            },
-          }
-        : {
-            agents: {
-              ownership: "explicit",
-              defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
-              entries: { main: {}, ops: {} },
-            },
-          };
+      const config: OpenClawConfig = {
+        ...(accepted ? { wizard: { securityAcknowledgedAt: "2026-06-30T00:00:00.000Z" } } : {}),
+        agents: {
+          ownership: "explicit",
+          defaults: { workspace: currentWorkspace, systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
+      };
       if (accepted) {
         readConfigFileSnapshot.mockResolvedValueOnce(configSnapshot(config));
       } else {
@@ -1194,7 +1185,7 @@ describe("runSetupWizard", () => {
       if (flow === "quickstart") {
         readConfigFileSnapshot.mockResolvedValueOnce(
           configSnapshot({
-            agents: { entries: { main: { default: true } } },
+            agents: { entries: { main: {} } },
             gateway: {
               port: 19111,
               bind: "loopback",
@@ -1224,7 +1215,6 @@ describe("runSetupWizard", () => {
               bind: gateway.bind,
               authMode: gateway.authMode,
               gatewayToken: undefined,
-              tailscaleMode: gateway.tailscaleMode,
             },
           }),
         );

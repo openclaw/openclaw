@@ -112,11 +112,11 @@ describe("Doctor disabled LaunchAgent diagnosis", () => {
       await fs.mkdir(path.join(home, "Library", "LaunchAgents"), { recursive: true });
       await fs.writeFile(path.join(home, "Library", "LaunchAgents", `${label}.plist`), "fixture");
     }
-    vi.mocked(execLaunchctl).mockImplementation(async ([action]) => {
+    vi.mocked(execLaunchctl).mockImplementation(async ([action, target]) => {
       if (action === "print") {
         return {
           code: loaded ? 0 : 113,
-          stdout: loaded ? "state = running" : "",
+          stdout: loaded ? `${target} = {\n\tstate = running\n}` : "",
           stderr: loaded ? "" : "Could not find service",
           termination: "exit",
         };

@@ -12,7 +12,7 @@ import { renderAgentRowChip } from "../../components/agent-row-chip.ts";
 import { renderChannelPicker, type ChannelPickerOption } from "../../components/channel-picker.ts";
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
-import { icon, icons, type IconName } from "../../components/icons.ts";
+import { icon, icons } from "../../components/icons.ts";
 import { highlightCodeHtml } from "../../components/markdown-code-blocks.ts";
 import { renderModelPicker } from "../../components/model-picker.ts";
 import { providerIdFromModelRef } from "../../components/provider-icon.ts";
@@ -29,20 +29,21 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import {
-  isCronJobActiveFailure,
-  isCronJobRunning,
-  resolveCronJobLastRunStatus,
-} from "../../lib/cron-status.ts";
+import { isCronJobActiveFailure, isCronJobRunning } from "../../lib/cron-status.ts";
 import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import type { CronFieldErrors, CronFieldKey, CronFormState } from "../../lib/cron/types.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp, formatMs } from "../../lib/format.ts";
 import { formatCronSchedule } from "../../lib/presenter.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { CRON_SUGGESTIONS, suggestionFormPatch } from "./suggestions.ts";
+import {
+  renderDisabledNote,
+  renderJobStateIndicator,
+  renderLastRunCell,
+  renderTriggerIndicator,
+} from "./view-job-status.ts";
 import { renderJobsFilterPopover } from "./view-jobs-filter.ts";
-import { renderRunsSection, runStatusLabel } from "./view-runs.ts";
+import { renderRunsSection } from "./view-runs.ts";
 import { renderCronSuggestionLists } from "./view-suggestions.ts";
 import type { CronDetailTab, CronProps } from "./view-types.ts";
 
@@ -82,6 +83,7 @@ const CRON_FIELD_LABEL_KEYS: Record<CronFieldKey, string> = {
   payloadModel: "cron.form.model",
   payloadThinking: "cron.form.thinking",
   timeoutSeconds: "cron.form.timeoutSeconds",
+  deliveryMode: "cron.form.deliveryModeLabel",
   deliveryTo: "cron.form.to",
   failureAlertAfter: "cron.form.failureAlertAfter",
   failureAlertCooldownSeconds: "cron.form.failureAlertCooldown",
@@ -257,6 +259,7 @@ type CronSelectOptions = {
   disabled?: boolean;
   standalone?: boolean;
   channel?: boolean;
+  errorKey?: CronFieldKey;
 };
 
 function renderCronSelect(
@@ -265,6 +268,7 @@ function renderCronSelect(
   options: CronSelectOptions,
 ) {
   const selected = options.value ?? props.form[field];
+  const error = options.errorKey ? props.fieldErrors[options.errorKey] : undefined;
   const picker = options.channel ? renderChannelPicker : renderPicker;
   return picker({
     id: options.standalone ? undefined : inputIdForField(field),
@@ -272,6 +276,8 @@ function renderCronSelect(
     value: options.channel ? selected || "last" : selected,
     options: options.options,
     disabled: options.disabled,
+    invalid: options.errorKey ? Boolean(error) : undefined,
+    describedBy: error && options.errorKey ? errorIdForField(options.errorKey) : undefined,
     onChange: (value) => props.onFormChange({ [field]: value }),
   });
 }
@@ -285,6 +291,8 @@ function renderCronSelectField(
     label: options.label,
     controlId: inputIdForField(field),
     help: options.help,
+    error: options.errorKey ? props.fieldErrors[options.errorKey] : undefined,
+    errorId: options.errorKey ? errorIdForField(options.errorKey) : undefined,
     control: renderCronSelect(props, field, options),
   });
 }
@@ -650,91 +658,6 @@ function renderJobCell(className: string, label: string, value: unknown) {
     <span class="cron-table__cell-label">${label}</span>
     <span class="cron-table__cell-value">${value}</span>
   </span>`;
-}
-
-function renderJobStateIndicator(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  const [state, iconName, label]: [string, IconName | null, string] = isCronJobRunning(job)
-    ? ["running", "loader", t("cron.runs.runStatusRunning")]
-    : autoDisabled
-      ? ["error", "lock", disabledNoteLabel(job)]
-      : isCronJobActiveFailure(job)
-        ? ["error", "alertTriangle", t("cron.runs.runStatusError")]
-        : !job.enabled
-          ? ["paused", "pause", t("cron.list.paused")]
-          : ["active", null, t("cron.detail.active")];
-  return html`<span
-    class="cron-table__state cron-table__state--${state}"
-    role="img"
-    aria-label=${label}
-    title=${label}
-    >${iconName ? icon(iconName) : html`<span class="cron-table__state-dot"></span>`}</span
-  >`;
-}
-
-function renderTriggerIndicator() {
-  const label = t("cron.form.triggerConfigured");
-  return html`<span class="cron-trigger-icon" role="img" aria-label=${label} title=${label}
-    >${icon("gitBranch")}</span
-  >`;
-}
-
-/** Auto-disabled is the escalated failure state, not an operator pause: the
- * recorded fact (state.autoDisabled) must stay visible or the job silently
- * drops out of every failure surface the moment the problem became permanent. */
-function renderDisabledNote(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  if (!autoDisabled) {
-    return html`<span class="muted cron-table__paused-note">${t("cron.list.paused")}</span>`;
-  }
-  const label = disabledNoteLabel(job);
-  const lastError = job.state?.lastError?.trim();
-  return html`<span
-    class="cron-table__paused-note cron-table__auto-disabled"
-    data-test-id=${`cron-row-auto-disabled-${job.id}`}
-    title=${lastError ? formatUiExternalText(lastError) : label}
-    >${label}</span
-  >`;
-}
-
-function disabledNoteLabel(job: CronJob) {
-  const autoDisabled = job.state?.autoDisabled;
-  if (!autoDisabled) {
-    return t("cron.list.paused");
-  }
-  return t(
-    autoDisabled.reason === "schedule-errors"
-      ? "cron.list.autoDisabledScheduleErrors"
-      : "cron.list.autoDisabledRunFailures",
-    { count: String(autoDisabled.consecutiveErrors) },
-  );
-}
-
-function renderLastRunCell(job: CronJob) {
-  const status = resolveCronJobLastRunStatus(job);
-  const lastRunAtMs = job.state?.lastRunAtMs;
-  const rel =
-    typeof lastRunAtMs === "number" && Number.isFinite(lastRunAtMs)
-      ? formatRelativeTimestamp(lastRunAtMs)
-      : null;
-  if (status === "unknown" || !rel) {
-    return html`<span class="muted">${t("common.na")}</span>`;
-  }
-  // Bare glyph + time reads calmer than a chip per row; the status word stays
-  // available to hover and assistive tech via the label.
-  const glyph =
-    status === "ok"
-      ? html`<span class="cron-last-glyph cron-last-glyph--ok">${icon("check")}</span>`
-      : status === "error"
-        ? html`<span class="cron-last-glyph cron-last-glyph--error">${icon("x")}</span>`
-        : html`<span class="cron-last-glyph">${icon("cornerDownRight")}</span>`;
-  const label = runStatusLabel(status);
-  return html`
-    <span class="cron-table__last-run" role="img" aria-label=${label} title=${label}>
-      ${glyph}
-      <span class="cron-table__last-time">${rel}</span>
-    </span>
-  `;
 }
 
 // Run now and pause/resume are visible controls (rows and detail header);
@@ -1447,7 +1370,11 @@ function renderDeliverySection(
         label: t("cron.form.deliveryModeLabel"),
         help: t("cron.form.deliveryHelp"),
         value: ctx.selectedDeliveryMode,
+        errorKey: "deliveryMode",
         options: [
+          ...(ctx.selectedDeliveryMode === ""
+            ? [{ value: "", label: t("cron.form.selectDeliveryMode"), disabled: true }]
+            : []),
           ...(ctx.supportsAnnounce
             ? [{ value: "announce", label: t("cron.form.announceDefault") }]
             : []),

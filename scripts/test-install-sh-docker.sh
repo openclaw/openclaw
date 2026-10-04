@@ -255,8 +255,8 @@ NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
 NPM_CACHE_OWNED=0
 NPM_CACHE_PREPARED=0
 NPM_CACHE_DOCKER_ARGS=()
-INSTALL_SCRIPT_PATH="$ROOT_DIR/scripts/install.sh"
-CLI_INSTALL_SCRIPT_PATH="$ROOT_DIR/scripts/install-cli.sh"
+INSTALL_SCRIPT_PATH="$UPDATE_DIR/installers/install.sh"
+CLI_INSTALL_SCRIPT_PATH="$UPDATE_DIR/installers/install-cli.sh"
 SMOKE_RUNNER_ENV_ARGS=()
 
 require_regular_payload_file() {
@@ -337,6 +337,10 @@ cleanup() {
 }
 
 trap cleanup EXIT
+
+if [[ -z "$FROZEN_PAYLOAD_DIR" ]]; then
+  node "$HARNESS_ROOT/scripts/build-installers.mjs" "$UPDATE_DIR/installers" "$ROOT_DIR"
+fi
 
 allocate_host_port() {
   node -e '

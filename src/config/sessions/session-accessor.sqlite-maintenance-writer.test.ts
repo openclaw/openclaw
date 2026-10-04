@@ -1,9 +1,9 @@
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { recordInboundSession } from "../../channels/session.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import {
   beginSessionWorkAdmission,
   isSessionLifecycleMutationActive,
@@ -11,10 +11,10 @@ import {
 } from "../../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   applySessionEntryLifecycleMutation,
   loadSessionEntry,
@@ -26,7 +26,6 @@ import {
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import { deleteSessionEntryRows } from "./session-accessor.sqlite-entry-store.js";
 import * as maintenance from "./session-accessor.sqlite-maintenance.js";
-import * as reclamationCommit from "./session-accessor.sqlite-reclamation-commit.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
@@ -49,16 +48,15 @@ vi.mock("./session-accessor.sqlite-archive.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-maintenance-planner-");
 
 afterEach(() => {
   vi.restoreAllMocks();
   archiveMaterializationHook.beforeMaterialize = undefined;
-  closeOpenClawAgentDatabasesForTest();
 });
 
 function createPlannerStore(entryCount: number, updatedAt?: number) {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-planner-");
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   for (let index = 0; index < entryCount; index += 1) {
     replaceSessionEntrySync(
@@ -132,7 +130,7 @@ it("resolves protection once before capping aged candidates", async () => {
   const provider = vi.fn(() => [key(2)]);
   const unregister = registerSessionMaintenancePreserveKeysProvider(provider);
   try {
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [key(1)],
       run: async () => {
@@ -254,7 +252,7 @@ it.each(["session-key", "session-id"] as const)(
       );
     const identity = identityKind === "session-key" ? target.sessionKey : target.sessionId;
 
-    await runExclusiveSessionLifecycleMutation({
+    await runExclusiveSessionLifecycleMutation("archive", {
       scope: storePath,
       identities: [identity],
       run: async () => {
@@ -321,7 +319,7 @@ it("does not rescan unrelated rows when a requested lifecycle removal does not m
 });
 
 it("does not hold channel recording behind automatic session maintenance", async ({ signal }) => {
-  const tempDir = tempDirs.make("openclaw-session-maintenance-ingress-");
+  const tempDir = sessionDirs.make();
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   const staleSessionKey = "agent:main:subagent:maintenance-ingress-stale";
   const laterStaleSessionKey = "agent:main:subagent:maintenance-ingress-later-stale";
@@ -466,17 +464,17 @@ it("rolls back planner statistics when maintenance ownership is revoked before c
       .get("idx_agent_session_nodes_updated_at");
   let current = true;
   let reachedCommit = false;
-  const authorize = reclamationCommit.withSqliteReclamationAuthorization;
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
   const authorization = vi
-    .spyOn(reclamationCommit, "withSqliteReclamationAuthorization")
-    .mockImplementation((buffer, owner, assertCurrent, run) =>
-      authorize(buffer, owner, assertCurrent, (commit) =>
-        run(() => {
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((callback, attachment) =>
+      createAdmission((request, grant) => {
+        if (request.stage === "commit") {
           reachedCommit = true;
           current = false;
-          return commit();
-        }),
-      ),
+        }
+        return callback(request, grant);
+      }, attachment),
     );
 
   await maintenance.refreshSqliteSessionPlannerStatisticsBestEffort(scope, 65, {

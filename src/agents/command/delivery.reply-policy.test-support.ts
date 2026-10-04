@@ -4,6 +4,7 @@ import {
   markReplyPayloadForSourceSuppressionDelivery,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
+import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { hasVisibleAgentPayload } from "../embedded-agent-runner/message-visibility.js";
 import type { AgentCommandDeliveryResult } from "./delivery-result.js";
 import type { AgentCommandOpts } from "./types.js";
@@ -19,7 +20,7 @@ export function registerAgentCommandReplyPolicyTests({
     opts?: Partial<AgentCommandOpts>;
     omitReplyTarget?: boolean;
   }) => Promise<AgentCommandDeliveryResult>;
-  deliverOutboundPayloadsMock: Mock<(...args: unknown[]) => Promise<unknown[]>>;
+  deliverOutboundPayloadsMock: Mock<typeof deliverOutboundPayloads>;
   latestOutboundDeliveryArgs: () => { payloads: ReplyPayload[] };
   expectDeliveryStatusFields: (
     delivered: AgentCommandDeliveryResult,

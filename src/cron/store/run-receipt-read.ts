@@ -8,6 +8,7 @@ import {
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { readAgentDeletionJournalInDatabase } from "../../state/agent-deletion-journal.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
+import { projectCronReceiptAuthorityJobFacts } from "./receipt-authority-facts.js";
 import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 import type {
   CronRunReceipt,
@@ -103,7 +104,7 @@ export function readCronRunReceiptCurrentFactsInDatabase(
         : undefined;
     return {
       receipt,
-      job: job ? { agentId: job.agentId, sessionKey: job.sessionKey } : undefined,
+      job: job ? projectCronReceiptAuthorityJobFacts(job) : undefined,
       deletionBlocked,
     };
   });

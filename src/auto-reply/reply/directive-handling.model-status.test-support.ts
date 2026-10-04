@@ -174,14 +174,13 @@ export function registerModelStatusDirectiveTests(harness: ModelStatusTestHarnes
           },
           modelPolicy: { allow: ["approved"] },
         },
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
             models: {
               "provider-b/model-b": { alias: "approved" },
             },
           },
-        ],
+        },
       },
     } as unknown as OpenClawConfig;
     const policy = createModelVisibilityPolicy({

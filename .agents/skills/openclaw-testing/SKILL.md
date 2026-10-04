@@ -119,3 +119,17 @@ For prompt snapshot drift that passes on macOS, reproduce in CI's Linux/Node
 environment before regenerating; a local pass cannot override failing CI bytes.
 Fix related failures and rerun the affected proof. Route unrelated failures with
 evidence rather than broadening this task automatically.
+
+### Test failure policy
+
+Treat test failures as defects and make a bounded, best-effort attempt to
+reproduce them (same shard order first), identify their cause, and fix the owning
+fixture, shared state, ordering, or product. When a safe fix is established, add
+a regression and document the cause; cite another owner's fix when applicable.
+If reasonable investigation cannot establish or complete a safe fix, record the
+original failure, attempted reproductions, evidence, and remaining uncertainty in
+the PR, then continue under the normal CI and review gates. The unresolved
+failure alone must not block landing or trigger an extra approval request. Never
+claim a passing replay proves a fix. Do not rerun, re-push, or refresh merely to
+get green, or conceal failures with retries, longer timeouts, weaker assertions,
+broader mocks, or altered baselines.

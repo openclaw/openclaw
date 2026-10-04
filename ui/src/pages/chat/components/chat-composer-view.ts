@@ -1,4 +1,7 @@
 import "../../../styles/chat/composer-surface.css";
+import "../../../components/mcp-app-catalog.ts";
+import "../../../components/mcp-app-context-strip.ts";
+import "../../../components/mcp-app-resources.ts";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
@@ -10,6 +13,7 @@ import { renderSessionProgressCard } from "../../../components/session-progress-
 import { t } from "../../../i18n/index.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { presentedContent } from "../../../lit/presentation-binding.ts";
 import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
@@ -92,31 +96,19 @@ type ChatComposerViewContext = {
 };
 
 export function renderChatComposerQueue(props: ChatComposerProps, showAbortableUi: boolean) {
+  const canAct = props.connected && props.canSend && !props.submitDisabledReason;
   return renderChatQueue({
     queue: props.queue,
     displayQueue: props.displayQueue,
     offline: props.offline,
     canAbort: showAbortableUi,
-    canRemoveServerQueued: props.connected && props.canSend && !props.submitDisabledReason,
-    onQueueRetry:
-      props.connected && props.canSend && !props.submitDisabledReason
-        ? props.onQueueRetry
-        : undefined,
-    onQueueSteer:
-      props.connected && props.canSend && !props.submitDisabledReason
-        ? props.onQueueSteer
-        : undefined,
+    canRemoveServerQueued: canAct,
+    onQueueRetry: canAct ? props.onQueueRetry : undefined,
+    onQueueSteer: canAct ? props.onQueueSteer : undefined,
     // Reordering is local bookkeeping, so it stays available while offline —
     // exactly when a queue is long enough to need it.
     onQueueMove: props.onQueueMove,
-    onQueueEdit: props.queuedEdit?.onEdit,
-    onQueueEditChange: props.queuedEdit?.onEditChange,
-    onQueueEditSubmit: props.queuedEdit?.onEditSubmit,
-    onQueueEditCancel: props.queuedEdit?.onCancel,
-    editingId: props.queuedEdit?.editingId ?? null,
-    editingText: props.queuedEdit?.editingText,
-    editingMentions: props.queuedEdit?.editingMentions,
-    editingSource: props.queuedEdit?.source,
+    queuedEdit: props.queuedEdit,
     onQueueRemove: props.onQueueRemove,
   });
 }
@@ -178,71 +170,78 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
     props.realtimeTalkVideoStream?.getVideoTracks?.()[0]?.getSettings?.().facingMode !==
     "environment";
   const slashMenuAnnouncementId = paneDomId(props.paneId, "slash-active-announcement");
-  const disabledBanner = props.disabledBanner
-    ? html`
-        <div
-          class="agent-chat__disabled-banner ${
-            props.disabledBanner.kind === "composer-replacement"
-              ? "agent-chat__disabled-banner--replacement"
-              : ""
-          } callout ${
-            props.disabledBanner.tone === "neutral"
-              ? "agent-chat__disabled-banner--neutral"
-              : "info"
-          } callout--action"
-          role="status"
-        >
-          ${
-            props.disabledBanner.icon
-              ? html`<span
-                  class="agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${
-                    props.disabledBanner.icon
-                  }"
-                  aria-hidden="true"
-                  >${
-                    props.disabledBanner.icon === "archive" ? icons.archive : icons.alertTriangle
-                  }</span
-                >`
-              : nothing
-          }
-          <div class="callout__content">
+  const disabledBanner =
+    props.disabledBanner && props.disabledBanner.presentation !== "hidden"
+      ? html`
+          <div
+            class="agent-chat__disabled-banner ${
+              props.disabledBanner.kind === "composer-replacement"
+                ? "agent-chat__disabled-banner--replacement"
+                : ""
+            } ${props.disabledBanner.presentation === "compact" ? "agent-chat__disabled-banner--compact" : ""} callout ${
+              props.disabledBanner.tone === "neutral"
+                ? "agent-chat__disabled-banner--neutral"
+                : "info"
+            } callout--action"
+            role="status"
+          >
             ${
-              props.disabledBanner.title
-                ? html`<div class="agent-chat__disabled-banner-title">
-                    ${props.disabledBanner.title}
-                  </div>`
+              props.disabledBanner.icon
+                ? html`<span
+                    class="agent-chat__disabled-banner-icon agent-chat__disabled-banner-icon--${
+                      props.disabledBanner.icon
+                    }"
+                    aria-hidden="true"
+                    >${
+                      props.disabledBanner.icon === "archive"
+                        ? icons.archive
+                        : props.disabledBanner.icon === "eye"
+                          ? icons.eye
+                          : icons.alertTriangle
+                    }</span
+                  >`
                 : nothing
             }
-            <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
+            <div class="callout__content">
+              ${
+                props.disabledBanner.title
+                  ? html`<div class="agent-chat__disabled-banner-title">
+                      ${props.disabledBanner.title}
+                    </div>`
+                  : nothing
+              }
+              <div class="agent-chat__disabled-banner-detail">${props.disabledBanner.text}</div>
+            </div>
+            ${
+              props.disabledBanner.onAction
+                ? html`<button
+                    type="button"
+                    class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
+                    ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
+                    aria-busy=${props.disabledBanner.busy ? "true" : "false"}
+                    title=${props.disabledBanner.disabledReason ?? nothing}
+                    @click=${props.disabledBanner.onAction}
+                  >
+                    ${
+                      props.disabledBanner.busy
+                        ? html`<span class="btn__spinner" aria-hidden="true"></span>${
+                              props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
+                            }`
+                        : props.disabledBanner.actionLabel
+                    }
+                  </button>`
+                : nothing
+            }
+            ${
+              props.disabledBanner.kind === "composer-replacement" &&
+              props.disabledBanner.presentation !== "compact" &&
+              showAbortableUi
+                ? renderChatAbortAction(runControlsProps)
+                : nothing
+            }
           </div>
-          ${
-            props.disabledBanner.onAction
-              ? html`<button
-                  type="button"
-                  class="btn btn--sm ${props.disabledBanner.actionStyle ?? ""}"
-                  ?disabled=${Boolean(props.disabledBanner.disabledReason) || props.disabledBanner.busy}
-                  aria-busy=${props.disabledBanner.busy ? "true" : "false"}
-                  title=${props.disabledBanner.disabledReason ?? nothing}
-                  @click=${props.disabledBanner.onAction}
-                >
-                  ${
-                    props.disabledBanner.busy
-                      ? html`<span class="btn__spinner" aria-hidden="true"></span>${
-                            props.disabledBanner.busyLabel ?? props.disabledBanner.actionLabel
-                          }`
-                      : props.disabledBanner.actionLabel
-                  }
-                </button>`
-              : nothing
-          }
-          ${
-            props.disabledBanner.kind === "composer-replacement" && showAbortableUi
-              ? renderChatAbortAction(runControlsProps)
-              : nothing
-          }
-        </div>
-      `
-    : nothing;
+        `
+      : nothing;
   const showComposerInput = showComposer && props.disabledBanner?.kind !== "composer-replacement";
   if (!props.capabilityMenu) {
     state.capabilityMenuView = "root";
@@ -342,6 +341,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
             onManipulate: props.onProgressManipulate,
           },
           props.connected && props.canSend ? props.progressCardRefresh : undefined,
+          props.onClearSavedProgressCard,
         )}
       </div>`
     : props.progressCardInitialLoading
@@ -381,8 +381,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
         </div>
         ${renderComposerQuestionDock(questionPanelProps)}
         ${props.disabledBanner?.kind === "above-composer" ? disabledBanner : nothing}
-        ${progressCard} ${queue} ${renderChatGoalRecovery(props.goalRecovery, props.connected)}
-        ${goalCard}
+        ${presentedContent(props.progressCardVisibility ?? true, progressCard)} ${queue}
+        ${renderChatGoalRecovery(props.goalRecovery, props.connected)} ${goalCard}
+        ${props.composerRecovery ?? nothing}
       </div>
       ${
         showComposerInput
@@ -422,6 +423,15 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                   : nothing
               }
               <div class="agent-chat__composer-lede">
+                <openclaw-mcp-app-catalog
+                  surface="thread"
+                  .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
+                ></openclaw-mcp-app-catalog>
+                <openclaw-mcp-app-resources
+                  .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
+                ></openclaw-mcp-app-resources>
                 ${goalComposer.render()}
                 ${renderSelectedHumanMentions(
                   visibleDraft,
@@ -464,6 +474,10 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       `
                     : nothing
                 }
+                <openclaw-mcp-app-context-strip
+                  .sessionKey=${props.sessionKey}
+                  .agentId=${props.currentAgentId}
+                ></openclaw-mcp-app-context-strip>
                 ${renderAttachmentPreview(props)}
                 ${renderAttachmentReadStatus(props.getPendingAttachmentReads?.() ?? props.pendingAttachmentReads ?? 0)}
                 ${renderComposerDictationStatus(dictation)}

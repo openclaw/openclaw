@@ -66,21 +66,21 @@ describe("buildGuardedModelFetch SSE readability", () => {
     },
   );
 
-  it("leaves official OpenAI event-only frames untouched", async () => {
-    const body = 'event: response.created\n\ndata: {"ok": true}\n\n';
-    respond([body], "text/event-stream");
-    const target = { ...model, provider: "openai", baseUrl: "https://api.openai.com/v1" };
-    const response = await buildGuardedModelFetch(target)(
-      new Request(`${target.baseUrl}/responses`, {
-        method: "POST",
-      }),
-    );
-    await expect(response.text()).resolves.toBe(body);
-  });
-
-  it("preserves mixed chunked framing and multiline data while dropping blank keepalives", async () => {
-    respond(
-      [
+  it.each([
+    {
+      name: "official OpenAI event-only frames",
+      target: { ...model, provider: "openai", baseUrl: "https://api.openai.com/v1" },
+      input: new Request("https://api.openai.com/v1/responses", { method: "POST" }),
+      init: undefined,
+      chunks: ['event: response.created\n\ndata: {"ok": true}\n\n'],
+      expected: 'event: response.created\n\ndata: {"ok": true}\n\n',
+    },
+    {
+      name: "mixed chunked framing and multiline data, excluding blank keepalives",
+      target: model,
+      input: url,
+      init: { method: "POST" },
+      chunks: [
         "event: ping\ndata\ndata:\ndata: \t\uFEFF\u00A0\n\nData: ignored\n data: ignored\ndatabase: ignored\n\n",
         'data: {"ok"',
         ": true}\n",
@@ -93,18 +93,22 @@ describe("buildGuardedModelFetch SSE readability", () => {
         "\n",
         "event: ping\ndata\ndata: \t\uFEFF\u00A0",
       ],
-      "text/event-stream",
-    );
-    const response = await buildGuardedModelFetch(model)(url, { method: "POST" });
-    await expect(response.text()).resolves.toBe(
-      'data: {"ok": true}\n\ndata: \u0085\r\rdata: \u200B\r\r' +
+      expected:
+        'data: {"ok": true}\n\ndata: \u0085\r\rdata: \u200B\r\r' +
         'data:\r\ndata: {\r\ndata: "ok": true}\r\ndata: \t\r\n\r\n',
+    },
+    {
+      name: "a readable EOF tail ending with a blank data line",
+      target: model,
+      input: url,
+      init: undefined,
+      chunks: ['data: {"ok": true}\ndata: \t'],
+      expected: 'data: {"ok": true}\ndata: \t',
+    },
+  ])("preserves $name", async ({ target, input, init, chunks, expected }) => {
+    respond(chunks, "text/event-stream");
+    await expect((await buildGuardedModelFetch(target)(input, init)).text()).resolves.toBe(
+      expected,
     );
-  });
-
-  it("preserves a readable EOF tail ending with a blank data line", async () => {
-    const body = 'data: {"ok": true}\ndata: \t';
-    respond([body], "text/event-stream");
-    await expect((await buildGuardedModelFetch(model)(url)).text()).resolves.toBe(body);
   });
 });

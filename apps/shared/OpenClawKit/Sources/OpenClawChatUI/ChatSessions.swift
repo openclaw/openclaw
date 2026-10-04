@@ -539,6 +539,7 @@ public struct OpenClawChatSessionGroup: Codable, Identifiable, Sendable, Hashabl
 
 public struct OpenClawChatSessionGroupsResponse: Codable, Sendable, Equatable {
     public let groups: [OpenClawChatSessionGroup]
+    public var sectionOrder: [String]?
 }
 
 public struct OpenClawChatSessionGroupsMutationResponse: Codable, Sendable, Equatable {
@@ -568,6 +569,10 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var icon: String?
     public var channel: String?
     public var channelAvatarUrl: String?
+    public var origin: [String: AnyCodable]?
+    public var chatType: String?
+    public var groupChannel: String?
+    public var deliveryContext: [String: AnyCodable]?
     public var owner: Owner?
     public var participants: [Participant]?
     public var expandedParticipants: [Participant]?
@@ -613,6 +618,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var pinnedAt: Double?
     public var archived: Bool?
     public var archivedAt: Double?
+    public var snoozedUntil: Double?
+    public var snoozedAt: Double?
     public var unread: Bool?
     public var agentStatus: OpenClawChatSessionAgentStatus?
     public var observerDigest: OpenClawChatSessionObserverDigest?
@@ -672,8 +679,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
 
     public init(
         key: String,
-        kind: String?,
-        displayName: String?,
+        kind: String? = nil,
+        displayName: String? = nil,
         classification: String? = nil,
         boardFace: String? = nil,
         agentId: String? = nil,
@@ -681,23 +688,23 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         peerKind: String? = nil,
         isMain: Bool? = nil,
         isBackground: Bool? = nil,
-        surface: String?,
-        subject: String?,
-        room: String?,
-        space: String?,
-        updatedAt: Double?,
-        sessionId: String?,
-        systemSent: Bool?,
-        abortedLastRun: Bool?,
-        thinkingLevel: String?,
-        verboseLevel: String?,
-        inputTokens: Int?,
-        outputTokens: Int?,
-        totalTokens: Int?,
+        surface: String? = nil,
+        subject: String? = nil,
+        room: String? = nil,
+        space: String? = nil,
+        updatedAt: Double? = nil,
+        sessionId: String? = nil,
+        systemSent: Bool? = nil,
+        abortedLastRun: Bool? = nil,
+        thinkingLevel: String? = nil,
+        verboseLevel: String? = nil,
+        inputTokens: Int? = nil,
+        outputTokens: Int? = nil,
+        totalTokens: Int? = nil,
         totalTokensFresh: Bool? = nil,
-        modelProvider: String?,
-        model: String?,
-        contextTokens: Int?,
+        modelProvider: String? = nil,
+        model: String? = nil,
+        contextTokens: Int? = nil,
         thinkingLevels: [OpenClawChatThinkingLevelOption]? = nil,
         thinkingOptions: [String]? = nil,
         thinkingDefault: String? = nil,
@@ -709,6 +716,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         pinnedAt: Double? = nil,
         archived: Bool? = nil,
         archivedAt: Double? = nil,
+        snoozedUntil: Double? = nil,
+        snoozedAt: Double? = nil,
         unread: Bool? = nil,
         agentStatus: OpenClawChatSessionAgentStatus? = nil,
         observerDigest: OpenClawChatSessionObserverDigest? = nil,
@@ -759,6 +768,8 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.pinnedAt = pinnedAt
         self.archived = archived
         self.archivedAt = archivedAt
+        self.snoozedUntil = snoozedUntil
+        self.snoozedAt = snoozedAt
         self.unread = unread
         self.agentStatus = agentStatus
         self.observerDigest = observerDigest
@@ -810,35 +821,17 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.thinkingDefault = thinkingDefault
     }
 
-    static func placeholder(key: String) -> OpenClawChatSessionEntry {
-        OpenClawChatSessionEntry(
-            key: key,
-            kind: nil,
-            displayName: nil,
-            surface: nil,
-            subject: nil,
-            room: nil,
-            space: nil,
-            updatedAt: nil,
-            sessionId: nil,
-            systemSent: nil,
-            abortedLastRun: nil,
-            thinkingLevel: nil,
-            verboseLevel: nil,
-            inputTokens: nil,
-            outputTokens: nil,
-            totalTokens: nil,
-            modelProvider: nil,
-            model: nil,
-            contextTokens: nil)
-    }
-
     public var isPinned: Bool {
         self.pinned == true
     }
 
     public var isArchived: Bool {
         self.archived == true
+    }
+
+    public func isSnoozed(at now: Date = .now) -> Bool {
+        guard let snoozedUntil, snoozedUntil.isFinite else { return false }
+        return snoozedUntil / 1000 > now.timeIntervalSince1970
     }
 }
 
@@ -944,11 +937,12 @@ public enum OpenClawChatChildSessionPager {
 public struct OpenClawChatSessionsListResponse: Codable, Sendable {
     public let ts: Double?
     public let path: String?
-    public let count: Int?
-    public let totalCount: Int?
+    public var count: Int?
+    public var totalCount: Int?
     public let offset: Int?
-    public let nextOffset: Int?
-    public let hasMore: Bool?
+    public var nextOffset: Int?
+    public var nextOffsetPresent: Bool
+    public var hasMore: Bool?
     public let owners: [OpenClawChatSessionEntry.CreatedActor]?
     public let ownerSessionCounts: [SessionOwnerSessionCount]?
     public let people: [SessionPerson]?
@@ -965,6 +959,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         totalCount: Int? = nil,
         offset: Int? = nil,
         nextOffset: Int? = nil,
+        nextOffsetPresent: Bool? = nil,
         hasMore: Bool? = nil,
         owners: [OpenClawChatSessionEntry.CreatedActor]? = nil,
         ownerSessionCounts: [SessionOwnerSessionCount]? = nil,
@@ -981,6 +976,7 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         self.totalCount = totalCount
         self.offset = offset
         self.nextOffset = nextOffset
+        self.nextOffsetPresent = nextOffsetPresent ?? (nextOffset != nil)
         self.hasMore = hasMore
         self.owners = owners
         self.ownerSessionCounts = ownerSessionCounts
@@ -990,5 +986,31 @@ public struct OpenClawChatSessionsListResponse: Codable, Sendable {
         self.involvingProfileId = involvingProfileId
         self.defaults = defaults
         self.sessions = sessions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ts, path, count, totalCount, offset, nextOffset, hasMore, defaults, sessions
+        case owners, ownerSessionCounts, people, peopleIncomplete, peopleSessionCount, involvingProfileId
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            ts: container.decodeIfPresent(Double.self, forKey: .ts),
+            path: container.decodeIfPresent(String.self, forKey: .path),
+            count: container.decodeIfPresent(Int.self, forKey: .count),
+            totalCount: container.decodeIfPresent(Int.self, forKey: .totalCount),
+            offset: container.decodeIfPresent(Int.self, forKey: .offset),
+            nextOffset: container.decodeIfPresent(Int.self, forKey: .nextOffset),
+            nextOffsetPresent: container.contains(.nextOffset),
+            hasMore: container.decodeIfPresent(Bool.self, forKey: .hasMore),
+            owners: container.decodeIfPresent([OpenClawChatSessionEntry.CreatedActor].self, forKey: .owners),
+            ownerSessionCounts: container.decodeIfPresent([SessionOwnerSessionCount].self, forKey: .ownerSessionCounts),
+            people: container.decodeIfPresent([SessionPerson].self, forKey: .people),
+            peopleIncomplete: container.decodeIfPresent(Bool.self, forKey: .peopleIncomplete),
+            peopleSessionCount: container.decodeIfPresent(Int.self, forKey: .peopleSessionCount),
+            involvingProfileId: container.decodeIfPresent(String.self, forKey: .involvingProfileId),
+            defaults: container.decodeIfPresent(OpenClawChatSessionsDefaults.self, forKey: .defaults),
+            sessions: container.decode([OpenClawChatSessionEntry].self, forKey: .sessions))
     }
 }

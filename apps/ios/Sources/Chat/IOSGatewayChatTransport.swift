@@ -432,14 +432,6 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             unread: unread)
     }
 
-    func forkSession(parentKey: String) async throws -> String {
-        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
-    }
-
-    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
-        try await self.forkSession(parentKey: parentKey, fromLastCompleted: fromLastCompleted, agentID: nil)
-    }
-
     func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String {
         let target = self.sessionTarget(for: parentKey, overrideAgentID: agentID)
         let childAgentID = target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey)
@@ -606,10 +598,6 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
               error.code == "INVALID_REQUEST"
         else { return false }
         return error.message == "invalid chat.history params: at root: unexpected property 'inputRunIds'"
-    }
-
-    var supportsSlashCommandCatalog: Bool {
-        true
     }
 
     func waitForRunCompletion(

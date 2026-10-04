@@ -15,6 +15,8 @@ import {
 } from "../agents/agent-delete-safety.js";
 import { normalizeAgentDirRegistryPath } from "../agents/agent-dir-registry.js";
 import {
+  AgentDeletionAuthorityRollbackError,
+  AgentDeletionCommitUncertainError,
   withAgentDeletion,
   claimCompletedAgentDeletion,
 } from "../agents/agent-lifecycle-registry.js";
@@ -87,31 +89,6 @@ function failAgentsDelete(opts: AgentsDeleteOptions, runtime: RuntimeEnv, messag
   } else {
     runtime.error(message);
     runtime.exit(1);
-  }
-}
-
-function logClearedOwnerRefs(runtime: RuntimeEnv, clearedOwnerRefs: readonly string[]): void {
-  if (clearedOwnerRefs.length > 0) {
-    runtime.log(`Cleared owner references: ${clearedOwnerRefs.join(", ")}`);
-  }
-}
-
-function logSessionPurgeWarning(runtime: RuntimeEnv, agentId: string, purgeFailed: boolean): void {
-  if (purgeFailed) {
-    runtime.error(
-      `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
-    );
-  }
-}
-
-function logTrashFailures(
-  runtime: RuntimeEnv,
-  failed: readonly AgentDeleteFailedPath[] | undefined,
-): void {
-  for (const failure of failed ?? []) {
-    runtime.error(
-      `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
-    );
   }
 }
 
@@ -297,9 +274,19 @@ export async function agentsDeleteCommand(
       });
     } else {
       runtime.log(`Deleted agent: ${agentId}`);
-      logClearedOwnerRefs(runtime, result.clearedOwnerRefs);
-      logSessionPurgeWarning(runtime, agentId, cleanup.purgeFailed === true);
-      logTrashFailures(runtime, cleanup.failed);
+      if (result.clearedOwnerRefs.length > 0) {
+        runtime.log(`Cleared owner references: ${result.clearedOwnerRefs.join(", ")}`);
+      }
+      if (cleanup.purgeFailed === true) {
+        runtime.error(
+          `Warning: session-store purge failed for deleted agent "${agentId}"; source data was retained. Retry deletion after resolving the storage error.`,
+        );
+      }
+      for (const failure of cleanup.failed ?? []) {
+        runtime.error(
+          `Warning: path could not be moved to Trash: ${failure.reason}; remove it manually at ${failure.path}`,
+        );
+      }
     }
   };
 
@@ -321,7 +308,7 @@ export async function agentsDeleteCommand(
   return await withAgentDeletion(agentId, async (begin) => {
     existingJournal = readAgentDeletionJournal(agentId);
     if (configured && existingJournal?.cleanupCompleted) {
-      if (!claimCompletedAgentDeletion(agentId, existingJournal.operationId)) {
+      if (!(await claimCompletedAgentDeletion(agentId, existingJournal.operationId))) {
         throw new Error(`Agent "${agentId}" deletion tombstone changed before fresh deletion.`);
       }
       existingJournal = undefined;
@@ -333,9 +320,10 @@ export async function agentsDeleteCommand(
     const workspaceSharedWith = findOverlappingWorkspaceAgentIds(cfg, agentId, workspaceDir);
 
     const deleteFiles = existingJournal?.deleteFiles ?? true;
-    const deletion = begin(
+    const deletion = await begin(
       existingJournal ?? { agentId, agentDir, workspaceDir, sessionsDir, deleteFiles },
     );
+    let rosterCommitted = !configured;
     try {
       await prepareAgentDeleteDatabases(cfg, agentId, agentDir);
       deletion.assertCurrent();
@@ -356,6 +344,7 @@ export async function agentsDeleteCommand(
                 ...(opts.json ? { skipOutputLogs: true } : {}),
               },
             });
+            rosterCommitted = true;
             if (!opts.json) {
               logConfigUpdated(runtime);
             }
@@ -369,8 +358,13 @@ export async function agentsDeleteCommand(
       }
       deletion.assertCurrent();
     } catch (error) {
-      if (!existingJournal) {
-        deletion.rollback();
+      if (
+        !existingJournal &&
+        !rosterCommitted &&
+        !(error instanceof AgentDeletionAuthorityRollbackError) &&
+        !(error instanceof AgentDeletionCommitUncertainError)
+      ) {
+        await deletion.rollback();
       }
       throw error;
     }

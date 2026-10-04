@@ -7,6 +7,7 @@ import { icons } from "../../../components/icons.ts";
 import { dispatchWidgetPrompt } from "../../../components/mcp-app-security.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerMcpAppEnglish } from "../../../i18n/locales/en-mcp-app.ts";
 import {
   canvasWidgetNameForDocument,
   mcpAppWidgetNameForViewId,
@@ -20,10 +21,13 @@ import {
   resolveEmbedSandbox,
   type EmbedSandboxMode,
 } from "../../../lib/chat/tool-display.ts";
+import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { installWidgetThemeObserver, postWidgetTheme } from "../../../lib/widget-theme.ts";
 import { exportWidget } from "./widget-export.ts";
 import "./browser-tab-card.ts";
+
+registerMcpAppEnglish();
 
 type WidgetCardOptions = {
   rawText?: string | null;
@@ -147,7 +151,7 @@ function handleWidgetPromptMessage(frame: HTMLIFrameElement, data: unknown) {
   if (!payload || payload.type !== WIDGET_PROMPT_MESSAGE_TYPE) {
     return;
   }
-  dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
+  void dispatchWidgetPrompt(frame, payload.prompt, frame.getAttribute("src") ?? "");
 }
 
 // Prompt authority is a MessagePort OFFERED by the trusted bridge script that
@@ -342,6 +346,7 @@ const loadMcpAppView = async () => {
 };
 
 const loadCanvasWidgetView = () => import("../../../components/canvas-widget-view.ts");
+const loadYouTubeVideo = () => import("./youtube-video-card.ts");
 
 function renderWidgetContent(
   preview: CanvasToolPreview,
@@ -368,7 +373,7 @@ function renderWidgetContent(
       (error: unknown) => console.error("[openclaw] failed to load widget view", error),
     );
     return keyed(
-      `${preview.viewId}\0${getCanvasWidgetFrameConnectionGeneration()}`,
+      `${preview.viewId}\0${options?.sessionKey ?? ""}`,
       html`
         <openclaw-canvas-widget-view
           .docId=${preview.viewId!.trim()}
@@ -564,6 +569,24 @@ export function renderToolPreview(
   }
   if (preview.surface !== "assistant_message") {
     return nothing;
+  }
+  const video = !preview.mcpApp ? parseYouTubeVideoUrl(preview.url) : undefined;
+  if (video) {
+    void ensureCustomElementDefined("openclaw-youtube-video", loadYouTubeVideo).catch(
+      (error: unknown) => console.error("[openclaw] failed to load YouTube player", error),
+    );
+    return keyed(
+      `${options?.sessionKey ?? ""}\0${video.watchUrl}`,
+      html`<openclaw-youtube-video
+        .video=${video}
+        .videoTitle=${preview.title ?? ""}
+        .enabled=${options?.embedSandboxMode !== "strict" && preview.sandbox !== "strict"}
+      >
+        <a href=${video.watchUrl} target="_blank" rel="noopener noreferrer">
+          ${preview.title?.trim() || t("chat.youtube.video")}${icons.externalLink}
+        </a>
+      </openclaw-youtube-video>`,
+    );
   }
   const contentKind = preview.mcpApp ? "mcp-app" : "canvas-html";
   const sandbox = resolveEmbedSandbox(options?.embedSandboxMode ?? "scripts", preview.sandbox);

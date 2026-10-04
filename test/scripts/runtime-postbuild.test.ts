@@ -135,8 +135,6 @@ describe("runtime postbuild static assets", () => {
     `);
 
     expect(payload.outputs).toEqual([
-      "dist/extensions/acpx/mcp-command-line.mjs",
-      "dist/extensions/acpx/mcp-proxy.mjs",
       "dist/extensions/apple-fm/assets/AppleFoundationModels.swift",
       "dist/extensions/code-mode-quickjs/assets/encoding.so",
       "dist/extensions/code-mode-quickjs/assets/quickjs.wasm",
@@ -758,7 +756,6 @@ describe("runtime postbuild static assets", () => {
       path.join(distDir, "install.runtime-Aaa111.mjs"),
       [
         "export const scanPackageInstallSource = true;",
-        "export const scanFileInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
         "",
@@ -1006,7 +1003,6 @@ describe("runtime postbuild static assets", () => {
       path.join(distDir, "install.runtime-Aaa111.mjs"),
       [
         "export const scanPackageInstallSource = true;",
-        "export const scanFileInstallSource = true;",
         "export const scanInstalledPackageDependencyTree = true;",
         "export const scanBundleInstallSource = true;",
         "",

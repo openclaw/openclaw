@@ -39,10 +39,7 @@ import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection, loadReleaseChangelog } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
 import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-evidence.mts";
-import {
-  formatReleasePublishPreflight,
-  isStableLatestPublication,
-} from "./lib/release-publish-preflight-interface.mts";
+import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   downloadFullReleaseNpmPreflight,
@@ -197,9 +194,6 @@ Options:
 `;
 }
 
-/**
- * Parses release-candidate validation options and enforces publish-scope policy.
- */
 export function parseArgs(argv: string[]) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const terminatorIndex = args.indexOf("--");
@@ -595,9 +589,6 @@ function githubApiTimedOut(error: unknown) {
   );
 }
 
-/**
- * Calls the GitHub REST API with the gh-auth token and a bounded timeout.
- */
 export async function githubApi(path: string, options: GithubApiOptions = {}): Promise<unknown> {
   const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
   const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
@@ -654,9 +645,6 @@ export async function githubApi(path: string, options: GithubApiOptions = {}): P
   }
 }
 
-/**
- * Validates the immutable Windows source release contract for a stable candidate.
- */
 export async function validateWindowsSourceRelease(tag: string, options: GithubApiOptions = {}) {
   const release = await githubApi(
     `repos/${WINDOWS_NODE_REPO}/releases/tags/${encodeURIComponent(tag)}`,
@@ -1132,9 +1120,6 @@ export function validateCandidateChangelogProvenance({
   if (section === undefined) {
     section = requireString(extractChangelogSection(changelog, version), "changelog section");
   }
-  if (section === undefined) {
-    throw new Error(`CHANGELOG.md ## ${sectionVersion} could not be resolved`);
-  }
   const recordStart = section.search(/\n### Complete contribution record\r?$/m);
   if (recordStart < 0) {
     throw new Error(
@@ -1307,10 +1292,7 @@ function runLocalGeneratedCheckIfNeeded(options: ReturnType<typeof parseArgs>): 
   return { status: "passed", command: "pnpm release:generated:check" };
 }
 
-/**
- * Extracts a GitHub Actions run id from gh workflow dispatch output.
- */
-export function parseRunIdFromDispatchOutput(output: string) {
+function parseRunIdFromDispatchOutput(output: string) {
   return output.match(/actions\/runs\/([0-9]+)/u)?.[1] ?? "";
 }
 
@@ -1444,7 +1426,7 @@ function summarizePendingDeployments(repo: string, runId: string, deployments: u
 }
 
 function summarizeFailedRun(info: RunInfo) {
-  const failedJobs = (info.jobs ?? []).filter(
+  const failedJobs = info.jobs.filter(
     (job) => job.conclusion && job.conclusion !== "success" && job.conclusion !== "skipped",
   );
   return [
@@ -1604,16 +1586,12 @@ function publicationSelectionForChecklist(
   return normalizePublicationIntent("publish", JSON.stringify(selection)).publicationSelection!;
 }
 
-/**
- * Builds the final release publish workflow command once validation evidence is ready.
- */
-export function buildPublishCommand(
+export function buildPrepareCommand(
   options: ReturnType<typeof parseArgs> & {
     fullReleaseRunAttempt?: number;
     npmTelegramRunId?: string;
   },
   npmPreflightSource?: Awaited<ReturnType<typeof validateNpmPreflightRunSource>>,
-  mode: "publish" | "prepare" = "publish",
 ) {
   const workflowRef =
     options.publishWorkflowRef || npmPreflightSource?.workflowRef || options.workflowRef;
@@ -1641,10 +1619,6 @@ export function buildPublishCommand(
     ["release_profile", "from-validation"],
     ["wait_for_clawhub", "false"],
   ];
-  if (mode === "publish" && isStableLatestPublication(options.tag, options.npmDistTag)) {
-    // Stable policy: GitHub goes Latest right after npm verification, before Docker.
-    fields.push(["finalize_release_before_docker", "true"]);
-  }
   if (options.npmTelegramRunId) {
     fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
   }
@@ -1658,36 +1632,28 @@ export function buildPublishCommand(
     fields.push(["plugins", options.plugins]);
   }
   if (
-    mode === "prepare" &&
-    (!PUBLISH_TOOLING_TAG_PATTERN.test(workflowRef) ||
-      options.pluginPublishScope !== "all-publishable" ||
-      options.npmDistTag === "extended-stable")
+    options.pluginPublishScope !== "all-publishable" ||
+    options.npmDistTag === "extended-stable"
   ) {
     throw new Error(
       "Prepared publication requires a protected tooling tag and the complete regular-release plugin roster.",
     );
   }
-  if (mode === "prepare") {
-    const version = parseReleaseVersion(options.tag.slice(1));
-    if (!version || !["beta", "stable"].includes(classifyReleaseTrain(version))) {
-      throw new Error("Prepared publication requires a regular beta or stable release train.");
-    }
+  const version = parseReleaseVersion(options.tag.slice(1));
+  if (!version || !["beta", "stable"].includes(classifyReleaseTrain(version))) {
+    throw new Error("Prepared publication requires a regular beta or stable release train.");
   }
   return [
     "gh",
     "workflow",
     "run",
-    mode === "prepare" ? "openclaw-release-prepare.yml" : "openclaw-release-publish.yml",
+    "openclaw-release-prepare.yml",
     "--repo",
     options.repo,
     "--ref",
     workflowRef,
-    ...(mode === "prepare"
-      ? [
-          "-f",
-          `publish_inputs=${JSON.stringify(Object.fromEntries(fields.filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])))}`,
-        ]
-      : fields.flatMap(([key, value]) => ["-f", `${key}=${String(value)}`])),
+    "-f",
+    `publish_inputs=${JSON.stringify(Object.fromEntries(fields.filter(([, value]) => value !== undefined).map(([key, value]) => [key, String(value)])))}`,
   ]
     .map(shellQuote)
     .join(" ");
@@ -2468,7 +2434,7 @@ async function main() {
     options.publicationRoute === "normal" ? publishPreflight.command : undefined;
   const prepareCommand =
     options.publicationRoute === "prepared"
-      ? buildPublishCommand(publicationOptions, npmPreflightSource, "prepare")
+      ? buildPrepareCommand(publicationOptions, npmPreflightSource)
       : undefined;
   if (prepareCommand) {
     publishPreflight.command = prepareCommand;

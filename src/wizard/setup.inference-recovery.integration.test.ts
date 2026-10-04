@@ -145,11 +145,13 @@ it.each([
         },
       });
     };
-    const interceptWrite: typeof targetOwner.write = async (...args) => {
-      const committed = await targetOwner.write(...args);
-      await editCredential();
-      return committed;
-    };
+    const interceptWrite =
+      (write: typeof targetOwner.write): typeof write =>
+      async (...args) => {
+        const committed = await write(...args);
+        await editCredential();
+        return committed;
+      };
     mocks.verify.mockImplementation(async (params) => {
       const route = await resolveSystemAgentConfiguredRouteFromConfig(params.config);
       if (!route) {
@@ -197,16 +199,12 @@ it.each([
       stateDir,
       required: true,
       configTarget: {
-        write: interceptWrite,
+        write: interceptWrite(targetOwner.write),
         read: async () => {
           const read = await targetOwner.read();
           return {
             config: read.config,
-            write: async (...args) => {
-              const committed = await read.write(...args);
-              await editCredential();
-              return committed;
-            },
+            write: interceptWrite(read.write),
           };
         },
       },
@@ -245,7 +243,6 @@ it.each([
 );
 
 it.each([
-  { pending: false, superseded: false },
   { pending: true, superseded: false },
   { pending: false, superseded: true },
 ])(

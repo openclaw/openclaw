@@ -13,10 +13,16 @@ import { tmpdir } from "node:os";
 import path, { join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { createTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../helpers/fixture-receipts.js";
+import { withinTest } from "../helpers/promise.js";
+import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT_PATH = "scripts/test-install-sh-docker.sh";
 const INSTALL_E2E_DOCKER_PATH = "scripts/test-install-sh-e2e-docker.sh";
@@ -35,6 +41,13 @@ const DOCKER_E2E_PACKAGE_HELPER_PATH = "scripts/lib/docker-e2e-package.sh";
 const INSTALL_SMOKE_WORKFLOW_PATH = ".github/workflows/install-smoke-reusable.yml";
 const LIVE_E2E_WORKFLOW_PATH = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const tempDirs = createTempDirTracker();
+let fixtureReceipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  fixtureReceipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await fixtureReceipts.close();
+});
 const testNodeExecPath = resolveTestNodeExecPath();
 
 afterEach(() => {
@@ -495,23 +508,6 @@ run_installer_pipeline "$INSTALL_URL" "$@"`,
     result,
     timeoutArgsPath,
   };
-}
-
-async function waitForCondition(
-  predicate: () => boolean,
-  label: string,
-  timeoutMs = 2_000,
-): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 5);
-    });
-  }
-  throw new Error(`timed out waiting for ${label}`);
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -1560,16 +1556,25 @@ describe("install-sh E2E runner", () => {
 });
 
 describe("install-sh smoke runner", () => {
-  it.runIf(process.platform !== "win32").each([23])(
+  it.runIf(process.platform !== "win32").for([23])(
     "reaps the heartbeat timer and preserves command exit %i",
-    (exitCode) => {
-      const root = tempDirs.make("openclaw-smoke-heartbeat-");
+    async (exitCode, { signal, onTestFinished }) => {
+      let cleanup = async () => {};
+      // Vitest can start afterEach while an aborted body is still joining its child.
+      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
+        onTestFinished(async () => {
+          await cleanup();
+          removeDirs();
+        });
+      });
+      const root = fixtureDirs.make("openclaw-smoke-heartbeat-");
       const bin = join(root, "bin");
       const pidFile = join(root, "timer.pid");
+      const readyPipe = join(root, "timer-ready");
       mkdirSync(bin);
       writeFileSync(
         join(bin, "sleep"),
-        '#!/bin/bash\nexec >/dev/null 2>&1\nprintf "%s" "$$" >"$SLEEP_PID_FILE"\nexec /bin/sleep "$@"\n',
+        '#!/bin/bash\nexec >/dev/null 2>&1\nprintf "%s" "$$" >"$SLEEP_PID_FILE"\nprintf "%s\\n" "$$" >&3\nexec /bin/sleep "$@"\n',
         { mode: 0o755 },
       );
       const runner = readFileSync(SMOKE_RUNNER_PATH, "utf8");
@@ -1579,49 +1584,83 @@ describe("install-sh smoke runner", () => {
       );
       const command = `
 const fs = require("node:fs");
-const timer = setInterval(() => {
-  if (fs.existsSync(process.env.SLEEP_PID_FILE) && /^\\d+$/.test(fs.readFileSync(process.env.SLEEP_PID_FILE, "utf8"))) {
-    clearInterval(timer);
-    process.exit(${exitCode});
-  }
-}, 5);
-setTimeout(() => process.exit(99), 2000).unref();
+const ready = Buffer.alloc(64);
+let length = 0;
+while (!ready.subarray(0, length).includes(10)) {
+  const count = fs.readSync(3, ready, length, ready.length - length, null);
+  if (count === 0) throw new Error("heartbeat timer readiness pipe closed");
+  length += count;
+}
+if (!/^\\d+\\n$/.test(ready.subarray(0, length).toString())) {
+  throw new Error("invalid heartbeat timer readiness");
+}
+process.exit(${exitCode});
 `;
       let timerPid = 0;
-      try {
-        const result = spawnSync(
-          "bash",
-          [
-            "-c",
-            `set -euo pipefail
+      const child = spawn(
+        "bash",
+        [
+          "-c",
+          `set -euo pipefail
 HEARTBEAT_INTERVAL=60
+mkfifo "$TIMER_READY_PIPE"
+exec 3<>"$TIMER_READY_PIPE"
 ${heartbeat}
 command_result=0
 run_with_heartbeat fixture "$HOST_NODE" -e "$COMMAND_SOURCE" || command_result=$?
 printf 'command-status=%s\\n' "$command_result"
 `,
-          ],
-          {
-            encoding: "utf8",
-            timeout: 5_000,
-            env: {
-              HOME: root,
-              PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
-              SLEEP_PID_FILE: pidFile,
-              HOST_NODE: testNodeExecPath,
-              COMMAND_SOURCE: command,
-            },
+        ],
+        {
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+          env: {
+            HOME: root,
+            PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
+            SLEEP_PID_FILE: pidFile,
+            TIMER_READY_PIPE: readyPipe,
+            HOST_NODE: testNodeExecPath,
+            COMMAND_SOURCE: command,
           },
-        );
+        },
+      );
+      let stdout = "";
+      let stderr = "";
+      child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
+        stdout += chunk;
+      });
+      child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
+        stderr += chunk;
+      });
+      const closed = new Promise<number | null>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("close", resolve);
+      });
+      let cleanupPromise: Promise<void> | undefined;
+      cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          if (child.pid && child.exitCode === null && child.signalCode === null) {
+            // The shell and its heartbeat children share this test-owned process group.
+            process.kill(-child.pid, "SIGKILL");
+          }
+          await closed;
+          if (!timerPid && existsSync(pidFile)) {
+            timerPid = Number(readFileSync(pidFile, "utf8"));
+          }
+          if (timerPid && isProcessAlive(timerPid)) {
+            process.kill(timerPid, "SIGKILL");
+          }
+        })());
+      try {
+        const status = await withinTest(closed, signal);
+        const result = { status, stdout, stderr };
         timerPid = Number(readFileSync(pidFile, "utf8"));
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout.trim()).toBe(`command-status=${exitCode}`);
         expect(timerPid).toBeGreaterThan(0);
         expect(isProcessAlive(timerPid)).toBe(false);
       } finally {
-        if (timerPid && isProcessAlive(timerPid)) {
-          process.kill(timerPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );
@@ -2495,23 +2534,35 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
 
   it.runIf(process.platform !== "win32")(
     "cleans Bun global smoke descendants on parent signal",
-    async () => {
-      const tempDir = tempDirs.make("openclaw-bun-global-parent-signal-");
+    async ({ signal, onTestFinished }) => {
+      let cleanup = async () => {};
+      // Vitest can start afterEach while an aborted body is still joining its child.
+      const fixtureDirs = useAutoCleanupTempDirTracker((removeDirs) => {
+        onTestFinished(async () => {
+          await cleanup();
+          removeDirs();
+        });
+      });
+      const tempDir = fixtureDirs.make("openclaw-bun-global-parent-signal-");
       const readyPath = path.join(tempDir, "ready");
       const descendantPidPath = path.join(tempDir, "descendant.pid");
       let descendantPid = 0;
       const descendantScript = [
-        "const fs = require('node:fs');",
-        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        "import fs from 'node:fs';",
+        fixtureReceiptClientSource(fixtureReceipts.endpoint),
         "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
+        `sendReceipt(${JSON.stringify(descendantPidPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const parentScript = [
-        "const childProcess = require('node:child_process');",
-        "const fs = require('node:fs');",
-        `childProcess.spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
-        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "import childProcess from 'node:child_process';",
+        "import fs from 'node:fs';",
+        fixtureReceiptClientSource(fixtureReceipts.endpoint),
+        `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(descendantScript)}], { stdio: "ignore" });`,
         "process.on('SIGTERM', () => process.exit(0));",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        `sendReceipt(${JSON.stringify(readyPath)}, "ready");`,
         "setInterval(() => {}, 1000);",
       ].join("\n");
       const runner = spawn(
@@ -2521,7 +2572,8 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
           "run-with-timeout",
           "60000",
           testNodeExecPath,
-          "-e",
+          "--input-type=module",
+          "--eval",
           parentScript,
         ],
         {
@@ -2538,45 +2590,54 @@ node -e 'const fs=require("node:fs");const p=process.argv[1];const value=JSON.pa
       });
       const runnerExit = new Promise<{ status: number | null; signal: NodeJS.Signals | null }>(
         (resolve) => {
-          runner.once("close", (status, signal) => resolve({ status, signal }));
+          runner.once("close", (status, exitSignal) => resolve({ status, signal: exitSignal }));
         },
       );
 
-      // The descendant's pid file can be observed created-but-empty between its
-      // open() and write(); readiness must require parseable content, not
-      // existence, or the integer assertion below flakes on loaded runners.
-      const readDescendantPid = () => {
-        if (!existsSync(descendantPidPath)) {
-          return null;
-        }
-        const pid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-        return Number.isInteger(pid) && pid > 0 ? pid : null;
-      };
+      let cleanupPromise: Promise<void> | undefined;
+      cleanup = () =>
+        (cleanupPromise ??= (async () => {
+          if (runner.pid && isProcessAlive(runner.pid)) {
+            // Let the runner own its tree even when readiness is aborted.
+            runner.kill("SIGTERM");
+          }
+          await runnerExit;
+          if (!descendantPid && existsSync(descendantPidPath)) {
+            descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+          }
+          if (descendantPid && isProcessAlive(descendantPid)) {
+            process.kill(descendantPid, "SIGKILL");
+          }
+        })());
       try {
-        await waitForCondition(
-          () => existsSync(readyPath) && readDescendantPid() !== null,
-          "Bun global smoke descendant readiness",
-        );
-        descendantPid = readDescendantPid() ?? 0;
+        const ready = Promise.all([
+          fixtureReceipts.waitFor(readyPath, "ready"),
+          fixtureReceipts.waitFor(descendantPidPath, "ready"),
+        ]);
+        // Both fixtures commit their records before sending; exit may beat socket delivery.
+        const settled = runnerExit.then(() => {
+          if (
+            !existsSync(readyPath) ||
+            !existsSync(descendantPidPath) ||
+            !/^\d+$/.test(readFileSync(descendantPidPath, "utf8"))
+          ) {
+            throw new Error("timed out waiting for Bun global smoke descendant readiness");
+          }
+        });
+        await withinTest(Promise.race([ready, settled]), signal);
+        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
         expect(descendantPid).toBeGreaterThan(0);
         expect(isProcessAlive(descendantPid)).toBe(true);
 
         const signalSent = runner.kill("SIGTERM");
-        const result = await runnerExit;
+        const result = await withinTest(runnerExit, signal);
 
         expect(signalSent, runnerStderr).toBe(true);
         expect(result, runnerStderr).toEqual({ status: 143, signal: null });
-        await waitForCondition(
-          () => !isProcessAlive(descendantPid),
-          "Bun global smoke descendant cleanup",
-        );
+        // Status 143 is emitted only after the assertion runner observes its group gone.
+        expect(isProcessAlive(descendantPid)).toBe(false);
       } finally {
-        if (runner.pid && isProcessAlive(runner.pid)) {
-          process.kill(runner.pid, "SIGKILL");
-        }
-        if (descendantPid && isProcessAlive(descendantPid)) {
-          process.kill(descendantPid, "SIGKILL");
-        }
+        await cleanup();
       }
     },
   );

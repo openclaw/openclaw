@@ -52,10 +52,16 @@ setups are supported. `scripts/stage-mac-runtime.sh` installs the package with
 build-time Node and npm, then stages Bun and SQLite. No Node executable or
 npm/corepack/npx shims ship in the app.
 
-The OpenClaw Bun fork is pinned in `scripts/lib/openclaw-bun-macos.json` and
-downloaded by `scripts/stage-openclaw-bun-macos.sh`. Archives are cached under
-`apps/macos/.build/openclaw-bun/<tag>/`, checked against pinned SHA-256 hashes,
-and verified against the fork revision. `scripts/build-mac-sqlite.sh` builds
+The OpenClaw Bun fork has one shared pin in `scripts/lib/openclaw-bun.json`,
+consumed by macOS packaging, the Tauri app, and CI's `setup-test-bun` action.
+`scripts/stage-openclaw-bun.sh <runtime> <darwin|linux> <arm64|x64> [...]`
+downloads it; Darwin accepts both architectures for a universal binary.
+Archives are cached under `.cache/openclaw-bun/<tag>/`. Staging verifies the
+release manifest against `SHA256SUMS`, its identity and artifact fields against
+the pin, each archive against both sources, then the executable checksum,
+native architecture, and runnable fork revision. The fork's package auto-install
+default stays off; OpenClaw's runtime admission still applies at launch.
+`scripts/build-mac-sqlite.sh` builds
 the pinned amalgamation in `scripts/lib/sqlite-macos.json`, cached under
 `apps/macos/.build/sqlite/<version>/`. The resulting signed library supports
 SQLite extensions without relying on Apple's system SQLite or Homebrew.
@@ -123,6 +129,39 @@ ad-hoc signing; TCC permissions do not stick with `--no-sign`).
 Ad-hoc signed apps may trigger security prompts. If the app crashes
 immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 </Note>
+
+### Shared Bun pin and repin gate
+
+The JSON schema has top-level `tag`, `commit`, `revision`, and `artifacts`.
+`artifacts` is keyed by `darwin-arm64`, `darwin-x64`, `linux-arm64`, and
+`linux-x64`; each entry contains `asset`, `sha256`, `executable`, and
+`executableSha256`. These are a projection of the published fork release's
+`manifest.json`, not independently maintained app or CI pins. Windows Tauri
+retains its current runtime until a signed fork Windows build is published;
+unsigned dry-run artifacts are not shippable.
+
+Every repin requires both gates on the same published tag: CI's paired Bun-lane
+replay and Bun-only smoke, plus the macOS runtime probes and two-binary test set.
+Neither app nor CI advances when either gate fails. A Linux-only regression
+also stops the shared repin. Preserve the last tag admitted by both gates while
+investigating; a published prerelease alone is not admission. Record the exact
+tag and gate evidence in the PR. See [CI runtime selection](/ci/pipeline#test-runtime-selection).
+
+After the gates pass, download `manifest.json` and `SHA256SUMS` from that exact
+release and verify the manifest checksum. Regenerate all four entries together:
+
+```sh
+jq '{tag, commit: .bun.commit, revision: .bun.revision,
+  artifacts: (.assets | map(
+    select(.target | IN("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64")) |
+    {key: .target, value: {asset: .name, sha256,
+      executable: .executable.path, executableSha256: .executable.sha256}}
+  ) | from_entries)}' manifest.json > scripts/lib/openclaw-bun.json
+```
+
+Repin one shared owner in one PR and run staging for all four targets; execute
+native proofs on matching hosts (Rosetta can verify Darwin x64). Do not advance
+an individual artifact or copy the pin into an app or workflow.
 
 ## 3. Install the CLI and Gateway
 
@@ -247,6 +286,14 @@ one non-yielding loop there starves the timeout that would cancel it, and the
 job hangs until CI cancels it. To assert that a late reply changed nothing,
 await the task that settles that reply, as provider wizard and manual-key
 actions return it.
+
+Work a test starts must end with the test, because the process outlives it.
+Shut down Gateway channels and connections a test opens; their watchdog
+otherwise keeps reconnecting through the test's fixture. Fake transports and
+sockets must stop waiting when their read is cancelled, as the production stream
+transports do: `AsyncTimeout` cancels and abandons the operation that loses its
+race instead of joining it, so a fake that ignores cancellation keeps polling for
+the rest of the run.
 
 ## Troubleshooting
 

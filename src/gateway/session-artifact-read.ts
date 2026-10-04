@@ -39,7 +39,10 @@ import {
   resolveMessageRunId,
   toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
-import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+} from "./session-transcript-read.types.js";
 import {
   parseTranscriptImageArtifactId,
   projectTranscriptImageArtifacts,
@@ -51,10 +54,8 @@ const IMAGE_PAGE_BYTES = 1024 * 1024;
 const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
 type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
-type ArtifactReaders = Pick<
-  SessionTranscriptReader,
-  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
->;
+type ArtifactReaders = SessionTranscriptVisitor &
+  Pick<SessionTranscriptPageReader, "readSessionMessagesPageWithStatsAsync">;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (

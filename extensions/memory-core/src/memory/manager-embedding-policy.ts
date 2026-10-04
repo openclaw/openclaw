@@ -83,7 +83,7 @@ type MemoryEmbeddingRetryBudget = {
   retryAfterMs?: number;
 };
 
-export function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
+function isSplittableMemoryEmbeddingBatchError(message: string): boolean {
   return SPLITTABLE_MEMORY_EMBEDDING_BATCH_ERROR_RE.test(message);
 }
 
@@ -167,24 +167,22 @@ export async function runMemoryEmbeddingRetryLoop<T>(params: {
 }
 
 export async function runMemoryEmbeddingBatchRetryWithSplit<TInput, TOutput>(params: {
-  profile: MemoryEmbeddingRetryProfileName;
   items: TInput[];
   run: (items: TInput[]) => Promise<TOutput[]>;
   onSuccess?: (items: TInput[], outputs: TOutput[]) => void | Promise<void>;
-  isSplittable: (message: string) => boolean;
   waitForRetry: (delayMs: number) => Promise<void>;
   onSplit?: (info: { itemCount: number; splitAt: number; message: string }) => void;
 }): Promise<TOutput[]> {
   let outputs: TOutput[];
   try {
     outputs = await runMemoryEmbeddingRetryLoop({
-      profile: params.profile,
+      profile: "index",
       run: async () => await params.run(params.items),
       waitForRetry: params.waitForRetry,
     });
   } catch (err) {
     const message = formatErrorMessage(err);
-    if (params.items.length <= 1 || !params.isSplittable(message)) {
+    if (params.items.length <= 1 || !isSplittableMemoryEmbeddingBatchError(message)) {
       throw err;
     }
 

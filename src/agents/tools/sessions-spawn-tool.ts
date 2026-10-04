@@ -70,7 +70,7 @@ import {
   maybeSpawnVisibleSession,
   type SessionsSpawnToolOptions,
 } from "./sessions-spawn-visible.js";
-import { VISIBLE_SESSIONS_SPAWN_SCHEMA } from "./sessions-spawn-visible.schema.js";
+import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
 const SESSIONS_SPAWN_SANDBOX_MODES = ["inherit", "require"] as const;
@@ -168,7 +168,7 @@ function createSessionsSpawnToolSchema(params: {
     ),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
-      { description: 'Runtime; visible=true requires "subagent".' },
+      { description: 'Runtime; visible=true and managed worktrees require "subagent".' },
     ),
     agentId: Type.Optional(Type.String()),
     model: Type.Optional(Type.String()),
@@ -204,7 +204,8 @@ function createSessionsSpawnToolSchema(params: {
         : '"run" one-shot. Visible sessions accept omitted/default "run" and remain persistent.',
     }),
     cleanup: optionalStringEnum(["delete", "keep"] as const, {
-      description: "Hidden session cleanup; visible=true always keeps the session.",
+      description:
+        "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
     }),
     expectsCompletionMessage: Type.Optional(
       Type.Boolean({
@@ -250,14 +251,14 @@ function createSessionsSpawnToolSchema(params: {
           ),
         }
       : {}),
-    ...VISIBLE_SESSIONS_SPAWN_SCHEMA,
+    ...SESSIONS_SPAWN_SESSION_SCHEMA,
 
     attachments: Type.Optional(
       Type.Array(
         Type.Object({
           name: Type.String(),
           content: Type.String(),
-          encoding: Type.Optional(optionalStringEnum(["utf8", "base64"] as const)),
+          encoding: optionalStringEnum(["utf8", "base64"] as const),
           mimeType: Type.Optional(Type.String()),
         }),
         {
@@ -472,15 +473,16 @@ export function createSessionsSpawnTool(
               signal: executionSignal,
             },
           });
-        const visibleResult = opts?.expectedParentSessionId
-          ? await runWithScopedSessionAccess({
-              cfg: effectiveConfig,
-              expectedSessionId: opts.expectedParentSessionId,
-              ...(opts.signal ? { signal: opts.signal } : {}),
-              targetSessionKey: expectedParentSessionKey!,
-              run: spawnVisible,
-            })
-          : await spawnVisible();
+        const visibleResult =
+          params.visible === true && opts?.expectedParentSessionId
+            ? await runWithScopedSessionAccess({
+                cfg: effectiveConfig,
+                expectedSessionId: opts.expectedParentSessionId,
+                ...(opts.signal ? { signal: opts.signal } : {}),
+                targetSessionKey: expectedParentSessionKey!,
+                run: spawnVisible,
+              })
+            : await spawnVisible();
         if (visibleResult) {
           recordAcceptedSessionSpawn(visibleResult, context ?? "isolated");
           return jsonResult(
@@ -527,12 +529,7 @@ export function createSessionsSpawnTool(
         }
         const thread = params.thread === true;
         const attachments = Array.isArray(params.attachments)
-          ? (params.attachments as Array<{
-              name: string;
-              content: string;
-              encoding?: "utf8" | "base64";
-              mimeType?: string;
-            }>)
+          ? (params.attachments as Parameters<typeof spawnSubagentDirect>[0]["attachments"])
           : undefined;
         const parentExecutionIdentityToken = getGatewayToolCallerIdentity()?.executionIdentityToken;
         const spawnParams = {
@@ -554,6 +551,8 @@ export function createSessionsSpawnTool(
           assertActive,
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
+          senderIsOwner: opts?.senderIsOwner,
+          expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
           requesterAgentIdOverride: opts?.requesterAgentIdOverride,
@@ -606,6 +605,10 @@ export function createSessionsSpawnTool(
         const result = await spawnSubagentDirect(
           {
             ...spawnParams,
+            projectId: readToolStringParam(params, "projectId"),
+            worktree: params.worktree === true,
+            worktreeName: readToolStringParam(params, "worktreeName"),
+            worktreeBaseRef: readToolStringParam(params, "worktreeBaseRef"),
             collect: hasCollectParam ? collect : undefined,
             outputSchema:
               params.outputSchema && typeof params.outputSchema === "object"
@@ -657,5 +660,7 @@ export function createSessionsSpawnTool(
       }),
     ),
   };
-  return bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
+  return opts?.workerPlacement
+    ? tool
+    : bindCollectorSpawnTool(tool, parameters.properties, opts?.signal);
 }

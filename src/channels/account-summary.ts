@@ -7,10 +7,10 @@ import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
 import {
   projectSafeChannelAccountSnapshotFields,
-  redactChannelAccountSnapshotBaseUrl,
+  redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
 
 /** Projects an admitted lifetime without resolving its potentially stale account configuration. */
@@ -56,7 +56,7 @@ export function buildChannelAccountSnapshotFromInspection(params: {
     if (!enabled) {
       snapshot.running = false;
     }
-    return redactChannelAccountSnapshotBaseUrl(snapshot);
+    return redactChannelStatusSummaryBaseUrl(snapshot);
   }
   const reason = normalizeOptionalString(inspected?.stateReason);
   applyChannelAccountState(
@@ -70,7 +70,7 @@ export function buildChannelAccountSnapshotFromInspection(params: {
       unconfiguredReason: reason,
     }),
   );
-  return redactChannelAccountSnapshotBaseUrl(snapshot);
+  return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
 export function buildChannelAccountSummary(params: {
@@ -82,7 +82,7 @@ export function buildChannelAccountSummary(params: {
   configured: boolean;
 }): ChannelAccountSnapshot {
   const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
-  return redactChannelAccountSnapshotBaseUrl({
+  return redactChannelStatusSummaryBaseUrl({
     enabled: params.enabled,
     configured: params.configured,
     ...projectSafeChannelAccountSnapshotFields(params.account),

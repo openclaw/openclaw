@@ -5,6 +5,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
@@ -17,7 +18,11 @@ import {
   hasRetainedSessionTranscriptArchives,
   measureSessionPhysicalDiskUsage,
 } from "./disk-budget.js";
-import type { SessionDiskBudgetSweepResult } from "./disk-budget.types.js";
+import type {
+  ArchivedSessionEvictionBatch,
+  ArchivedSessionEvictionQuery,
+  SessionDiskBudgetSweepResult,
+} from "./disk-budget.types.js";
 import { withSqliteTranscriptArchiveSession } from "./session-accessor.sqlite-archive-session.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
@@ -27,11 +32,12 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
-  createHistoryEvictionReclamationPlan,
+  resolveSessionReclamationDatabaseOptions,
   runExclusiveSqliteSessionReclamation,
 } from "./session-accessor.sqlite-reclamation.js";
 import { isRecentHistoricalSessionId } from "./session-accessor.sqlite-references.js";
@@ -42,6 +48,7 @@ import {
   toDatabaseOptions,
   withSqliteSessionDatabase,
 } from "./session-accessor.sqlite-scope.js";
+import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-worker-request.js";
 import {
   hasCanonicalSessionTranscriptArchives,
   pruneAllSessionTranscriptArchivesToHighWater,
@@ -58,12 +65,13 @@ import {
   type SessionHistoryBudgetKick,
   type SessionHistoryDiskBudgetParams,
 } from "./session-history-budget-state.js";
-import { deleteDiskBudgetArchivedSessionEntry } from "./session-history-entry-eviction.runtime.js";
 import {
   collectSessionAdmissionReferences,
-  readDiskEvictableArchivedSessionBatch,
+  readDiskEvictableArchivedSessionBatchInDatabase,
   readHistoricalSessionIdsInDatabase,
 } from "./session-history-eviction-candidates.js";
+import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 
 /** Reports the same physical total enforce mode compares, without projecting logical row bytes. */
@@ -120,7 +128,7 @@ export async function inspectSqliteSessionHistoryDiskBudget(
     reclamationMode: params.reclamationMode,
     storePath: params.storePath,
   });
-  const archivedCandidates = readDiskEvictableArchivedSessionBatch({
+  const archivedCandidates = await readDiskEvictableArchivedSessionBatch({
     databaseOptions,
     limit: 1,
     preserveRecentMs: params.maintenance.preserveRecentMs,
@@ -177,10 +185,6 @@ async function readHistoricalSessionIds(params: {
       database: openOpenClawAgentDatabase(params.databaseOptions),
     });
   }
-  const [{ withSessionHistoryWorkerDatabase }, { maintenanceLane }] = await Promise.all([
-    import("./session-transcript-worker-runtime.js"),
-    import("./session-transcript-worker-resources.js"),
-  ]);
   return withSessionHistoryWorkerDatabase(
     params.databaseOptions,
     (owner) =>
@@ -190,6 +194,38 @@ async function readHistoricalSessionIds(params: {
       }),
     maintenanceLane,
   );
+}
+
+async function readDiskEvictableArchivedSessionBatch({
+  databaseOptions,
+  ...archived
+}: ArchivedSessionEvictionQuery & {
+  databaseOptions: OpenClawAgentDatabaseOptions;
+}): Promise<ArchivedSessionEvictionBatch> {
+  if (
+    isIncognitoOpenClawAgentSqlitePath(
+      resolveOpenClawAgentSqlitePath(databaseOptions),
+      databaseOptions,
+    )
+  ) {
+    const result = withOpenClawAgentDatabaseReadOnly(
+      (database) => readDiskEvictableArchivedSessionBatchInDatabase(database, archived),
+      databaseOptions,
+    );
+    return result.found ? result.value : { candidates: [], exhausted: true };
+  }
+  const options = { ...databaseOptions, path: resolveOpenClawAgentSqlitePath(databaseOptions) };
+  return withSqliteMutationWorkerLifetime(options, async ({ assertCurrent }) => {
+    assertCurrent();
+    const batch = await withSessionHistoryWorkerDatabase(
+      options,
+      (owner) =>
+        owner.readArchivedEvictionCandidates({ archived, env: options.env ?? process.env }),
+      maintenanceLane,
+    );
+    assertCurrent();
+    return batch;
+  });
 }
 
 const log = createSubsystemLogger("sessions/history-eviction");
@@ -421,7 +457,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
     if (usage.totalBytes <= highWaterBytes) {
       break;
     }
-    const eviction = await runExclusiveSessionLifecycleMutation({
+    const eviction = await runExclusiveSessionLifecycleMutation("history-evict", {
       scope: params.storePath,
       identities: [sessionId],
       run: async () => {
@@ -469,13 +505,14 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 if (protectedSessionIds.has(sessionId)) {
                   return null;
                 }
-                return createHistoryEvictionReclamationPlan({
-                  databaseOptions,
+                return {
+                  databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
                   diskBudget: { preserveRecentMs: params.maintenance.preserveRecentMs },
+                  kind: "history-eviction",
                   materializedPlans: materialized,
-                  protectedSessionIds,
+                  protectedSessionIds: [...protectedSessionIds],
                   sessionId,
-                });
+                } satisfies SqliteSessionReclamationPlan;
               }),
             "session.history.reclamation-plan",
             diagnostics,
@@ -550,7 +587,7 @@ async function enforceSessionHistoryMaintenanceForDatabase(
   if (usage.totalBytes > highWaterBytes) {
     let after: { archivedAt: number; sessionKey: string } | undefined;
     while (usage.totalBytes > highWaterBytes) {
-      const batch = readDiskEvictableArchivedSessionBatch({
+      const batch = await readDiskEvictableArchivedSessionBatch({
         ...(after ? { after } : {}),
         databaseOptions,
         preserveRecentMs: params.maintenance.preserveRecentMs,
@@ -563,11 +600,13 @@ async function enforceSessionHistoryMaintenanceForDatabase(
         if (usage.totalBytes <= highWaterBytes) {
           break;
         }
-        const deletion = await runExclusiveSessionLifecycleMutation({
+        const deletion = await runExclusiveSessionLifecycleMutation("archived-delete", {
           scope: params.storePath,
           identities: [candidate.sessionKey, candidate.entry.sessionId],
-          run: async () =>
-            await deleteDiskBudgetArchivedSessionEntry(
+          run: async () => {
+            const { deleteDiskBudgetSessionEntryLifecycle } =
+              await import("./session-accessor.sqlite-lifecycle.js");
+            return await deleteDiskBudgetSessionEntryLifecycle(
               {
                 ...(params.agentId ? { agentId: params.agentId } : {}),
                 archiveTranscript: false,
@@ -579,7 +618,8 @@ async function enforceSessionHistoryMaintenanceForDatabase(
                 target: { canonicalKey: candidate.sessionKey, storeKeys: [candidate.sessionKey] },
               },
               resolved,
-            ),
+            );
+          },
         });
         if (!deletion.deleted) {
           usage = await measureSessionPhysicalDiskUsage(params.storePath);

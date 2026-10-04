@@ -11,7 +11,6 @@ import { delayForAttempt } from "./native-subagent-retry.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
-  now: () => number;
   retryDelaysMs?: readonly number[];
   maxRetries?: number;
   isCurrentChild: (child: ChildState) => boolean;

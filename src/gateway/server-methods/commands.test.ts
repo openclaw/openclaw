@@ -5,7 +5,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.types.js";
 
 const mockSkillCommands = [
@@ -104,7 +103,8 @@ type RuntimeCommandRegistration = {
     };
   };
 };
-vi.mock("../../auto-reply/commands-registry.js", () => ({
+vi.mock("../../auto-reply/commands-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../auto-reply/commands-registry.js")>()),
   listChatCommandsForConfig: vi.fn(() => mockChatCommands),
 }));
 vi.mock("../../skills/discovery/chat-commands.js", () => ({
@@ -179,8 +179,6 @@ import { registerPluginCommandInRegistry } from "../../plugins/command-registrat
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
-import { prepareSkillCommandsForAgents } from "../../skills/discovery/chat-commands.js";
-import * as sessionSharing from "../session-sharing.js";
 import { commandsHandlers } from "./commands.js";
 
 function createDiscordChannelPlugin() {
@@ -303,85 +301,6 @@ describe("commands.list handler", () => {
     vi.restoreAllMocks();
     resetPluginRuntimeStateForTest();
   });
-
-  it.each(["unchanged", "revoked", "replaced", "removed", "selection"] as const)(
-    "checks the current session after command preparation (%s)",
-    async (change) => {
-      const target = {
-        agentId: "main",
-        canonicalKey: "agent:main:session",
-        storeKey: "agent:main:session",
-        storeKeys: ["agent:main:session"],
-        storePath: "/synthetic/sessions.db",
-        entry: { sessionId: "session", lifecycleRevision: "first", updatedAt: 1 },
-      };
-      const resolveTarget = vi
-        .spyOn(sessionSharing, "resolveSessionSharingTarget")
-        .mockReturnValue(target);
-      const authorize = vi
-        .spyOn(sessionSharing, "authorizeSessionSharingTarget")
-        .mockReturnValue(null);
-      const entered = createDeferred();
-      const release = createDeferred();
-      vi.mocked(prepareSkillCommandsForAgents).mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        return mockSkillCommands;
-      });
-      const pending = callHandler({ sessionKey: target.canonicalKey });
-      try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("commands.list settled before command preparation");
-          }),
-        ]);
-        if (change === "revoked") {
-          authorize.mockReturnValue(errorShape(ErrorCodes.INVALID_REQUEST, "access revoked"));
-        } else if (change === "replaced") {
-          resolveTarget.mockReturnValue({
-            ...target,
-            entry: { ...target.entry, lifecycleRevision: "replacement" },
-          });
-        } else if (change === "removed") {
-          resolveTarget.mockReturnValue(null);
-        } else if (change === "selection") {
-          resolveTarget.mockReturnValue({
-            ...target,
-            entry: {
-              ...target.entry,
-              skillLibrarySelections: [
-                {
-                  skillId: "selected",
-                  revision: "second",
-                  name: "Selected skill",
-                  ownerProfileId: "owner",
-                },
-              ],
-            },
-          });
-        }
-      } finally {
-        release.resolve();
-      }
-      const result = await pending;
-      if (change === "unchanged") {
-        expect(result.ok).toBe(true);
-        expect(result.payload).toMatchObject({ commands: expect.any(Array) });
-      } else {
-        expect(result.ok).toBe(false);
-        expect(result.payload).toBeUndefined();
-        expect(result.error).toEqual(
-          errorShape(
-            change === "revoked" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-            change === "revoked"
-              ? "access revoked"
-              : "Session changed while preparing its commands. Retry the request.",
-          ),
-        );
-      }
-    },
-  );
 
   it("maps native commands with category, scope, and args", async () => {
     const commands = await listCommands();

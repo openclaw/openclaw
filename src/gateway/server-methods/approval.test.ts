@@ -14,16 +14,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
@@ -48,7 +46,11 @@ import {
   tempDirs,
 } from "./approval.handlers.test-support.js";
 import { createApprovalHandlers } from "./approval.js";
-import { createContext, deleteDurableApproval } from "./approval.test-support.js";
+import {
+  corruptDurableApprovalPresentation,
+  createContext,
+  deleteDurableApproval,
+} from "./approval.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
@@ -56,8 +58,6 @@ const prepareApprovalChannelCustodyMock = vi.hoisted(() => vi.fn());
 vi.mock("../approval-channel-custody.js", () => ({
   prepareApprovalChannelCustody: prepareApprovalChannelCustodyMock,
 }));
-
-type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
 
 function createHandlers(
   managers: ReturnType<typeof createManagers>,
@@ -73,21 +73,6 @@ function createHandlers(
     databaseOptions,
     ...options,
   });
-}
-
-function corruptDurableApprovalPresentation(
-  databaseOptions: OpenClawStateDatabaseOptions,
-  id: string,
-): void {
-  const database = openOpenClawStateDatabase(databaseOptions);
-  const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-  executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .updateTable("operator_approvals")
-      .set({ presentation_json: "{}" })
-      .where("approval_id", "=", id),
-  );
 }
 
 async function registerPlugin(

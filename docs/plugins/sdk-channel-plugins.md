@@ -52,6 +52,42 @@ approval, command, URL, web-app, question, callback, and model-picker actions
 distinguishable until that encoding boundary; never infer picker intent from a
 raw callback string. Actor and source-message checks remain channel-owned.
 
+## Return to the source conversation
+
+Channel plugins can supply `conversation.link` when building an inbound event
+with `buildChannelInboundEventContext`:
+
+```typescript
+conversation: {
+  ...conversation,
+  link: {
+    url: "https://chat.example.com/conversations/example-thread",
+    label: "Example Thread",
+  },
+}
+```
+
+The channel owns the destination URL and plain-text label. Discord supplies the
+actual created or existing thread URL. Slack uses its documented
+[`app_redirect` channel link](https://docs.slack.dev/interactivity/deep-linking/)
+to open the containing channel or direct conversation; it does not request a
+message permalink while preparing an inbound reply.
+
+The host retains the first valid HTTP(S) link on the logical session, preserves
+it across resets, and carries it to explicitly spawned or forked child sessions.
+Later delivery-route changes do not replace it. Upgrades do not backfill
+existing entries: an existing session receives a link only when a later inbound
+event supplies one. There is no historical-message scan or store migration.
+This metadata does not render any UI by itself. A channel's browser plugin
+registers a `session-header` accessory to display its link. Discord and Slack
+use the shared `createSessionHeaderLink` helper from
+`openclaw/plugin-sdk/control-ui` for the standard appearance and direct
+navigation, with no preview or dropdown.
+The helper receives the current session snapshot through the accessory's props;
+it requires no extra Gateway request. See [Feature plugins](/plugins/feature-plugins#contribute-and-replace-views)
+for registration. Other plugin accessories, including their custom HTML, CSS,
+and JavaScript, keep their existing contract.
+
 ## Walkthrough
 
 <Steps>
@@ -130,6 +166,11 @@ raw callback string. Actor and source-message checks remain channel-owned.
     the minimum - `id`, `config`, and `setup` - and add adapters as you need
     them. `createChatChannelPlugin` defaults omitted capabilities to direct
     messages; declare `capabilities.chatTypes` when the channel supports more.
+    Set `capabilities.reactions` when the channel supports reactions. Channels
+    limited to one bot reaction per message set `capabilities.reactionSlots` to
+    `"single"`; `"multiple"` or omission means independent emoji. When a Control UI
+    reaction is removed from a single-slot channel, the mirror restores the newest
+    remaining emoji or clears the slot when none remain.
 
     `config.inspectAccount` is synchronous and returns metadata
     for read-only diagnostics, including disabled or configured-but-unavailable
@@ -269,6 +310,12 @@ raw callback string. Actor and source-message checks remain channel-owned.
 
     For channels that accept both canonical top-level DM keys and legacy nested keys, use the helpers from `plugin-sdk/channel-config-helpers`: `resolveChannelDmAccess`, `resolveChannelDmPolicy`, `resolveChannelDmAllowFrom`, and `normalizeChannelDmPolicy` keep account-local values ahead of inherited root values. Pair the same resolver with doctor repair through `normalizeLegacyDmAliases` so runtime and migration read the same contract.
 
+    For channel-specific secret activation, `createChannelSecretContract` from
+    `openclaw/plugin-sdk/channel-secret-basic-runtime` combines `channelKey`,
+    `account`/`channel` registry specs, and a `collect` callback. The callback receives
+    `config`, `defaults`, `context`, `channelKey`, `channel`, and the resolved account
+    `surface`; it runs only when the channel record exists. Keep activation rules in the callback.
+
     Config-backed logout handlers can use `clearAccountFieldsFromConfigSection`
     from `openclaw/plugin-sdk/channel-config-helpers`. Pass `cfg`, `sectionKey`,
     `accountId`, and the plugin-owned `fields` to remove. It returns
@@ -371,13 +418,18 @@ raw callback string. Actor and source-message checks remain channel-owned.
       Channel turn adapters can forward the same plan through
       `deliverPreparedWithProviderMessageSending`, and durable inbound delivery uses
       `deliverStructuredInboundReplyWithMessageSendContext({ ...context, plan })`.
+      A prepared or filtered agent registry from the current Gateway publication
+      is not a reload successor: ordinary final replies use that Gateway’s live
+      channel registry and do not require a handoff callback.
       Both durable inbound helpers accept an optional synchronous
       `prepareRuntimeHandoff(cfg)` callback for final replies after an unrelated
       plugin reload. The channel must reject a changed admitted sender and return
       a config that pins the verified credential for all parts of that delivery.
       Core requires the exact retained channel registration and unchanged channel,
-      shared-default, and owning-plugin settings; channels without this callback
-      cannot transfer a final reply to a successor registry. The callback must not
+      shared-default, and owning-plugin settings for every successor handoff.
+      Channels without this callback deliver with the successor's unchanged
+      config; add the callback when the sender credential can change outside
+      config (environment, token files, SecretRef values). The callback must not
       persist credentials or change unrelated settings.
       Existing raw callbacks remain supported. An older adapter receives the
       payload through its original callback; it must adopt the prepared operation
@@ -686,10 +738,15 @@ Microsoft Teams supports `read`, `search`, `reactions`, `list-pins`, `member-inf
 `channel-info`, and `channel-list` under the [Teams access rules](/channels/msteams/access-control).
 
 Discord's `permissions` action inspects the bot's permissions for an allowed channel.
-Guild metadata reads require the requested guild to be allowed by the selected
+Guild-wide metadata reads require the requested guild to be allowed by the selected
 account's current configuration, with unrestricted or wildcard channel access.
+The narrow exception is an active `thread-list` naming a parent `channelId`: the
+parent must be allowed and its metadata must confirm the requested guild before
+the guild-wide fetch. The result includes only allowed threads under that parent
+and member records for those returned threads. An active list without a parent
+still requires guild-wide channel access; archived lists keep their channel-scoped path.
 Only direct operators receive the filtered-results relaxation for `channel-list`;
-delegated agents still require guild-wide channel access.
+delegated `channel-list` callers still require guild-wide channel access.
 
 The transport contract is mandatory for opt-in adapters:
 
@@ -700,6 +757,18 @@ The transport contract is mandatory for opt-in adapters:
   asynchronous DNS or dispatcher preparation.
 - An absent callback means this invocation has no additional read-authority
   fence. A thrown error stops the request; do not retry with a new callback.
+
+Migrated transports capture `captureEffectAuthority()` from
+`openclaw/plugin-sdk/fetch-runtime` before handing requests to shared queues.
+Use its `run` method to restore that captured scope in a queued continuation.
+After asynchronous preparation, call `effect.initiate(() => provider.send(...))`
+and run the existing synchronous assertion inside that callback. The owner
+releases the interval when the provider call is issued, before its response.
+Every retry or chunk calls `initiate` again to prepare a fresh use. Library work
+after the SDK handoff belongs to the already initiated operation.
+
+Shared HTTP, Discord, Slack, and Telegram currently use this preparation contract.
+Other bundled transports retain their existing synchronous guards during migration.
 
 The host binds the callback to the selected registration and its active lifecycle.
 Local message tools and Gateway agent requests retain the originating run and

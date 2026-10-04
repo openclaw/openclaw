@@ -301,6 +301,7 @@ export async function openClickClackDiscussionBinding(
       destinationIdentity,
       createGeneration: params.bindingGenerationFactory,
     });
+    const generationScope = { runtime, sessionKey, expectedGeneration: bindingGeneration };
     const externalRef = discussionExternalRef(
       params.installationId,
       sessionKey,
@@ -404,19 +405,11 @@ export async function openClickClackDiscussionBinding(
             break;
           }
           if (definitiveNoCreate) {
-            await clearDiscussionBindingGeneration({
-              runtime,
-              sessionKey,
-              expectedGeneration: bindingGeneration,
-            });
+            await clearDiscussionBindingGeneration(generationScope);
           }
         } catch {
           if (definitiveNoCreate && !adopted) {
-            await clearDiscussionBindingGeneration({
-              runtime,
-              sessionKey,
-              expectedGeneration: bindingGeneration,
-            });
+            await clearDiscussionBindingGeneration(generationScope);
           }
           // Otherwise the POST outcome is ambiguous and stays quarantined.
         }
@@ -438,20 +431,12 @@ export async function openClickClackDiscussionBinding(
         assertChannelPatch(resolved, managedFields);
       }
     } catch (error) {
-      await clearPendingDiscussionOpen({
-        runtime,
-        sessionKey,
-        expectedGeneration: bindingGeneration,
-      });
+      await clearPendingDiscussionOpen(generationScope);
       params.warn(`incompatible discussion channel remains quarantined: ${resolved.id}`);
       throw error;
     }
     if (!resolved.route_id) {
-      await clearPendingDiscussionOpen({
-        runtime,
-        sessionKey,
-        expectedGeneration: bindingGeneration,
-      });
+      await clearPendingDiscussionOpen(generationScope);
       params.warn(`route-less discussion channel remains quarantined: ${resolved.id}`);
       throw new Error("ClickClack discussion channel is missing its route id");
     }
@@ -461,11 +446,7 @@ export async function openClickClackDiscussionBinding(
       readConsistency: "latest",
     });
     if (!currentEntry?.sessionId || currentEntry.archivedAt !== undefined) {
-      await clearPendingDiscussionOpen({
-        runtime,
-        sessionKey,
-        expectedGeneration: bindingGeneration,
-      });
+      await clearPendingDiscussionOpen(generationScope);
       params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
       throw new Error("OpenClaw session became inactive while opening its ClickClack discussion");
     }
@@ -506,11 +487,7 @@ export async function openClickClackDiscussionBinding(
           assertCurrentAuthority,
         });
       } catch (error) {
-        await clearPendingDiscussionOpen({
-          runtime,
-          sessionKey,
-          expectedGeneration: bindingGeneration,
-        });
+        await clearPendingDiscussionOpen(generationScope);
         params.warn(`unattached discussion channel remains quarantined: ${channel.id}`);
         throw error;
       }
@@ -539,11 +516,7 @@ export async function openClickClackDiscussionBinding(
       assertCurrentAuthority();
       store.set(sessionKey, nextBinding);
     } catch (error) {
-      await clearPendingDiscussionOpen({
-        runtime,
-        sessionKey,
-        expectedGeneration: bindingGeneration,
-      });
+      await clearPendingDiscussionOpen(generationScope);
       params.warn(`unbound discussion channel remains quarantined: ${channel.id}`);
       throw error;
     }

@@ -2,8 +2,9 @@
 // across orchestrator and leaf child sessions.
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
+import { callGateway } from "../../../gateway/call.js";
 import {
   countPendingDescendantRuns,
   buildSubagentSessionListReadIndex,
@@ -32,8 +33,8 @@ describe("subagent registry nested agent tracking", () => {
     subagentRegistry = await import("./subagent-registry.test-helpers.js");
   });
 
-  afterEach(() => {
-    subagentRegistry.resetSubagentRegistryForTests({ persist: false });
+  afterEach(async () => {
+    await subagentRegistry.resetSubagentRegistryForTests({ persist: false });
   });
 
   it("listSubagentRunsForRequester returns children of the requesting session", async () => {
@@ -106,6 +107,13 @@ describe("subagent registry nested agent tracking", () => {
 
   it("countActiveRunsForSession only counts active children of the specific session", async () => {
     const { registerSubagentRun, countActiveRunsForSession } = subagentRegistry;
+    const gateway = vi.mocked(callGateway);
+    const originalGateway = expectDefined(gateway.getMockImplementation(), "shared gateway mock");
+    onTestFinished(() => {
+      gateway.mockImplementation(originalGateway);
+    });
+    // The shared default completes runs; these children must remain active while counted.
+    gateway.mockResolvedValue({ status: "pending" });
 
     // Main spawns orchestrator (active)
     await registerSubagentRun({
@@ -143,10 +151,10 @@ describe("subagent registry nested agent tracking", () => {
     expect(countActiveRunsForSession("agent:main:subagent:orch1")).toBe(2);
   });
 
-  it("counts active descendants through ended parents", () => {
+  it("counts active descendants through ended parents", async () => {
     const { addSubagentRunForTests } = subagentRegistry;
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent-ended",
       childSessionKey: "agent:main:subagent:orch-ended",
       requesterSessionKey: "agent:main:main",
@@ -158,7 +166,7 @@ describe("subagent registry nested agent tracking", () => {
       endedAt: 2,
       cleanupHandled: false,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-active",
       childSessionKey: "agent:main:subagent:orch-ended:subagent:leaf",
       requesterSessionKey: "agent:main:subagent:orch-ended",
@@ -183,7 +191,7 @@ describe("subagent registry nested agent tracking", () => {
   it("countPendingDescendantRuns includes ended descendants until cleanup completes", async () => {
     const { addSubagentRunForTests } = subagentRegistry;
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent-ended-pending",
       childSessionKey: "agent:main:subagent:orch-pending",
       requesterSessionKey: "agent:main:main",
@@ -196,7 +204,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: false,
       cleanupCompletedAt: undefined,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-ended-pending",
       childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf",
       requesterSessionKey: "agent:main:subagent:orch-pending",
@@ -213,7 +221,7 @@ describe("subagent registry nested agent tracking", () => {
     expect(await countPendingDescendantRuns("agent:main:main", () => {})).toBe(2);
     expect(await countPendingDescendantRuns("agent:main:subagent:orch-pending", () => {})).toBe(1);
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-completed",
       childSessionKey: "agent:main:subagent:orch-pending:subagent:leaf-completed",
       requesterSessionKey: "agent:main:subagent:orch-pending",
@@ -233,7 +241,7 @@ describe("subagent registry nested agent tracking", () => {
     const { addSubagentRunForTests } = subagentRegistry;
     const parentSessionKey = "agent:main:subagent:orch-parallel";
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-parent-parallel",
       childSessionKey: parentSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -246,7 +254,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: false,
       cleanupCompletedAt: undefined,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-a",
       childSessionKey: `${parentSessionKey}:subagent:leaf-a`,
       requesterSessionKey: parentSessionKey,
@@ -259,7 +267,7 @@ describe("subagent registry nested agent tracking", () => {
       cleanupHandled: true,
       cleanupCompletedAt: undefined,
     });
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-b",
       childSessionKey: `${parentSessionKey}:subagent:leaf-b`,
       requesterSessionKey: parentSessionKey,
@@ -274,7 +282,7 @@ describe("subagent registry nested agent tracking", () => {
 
     expect(await countPendingDescendantRuns(parentSessionKey, () => {})).toBe(2);
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-a",
       childSessionKey: `${parentSessionKey}:subagent:leaf-a`,
       requesterSessionKey: parentSessionKey,
@@ -289,7 +297,7 @@ describe("subagent registry nested agent tracking", () => {
     });
     expect(await countPendingDescendantRuns(parentSessionKey, () => {})).toBe(1);
 
-    addSubagentRunForTests({
+    await addSubagentRunForTests({
       runId: "run-leaf-b",
       childSessionKey: `${parentSessionKey}:subagent:leaf-b`,
       requesterSessionKey: parentSessionKey,

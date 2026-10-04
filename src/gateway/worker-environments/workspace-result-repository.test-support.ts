@@ -200,7 +200,7 @@ export function useRepositoryWorkspaceResultFixture() {
         owner: placementTurnOwner(placement),
       });
       if (markResultPending) {
-        placements.markWorkspaceResultPending(turnClaim);
+        await placements.markWorkspaceResultPending(turnClaim);
       }
       return { placement, turnClaim };
     };
@@ -255,7 +255,7 @@ export function useRepositoryWorkspaceResultFixture() {
       environments,
       workspaceOperations,
       runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim(await resolveWorkspace(), begin()),
+        await reclaim(await resolveWorkspace(), await begin()),
       withPreparedRecovery: createWorkerWorkspaceRecoveryFixture({ resolveWorkspace })
         .withPreparedRecovery,
     });

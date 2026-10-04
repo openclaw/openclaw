@@ -1,10 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
-import { getNodeSqliteKysely, prepareSqliteQuerySync } from "../infra/kysely-sync.js";
-import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
 import {
-  getAdmittedSqliteSchemaFacts,
-  type SqliteSchemaFacts,
-} from "../infra/sqlite-schema-facts.js";
+  createSqliteQueryCache,
+  getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+} from "../infra/kysely-sync.js";
+import { collectSqliteSchemaIssues } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -18,41 +19,26 @@ import type { DB } from "./openclaw-state-db.generated.js";
 // Read-only clients need schema admission without loading updater publication policy.
 export const CONTENT_VERSION_KEY = "state.schema.contentVersion";
 type StateSchemaVersionDatabase = Pick<DB, "config_machine_state">;
-const contentVersions = new WeakMap<SqliteSchemaFacts, number>();
-const contentVersionQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>>
->();
+const contentVersionQuery = createSqliteQueryCache((db) =>
+  prepareSqliteQuerySync<void, Pick<DB["config_machine_state"], "value_json">>(db, () =>
+    getNodeSqliteKysely<StateSchemaVersionDatabase>(db)
+      .selectFrom("config_machine_state")
+      .select("value_json")
+      .where("state_key", "=", CONTENT_VERSION_KEY),
+  ),
+);
 
 /** Content and its marker commit together, even while older readers retain their version floor. */
 export function readStateSchemaContentVersion(db: DatabaseSync): number {
   const schema = getAdmittedSqliteSchemaFacts(db);
-  const cached = schema && contentVersions.get(schema);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const version = readContentVersion(db, schema?.userVersion ?? readSqliteUserVersion(db));
-  if (schema) {
-    contentVersions.set(schema, version);
-  }
-  return version;
+  return readContentVersion(db, schema?.userVersion ?? readSqliteUserVersion(db));
 }
 
 function readContentVersion(db: DatabaseSync, published: number): number {
   if (!tableExists(db, "config_machine_state")) {
     return published;
   }
-  let query = contentVersionQueries.get(db);
-  if (!query) {
-    query = prepareSqliteQuerySync(db, () =>
-      getNodeSqliteKysely<StateSchemaVersionDatabase>(db)
-        .selectFrom("config_machine_state")
-        .select("value_json")
-        .where("state_key", "=", CONTENT_VERSION_KEY),
-    );
-    contentVersionQueries.set(db, query);
-  }
-  const row = query().rows[0];
+  const row = contentVersionQuery(db)().rows[0];
   if (!row) {
     return published;
   }

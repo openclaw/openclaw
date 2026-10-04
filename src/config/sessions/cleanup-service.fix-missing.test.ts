@@ -1,13 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { WorkerOptions } from "node:worker_threads";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { readSessionArchiveContentSync } from "./archive-compression.js";
 import { isRetainedSessionTranscriptArchiveName } from "./artifacts.js";
@@ -37,7 +34,7 @@ vi.mock("node:worker_threads", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cleanup-fix-missing-");
 
 function listDeletedArchives(directory: string): string[] {
   if (!fs.existsSync(directory)) {
@@ -53,13 +50,12 @@ describe("sessions cleanup --fix-missing", () => {
   let storePath: string;
 
   beforeEach(() => {
-    const tempDir = tempDirs.make("openclaw-cleanup-fix-missing-");
+    const tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
   });
 
   afterEach(() => {
     setCleanupDeleteFault(undefined);
-    closeOpenClawAgentDatabasesForTest();
   });
 
   it("inspects unscoped transcript keys in the selected agent's fixed-store partition", async () => {

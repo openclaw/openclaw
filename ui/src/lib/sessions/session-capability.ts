@@ -5,6 +5,7 @@ import type {
   SessionsAssignOwnerParams,
   SessionsDeleteResult,
   SessionsDescribeParams,
+  SessionsListParams,
   SessionsPatchManyParams,
   SessionsPatchManyResult,
   SessionsRecoverResult,
@@ -44,6 +45,7 @@ export type SessionState = {
   modelOverrides: Readonly<Record<string, string | null>>;
   loading: boolean;
   error: string | null;
+  startupPending?: boolean;
   deletedSessions: readonly SessionDeletionFact[];
   /** Gateway-owned custom group catalog in display order. */
   groups: readonly string[];
@@ -63,6 +65,8 @@ export type SessionGroupMutationResult = "completed" | "stale";
 export type SessionGroupDefaultsStatus = "idle" | "loading" | "ready" | "unavailable";
 
 export type SessionListOptions = {
+  source?: SessionsListParams["source"];
+  rowMode?: "compact";
   agentId?: string;
   spawnedBy?: string;
   boardFace?: "chat" | "dashboard";
@@ -101,7 +105,10 @@ export type SessionRefreshOutcome =
 
 export type SessionListScope = Readonly<Omit<SessionListOptions, "offset" | "append">>;
 
-export type SessionListSnapshot = Pick<SessionState, "result" | "agentId" | "loading" | "error">;
+export type SessionListSnapshot = Pick<
+  SessionState,
+  "result" | "agentId" | "loading" | "error" | "startupPending"
+>;
 
 export type SessionRowTarget = Readonly<{ key: string; agentId: string }>;
 
@@ -217,6 +224,11 @@ export type SessionCapability = {
   readonly presentation: Pick<SessionState, "result" | "agentId" | "resultCached">;
   /** Advances only when a canonical sessions.list result is published. */
   readonly canonicalListRevision: number;
+  /** Initial routing hints only; cached agent discovery never grants live authority. */
+  readonly cachedRoutingDefaults?: {
+    readonly mainKey: string;
+    readonly scope: "per-sender" | "global";
+  };
   whenCachedRosterSettled: () => Promise<void>;
   /** Captures the current Gateway connection generation for read-only requests. */
   captureConnectionScope: () => SessionConnectionScope | null;

@@ -1,11 +1,11 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   cleanupRuntimeToolFixtureTempRoots,
   mockToolRequests,
   runMockRuntimeToolFixture,
 } from "../test/runtime-tool-fixture-helpers.js";
 
-afterEach(cleanupRuntimeToolFixtureTempRoots);
+afterAll(cleanupRuntimeToolFixtureTempRoots);
 
 describe("runtime tool fixture known harness gaps", () => {
   it.each([

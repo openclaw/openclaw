@@ -5,10 +5,8 @@ import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { validateSkillProposalRecord } from "../skills/workshop/store-record.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { listLegacyCollectionBackupWorkspaceDirs } from "./doctor-skill-workshop-collection-backups.js";
-import {
-  classifyWorkshopRelocation,
-  type LegacyWorkshopProposal,
-} from "./doctor-skill-workshop-relocation.js";
+import type { LegacyWorkshopProposal } from "./doctor-skill-workshop-read.kernel.js";
+import { classifyWorkshopRelocation } from "./doctor-skill-workshop-relocation.js";
 
 export const LEGACY_WORKSHOP_PROPOSALS_DIR = "skill-workshop/proposals";
 export const LEGACY_WORKSHOP_MAX_RECORD_BYTES = 1024 * 1024;

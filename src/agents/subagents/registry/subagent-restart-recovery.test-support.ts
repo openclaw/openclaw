@@ -75,6 +75,7 @@ export function useSubagentRestartRecoveryFixture() {
   const activateGatewayRuntime = async () => {
     const gatewayContext = {
       recoveryRuntime: gatewayRuntime,
+      chatAbortControllers: new Map(),
       resolveGatewayContext: () => gatewayContext as never,
     };
     bindGatewayContextResolver(gatewayRuntime, gatewayContext.resolveGatewayContext);
@@ -113,7 +114,7 @@ export function useSubagentRestartRecoveryFixture() {
     // Preserve stores and their environment while detached delivery still owns them.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         await cleanupSessionStateForTest({ stateDir: tempStateDir ?? undefined });
         clearRuntimeConfigSnapshot();
         if (tempStateDir) {

@@ -211,7 +211,7 @@ export async function runPostUpgradeProbes(params: {
         findings.push({
           level: "warn",
           code: "plugin.manifest_drift",
-          message: `Plugin ${record.pluginId} manifest hash drifted from installs.json snapshot. Run \`openclaw plugins registry --refresh\` to re-sync.`,
+          message: `Plugin ${record.pluginId} manifest hash drifted from the installed plugin index. Run \`openclaw plugins registry --refresh\` to re-sync.`,
           plugin: record.pluginId,
         });
       }

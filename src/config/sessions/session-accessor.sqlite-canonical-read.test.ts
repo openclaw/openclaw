@@ -34,6 +34,8 @@ describe("canonical SQLite metadata reads", () => {
     async (sessionKey) => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-") };
       const scope = { agentId: "main", env, sessionKey };
+      expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toBeUndefined();
+      expect(fs.existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
       const savedPrompt = "saved prompt ".repeat(40_000);
       const keys = [...new Set([sessionKey, sessionKey.toLowerCase()])];
       for (const key of keys) {
@@ -155,32 +157,27 @@ describe("canonical SQLite metadata reads", () => {
     ["timestamp mismatch", '{"sessionId":"target","updatedAt":2}'],
     ["prompt-only", '{"skillsSnapshot":{"prompt":"saved"}}'],
     ["literal NUL", '{"sessionId":"target","updatedAt":1}\u0000trailing'],
-  ])("preserves canonical failures for %s rows", (_name, json) => {
+    [
+      "overdepth",
+      `{"sessionId":"target","updatedAt":1,"skillsSnapshot":{"prompt":"saved","skills":[],"deep":${"[".repeat(1001)}0${"]".repeat(1001)}}}`,
+    ],
+  ])("preserves metadata read semantics for %s rows", (kind, json) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-invalid-") };
     const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
     replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1 });
     loadSessionEntryReadOnly(scope);
     const database = openOpenClawAgentDatabase(scope);
-    database.db.prepare("UPDATE session_nodes SET entry_json = ?").run(json);
-    database.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
-    for (const projection of ["full", "list"] as const) {
-      expect(() => loadSessionEntryReadOnly({ ...scope, projection })).toThrow(
-        "invalid persisted session row",
-      );
-    }
-  });
-
-  it("keeps overdepth metadata readable and retained windows absent", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-depth-") };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:target" };
-    replaceSessionEntrySync(scope, { sessionId: "target", updatedAt: 1 });
-    loadSessionEntryReadOnly(scope);
-    const database = openOpenClawAgentDatabase(scope);
     const update = database.db.prepare("UPDATE session_nodes SET entry_json = ?");
-    update.run(
-      `{"sessionId":"target","updatedAt":1,"skillsSnapshot":{"prompt":"saved","skills":[],"deep":${"[".repeat(1001)}0${"]".repeat(1001)}}}`,
-    );
+    update.run(json);
     database.db.prepare("UPDATE session_nodes SET entry_valid = 1").run();
+    if (kind !== "overdepth") {
+      for (const projection of ["full", "list"] as const) {
+        expect(() => loadSessionEntryReadOnly({ ...scope, projection })).toThrow(
+          "invalid persisted session row",
+        );
+      }
+      return;
+    }
     expect(loadSessionEntryReadOnly(scope)?.skillsSnapshot?.prompt).toBe("saved");
     expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toEqual({
       sessionId: "target",
@@ -191,12 +188,5 @@ describe("canonical SQLite metadata reads", () => {
     for (const projection of ["full", "list"] as const) {
       expect(loadSessionEntryReadOnly({ ...scope, projection })).toBeUndefined();
     }
-  });
-
-  it("does not create a missing database for a metadata read", () => {
-    const env = { OPENCLAW_STATE_DIR: tempDirs.make("canonical-metadata-missing-") };
-    const scope = { agentId: "main", env, sessionKey: "agent:main:missing" };
-    expect(loadSessionEntryReadOnly({ ...scope, projection: "list" })).toBeUndefined();
-    expect(fs.existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
   });
 });

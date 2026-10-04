@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { setTimeout as sleep } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -34,7 +34,6 @@ import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js"
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
-import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
@@ -49,10 +48,7 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { logGatewayReady, logGatewaySidecarsReady } from "./server-startup-readiness.js";
-import {
-  refreshLatestUpdateRestartSentinelIfPresent,
-  scheduleRestartSentinelWakeAfterReady,
-} from "./server-startup-restart-sentinel.js";
+import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   schedulePostReadySidecarTask,
@@ -61,6 +57,7 @@ import {
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
+import type { prepareLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import {
   beginMacOSSystemCaWarmupOnce,
@@ -86,31 +83,17 @@ const loadAgentModelSelectionModule = createLazyRuntimeModule(
 
 const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
 
-function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !env.VITEST && env.NODE_ENV !== "test";
-}
-
-function hasGatewayStartHooks(pluginRegistry: PluginRegistry): boolean {
-  return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
-}
-
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await loadInternalHooksModule();
   return hasInternalHookListeners("gateway", "startup");
 }
 
-async function waitForAcpRuntimeBackendReady(params: {
-  backendId?: string;
-  timeoutMs?: number;
-  pollMs?: number;
-}): Promise<boolean> {
+async function waitForAcpRuntimeBackendReady(backendId?: string): Promise<boolean> {
   const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
-  const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
-  const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = performance.now() + timeoutMs;
+  const deadline = performance.now() + ACP_BACKEND_READY_TIMEOUT_MS;
 
   do {
-    const backend = getAcpRuntimeBackend(params.backendId);
+    const backend = getAcpRuntimeBackend(backendId);
     if (backend) {
       try {
         if (!backend.healthy || backend.healthy()) {
@@ -120,7 +103,7 @@ async function waitForAcpRuntimeBackendReady(params: {
         // Treat transient backend health probe errors like "not ready yet".
       }
     }
-    await sleep(pollMs, undefined, { ref: false });
+    await sleep(ACP_BACKEND_READY_POLL_MS, undefined, { ref: false });
   } while (performance.now() < deadline);
 
   return false;
@@ -323,16 +306,11 @@ export async function startGatewaySidecars(params: {
             },
             Math.max(0, deadlineAtMs - Date.now()),
           );
-          void stopPromise.then(
-            (result) => {
-              clearTimeout(timer);
-              resolve(result);
-            },
-            (error: unknown) => {
-              clearTimeout(timer);
+          void stopPromise
+            .finally(() => clearTimeout(timer))
+            .then(resolve, (error: unknown) => {
               reject(error instanceof Error ? error : new Error(String(error)));
-            },
-          );
+            });
         });
       },
     };
@@ -352,6 +330,7 @@ export async function startGatewaySidecars(params: {
           return;
         }
         await startPluginServices({
+          scheduler: params.scheduler,
           registry: params.pluginRegistry,
           config: params.cfg,
           workspaceDir: params.defaultWorkspaceDir,
@@ -419,7 +398,7 @@ export async function startGatewaySidecars(params: {
         return;
       }
       const ready = await measureStartup(params.startupTrace, "sidecars.acp.runtime-ready", () =>
-        waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend }),
+        waitForAcpRuntimeBackendReady(params.cfg.acp?.backend),
       );
       params.startupTrace?.detail("sidecars.acp.runtime-ready", [
         ["readyCount", ready ? 1 : 0],
@@ -461,7 +440,7 @@ export async function startGatewaySidecars(params: {
       waitForPostReadyWork: params.waitForPostReadyWork,
       shouldRun: params.shouldCreatePostReadySidecars,
       run: async (isStopped) => {
-        if (!shouldCheckRestartSentinel() || isStopped()) {
+        if (process.env.VITEST || process.env.NODE_ENV === "test" || isStopped()) {
           return;
         }
         if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
@@ -589,7 +568,7 @@ type GatewayPostAttachRuntimeDeps = {
   logGatewayStartup: (params: Parameters<typeof logGatewayStartup>[0]) => Awaitable<void>;
   refreshLatestUpdateRestartSentinel: (
     env?: NodeJS.ProcessEnv,
-  ) => Awaitable<ReturnType<typeof refreshLatestUpdateRestartSentinel>>;
+  ) => Awaitable<ReturnType<typeof prepareLatestUpdateRestartSentinel>>;
   createGatewayUpdateCheck: (
     ...args: Parameters<typeof createGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof createGatewayUpdateCheck>>;
@@ -605,7 +584,8 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("../plugins/hooks.js")).createHookRunner(...args),
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelIfPresent,
+  refreshLatestUpdateRestartSentinel: async (env) =>
+    (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel(env),
   createGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).createGatewayUpdateCheck(...args),
   startGatewaySidecars,
@@ -632,7 +612,6 @@ export async function startGatewayPostAttachRuntime(
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
-    controlUiBasePath: string;
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
@@ -839,15 +818,10 @@ export async function startGatewayPostAttachRuntime(
     }
     params.onPluginServices?.(pluginServices);
   };
-  const waitForSidecarStartTurn = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
   const startSidecars = () =>
     params.minimalTestGateway
       ? startStartupLog().then(() => pluginRegistry)
-      : waitForSidecarStartTurn().then(async () => {
+      : nextTurn().then(async () => {
           if (params.isClosing?.()) {
             skipStartupLog();
             return pluginRegistry;
@@ -875,7 +849,9 @@ export async function startGatewayPostAttachRuntime(
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
-            gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+            gatewayStartHooks: pluginRegistry.typedHooks.some(
+              (hook) => hook.hookName === "gateway_start",
+            ),
           });
           const workerEnvironmentSidecar = params.isClosing?.()
             ? null

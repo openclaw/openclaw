@@ -1,7 +1,7 @@
 /** Collects text-to-speech secret refs from runtime config. */
 import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
-  collectSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretDefaults,
 } from "./runtime-shared.js";

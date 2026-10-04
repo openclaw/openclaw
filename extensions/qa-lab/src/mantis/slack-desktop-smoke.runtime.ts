@@ -19,7 +19,6 @@ import {
   renderMantisDesktopRecordingScript,
   resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
-  runCommand,
   shellQuote,
 } from "./crabbox-runtime.js";
 import {
@@ -207,12 +206,9 @@ function parseSlackGatewayCredentialPayload(payload: unknown): SlackGatewayCrede
     throw new Error("Slack credential payload must be an object.");
   }
   const candidate = payload as Record<string, unknown>;
-  const channelId =
-    typeof candidate.channelId === "string" ? trimToValue(candidate.channelId) : undefined;
-  const sutBotToken =
-    typeof candidate.sutBotToken === "string" ? trimToValue(candidate.sutBotToken) : undefined;
-  const sutAppToken =
-    typeof candidate.sutAppToken === "string" ? trimToValue(candidate.sutAppToken) : undefined;
+  const channelId = trimToValue(candidate.channelId);
+  const sutBotToken = trimToValue(candidate.sutBotToken);
+  const sutAppToken = trimToValue(candidate.sutAppToken);
   if (!channelId || !sutBotToken || !sutAppToken) {
     throw new Error(
       "Slack credential payload must include channelId, sutBotToken, and sutAppToken.",
@@ -281,20 +277,7 @@ function renderRemoteScript(params: {
   slackChannelId: string;
   slackUrl?: string;
 }) {
-  const shellOutputDir = shellQuote(params.remoteOutputDir);
-  const slackUrl = shellQuote(params.slackUrl ?? "");
-  const credentialSource = shellQuote(params.credentialSource);
-  const credentialRole = shellQuote(params.credentialRole);
-  const providerMode = shellQuote(params.providerMode);
-  const primaryModel = shellQuote(params.primaryModel);
-  const alternateModel = shellQuote(params.alternateModel);
-  const fastMode = params.fastMode ? "1" : "0";
-  const hydrateMode = shellQuote(params.hydrateMode);
-  const setupGateway = params.setupGateway ? "1" : "0";
-  const approvalCheckpoints = params.approvalCheckpoints ? "1" : "0";
-  const slackChannelId = shellQuote(params.slackChannelId);
   const scenarioArgs = params.scenarioIds.flatMap((id) => ["--scenario", shellQuote(id)]).join(" ");
-  const checkpointScenarioJson = shellQuote(JSON.stringify(params.scenarioIds));
   const codexScenarioCount = params.scenarioIds.filter((id) =>
     id.startsWith("slack-codex-approval-"),
   ).length;
@@ -310,19 +293,19 @@ function renderRemoteScript(params: {
     DEFAULT_REMOTE_COMMAND_TIMEOUT_SECONDS +
     Math.ceil((codexScenarioCount * CODEX_APPROVAL_SCENARIO_BUDGET_MS) / 1_000);
   return `set -euo pipefail
-out=${shellOutputDir}
-slack_url_override=${slackUrl}
-credential_source=${credentialSource}
-credential_role=${credentialRole}
-provider_mode=${providerMode}
-primary_model=${primaryModel}
-alternate_model=${alternateModel}
-fast_mode=${fastMode}
-hydrate_mode=${hydrateMode}
-setup_gateway=${setupGateway}
-approval_checkpoints=${approvalCheckpoints}
-slack_channel_id=${slackChannelId}
-approval_checkpoint_scenarios_json=${checkpointScenarioJson}
+out=${shellQuote(params.remoteOutputDir)}
+slack_url_override=${shellQuote(params.slackUrl ?? "")}
+credential_source=${shellQuote(params.credentialSource)}
+credential_role=${shellQuote(params.credentialRole)}
+provider_mode=${shellQuote(params.providerMode)}
+primary_model=${shellQuote(params.primaryModel)}
+alternate_model=${shellQuote(params.alternateModel)}
+fast_mode=${params.fastMode ? "1" : "0"}
+hydrate_mode=${shellQuote(params.hydrateMode)}
+setup_gateway=${params.setupGateway ? "1" : "0"}
+approval_checkpoints=${params.approvalCheckpoints ? "1" : "0"}
+slack_channel_id=${shellQuote(params.slackChannelId)}
+approval_checkpoint_scenarios_json=${shellQuote(JSON.stringify(params.scenarioIds))}
 remote_command_timeout_seconds="\${OPENCLAW_MANTIS_REMOTE_COMMAND_TIMEOUT_SECONDS:-${remoteCommandTimeoutSeconds}}"
 if [ -z "\${OPENCLAW_QA_SLACK_CHANNEL_ID:-}" ] && [ -n "$slack_channel_id" ]; then
   export OPENCLAW_QA_SLACK_CHANNEL_ID="$slack_channel_id"
@@ -1051,49 +1034,48 @@ export async function runMantisSlackDesktopSmoke(
     let remoteRunError: unknown;
     const remoteRunStartedAt = new Date();
     const freshPrArgs = freshPr ? ["--fresh-pr", freshPr] : [];
-    await runCommand({
-      command: crabboxBin,
-      args: [
-        "run",
-        "--provider",
-        provider,
-        "--id",
-        resolvedLeaseId,
-        "--desktop",
-        "--browser",
-        "--no-hydrate",
-        ...freshPrArgs,
-        "--shell",
-        "--",
-        renderRemoteScript({
-          alternateModel,
-          approvalCheckpoints,
-          credentialRole,
-          credentialSource,
-          fastMode,
-          hydrateMode,
-          primaryModel,
-          providerMode,
-          remoteOutputDir,
-          scenarioIds,
-          setupGateway: gatewaySetup,
-          slackChannelId,
-          slackUrl,
-        }),
-      ],
-      cwd: repoRoot,
-      env,
-      runner,
-      stdio: "inherit",
-    }).then(
-      () => {
-        timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "pass");
-      },
-      (error: unknown) => {
-        timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "fail");
-        remoteRunError = error;
-      },
-    );
+    try {
+      await runner(
+        crabboxBin,
+        [
+          "run",
+          "--provider",
+          provider,
+          "--id",
+          resolvedLeaseId,
+          "--desktop",
+          "--browser",
+          "--no-hydrate",
+          ...freshPrArgs,
+          "--shell",
+          "--",
+          renderRemoteScript({
+            alternateModel,
+            approvalCheckpoints,
+            credentialRole,
+            credentialSource,
+            fastMode,
+            hydrateMode,
+            primaryModel,
+            providerMode,
+            remoteOutputDir,
+            scenarioIds,
+            setupGateway: gatewaySetup,
+            slackChannelId,
+            slackUrl,
+          }),
+        ],
+        {
+          cwd: repoRoot,
+          env,
+          stdio: "inherit",
+        },
+      );
+      timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "pass");
+    } catch (error) {
+      timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "fail");
+      remoteRunError = error;
+    }
     leaseHeartbeat?.throwIfFailed();
     await timer.timePhase("artifacts.copy", () =>
       copyCrabboxArtifacts({

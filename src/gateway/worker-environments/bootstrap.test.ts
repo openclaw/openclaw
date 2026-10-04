@@ -10,10 +10,11 @@ import {
 } from "../../../node-version.mjs";
 import { NODE_RELEASE_VERSION_CASES } from "../../../test/helpers/node-version-cases.js";
 import type { WorkerSshEndpoint } from "../../plugins/types.js";
-import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { bootstrapWorker as bootstrapWorkerCore } from "./bootstrap.js";
+import { fakeRunner, result } from "./bootstrap.test-support.js";
 import { createWorkerBundleProducer, type WorkerInstallationArtifact } from "./bundle.js";
 
 type WorkerBootstrapRequest = Parameters<typeof bootstrapWorkerCore>[0];
@@ -35,6 +36,18 @@ const RECEIPT_JSON = JSON.stringify({
   openclawVersion: VERSION,
   protocolFeatures: ["admission-v1"],
 });
+const WORKER_CHUNK = "worker-chunk-lazy-A_1.mjs";
+const WORKER_ARTIFACT_FIXTURE: Record<string, string> = {
+  ...Object.fromEntries(
+    WORKER_BUNDLE_ARTIFACT_PATHS.map((name) => [
+      name,
+      `export const artifact = ${JSON.stringify(name)};\n`,
+    ]),
+  ),
+  "worker.mjs": `const { value } = await import("./${WORKER_CHUNK}"); console.log(value);\n`,
+  [WORKER_CHUNK]: 'export { value } from "./worker-chunk-shared-B_2.mjs";\n',
+  "worker-chunk-shared-B_2.mjs": 'export const value = "worker chunks loaded";\n',
+};
 
 const SSH: WorkerSshEndpoint = {
   host: "worker.example.com",
@@ -56,41 +69,6 @@ const BUNDLE: WorkerInstallationArtifact = {
 
 function tagged(action: "current" | "install" | "receipt", payload: string): string {
   return `${OUTPUT_TAG}\t${action}\t${payload}\n`;
-}
-
-function result(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
-
-function fakeRunner(
-  responses: SpawnResult[],
-  inspectCall?: (
-    argv: string[],
-    options: Parameters<WorkerBootstrapCommandRunner>[1],
-  ) => void | Promise<void>,
-) {
-  const calls: Array<{
-    argv: string[];
-    options: Parameters<WorkerBootstrapCommandRunner>[1];
-  }> = [];
-  const runCommand: WorkerBootstrapCommandRunner = async (argv, options) => {
-    calls.push({ argv, options });
-    await inspectCall?.(argv, options);
-    const response = responses.shift();
-    if (!response) {
-      throw new Error("unexpected bootstrap command");
-    }
-    return response;
-  };
-  return { calls, runCommand };
 }
 
 function commandPort(argv: string[]): number {
@@ -270,7 +248,7 @@ describe("bootstrapWorker", () => {
     expect(runner.calls[2]?.options.input).toContain('ln -s "$lock_identity" "$lock"');
     expect(runner.calls[2]?.options.input).toContain("worker bundle archive digest mismatch");
     expect(runner.calls[2]?.options.input).toContain(
-      'const artifactPaths = ["file-tool-planning.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
+      'const artifactPaths = ["code-mode-node.worker.mjs","openclaw-state-read.worker.mjs","worker-native-lifecycle.worker.mjs","file-tool-planning.worker.mjs","github-exec-launcher.mjs","image-processor.worker.mjs","service-child-group-anchor.mjs","service-child-relay.mjs","sqlite-store.worker.mjs","worker.mjs","workspace-rsync-receiver.mjs"]',
     );
     expect(runner.calls[2]?.options.input).not.toContain('npm install --prefix "$staging"');
     expect(runner.calls[2]?.options.input).toContain("worker install content does not match");
@@ -506,18 +484,10 @@ describe("bootstrapWorker", () => {
     expect(npmRunner.calls[1]?.options.input).toContain("npm pack");
     expect(npmRunner.calls[1]?.options.input).not.toContain("npm install");
     expect(npmRunner.calls[1]?.options.input).toContain("--registry=https://registry.npmjs.org/");
-    for (const artifactPath of [
-      "worker.mjs",
-      "file-tool-planning.worker.mjs",
-      "github-exec-launcher.mjs",
-      "image-processor.worker.mjs",
-      "service-child-group-anchor.mjs",
-      "service-child-relay.mjs",
-      "sqlite-store.worker.mjs",
-      "workspace-rsync-receiver.mjs",
-    ]) {
-      expect(npmRunner.calls[1]?.options.input).toContain(`package/dist/worker/${artifactPath}`);
-    }
+    expect(npmRunner.calls[1]?.options.input).toContain(
+      'const expected = "package/dist/worker-artifacts/" + process.argv[2] + ".tar.gz"',
+    );
+    expect(npmRunner.calls[1]?.options.input).toContain("worker_archive=$staging/$hash.tar.gz");
     expect(npmRunner.calls[1]?.options.input).not.toContain("node_modules");
     expect(npmRunner.calls[1]?.argv.at(-1)).toContain(`openclaw@${VERSION}`);
   });
@@ -698,9 +668,9 @@ describe("bootstrapWorker", () => {
           path.join(packageRoot, "package.json"),
           `${JSON.stringify({ name: "openclaw", version: VERSION, files: ["dist/"] })}\n`,
         );
-        for (const artifact of WORKER_BUNDLE_ARTIFACT_PATHS) {
-          await fs.writeFile(path.join(packageRoot, "dist/worker", artifact), "export {};\n", {
-            mode: 0o755,
+        for (const [artifact, contents] of Object.entries(WORKER_ARTIFACT_FIXTURE)) {
+          await fs.writeFile(path.join(packageRoot, "dist/worker", artifact), contents, {
+            mode: 0o600,
           });
         }
         const artifact = await createWorkerBundleProducer({
@@ -813,6 +783,16 @@ describe("bootstrapWorker", () => {
         await expect(
           bootstrapWorker(bootstrapRequest, { resolveIdentity, runCommand }),
         ).resolves.toEqual(JSON.parse(receiptJson));
+
+        const installedWorker = await runCommandWithTimeout(
+          [
+            process.execPath,
+            path.join(remoteHome, ".openclaw-worker", artifact.bundleHash, "worker.mjs"),
+          ],
+          { timeoutMs: 10_000 },
+        );
+        expect(installedWorker.code, installedWorker.stderr).toBe(0);
+        expect(installedWorker.stdout.trim()).toBe("worker chunks loaded");
 
         const tamperedDependency = path.join(
           remoteHome,
@@ -936,7 +916,7 @@ describe("bootstrapWorker", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "installs and reuses the dedicated worker artifacts from an integrity-pinned npm archive",
+    "installs, reuses, and repairs split worker artifacts from an integrity-pinned npm archive",
     async () => {
       await withTestDir({ prefix: "openclaw-worker-bootstrap-npm-artifact-" }, async (root) => {
         const packageRoot = path.join(root, "package");
@@ -947,19 +927,24 @@ describe("bootstrapWorker", () => {
           path.join(packageRoot, "package.json"),
           `${JSON.stringify({ name: "openclaw", version: VERSION, files: ["dist/"] })}\n`,
         );
-        const artifacts = WORKER_BUNDLE_ARTIFACT_PATHS;
-        for (const artifact of artifacts) {
-          await fs.writeFile(
-            path.join(packageRoot, "dist/worker", artifact),
-            `export const artifact = ${JSON.stringify(artifact)};\n`,
-            { mode: 0o755 },
-          );
+        const artifacts = Object.entries(WORKER_ARTIFACT_FIXTURE);
+        for (const [artifact, contents] of artifacts) {
+          await fs.writeFile(path.join(packageRoot, "dist/worker", artifact), contents, {
+            mode: 0o600,
+          });
         }
         const bundle = await createWorkerBundleProducer({
           packageRoot,
           cacheDir: path.join(root, "cache"),
           openclawVersion: VERSION,
         }).prepare();
+        const packagedWorkerRoot = path.join(packageRoot, "dist/worker-artifacts");
+        await fs.mkdir(packagedWorkerRoot);
+        await fs.copyFile(
+          bundle.tarballPath,
+          path.join(packagedWorkerRoot, `${bundle.bundleHash}.tar.gz`),
+        );
+        await fs.rm(path.join(packageRoot, "dist/worker"), { recursive: true });
         const packageArchive = path.join(root, "package.tgz");
         await tar.create({ cwd: root, file: packageArchive, gzip: true }, ["package"]);
         const packageIntegrity = `sha512-${createHash("sha512")
@@ -1035,20 +1020,12 @@ describe("bootstrapWorker", () => {
           bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
         ).resolves.toEqual(JSON.parse(receiptJson));
         expect(installAttempts).toBe(1);
-        expect((await fs.readdir(installRoot)).toSorted()).toEqual([
-          "bootstrap-receipt.json",
-          "file-tool-planning.worker.mjs",
-          "github-exec-launcher.mjs",
-          "image-processor.worker.mjs",
-          "service-child-group-anchor.mjs",
-          "service-child-relay.mjs",
-          "sqlite-store.worker.mjs",
-          "worker.mjs",
-          "workspace-rsync-receiver.mjs",
-        ]);
-        for (const artifactName of artifacts) {
+        expect((await fs.readdir(installRoot)).toSorted()).toEqual(
+          ["bootstrap-receipt.json", ...Object.keys(WORKER_ARTIFACT_FIXTURE)].toSorted(),
+        );
+        for (const [artifactName, contents] of artifacts) {
           await expect(fs.readFile(path.join(installRoot, artifactName), "utf8")).resolves.toBe(
-            `export const artifact = ${JSON.stringify(artifactName)};\n`,
+            contents,
           );
           expect((await fs.stat(path.join(installRoot, artifactName))).mode & 0o777).toBe(0o700);
         }
@@ -1060,6 +1037,18 @@ describe("bootstrapWorker", () => {
           bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
         ).resolves.toEqual(JSON.parse(receiptJson));
         expect(installAttempts).toBe(1);
+
+        await fs.writeFile(path.join(installRoot, WORKER_CHUNK), "export {};\n");
+        await expect(
+          bootstrapWorker({ ssh: SSH, artifact }, { resolveIdentity, runCommand }),
+        ).resolves.toEqual(JSON.parse(receiptJson));
+        expect(installAttempts).toBe(2);
+        const installedWorker = await runCommandWithTimeout(
+          [process.execPath, path.join(installRoot, "worker.mjs")],
+          { timeoutMs: 10_000 },
+        );
+        expect(installedWorker.code, installedWorker.stderr).toBe(0);
+        expect(installedWorker.stdout.trim()).toBe("worker chunks loaded");
       });
     },
   );

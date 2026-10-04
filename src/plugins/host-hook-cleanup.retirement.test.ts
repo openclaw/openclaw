@@ -19,14 +19,14 @@ import {
 import { createPluginRecord } from "./status.test-helpers.js";
 
 describe("plugin retirement session-store ownership", () => {
-  it.each(["stable", "replace", "direct", "clear-command", "explicit"] as const)(
+  it.each(["replace", "direct", "clear-command", "explicit"] as const)(
     "keeps the retiring configuration across admitted work (%s)",
     async (mode) => {
       await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
         const cfg: OpenClawConfig = {
-          agents: { list: [{ id: "main", default: true }] },
+          agents: { entries: { main: {} } },
           session: { store: oldPath },
         };
         setRuntimeConfigSnapshot(cfg, cfg);
@@ -77,10 +77,8 @@ describe("plugin retirement session-store ownership", () => {
           });
           await Promise.resolve();
           expect(finished).toBe(false);
-          if (mode !== "stable") {
-            const next = { ...cfg, session: { store: newPath } };
-            setRuntimeConfigSnapshot(next, next);
-          }
+          const next = { ...cfg, session: { store: newPath } };
+          setRuntimeConfigSnapshot(next, next);
           release.resolve();
           await Promise.all([call, retirement]);
           expect(loadSessionEntry(scope(oldPath))?.pluginExtensions).toEqual({

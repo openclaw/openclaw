@@ -176,7 +176,7 @@ with the moved item, and the order uses the same saved preferences or Gateway
 group order as dragging. Home and sections derived from people, projects, or
 agents keep their existing fixed order.
 
-To inspect Home’s subagents, open **Home** and use `/subagents list`. Use `/subagents info <id|#>` for run metadata or `/subagents log <id|#>` for recent messages. See [Sub-agent slash command](/tools/subagents/slash-command).
+To inspect Home’s subagents, open **Home** and select **Subagents**. The side panel lists ordinary child runs and opens their view-only transcripts without replacing Home. Swarm members remain in the parallel-tasks view. You can also use `/subagents list`, `/subagents info <id|#>`, or `/subagents log <id|#>`. See [Sub-agent slash command](/tools/subagents/slash-command).
 
 Follow-up turns in an existing subagent session keep the parent’s activity ring running, even after the original task has finished. Opening the parent refreshes its hidden subagent activity without adding subagent rows to the sidebar. The ring clears when no work remains active.
 
@@ -348,7 +348,7 @@ During the initial handoff, the chat placement menu and stop confirmation use th
 
 Choose **Icon & color** from a single session's context menu to give its sidebar row a persistent emoji, monochrome icon, or custom SVG. The picker includes common emoji and six named icons: `braces`, `book`, `monitor`, `bot`, `kanban`, and `coins`. Choose **Custom icon…** to enter a single emoji, paste SVG markup, or paste an SVG data URL (percent encoded or base64). SVGs must be self-contained and at most 16 KiB decoded; scripts, embedded documents, and external references are rejected. Include `xmlns="http://www.w3.org/2000/svg"` and a `viewBox`. Custom SVGs render as images, preserving their own colors. For emoji, press Control-Command-Space on macOS or Windows-period on Windows to open the system picker. The `sessions` agent tool can set the same `icon` field. An empty value removes it. This decoration replaces the owner avatar in the leading glyph slot, but temporary attention state always takes precedence so an operator request cannot be hidden.
 
-With **Person** grouping, hover or focus a person’s header and choose **Show only {name}** to filter to that owner, including yourself. Choose **Show everyone** on the active header to clear the owner filter. Active owner, **Involving me**, and non-default status filters appear beside **Sessions** in the toolbar. Click that summary to clear all filters and return to active sessions.
+With **Person** grouping, use **Filter & sort → Owners** in the **Sessions** toolbar to filter to one owner, including yourself. Choose **All owners** to clear the owner filter. Active owner, **Involving me**, and non-default status filters appear beside **Sessions** in the toolbar. Click that summary to clear all filters and return to active sessions.
 
 ## Session colors
 
@@ -508,7 +508,7 @@ Starting a suggested task keeps its instructions visible through acceptance, wit
 
 Attributed submissions show your avatar immediately, in the same position as the chat transcript. Opening the created session focuses the composer quietly; the attention cue is reserved for navigation that prefills a draft.
 
-The project picker refreshes after sign-in and reconnects. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
+The project picker refreshes after sign-in, reconnects, and Gateway configuration changes. Remote repository choices stay in the signed-in person's Gateway-scoped preferences and are excluded from shared browser fallback/migration. A saved remote repository from a previous GitHub host is discarded; New Session uses the current configured repository or the agent workspace instead. Gateway reconnects and Git verification retries preserve your edited base branch and worktree name. Choosing another folder or project clears those repository-specific details.
 
 For local worktree sessions, sending the first message opens the admitted session before naming, checkout, and setup finish. The chat shows the submitted message and preparation stages. A generated title is saved as soon as naming completes, independently of checkout and setup. Setup failures remain visible in that session; send a retry there after correcting the problem. The retry reuses the saved title. If naming itself fails, another attempt uses the original first prompt, including text attachments. Stopping during setup cancels preparation without starting the agent. Steering an active run keeps its progress visible, and delayed history cannot replace a newer startup stage or restore startup labels after activity begins.
 
@@ -563,7 +563,29 @@ checkouts from visible sessions and managed worktrees. Concurrent discovery of
 the same checkout set shares one bounded Git pass; subsequent requests read
 fresh repository metadata, including external remote changes and moved checkouts.
 
-**Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. When it is omitted, the Gateway still uses its shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback from the shared process environment. When it is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
+**Projects from GitHub.** Search the same picker or paste a GitHub HTTPS or `git@github.com` repository URL. For a remote destination, creation records that source and the runner fetches it during dispatch; no Gateway project clone is required. For Gateway execution, the picker clones into the Gateway-managed projects area. Recent repository sources retain their URL without inventing a local path. Public repository search and cloning work anonymously. Private remote checkout uses the effective shared `tools.github` identity; the discovery credential below only grants picker access. For affiliated and private repositories, prefer the explicit `gateway.controlUi.github.token` SecretRef so this service access has a clear runtime owner. Set `gateway.controlUi.github.host` to the selected Enterprise host; an omitted credential host means `github.com`. The shipped `GH_TOKEN` then `GITHUB_TOKEN` fallback applies only to `github.com`. A trusted host that sets `gateway.projects.nativeGitHubSearch: true` instead prepares the current native system GitHub identity for each search; this is intended for a protected `gh` wrapper or host login and retains the native identity's 60-second cache and rotation fences. Ambient `GH_ENTERPRISE_TOKEN` or `GITHUB_ENTERPRISE_TOKEN` requires `GH_HOST` to match the selected Enterprise host; host-specific native login remains supported. When a Control UI SecretRef is explicit, its exact environment or store name is excluded from agent execution without clearing unrelated native GitHub CLI variables. Search rechecks the requesting connection before each outbound request and stops after revocation or cancellation. Search requires `operator.read`, cloning requires `operator.write`, and deleting a Gateway-managed cloned checkout requires `operator.admin`. Clone deletion refuses while a live session or managed worktree still references the checkout. SecretRef ownership is not an OS-user security boundary; use a sandbox, dedicated host, or dedicated OS user when same-account processes are not trusted.
+
+For a GitHub Enterprise deployment, configure `gateway.github.host` and `gateway.github.apiBaseUrl`. GitHub Enterprise Server uses `https://HOSTNAME/api/v3`; its GraphQL requests use `/api/graphql`. To preselect a repository on New Session, set `gateway.projects.defaultRepository.url` and optionally its `ref`. OpenClaw derives the repository identity from the URL and selects a worker profile through the existing `cloudWorkers.projectProfiles` mapping. The profile can use any configured provider, including Azure through the Crabbox plugin. The default is returned only to clients authorized for `sessions.create`, and applies only while the user has no saved project choice; selecting a folder or another project overrides it.
+
+```json5
+{
+  gateway: {
+    github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+    controlUi: {
+      github: {
+        host: "ghe.example.test",
+        token: { source: "store", provider: "default", id: "example-enterprise-service-token" },
+      },
+    },
+    projects: {
+      defaultRepository: { url: "https://ghe.example.test/acme/private-repo.git", ref: "main" },
+    },
+  },
+  cloudWorkers: {
+    projectProfiles: { "ghe.example.test/acme/private-repo": "example-worker" },
+  },
+}
+```
 
 Use the Effort menu to choose Fast Mode before creating a session. New Session persists that choice before the first local or remote turn starts.
 

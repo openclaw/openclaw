@@ -1,6 +1,7 @@
 // Nodes tool tests cover gateway-scoped node actions, media payload writing,
 // numeric schema guardrails, and pairing approval scopes.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import "../../test-utils/prepare-compiled-subprocesses.js";
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),

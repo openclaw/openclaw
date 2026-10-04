@@ -198,14 +198,13 @@ Ignore this.
             postCompactionMaxChars: 1800,
           },
         },
-        list: [
-          {
-            id: "writer",
+        entries: {
+          writer: {
             contextLimits: {
               postCompactionMaxChars: 300,
             },
           },
-        ],
+        },
       },
     } as OpenClawConfig;
 
@@ -264,6 +263,54 @@ Never do Y.
     expect(result).toContain("Rule 1");
     expect(result).toContain("Rule 2");
     expect(result).not.toContain("Other Section");
+  });
+
+  it("keeps H1 lines inside fenced code blocks in the selected section", async () => {
+    const content = `## Session Startup\n\n\`\`\`bash\n# install deps\npnpm install\n\`\`\`\n\nAfter fence.\n\n# Appendix\n\nAppendix body.\n`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toContain("# install deps\npnpm install");
+    expect(result).toContain("After fence.");
+    expect(result).not.toContain("Appendix body.");
+  });
+
+  it("keeps tilde-fenced comment lines in the selected section", async () => {
+    const content =
+      "## Session Startup\n\n~~~bash\n# install deps\npnpm install\n~~~\n\nAfter fence.";
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toContain("# install deps\npnpm install\n~~~\n\nAfter fence.");
+  });
+
+  it("keeps a nested backtick block inside a four-backtick fence in the selected section", async () => {
+    const content =
+      "## Session Startup\n\n````markdown\n```bash\n# setup\n```\n# Example heading\n````\n\nAfter fence.\n\n# Appendix\n\nAppendix body.\n";
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const result = await readDefaultPostCompactionContext();
+    expect(result).toContain("# setup\n```\n# Example heading\n````\n\nAfter fence.");
+    expect(result).not.toContain("Appendix body.");
+  });
+
+  it("ends a selected section at an H1 so a later section fits the budget", async () => {
+    const content = `## Session Startup\n\nRead files.\n\n# Appendix\n\n${"A".repeat(3000)}\n\n## Red Lines\n\nNever do X.\n`;
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), content);
+    const cfg = {
+      agents: { defaults: { contextLimits: { postCompactionMaxChars: 200 } } },
+    } as OpenClawConfig;
+    const result = await readDefaultPostCompactionContext({ cfg });
+    expect(result).toContain("Read files.");
+    expect(result).toContain("Never do X.");
+    expect(result).not.toContain("Appendix");
+    expect(result).not.toContain("[truncated]");
+  });
+
+  it("does not select H1 headings that match a configured section name", async () => {
+    fs.writeFileSync(path.join(tmpDir, "AGENTS.md"), `# Red Lines\n\nTop-level text.\n`);
+    const cfg = {
+      agents: { defaults: { compaction: { postCompactionSections: ["Red Lines"] } } },
+    } as OpenClawConfig;
+    const result = await readPostCompactionContext(tmpDir, { cfg });
+    expect(result).toBeNull();
   });
 
   it.runIf(process.platform !== "win32")(

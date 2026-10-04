@@ -239,15 +239,11 @@ export class SpawnBrokerHost {
     }
     if (this.closing || this.resourceClaims.hasOpenClaims || this.requests.size > 0) {
       this.process.ref();
-      // Bun's ChildProcess owns the reference; its channel is only an EventEmitter.
-      if (!process.versions.bun) {
-        this.process.channel?.ref();
-      }
+      // Newer Bun releases, like Node, reference IPC independently of the child.
+      this.process.channel?.ref?.();
     } else {
       this.process.unref();
-      if (!process.versions.bun) {
-        this.process.channel?.unref();
-      }
+      this.process.channel?.unref?.();
     }
   }
 

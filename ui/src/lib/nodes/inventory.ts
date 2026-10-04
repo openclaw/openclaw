@@ -221,22 +221,9 @@ function entryRecency(entry: DeviceInventoryEntry): number {
 }
 
 function compareEntries(left: DeviceInventoryEntry, right: DeviceInventoryEntry): number {
-  if (left.connected !== right.connected) {
-    return left.connected ? -1 : 1;
-  }
-  const recency = entryRecency(right) - entryRecency(left);
-  if (recency !== 0) {
-    return recency;
-  }
-  return left.id.localeCompare(right.id);
-}
-
-function compareGroups(left: DeviceInventoryGroup, right: DeviceInventoryGroup): number {
-  const order = compareEntries(left.primary, right.primary);
-  if (order !== 0) {
-    return order;
-  }
-  return left.name.localeCompare(right.name);
+  const order =
+    Number(right.connected) - Number(left.connected) || entryRecency(right) - entryRecency(left);
+  return order !== 0 ? order : left.id.localeCompare(right.id);
 }
 
 /** Joins paired devices with node catalog rows and groups duplicate pairings. */
@@ -302,7 +289,10 @@ export function buildDeviceInventory(params: {
       duplicates: sorted.slice(1),
     });
   }
-  return groups.toSorted(compareGroups);
+  return groups.toSorted((left, right) => {
+    const order = compareEntries(left.primary, right.primary);
+    return order !== 0 ? order : left.name.localeCompare(right.name);
+  });
 }
 
 /**

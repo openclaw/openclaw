@@ -455,6 +455,36 @@ describe("agent selection", () => {
     expect(selection.state).toEqual({ selectedId: "ops", scopeId: "ops" });
   });
 
+  it.each(["filter", "sidebar mode"])(
+    "publishes %s intent before notifying scope observers",
+    (action) => {
+      const gateway = createGateway(null);
+      const roster = createRoster();
+      const preferences = createPreferences();
+      const selection = createAgentSelectionCapability(
+        gateway.gateway,
+        roster.roster,
+        undefined,
+        preferences,
+      );
+      const observed = vi.fn(() => selection.intentRevision);
+      selection.subscribe(observed);
+      const revision = selection.intentRevision;
+      gateway.publish({ client: null, assistantAgentId: "main" });
+      expect(observed.mock.results.at(-1)?.value).toBe(revision);
+
+      if (action === "filter") {
+        selection.setScope("research");
+      } else {
+        preferences.setMode("roster");
+      }
+      expect(observed.mock.results.at(-1)?.value).toBe(revision + 1);
+      roster.publish(agentRoster("main", ["main", "research"]));
+      expect(selection.intentRevision).toBe(revision + 1);
+      selection.dispose();
+    },
+  );
+
   it("adopts the hello default published by the same gateway client", () => {
     const gateway = createGateway(null);
     const selection = createAgentSelectionCapability(gateway.gateway, createRoster().roster);

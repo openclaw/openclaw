@@ -14,7 +14,8 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
-import { ensureProfileForEmail, mergeProfiles } from "../../state/user-profiles.js";
+import { mergeProfiles } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -31,7 +32,7 @@ it("counts caller-visible open ownership and direct running work across agents b
     const bob = ensureProfileForEmail("counts-bob@example.test").id;
     const actor = (id: string) => ({ type: "human", source: "profile", id }) as const;
     const context = requestContext({
-      agents: { entries: { main: { default: true }, work: {} } },
+      agents: { entries: { main: {}, work: {} } },
     });
     const client = identifiedClient(ada);
     const seed = (name: string, agentId = "main", fields: Partial<SessionEntry> = {}) => {
@@ -166,8 +167,8 @@ it("counts caller-visible open ownership and direct running work across agents b
 
       // A sharing/ownership change during readiness must affect the whole facet.
       const projection = getSessionRowProjection(context)!;
-      const ensure = projection.ensureMaterialized;
-      vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+      const ensure = projection.prepareSelection;
+      vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async () => {
         assignSessionOwner(
           { agentId: "main", sessionKey: running },
           {
@@ -209,7 +210,7 @@ it("keeps the owner summary complete beyond the people facet cap and resolves me
         },
       );
     }
-    const context = requestContext({ agents: { entries: { main: { default: true } } } });
+    const context = requestContext({ agents: { entries: { main: {} } } });
     const client = identifiedClient(profiles[1]!);
     const request = { includeOwnerSessionCounts: true, includePeople: true, limit: 1 };
     const counts = profiles.map((profileId) => ({ profileId, open: 1, running: 0 }));

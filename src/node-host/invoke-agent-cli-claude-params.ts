@@ -138,6 +138,14 @@ function requireBoundedString(value: unknown, label: string, maxBytes: number): 
   return value;
 }
 
+function optionalBoundedString(
+  value: unknown,
+  label: string,
+  maxBytes: number,
+): string | undefined {
+  return value === undefined ? undefined : requireBoundedString(value, label, maxBytes);
+}
+
 /** Claude CLI session ids are bounded, non-option argv values. */
 export function validateClaudeSessionId(value: unknown): string {
   const sessionId = requireBoundedString(value, "threadId", MAX_ARG_BYTES).trim();
@@ -231,23 +239,11 @@ export async function decodeClaudeCliNodeRunParams(
   if (value.skillRuntime !== undefined && value.skillRuntime !== true) {
     throw new Error("INVALID_REQUEST: skillRuntime must be true when supplied");
   }
-  const stdin =
-    value.stdin === undefined
-      ? undefined
-      : requireBoundedString(value.stdin, "stdin", MAX_REQUEST_BYTES);
-  const systemPrompt =
-    value.systemPrompt === undefined
-      ? undefined
-      : requireBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
-  const agentId =
-    value.agentId === undefined
-      ? undefined
-      : requireBoundedString(value.agentId, "agentId", MAX_ARG_BYTES);
-  const sessionKey =
-    value.sessionKey === undefined
-      ? undefined
-      : requireBoundedString(value.sessionKey, "sessionKey", MAX_ARG_BYTES);
-  const approvalDecision =
+  const stdin = optionalBoundedString(value.stdin, "stdin", MAX_REQUEST_BYTES);
+  const systemPrompt = optionalBoundedString(value.systemPrompt, "systemPrompt", MAX_REQUEST_BYTES);
+  const agentId = optionalBoundedString(value.agentId, "agentId", MAX_ARG_BYTES);
+  const sessionKey = optionalBoundedString(value.sessionKey, "sessionKey", MAX_ARG_BYTES);
+  const approvalDecision: "allow-once" | "allow-always" | undefined =
     value.approvalDecision === "allow-once" || value.approvalDecision === "allow-always"
       ? value.approvalDecision
       : undefined;
@@ -259,8 +255,7 @@ export async function decodeClaudeCliNodeRunParams(
   if (value.systemRunPlan !== undefined && !systemRunPlan) {
     throw new Error("INVALID_REQUEST: systemRunPlan must be an object");
   }
-  const cwd =
-    value.cwd === undefined ? undefined : requireBoundedString(value.cwd, "cwd", MAX_ARG_BYTES);
+  const cwd = optionalBoundedString(value.cwd, "cwd", MAX_ARG_BYTES);
   if (cwd) {
     const stat = await fs.stat(cwd).catch(() => undefined);
     if (!stat?.isDirectory()) {

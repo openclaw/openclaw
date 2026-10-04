@@ -9,10 +9,7 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
-import {
-  PluginHostCleanupTimeoutError,
-  withPluginHostCleanupTimeout,
-} from "../plugins/host-hook-cleanup-timeout.js";
+import { withPluginHostCleanupTimeout } from "../plugins/host-hook-cleanup-timeout.js";
 import {
   createPluginRuntimeApplication,
   getPluginRuntimeGeneration,
@@ -147,8 +144,10 @@ export async function reloadGatewayPlugins(
     reserveResourceHandoff,
     selectResourceHandoff,
     drainInstances,
+    drainMemory,
     drainRetainedWork,
     drainBeforeReplacement,
+    quiesceInstances,
     resumeInstances,
     drainForRecovery,
     disposeInstances,
@@ -250,16 +249,23 @@ export async function reloadGatewayPlugins(
     assertCurrent();
     // Reserve and gate new model runs atomically; admitted runs keep their callbacks until settled.
     releaseResourceHandoff = reserveResourceHandoff(resourceHandoffIds);
-    rollbackConfigEffects = params.prepareConfigEffects({
+    const configEffects = params.prepareConfigEffects({
       pluginIds: changedPluginIds,
       channels: channelTargets,
     });
+    rollbackConfigEffects = configEffects.rollback;
     phase = "drain";
     replacement.setReloadStatus({ phase: "reloading", pluginIds: [...changedPluginIds] });
     await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus);
     assertCurrent();
-    channels.pause();
     decisionReplacement = prepareDecisionProviderReload(previousRegistry, changedPluginIds);
+    channels.pause();
+    quiesceInstances();
+    await drainRetainedWork(resourceHandoffIds, drainSignal, replacement.setReloadStatus, {
+      includeCalls: true,
+    });
+    assertCurrent();
+    configEffects.retire();
     for (const sidecar of runtimeState.gatewayLifetimeSidecars.snapshot()) {
       const prepared = sidecar.preparePluginReload?.({
         previousRegistry,
@@ -273,24 +279,11 @@ export async function reloadGatewayPlugins(
       }
     }
     memoryReplacement = prepareMemoryRuntimeReload(previousRegistry, nextRegistry);
-    // Consumers release their handles while the producing instance is callable.
+    // Retained consumers and cleanup calls remain usable after ordinary admission closes.
     for (const sidecar of sidecarReplacements) {
       await sidecar.drain();
     }
-    try {
-      const result = await memoryReplacement.drain();
-      for (const error of result.errors) {
-        const warning = `Memory cleanup failed: ${formatErrorMessage(error)}`;
-        log.warn(warning);
-        recordWarning(warning);
-      }
-    } catch (error) {
-      if (!(error instanceof PluginHostCleanupTimeoutError)) {
-        throw error;
-      }
-      log.warn(error.message);
-      recordWarning(error.message);
-    }
+    await drainMemory(memoryReplacement.drain);
     await runtimeState.discovery?.update({
       gatewayDiscoveryServices: previousRegistry.gatewayDiscoveryServices.filter(
         (entry) => !changedPluginIds.has(entry.pluginId),
@@ -362,6 +355,7 @@ export async function reloadGatewayPlugins(
     assertCurrent();
     const startedServices = await withPluginRegistryPreparationScope(nextRegistry, () =>
       startPluginServices({
+        scheduler: runtime.scheduler,
         registry: nextRegistry,
         config: params.nextConfig,
         workspaceDir: pluginWorkspaceDir,
@@ -578,6 +572,7 @@ export async function reloadGatewayPlugins(
             await withPluginRegistryPreparationScope(restoredRegistry, async () => {
               await attempt(recoveryErrors, async () => {
                 await startPluginServices({
+                  scheduler: runtime.scheduler,
                   registry: restoredRegistry,
                   config: previousConfig,
                   workspaceDir: pluginWorkspaceDir,

@@ -6,6 +6,7 @@ import type {
   SessionsListParams,
 } from "@openclaw/gateway-protocol";
 import type { ControlUiComponents } from "./control-ui-components.js";
+export { createSessionHeaderLink } from "./control-ui-session-link.js";
 export type {
   ControlUiAgentPickerProps,
   ControlUiComponentHandle,
@@ -136,6 +137,8 @@ export type ControlUiPage = {
 
 export type ControlUiNavigationItem = {
   id: string;
+  /** Navigation item ID in this plugin whose active section displays this child. */
+  parent?: string;
   label: string;
   page: ControlUiPageTarget;
   icon?: string;
@@ -171,7 +174,7 @@ export type ControlUiAction = {
 export type ControlUiAccessory = {
   id: string;
   placement: "session-header";
-  mount: ControlUiView<BoardGetParams>;
+  mount: ControlUiView<BoardGetParams & { session?: ControlUiSession }>;
 };
 
 export type ControlUiWidget = {
@@ -263,7 +266,11 @@ export type ControlUiHost = {
     invalidate: () => void;
     registerPage: (page: ControlUiPage) => ControlUiDisposer;
     registerNavigation: (item: ControlUiNavigationItem) => ControlUiDisposer;
+    /** Pin an already registered navigation item once; unknown or pinned IDs are a no-op. */
+    pinNavigation: (id: string) => void;
     registerPanel: (panel: ControlUiPanel) => ControlUiDisposer;
+    /** Open an owned registered panel beside the supplied or currently selected session. */
+    openPanel: (id: string, session?: BoardGetParams) => void;
     registerAction: (action: ControlUiAction) => ControlUiDisposer;
     registerAccessory: (accessory: ControlUiAccessory) => ControlUiDisposer;
     registerWidget: (widget: ControlUiWidget) => ControlUiDisposer;

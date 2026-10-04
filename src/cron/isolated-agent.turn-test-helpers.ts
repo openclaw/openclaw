@@ -17,12 +17,12 @@ export { withTempHome };
 
 export function makeDeps(): CliDeps {
   return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
+    slack: vi.fn(),
+    whatsapp: vi.fn(),
+    telegram: vi.fn(),
+    discord: vi.fn(),
+    signal: vi.fn(),
+    imessage: vi.fn(),
   };
 }
 
@@ -74,8 +74,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
       "agent:main:main": {
         sessionId: "main-session",
         updatedAt: Date.now(),
-        lastProvider: "webchat",
-        lastTo: "",
+        delivery: { kind: "internal" },
       },
       ...options.storeEntries,
     }));

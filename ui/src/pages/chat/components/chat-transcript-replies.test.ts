@@ -5,7 +5,7 @@ import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
-import * as chatMessage from "./chat-message.ts";
+import * as chatMessage from "./chat-message-group.ts";
 import {
   getTranscriptState,
   renderTranscriptSearch,
@@ -58,9 +58,13 @@ describe("chat transcript replies", () => {
     ] as const;
   }
 
-  it.each([false, true])(
-    "resolves persisted replies and owns their flash lifetime (reduced motion: %s)",
-    async (reducedMotion) => {
+  it.each([
+    { name: "ordinary motion", reducedMotion: false, textless: false },
+    { name: "reduced motion", reducedMotion: true, textless: false },
+    { name: "textless original", reducedMotion: false, textless: true },
+  ])(
+    "reveals loaded replies and owns their flash lifetime: $name",
+    async ({ reducedMotion, textless }) => {
       vi.stubGlobal("matchMedia", (query: string) => ({
         matches: query.includes("prefers-reduced-motion") && reducedMotion,
         addEventListener: vi.fn(),
@@ -68,7 +72,20 @@ describe("chat transcript replies", () => {
       }));
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
-      const props = threadProps("pane-reply-preview", "agent:main:main", [...replyMessages()]);
+      const [source, reply] = replyMessages();
+      const open = vi.fn();
+      const props = threadProps("pane-reply-preview", "agent:main:main", [
+        textless
+          ? {
+              ...source,
+              role: "user",
+              content: [],
+              __openclaw: { ...source["__openclaw"], replyToId: "elsewhere" },
+            }
+          : source,
+        reply,
+      ]);
+      props.replyMessageAccess = { revision: 0, navigationId: null, read: () => undefined, open };
       render(renderChatThread(props, transcript), container);
       transcript.hostConnected();
       transcript.hostUpdated();
@@ -77,7 +94,9 @@ describe("chat transcript replies", () => {
       const preview = container.querySelector<HTMLButtonElement>(
         ".chat-reply-attribution--inline button",
       );
-      expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
+      if (!textless) {
+        expect(preview?.getAttribute("aria-label")).toBe("Replying to Molty");
+      }
       expect(preview?.textContent).not.toContain("source-message");
 
       const sourceBubble = [...container.querySelectorAll<HTMLElement>(".chat-bubble")].find(
@@ -88,8 +107,13 @@ describe("chat transcript replies", () => {
       try {
         preview?.click();
         await Promise.resolve();
+        expect(open).not.toHaveBeenCalled();
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
-        sourceBubble.firstElementChild!.dispatchEvent(new Event("animationend", { bubbles: true }));
+        if (!textless) {
+          sourceBubble.firstElementChild!.dispatchEvent(
+            new Event("animationend", { bubbles: true }),
+          );
+        }
         expect(sourceBubble.classList.contains("chat-bubble--reply-target")).toBe(true);
         vi.advanceTimersByTime(duration / 2);
         preview?.click();
@@ -109,50 +133,6 @@ describe("chat transcript replies", () => {
     },
   );
 
-  it("reveals a loaded original without text instead of paging history", async () => {
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const open = vi.fn();
-    const props = threadProps("pane-reply-textless", "agent:main:main", [
-      // Rendered for its own reply line, with no text of its own.
-      {
-        role: "user",
-        content: [],
-        __openclaw: { id: "textless", replyToId: "elsewhere" },
-        timestamp: 1_000,
-      },
-      {
-        role: "user",
-        content: "Follow up",
-        __openclaw: { id: "reply-message", replyToId: "textless" },
-        timestamp: 2_000,
-      },
-    ]);
-    props.replyMessageAccess = {
-      revision: 0,
-      navigationId: null,
-      read: () => undefined,
-      request: vi.fn(),
-      open,
-    };
-    try {
-      render(renderChatThread(props, transcript), container);
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      await flushDeferredRowPrune();
-      requireElement(container, ".chat-reply-attribution--inline button").click();
-      await Promise.resolve();
-      expect(open).not.toHaveBeenCalled();
-      expect(
-        requireElement(container, "[data-entry-id='textless']").classList.contains(
-          "chat-bubble--reply-target",
-        ),
-      ).toBe(true);
-    } finally {
-      transcript.hostDisconnected();
-    }
-  });
-
   it.each([
     ["assistant", null, false, "Molty"],
     ["CLI", ["cli", "cli", "Release helper"], false, "via CLI (Release helper)"],
@@ -165,7 +145,6 @@ describe("chat transcript replies", () => {
       const transcript = createTestTranscript();
       const container = document.body.appendChild(document.createElement("div"));
       let resolvedMessage: unknown = undefined;
-      const request = vi.fn();
       const open = vi.fn();
       const props = {
         ...threadProps("pane-reply-hydration", "agent:main:main", [followUp]),
@@ -175,7 +154,6 @@ describe("chat transcript replies", () => {
           revision: 0,
           navigationId: null,
           read: () => resolvedMessage,
-          request,
           open,
         },
       };
@@ -188,7 +166,6 @@ describe("chat transcript replies", () => {
         transcript.hostConnected();
         await flushDeferredRowPrune();
 
-        expect(request).toHaveBeenCalledWith("source-message");
         expect(container.querySelector("[data-entry-id='source-message']")).toBeNull();
 
         resolvedMessage = { ...sourceMessage, content: "The original message" };
@@ -224,7 +201,6 @@ describe("chat transcript replies", () => {
         revision: 0,
         navigationId: null,
         read: () => sourceMessage,
-        request: vi.fn(),
         open,
       };
       const rerender = () => {
@@ -304,7 +280,53 @@ describe("chat transcript replies", () => {
     return strips;
   }
 
+  const currentReplyCases = [
+    { linkage: "the prompt that owns its run", strips: ["Alice"] },
+    { linkage: "its own prompt in a 1:1 thread", latest: null, strips: [] },
+    { linkage: "an older prompt in a 1:1 thread", latest: alice, strips: ["Alice"] },
+    { linkage: "a legacy reply without a run", replyRun: null, strips: [] },
+    { linkage: "a prompt without a run key", promptRun: null, strips: [] },
+    { linkage: "another run's prompt", promptRun: "run-b", strips: [] },
+    { linkage: "duplicate run owners", duplicate: true, strips: [] },
+    {
+      linkage: "a channel-mirrored reply keyed only by its send",
+      reply: { mirrorOrigin: "discord", idempotencyKey: "run-a" },
+      strips: [],
+    },
+  ].map(
+    ({
+      linkage,
+      promptRun = "run-a",
+      replyRun = "run-a",
+      latest = bob,
+      duplicate,
+      reply,
+      strips,
+    }) => ({
+      case: linkage,
+      query: undefined,
+      session: undefined,
+      strips,
+      messages: [
+        ...(duplicate
+          ? [turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" })]
+          : []),
+        turn("p2", "user", "hey hey", {
+          ...alice,
+          ...(promptRun ? { idempotencyKey: `${promptRun}:user` } : {}),
+        }),
+        // The latest prompt never stands in for an unresolved origin.
+        ...(latest ? [turn("p3", "user", "Unrelated", latest)] : []),
+        {
+          ...turn("a4", "assistant", "Tô aqui", reply ?? (replyRun ? { runId: replyRun } : {})),
+          openclawDelivery: { replyToCurrent: true },
+        },
+      ],
+    }),
+  );
+
   it.each([
+    ...currentReplyCases,
     {
       case: "search hides the other speaker",
       messages: [
@@ -395,41 +417,6 @@ describe("chat transcript replies", () => {
   );
 
   it.each([
-    { linkage: "the prompt that owns its run", strips: ["Alice"] },
-    { linkage: "its own prompt in a 1:1 thread", latest: null, strips: [] },
-    { linkage: "an older prompt in a 1:1 thread", latest: alice, strips: ["Alice"] },
-    { linkage: "a legacy reply without a run", replyRun: null, strips: [] },
-    { linkage: "a prompt without a run key", promptRun: null, strips: [] },
-    { linkage: "another run's prompt", promptRun: "run-b", strips: [] },
-    { linkage: "duplicate run owners", duplicate: true, strips: [] },
-    {
-      linkage: "a channel-mirrored reply keyed only by its send",
-      reply: { mirrorOrigin: "discord", idempotencyKey: "run-a" },
-      strips: [],
-    },
-  ])(
-    "attributes reply_to_current only through $linkage",
-    async ({ promptRun = "run-a", replyRun = "run-a", latest = bob, duplicate, reply, strips }) => {
-      const props = threadProps("pane-reply-current", "agent:main:main", [
-        ...(duplicate
-          ? [turn("p1", "user", "Earlier", { ...alice, idempotencyKey: "run-a:user" })]
-          : []),
-        turn("p2", "user", "hey hey", {
-          ...alice,
-          ...(promptRun ? { idempotencyKey: `${promptRun}:user` } : {}),
-        }),
-        // The latest prompt never stands in for an unresolved origin.
-        ...(latest ? [turn("p3", "user", "Unrelated", latest)] : []),
-        {
-          ...turn("a4", "assistant", "Tô aqui", reply ?? (replyRun ? { runId: replyRun } : {})),
-          openclawDelivery: { replyToCurrent: true },
-        },
-      ]);
-      expect(await renderedStrips(props)).toEqual(strips);
-    },
-  );
-
-  it.each([
     { target: "loaded explicit", loaded: true, readOnly: false },
     { target: "unloaded explicit", loaded: false, readOnly: false },
     { target: "loaded automatic in a read-only archive", loaded: true, readOnly: true },
@@ -475,7 +462,6 @@ describe("chat transcript replies", () => {
         revision: 0,
         navigationId: null,
         read: () => undefined,
-        request: vi.fn(),
         open,
       };
     }

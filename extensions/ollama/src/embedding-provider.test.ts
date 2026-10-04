@@ -1,8 +1,10 @@
-import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Ollama tests cover embedding provider plugin behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
+import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
+import { ollamaMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
@@ -26,14 +28,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
   fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
 }));
-
-let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
-let ollamaMemoryEmbeddingProviderAdapter: typeof import("./memory-embedding-adapter.js").ollamaMemoryEmbeddingProviderAdapter;
-
-beforeAll(async () => {
-  ({ createOllamaEmbeddingProvider } = await import("./embedding-provider.js"));
-  ({ ollamaMemoryEmbeddingProviderAdapter } = await import("./memory-embedding-adapter.js"));
-});
 
 beforeEach(() => {
   fetchConfiguredLocalOriginWithSsrFGuardMock.mockClear();

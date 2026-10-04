@@ -554,10 +554,7 @@ export async function prepareReplyAgentPayloads(state: {
   // turn) already covers the commitment — avoids false positives (#32228).
   const coveredByExistingCron =
     hasReminderCommitment && successfulCronAdds === 0
-      ? await hasSessionRelatedCronJobs({
-          cronStorePath: undefined,
-          sessionKey,
-        })
+      ? await hasSessionRelatedCronJobs(sessionKey)
       : false;
   const guardedReplyPayloads =
     hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
@@ -686,7 +683,7 @@ export async function prepareReplyAgentPayloads(state: {
   // Refresh inherited verbosity even when it started off: session preferences
   // and plugin diagnostics may change while the model runs.
   if (followupRun.run.verboseLevelOverride !== "off" || followupRun.run.traceAuthorized === true) {
-    activeSessionEntry = refreshSessionEntryFromStore({
+    activeSessionEntry = await refreshSessionEntryFromStore({
       storePath,
       sessionKey,
       fallbackEntry: activeSessionEntry,

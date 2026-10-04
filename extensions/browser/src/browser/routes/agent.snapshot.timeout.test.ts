@@ -77,7 +77,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
 
 vi.mock("./agent.shared.js", () => ({
   browserNavigationPolicyForProfile: vi.fn(() => ({})),
-  handleRouteError: vi.fn((_ctx, _res, err) => {
+  handleRouteError: vi.fn((_res, err) => {
     throw err;
   }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),

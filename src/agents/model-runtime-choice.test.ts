@@ -105,37 +105,60 @@ describe("prepared model support admission", () => {
     },
   };
 
-  it("preserves an inherited model id that contains its provider prefix", async () => {
-    publish(() => true, custom);
-    const ref = { provider: "fixture", model: "fixture/custom-model" };
-    expect(
-      await prepareModelChoice({
-        ...selection,
-        cfg: custom,
+  const manualPolicy: OpenClawConfig = {
+    ...custom,
+    agents: { defaults: { modelPolicy: { allow: ["fixture/manual-only"] } } },
+  };
+  const inheritedRef = { provider: "fixture", model: "fixture/custom-model" };
+  it.each([
+    {
+      name: "preserves an inherited provider-prefixed model id",
+      current: true,
+      config: custom,
+      request: {
         raw: "fixture/fixture/custom-model",
-        source: "automatic",
-        resolvedRef: ref,
-      }),
-    ).toMatchObject({
-      kind: "resolved",
-      ref,
-      model: { id: ref.model, baseUrl: "https://custom.invalid/v1" },
-    });
-  });
-
-  it("keeps automatic defaults independent of manual override policy", async () => {
-    const config: OpenClawConfig = {
-      ...custom,
-      agents: { defaults: { modelPolicy: { allow: ["fixture/manual-only"] } } },
-    };
-    publish(() => true, config);
-    expect(await prepareModelChoice({ ...selection, cfg: config })).toMatchObject({
-      kind: "unavailable",
-      error: "model not allowed: fixture/new-model",
-    });
-    expect(
-      await prepareModelChoice({ ...selection, cfg: config, source: "automatic" }),
-    ).toMatchObject({ kind: "resolved" });
+        source: "automatic" as const,
+        resolvedRef: inheritedRef,
+      },
+      expected: {
+        kind: "resolved",
+        ref: inheritedRef,
+        model: { id: inheritedRef.model, baseUrl: "https://custom.invalid/v1" },
+      },
+    },
+    {
+      name: "applies manual override policy",
+      current: true,
+      config: manualPolicy,
+      request: { source: "override" as const },
+      expected: { kind: "unavailable", error: "model not allowed: fixture/new-model" },
+    },
+    {
+      name: "keeps automatic defaults independent of manual override policy",
+      current: true,
+      config: manualPolicy,
+      request: { source: "automatic" as const },
+      expected: { kind: "resolved" },
+    },
+    {
+      name: "does not replace a missing pinned account with the shared account",
+      current: true,
+      config: custom,
+      request: { raw: "fixture/new-model@missing" },
+      expected: { kind: "unavailable", error: expect.stringContaining("selected account") },
+    },
+    {
+      name: "does not publish a choice from a replaced generation",
+      current: false,
+      config: custom,
+      request: {},
+      expected: { kind: "unavailable", error: expect.stringContaining("changed during selection") },
+    },
+  ])("$name", async ({ current, config, request, expected }) => {
+    publish(() => current, config);
+    expect(await prepareModelChoice({ ...selection, cfg: config, ...request })).toMatchObject(
+      expected,
+    );
   });
 
   it("rejects an unsupported explicit selection even with a viable fallback", async () => {
@@ -167,13 +190,6 @@ describe("prepared model support admission", () => {
         fallbacks: ["fixture/custom-unlisted"],
       }),
     ).toMatchObject({ kind: "unavailable", error: expect.stringContaining("Unknown model") });
-  });
-
-  it("does not replace a missing pinned account with the available shared account", async () => {
-    publish(() => true, custom);
-    expect(
-      await prepareModelChoice({ ...selection, cfg: custom, raw: "fixture/new-model@missing" }),
-    ).toMatchObject({ kind: "unavailable", error: expect.stringContaining("selected account") });
   });
 
   it.each([
@@ -339,18 +355,15 @@ describe("prepared model support admission", () => {
         {
           provider: "fixture",
           modelId: "model",
-          model: {
+          model: makeProviderModelFixture({
             provider: "fixture",
             id: "model",
             name: "Native A model",
             api: "openai-responses",
             baseUrl: "https://a.native.invalid/v1",
-            reasoning: false,
-            input: ["text"],
             contextWindow: 4096,
             maxTokens: 1024,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
+          }),
         },
       ],
     });
@@ -810,18 +823,15 @@ describe("prepared model support admission", () => {
         {
           provider: "fixture",
           modelId: "native",
-          model: {
+          model: makeProviderModelFixture({
             provider: "fixture",
             id: "native",
             name: "Native model",
             api: "openai-responses",
             baseUrl: "https://native.invalid/v1",
-            reasoning: false,
-            input: ["text"],
             contextWindow: 4096,
             maxTokens: 1024,
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          },
+          }),
         },
       ],
     });
@@ -833,23 +843,51 @@ describe("prepared model support admission", () => {
     agents: { defaults: { model: "fixture/native", models: { "fixture/native": {} } } },
   };
 
-  it.each(["override", "automatic"] as const)(
-    "admits a native-owned model without requiring a host API credential (%s)",
-    async (source) => {
-      const { state, reload } = publishNativeRenewal(implicitNative);
+  it.each([
+    { ownership: "catalog", source: "override" },
+    { ownership: "catalog", source: "automatic" },
+    { ownership: "configured", source: "override" },
+    { ownership: "configured", source: "automatic" },
+  ] as const)(
+    "renews $ownership native ownership once per $source choice without host credentials",
+    async ({ ownership, source }) => {
+      const configured = ownership === "configured";
+      const config: OpenClawConfig = configured
+        ? {
+            agents: {
+              defaults: {
+                model: "fixture/native",
+                models: { "fixture/native": { agentRuntime: { id: "native-test" } } },
+              },
+            },
+          }
+        : implicitNative;
+      // Configured ownership must renew without a row-owned runtime.
+      const { nativeRuntime: _, ...configuredRow } = nativeRow;
+      const { state, reload } = publishNativeRenewal(config, {
+        row: configured ? configuredRow : nativeRow,
+      });
       const choose = (raw = "fixture/native") =>
-        prepareModelChoice({ ...selection, source, cfg: implicitNative, raw });
+        prepareModelChoice({ ...selection, source, cfg: config, raw });
       expect(await choose()).toMatchObject(nativeResolved);
+      expect(reload).not.toHaveBeenCalled();
       state.registered = false;
       expect(await choose()).toMatchObject(nativeResolved);
       expect(reload).toHaveBeenCalledExactlyOnceWith(nativeRenewal);
       state.registered = false;
       state.renewalRegisters = false;
-      expect(await choose()).toMatchObject({
-        kind: "unavailable",
-        error: expect.stringContaining("Restore that account"),
-      });
+      expect(await choose()).toMatchObject(
+        configured
+          ? { kind: "unavailable" }
+          : { kind: "unavailable", error: expect.stringContaining("Restore that account") },
+      );
       expect(reload).toHaveBeenCalledTimes(2);
+      if (configured) {
+        reload.mockRejectedValueOnce(new Error("renewal failed"));
+        expect(await choose()).toMatchObject({ kind: "unavailable" });
+        expect(reload).toHaveBeenCalledTimes(3);
+        return;
+      }
       // The load restored the client, but its catalog moved the model to a runtime without
       // readiness. The renewed catalog decides, not the stale owner row.
       state.registered = false;
@@ -874,67 +912,27 @@ describe("prepared model support admission", () => {
     },
   );
 
-  it.each(["override", "automatic"] as const)(
-    "renews a configured native runtime once per choice (%s)",
-    async (source) => {
-      const config: OpenClawConfig = {
-        agents: {
-          defaults: {
-            model: "fixture/native",
-            models: { "fixture/native": { agentRuntime: { id: "native-test" } } },
-          },
-        },
-      };
-      // Without a row-owned runtime, the renewal target can only come from agentRuntime.
-      const { nativeRuntime: _, ...row } = nativeRow;
-      const { state, reload } = publishNativeRenewal(config, { row });
-      const choose = () =>
-        prepareModelChoice({ ...selection, source, cfg: config, raw: "fixture/native" });
-      expect(await choose()).toMatchObject(nativeResolved);
-      expect(reload).not.toHaveBeenCalled();
-      state.registered = false;
-      expect(await choose()).toMatchObject(nativeResolved);
-      expect(reload).toHaveBeenCalledExactlyOnceWith(nativeRenewal);
-      state.registered = false;
-      state.renewalRegisters = false;
-      expect(await choose()).toMatchObject({ kind: "unavailable" });
-      expect(reload).toHaveBeenCalledTimes(2);
-      reload.mockRejectedValueOnce(new Error("renewal failed"));
-      expect(await choose()).toMatchObject({ kind: "unavailable" });
-      expect(reload).toHaveBeenCalledTimes(3);
-    },
-  );
-
-  it.each(["override", "automatic"] as const)(
-    "rejects a native model removed from the renewed catalog (%s)",
-    async (source) => {
-      const { state, reload } = publishNativeRenewal(implicitNative);
-      state.registered = false;
-      state.renewed = { entries: [], routeVariants: [] };
-      expect(
-        await prepareModelChoice({
-          ...selection,
-          source,
-          cfg: implicitNative,
-          raw: "fixture/native",
-        }),
-      ).toMatchObject({ kind: "unavailable" });
-      expect(reload).toHaveBeenCalledExactlyOnceWith(nativeRenewal);
-    },
-  );
-
-  it.each(["override", "automatic"] as const)(
-    "fails closed when the owner is replaced during native renewal (%s)",
-    async (source) => {
+  it.each([
+    { revoked: "model", source: "override" },
+    { revoked: "model", source: "automatic" },
+    { revoked: "owner", source: "override" },
+    { revoked: "owner", source: "automatic" },
+  ] as const)(
+    "rejects $source admission when native renewal revokes the $revoked",
+    async ({ revoked, source }) => {
       let current = true;
       const { state, reload } = publishNativeRenewal(implicitNative, { isCurrent: () => current });
       state.registered = false;
-      reload.mockImplementationOnce(async () => {
-        // The load succeeds and registers a client, but a newer generation replaced this owner.
-        current = false;
-        state.registered = true;
-        return state.renewed;
-      });
+      if (revoked === "model") {
+        state.renewed = { entries: [], routeVariants: [] };
+      } else {
+        reload.mockImplementationOnce(async () => {
+          // A new generation replaces this owner while renewal registers the client.
+          current = false;
+          state.registered = true;
+          return state.renewed;
+        });
+      }
       expect(
         await prepareModelChoice({
           ...selection,
@@ -946,12 +944,4 @@ describe("prepared model support admission", () => {
       expect(reload).toHaveBeenCalledExactlyOnceWith(nativeRenewal);
     },
   );
-
-  it("does not publish a choice from a replaced generation", async () => {
-    publish(() => false, custom);
-    expect(await prepareModelChoice({ ...selection, cfg: custom })).toMatchObject({
-      kind: "unavailable",
-      error: expect.stringContaining("changed during selection"),
-    });
-  });
 });

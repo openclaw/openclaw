@@ -377,7 +377,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       storePath,
       suppressVisibleSessionEffects: params.suppressVisibleSessionEffects,
       sessionReboundDuringRun,
-      payloads: selectSourceDeliverablePayloads(payloads, params.opts.sourceReplyDeliveryMode),
+      payloads: selectSourceDeliverablePayloads(payloads, params.opts),
       deliveryContext: params.currentRunDeliveryContext,
       runOwnedSessionId,
     });
@@ -434,6 +434,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               model: agentMeta?.model ?? fallbackModel,
               thinkLevel: effectiveTurnThinkLevel,
               auth: params.attempt.maintenanceAuthProfile,
+              senderIsOwner: params.opts.senderIsOwner,
             }),
             sessionId: runOwnedSessionId,
             lifecycleRevision: sessionEntry.lifecycleRevision,

@@ -1,15 +1,18 @@
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerEnvironmentPlacementFacts } from "./placement-read-projection.types.js";
-import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type {
   WorkerSessionPlacementRetirement,
   WorkerSessionPlacementStore,
 } from "./placement-store.js";
+import {
+  isFailedWorkerPlacementEnvironmentGone,
+  matchesWorkerPlacementTarget,
+  type WorkerPlacementCancellationTarget,
+} from "./placement-target.js";
 import type {
   WorkerEnvironmentServiceContract,
-  WorkerPlacementCancellationTarget,
   WorkerPlacementDispatchContract,
   WorkerPlacementReclaimSourceCheck,
 } from "./service-contract.js";
@@ -18,7 +21,12 @@ export type SessionWorkerPlacementContext = {
   workerEnvironmentService?: Pick<WorkerEnvironmentServiceContract, "get">;
   workerPlacementDispatchService?: Pick<WorkerPlacementDispatchContract, "reclaim">;
   workerSessionPlacementService?: Pick<WorkerSessionPlacementStore, "getMany"> &
-    Partial<Pick<WorkerSessionPlacementStore, "retireSessionPlacement" | "listForReconcile">>;
+    Partial<
+      Pick<
+        WorkerSessionPlacementStore,
+        "retireSessionPlacement" | "listForReconcile" | "prepareRuntimeRefresh"
+      >
+    >;
 };
 
 type PlacementMutationAction = "fork" | "reset" | "restore" | "rewind" | "switch";
@@ -57,41 +65,6 @@ type SessionWorkerPlacementMutationParams = {
 
 type RetirablePlacement = Extract<Placement, { state: "local" | "reclaimed" | "failed" }>;
 type FailedPlacement = Extract<Placement, { state: "failed" }>;
-
-export function isFailedWorkerPlacementEnvironmentGone(params: {
-  environmentService:
-    | {
-        get(
-          environmentId: string,
-        ):
-          | Pick<
-              NonNullable<ReturnType<WorkerEnvironmentServiceContract["get"]>>,
-              "state" | "leaseId"
-            >
-          | undefined;
-      }
-    | undefined;
-  placement: FailedPlacement;
-}): boolean {
-  if (params.placement.environmentId === null) {
-    return true;
-  }
-  // Provisioning persists deterministic allocation intent first; only the configured service
-  // can prove that the corresponding durable environment row was never created or is gone.
-  if (!params.environmentService) {
-    return false;
-  }
-  try {
-    const environment = params.environmentService.get(params.placement.environmentId);
-    return (
-      environment === undefined ||
-      environment.state === "destroyed" ||
-      (environment.state === "failed" && environment.leaseId === null)
-    );
-  } catch {
-    return false;
-  }
-}
 
 export function canRedispatchFailedWorkerPlacement(
   placement: FailedPlacement,

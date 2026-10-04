@@ -43,7 +43,7 @@ import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
-  gatewayPid: 4200,
+  gatewayPid: Math.max(process.pid, process.ppid, 1) + 1,
   resident: vi.fn<() => { pid: number } | undefined>(),
   activeRoot: "",
   runtimePath: "",
@@ -51,7 +51,7 @@ const mocks = vi.hoisted(() => ({
   audit: vi.fn<typeof import("../daemon/service-audit.js").auditGatewayServiceConfig>(),
   confirm: vi.fn(),
   note: vi.fn(),
-  health: vi.fn(async () => ({ healthy: true })),
+  health: vi.fn(async () => ({ outcome: "ready", healthy: true })),
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
@@ -390,7 +390,7 @@ async function runInstallationCase(params: {
             const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
             expect(ref).toMatchObject({ source: "store" });
             expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toEqual(ref);
-            const stored = readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
+            const stored = await readSecretStoreValue({ scope: { kind: "team" }, name: ref.id });
             expect(stored.ok && stored.value === "maintenance-fixture-token").toBe(true);
           }
           if (params.revoked) {
@@ -740,96 +740,61 @@ async function runInstallationCase(params: {
   );
 }
 
-it.each(["success", "refused", "service-failure", "writer-unavailable", "no-consent"] as const)(
-  "delegates maintenance token recovery before native service mutation (%s)",
-  async (tokenRecovery) =>
-    runInstallationCase({
-      platform: "linux",
-      mode: "maintenance",
-      tokenRecovery,
-      installFails: tokenRecovery === "service-failure",
-    }),
+type InstallationCase = Omit<Parameters<typeof runInstallationCase>[0], "mode">;
+
+it.each<InstallationCase>([
+  { platform: "linux", tokenRecovery: "success", installFails: false },
+  { platform: "linux", tokenRecovery: "refused", installFails: false },
+  { platform: "linux", tokenRecovery: "service-failure", installFails: true },
+  { platform: "linux", tokenRecovery: "writer-unavailable", installFails: false },
+  { platform: "linux", tokenRecovery: "no-consent", installFails: false },
+  { platform: "linux", initiallyStopped: true },
+  { platform: "linux", restorationInspectionFailure: "read-error" },
+  { platform: "linux", restorationInspectionFailure: "unknown-runtime" },
+  { platform: "linux", inspectionScenario: "slow-admission" },
+  { platform: "linux", stopFailsWithPairedDevice: true },
+  { platform: "linux", inspectionScenario: "competing-update" },
+  { platform: "win32", installFails: false, releaseStateBeforeFinish: false },
+  { platform: "win32", installFails: true, releaseStateBeforeFinish: false },
+  { platform: "win32", installFails: false, releaseStateBeforeFinish: true },
+  { platform: "win32", installFails: true, releaseStateBeforeFinish: true },
+  { platform: "linux", revoked: "unchanged" },
+  { platform: "linux", revoked: "restored" },
+  { platform: "linux", revoked: "recovery-pending" },
+  { platform: "linux", revoked: "unclassified" },
+])("reconciles installation drift under maintenance authority (%j)", async (scenario) =>
+  runInstallationCase({ ...scenario, mode: "maintenance" }),
 );
 
-it("preserves an already-stopped service with two-prefix installation drift", async () =>
-  runInstallationCase({ platform: "linux", mode: "maintenance", initiallyStopped: true }));
-
-it.each(["read-error", "unknown-runtime"] as const)(
-  "keeps the old installation stopped after inconclusive restoration inspection (%s)",
-  async (restorationInspectionFailure) =>
-    runInstallationCase({
-      platform: "linux",
-      mode: "maintenance",
-      restorationInspectionFailure,
-    }),
+it.each<InstallationCase>([
+  { platform: "win32" },
+  { platform: "linux", invocationPort: "19990" },
+  { platform: "darwin", consent: { aggressive: true, approved: false, interactive: true } },
+  { platform: "darwin", consent: { aggressive: true, approved: true, interactive: true } },
+  { platform: "darwin", consent: { aggressive: true, approved: false, interactive: false } },
+  { platform: "darwin", consent: { aggressive: false, approved: false, interactive: true } },
+  {
+    platform: "darwin",
+    consent: { aggressive: false, approved: false, interactive: true, mixed: "stale-native" },
+  },
+  {
+    platform: "darwin",
+    consent: { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
+  },
+  {
+    platform: "darwin",
+    consent: {
+      aggressive: false,
+      approved: false,
+      interactive: true,
+      mixed: "version-managed-runtime",
+    },
+  },
+  { platform: "linux", inspectionFailure: "unavailable" },
+  { platform: "linux", inspectionFailure: "lost-before-install" },
+  { platform: "linux", profile: "work" },
+  { platform: "linux", updateInProgress: true },
+  { platform: "linux", bun: true },
+])("repairs installation drift with doctor --fix (%j)", async (scenario) =>
+  runInstallationCase({ ...scenario, mode: "direct" }),
 );
-
-it("reconciles installation drift within the native budget with slow admission snapshots", async () =>
-  runInstallationCase({
-    platform: "linux",
-    mode: "maintenance",
-    inspectionScenario: "slow-admission",
-  }));
-
-it("releases paired-device auth workers when the native stop fails before repair", async () =>
-  runInstallationCase({
-    platform: "linux",
-    mode: "maintenance",
-    stopFailsWithPairedDevice: true,
-  }));
-
-it("refuses installation repair when an update starts during passive native inspection", async () =>
-  runInstallationCase({
-    platform: "linux",
-    mode: "maintenance",
-    inspectionScenario: "competing-update",
-  }));
-
-it("restarts a Windows service after repairing its installation with doctor --fix", async () =>
-  runInstallationCase({ platform: "win32", mode: "direct" }));
-
-it("honors an explicit invoking Gateway port while repairing installation drift", async () =>
-  runInstallationCase({ platform: "linux", mode: "direct", invocationPort: "19990" }));
-
-it.each([
-  { aggressive: true, approved: false, interactive: true },
-  { aggressive: true, approved: true, interactive: true },
-  { aggressive: true, approved: false, interactive: false },
-  { aggressive: false, approved: false, interactive: true },
-  { aggressive: false, approved: false, interactive: true, mixed: "stale-native" },
-  { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
-  { aggressive: false, approved: false, interactive: true, mixed: "version-managed-runtime" },
-] as const)(
-  "requires consent beyond installation drift (aggressive=$aggressive, mixed=$mixed, approved=$approved, interactive=$interactive)",
-  async (consent) => runInstallationCase({ platform: "darwin", mode: "direct", consent }),
-);
-
-it.each([
-  { installFails: false, releaseStateBeforeFinish: false },
-  { installFails: true, releaseStateBeforeFinish: false },
-  { installFails: false, releaseStateBeforeFinish: true },
-  { installFails: true, releaseStateBeforeFinish: true },
-])(
-  "keeps Windows activation with the repaired installation (installFails=$installFails, releaseStateBeforeFinish=$releaseStateBeforeFinish)",
-  async (scenario) => runInstallationCase({ platform: "win32", mode: "maintenance", ...scenario }),
-);
-
-it.each(["unavailable", "lost-before-install"] as const)(
-  "leaves a stale service unchanged when native inspection is %s",
-  async (inspectionFailure) =>
-    runInstallationCase({ platform: "linux", mode: "direct", inspectionFailure }),
-);
-
-it.each(["unchanged", "restored", "recovery-pending", "unclassified"] as const)(
-  "records native authority loss as a warning and blocks only pending recovery (%s)",
-  (revoked) => runInstallationCase({ platform: "linux", mode: "maintenance", revoked }),
-);
-
-it("keeps installation reconciliation guidance on the selected profile", async () =>
-  runInstallationCase({ platform: "linux", mode: "direct", profile: "work" }));
-
-it("leaves two-prefix installation drift with update finalization", async () =>
-  runInstallationCase({ platform: "linux", mode: "direct", updateInProgress: true }));
-
-it("reports split-root Bun drift without rewriting or stopping the service", async () =>
-  runInstallationCase({ platform: "linux", mode: "direct", bun: true }));

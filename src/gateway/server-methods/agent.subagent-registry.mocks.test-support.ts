@@ -1,18 +1,13 @@
 import { vi } from "vitest";
 import type { runSubagentAnnounceFlow } from "../../agents/subagents/announce/subagent-announce.js";
 import type { maybeWakeRequesterAfterAllChildrenSettled } from "../../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
-import type {
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { callGateway } from "../call.js";
 
 const subagentRegistryMocks = vi.hoisted(() => ({
   registryCallGateway: vi.fn<typeof callGateway>().mockResolvedValue({ status: "pending" }),
   registryAnnounce: vi.fn<typeof runSubagentAnnounceFlow>(),
   registryWake: vi.fn<typeof maybeWakeRequesterAfterAllChildrenSettled>(),
-  registryPersist: vi.fn<typeof persistSubagentRunsToDisk>(),
-  registryPersistOrThrow: vi.fn<typeof persistSubagentRunsToDiskOrThrow>(),
+  registryWrite: vi.fn<() => void>(),
 }));
 
 export { subagentRegistryMocks };
@@ -22,23 +17,27 @@ vi.mock("../server-recovery-runtime-context.js", async (importOriginal) => ({
   bindGatewayLifecycleRequest: () => subagentRegistryMocks.registryCallGateway,
 }));
 
-vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (importOriginal) => {
+vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
   const actual =
-    await importOriginal<
-      typeof import("../../agents/subagents/registry/subagent-registry-state.js")
-    >();
+    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
   return {
     ...actual,
-    persistSubagentRunsToDisk: (...args: Parameters<typeof actual.persistSubagentRunsToDisk>) =>
-      subagentRegistryMocks.registryPersist.getMockImplementation()
-        ? subagentRegistryMocks.registryPersist(...args)
-        : actual.persistSubagentRunsToDisk(...args),
-    persistSubagentRunsToDiskOrThrow: (
-      ...args: Parameters<typeof actual.persistSubagentRunsToDiskOrThrow>
+    runOpenClawStateWorkerOperation: (
+      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
     ) =>
-      subagentRegistryMocks.registryPersistOrThrow.getMockImplementation()
-        ? subagentRegistryMocks.registryPersistOrThrow(...args)
-        : actual.persistSubagentRunsToDiskOrThrow(...args),
+      actual.runOpenClawStateWorkerOperation(
+        context,
+        (scope) =>
+          operation({
+            execute(command) {
+              if (command.type === "subagents.persistChanges") {
+                subagentRegistryMocks.registryWrite();
+              }
+              return scope.execute(command);
+            },
+          }),
+        options,
+      ),
   };
 });
 
@@ -86,6 +85,5 @@ export function resetSubagentRegistryMocks() {
   subagentRegistryMocks.registryCallGateway.mockReset().mockResolvedValue({ status: "pending" });
   subagentRegistryMocks.registryAnnounce.mockReset();
   subagentRegistryMocks.registryWake.mockReset();
-  subagentRegistryMocks.registryPersist.mockReset();
-  subagentRegistryMocks.registryPersistOrThrow.mockReset();
+  subagentRegistryMocks.registryWrite.mockReset();
 }

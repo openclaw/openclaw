@@ -2,7 +2,6 @@ import { isUtf8 } from "node:buffer";
 import type { IncomingHttpHeaders, IncomingMessage } from "node:http";
 import { promisify } from "node:util";
 import { zstdCompress, zstdDecompress } from "node:zlib";
-import type { RawData } from "openclaw/plugin-sdk/websocket-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { createCodexInferenceContext } from "./inference-context.js";
 import { readCodexInferenceMetadata, type CodexInferenceMetadata } from "./inference-metadata.js";
@@ -391,14 +390,6 @@ export async function readProxyBody(stream: IncomingMessage, maxBytes: number): 
     chunks.push(bytes);
   }
   return Buffer.concat(chunks);
-}
-
-export function readProxyWebSocketBody(data: RawData): Buffer {
-  return Array.isArray(data)
-    ? Buffer.concat(data)
-    : Buffer.isBuffer(data)
-      ? data
-      : Buffer.from(data);
 }
 
 export function isTerminalResponse(bytes: Buffer): boolean {

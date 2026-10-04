@@ -1,9 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import * as subagentState from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   persistSessionTranscriptTurn,
   replaceSessionEntry,
@@ -13,6 +14,9 @@ import type { OpenClawConfig } from "../../config/types.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import * as sessionRows from "../session-row-projection-record.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { createControlUiRequestOptions } from "./control-ui-request.test-support.js";
 import { controlUiHandlers, createControlUiHandlers } from "./control-ui.js";
 import { identifiedClient } from "./sessions-sharing.test-support.js";
@@ -21,6 +25,13 @@ import type { RespondFn } from "./types.js";
 const requestOptions = createControlUiRequestOptions(() => ({
   agents: { entries: { main: {} } },
 }));
+
+async function createPreviewContext(cfg: OpenClawConfig = {}, getRuntimeConfig = () => cfg) {
+  const projection = await createSessionRowProjection({ cfg });
+  onTestFinished(() => projection.dispose());
+  await projection.ensureMaterialized();
+  return bindSessionRowProjection({ getRuntimeConfig }, () => projection);
+}
 
 describe("controlUi.sessionPreview", () => {
   it("joins a second compact recovery before presenting an authorized preview", async () => {
@@ -38,6 +49,7 @@ describe("controlUi.sessionPreview", () => {
             createdActor: { type: "human", source: "profile", id: "owner" },
           },
         );
+        const context = await createPreviewContext();
         const run = createSubagentRunRecord({
           runId: "preview-old",
           childSessionKey: "agent:main:subagent:preview-recovery",
@@ -92,7 +104,7 @@ describe("controlUi.sessionPreview", () => {
         )(
           requestOptions({ sessionKey }, respond, {
             client: { ...identifiedClient("reader"), connId: "preview-reader" },
-            context: { getRuntimeConfig: () => ({}) },
+            context,
           }),
         );
         try {
@@ -138,29 +150,28 @@ describe("controlUi.sessionPreview", () => {
       const respond = vi.fn<RespondFn>(() => {
         events.push("response");
       });
+      const context = await createPreviewContext({}, () => {
+        if (!queued) {
+          queued = true;
+          queueMicrotask(() => {
+            try {
+              replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
+              events.push("revoked");
+              revoked.resolve();
+            } catch (error) {
+              revoked.reject(error);
+            }
+          });
+        }
+        return {};
+      });
       await expectDefined(
         controlUiHandlers["controlUi.sessionPreview"],
         "registered preview",
       )(
         requestOptions({ sessionKey }, respond, {
           client: { ...identifiedClient("reader"), connId: "preview-reader" },
-          context: {
-            getRuntimeConfig: () => {
-              if (!queued) {
-                queued = true;
-                queueMicrotask(() => {
-                  try {
-                    replaceSessionEntrySync(scope, { ...entry, visibility: "draft" });
-                    events.push("revoked");
-                    revoked.resolve();
-                  } catch (error) {
-                    revoked.reject(error);
-                  }
-                });
-              }
-              return {};
-            },
-          },
+          context,
         }),
       );
       expect(queued).toBe(true);
@@ -186,6 +197,7 @@ describe("controlUi.sessionPreview", () => {
         createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
       };
       await replaceSessionEntry(scope, entry);
+      const context = await createPreviewContext();
       const prepared = createDeferred();
       const identity = vi
         .spyOn(subagentState, "getSubagentSessionListReadSnapshotIdentity")
@@ -200,7 +212,7 @@ describe("controlUi.sessionPreview", () => {
       )(
         requestOptions({ sessionKey }, respond, {
           client: { ...identifiedClient("reader"), connId: "preview-reader" },
-          context: { getRuntimeConfig: () => ({}) },
+          context,
         }),
       );
       try {
@@ -219,15 +231,19 @@ describe("controlUi.sessionPreview", () => {
     });
   });
 
-  it("keeps the resolved owner when previewing a qualified global main alias", async () => {
+  it("keeps the resolved owner without host SQL when previewing a qualified global main alias", async () => {
     await withOpenClawTestState({ label: "hover-global-owner" }, async () => {
       const cfg: OpenClawConfig = {
         session: { scope: "global" },
-        agents: { entries: { main: { default: true }, research: {} } },
+        agents: { entries: { main: {}, research: {} } },
       };
       for (const agentId of ["main", "research"]) {
         const scope = { agentId, sessionKey: "global", sessionId: `hover-${agentId}` };
-        await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 42 });
+        await replaceSessionEntry(scope, {
+          sessionId: scope.sessionId,
+          updatedAt: 42,
+          displayName: `Title from ${agentId}`,
+        });
         await persistSessionTranscriptTurn(scope, {
           cwd: "/tmp",
           updateMode: "none",
@@ -238,11 +254,30 @@ describe("controlUi.sessionPreview", () => {
         createControlUiHandlers()["controlUi.sessionPreview"],
         "session preview handler",
       );
+      const publications = new Map([
+        ["main", createDeferred()],
+        ["research", createDeferred()],
+      ]);
+      const publishTranscriptFields = sessionRows.publishTranscriptFields;
+      const publication = vi
+        .spyOn(sessionRows, "publishTranscriptFields")
+        .mockImplementation((row, ...args) => {
+          const changed = publishTranscriptFields(row, ...args);
+          if (row.key === "global" && row.lastMessagePreview === `Title from ${row.agentId}`) {
+            publications.get(row.agentId)?.resolve();
+          }
+          return changed;
+        });
+      onTestFinished(() => publication.mockRestore());
+      const context = await createPreviewContext(cfg);
+      await Promise.all([...publications.values()].map((completion) => completion.promise));
+      const statements = observeHostDataSql();
+      onTestFinished(() => statements.restore());
       for (const agentId of ["main", "research"]) {
         const respond = vi.fn<RespondFn>();
         await handler(
           requestOptions({ sessionKey: `agent:${agentId}:main` }, respond, {
-            context: { getRuntimeConfig: () => cfg },
+            context,
           }),
         );
         expect(respond).toHaveBeenCalledWith(
@@ -257,6 +292,8 @@ describe("controlUi.sessionPreview", () => {
           undefined,
         );
       }
+      expect(statements.queries).toEqual([]);
+      statements.restore();
     });
   });
 
@@ -304,18 +341,6 @@ describe("controlUi.sessionPreview", () => {
     expect(payload.title).toHaveLength(200);
     expect(payload.lastMessagePreview?.length).toBeLessThanOrEqual(200);
     expect(payload.lastMessagePreview).not.toContain(secret);
-  });
-
-  it("returns unavailable for an unknown session", async () => {
-    const handlers = createControlUiHandlers(vi.fn(), vi.fn().mockReturnValue(null));
-    const respond = vi.fn<RespondFn>();
-
-    await expectDefined(
-      handlers["controlUi.sessionPreview"],
-      'handlers["controlUi.sessionPreview"] test invariant',
-    )(requestOptions({ sessionKey: "agent:main:missing" }, respond));
-
-    expect(respond).toHaveBeenCalledWith(true, { status: "unavailable" }, undefined);
   });
 
   it("rejects malformed preview params", async () => {

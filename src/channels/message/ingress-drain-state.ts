@@ -42,6 +42,16 @@ export type ActiveHandlerState<TPayload, TMetadata> = {
   settleOnce: (fn: () => Promise<void>) => Promise<void>;
 };
 
+export function isPreAdoptionState<TPayload, TMetadata>(
+  state: ActiveHandlerState<TPayload, TMetadata>,
+): boolean {
+  return (
+    (state.phase === "dispatching" || state.phase === "deferred") &&
+    !state.guillotined &&
+    !state.superseded
+  );
+}
+
 export function createIngressSettleOwner<TPayload, TMetadata>(
   state: ActiveHandlerState<TPayload, TMetadata>,
   removeActive: (state: ActiveHandlerState<TPayload, TMetadata>) => void,

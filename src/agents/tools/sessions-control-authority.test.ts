@@ -5,7 +5,8 @@ import { assignSessionOwner } from "../../config/sessions/session-accessor.sqlit
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
-import { ensureProfileForEmail, linkEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { linkEmail, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -15,11 +16,11 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
   hasSessionControlAuthority,
-  prepareSessionControlTarget,
   readSessionControlAuthority,
-} from "./sessions-control-authority.js";
+} from "./sessions-operator-authority.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 function issueAuthority(profileId: string, scopes: readonly string[] = ["operator.write"]) {
@@ -215,7 +216,8 @@ describe("prepared session control target", () => {
     const tool = createSessionsTool({
       agentSessionKey: scope.sessionKey,
       agentSessionId: entry.sessionId,
-      controlOnly: true,
+      senderIsOwner: false,
+      sessionControlAuthority: authority,
       config: cfg,
     });
     try {

@@ -24,8 +24,9 @@ change which runtime it uses.
 On a fresh profile, the **app hosts the Gateway** as a child process using its
 bundled Bun runtime. The Gateway starts with the app and stops when the app
 quits. An existing Gateway on the configured port is attached instead of
-duplicated. Existing independently managed installations and Node LaunchAgents
-keep their current lifecycle.
+duplicated. Existing independently managed installations keep their current
+lifecycle. Eligible app-managed Node services move to bundled Bun while keeping
+their always-on service.
 
 The app first copies its runtime to `<state>/runtime/<runtimeBuildId>/`, where
 `<state>` is `~/.openclaw` or `~/.openclaw-<profile>`. Copies use APFS
@@ -131,7 +132,29 @@ Plist location (per-user): `~/Library/LaunchAgents/ai.openclaw.gateway.plist`
 (or `ai.openclaw.<profile>.plist`).
 
 The macOS app can manage the Gateway as a background service instead of a
-child process. The CLI can also install it directly: `openclaw gateway install`
+child process. Turn on **Keep OpenClaw running when the app is closed** next to
+**Launch at login** in Dashboard device settings, or during bundled onboarding.
+It is off for fresh setups. Enabling it stops the child and starts the background
+service; disabling it removes the service and starts an app-owned child. The
+control is unavailable for independently managed Gateways and connections that
+do not host a local Gateway. A paused Gateway stays paused when this preference
+changes.
+
+If the replacement Gateway fails to start, the app restores the previous hosting
+mode and verifies its health before reporting the failure. An operator change to
+the service, or pausing or quitting during the switch, stops automatic recovery;
+the app preserves the newer choice and reports what could not finish.
+
+The app preserves settings from the Gateway's generated service environment and
+rereads that file on later app launches. If a service has settings that would be
+lost after switching to app hosting, the app leaves the service unchanged and
+asks you to move the needed settings into the profile's persistent configuration
+or `.env` file. Run `openclaw gateway install --force`, then retry the hosting
+change. This uses the Gateway CLI's existing persistence rules for
+provider credentials and referenced configuration; arbitrary ambient variables
+are not guaranteed to persist through a new service installation.
+
+The CLI can also install it directly: `openclaw gateway install`
 (named profiles are selected via the `OPENCLAW_PROFILE` env var).
 Enabling an existing service from the app preserves its saved runtime pin.
 If the pin is invalid, enabling fails with the CLI error; reinstall explicitly with
@@ -279,6 +302,58 @@ updated and verified through its own captured CLI. The app-owned local companion
 Gateway is then updated separately; the update receipt stays pending until both
 required runtimes are healthy. The bundled private worker is not a Node LaunchAgent,
 and absent node services or named profiles do not trigger legacy node lifecycle work.
+
+### Existing app-managed Node services
+
+For the default profile after onboarding, the app migrates its exact-version
+Node installation in two separate attempts. If the installed version differs
+from the bundled version, the existing managed updater first updates the Node
+installation to the app's version. The core updater owns backups, rollback, and
+database migrations. A failed update leaves the runtime on Node and shows the
+existing update failure and Retry window.
+
+On the next launch or Retry, once the core update or repair completes and the
+versions match, the app seeds its bundled runtime and reinstalls the service with matching concrete Bun, package, and
+SQLite paths. It verifies health before completing the migration. If that step
+fails, it reinstalls and verifies the retained same-version Node command, then
+shows the failure with Retry. The app retains the old Node tools and npm package
+for recovery. Pausing and relaunching before migration finishes preserves the
+Node resume path; it does not skip the version update or enable the hosting
+toggle early.
+
+Before an app-owned install through the bundled CLI, the app reads runtime intent
+with that same CLI, runtime, and environment using `gateway status --deep --json`.
+It passes the observed revision and service definition to the installer after its
+final local custody checks. Failed or unknown inspection stops the install. If an
+operator changes the service or runtime pin before installation begins, the CLI
+preserves that selection and the app reports it without retrying or rolling it
+back. Older installed CLIs keep their existing invocation contract.
+
+Node rollback and restoration of a prior bundled build still run the retained
+CLI, which cannot be assumed to accept this expectation. An operator change
+between the app's final custody check and that CLI's initial snapshot is not yet
+fenced. The app cannot substitute its current bundled CLI: the installer derives
+the service entrypoint from its own package, which would change what recovery
+restores. A narrow core installer capability for selecting the retained service
+entrypoint is the follow-up needed to close this recovery window.
+
+Channel-policy installs, independently managed services, and services with
+saved operator runtime pins are not migrated. This includes a saved pin pointing
+at the app's Node tools. This registered-service migration does not run
+automatically in named profiles.
+
+Older apps removed the LaunchAgent when paused. After onboarding in local mode,
+the surviving app-managed Node installation preserves service hosting even when
+the LaunchAgent is absent. This applies to default and named profiles using an
+exact or unset install policy. While paused, the app only records the hosting
+preference; it does not update, seed, or install a Gateway.
+
+On Resume, the app uses that Node installation's core updater to reach the app's
+version without restarting a service. It then seeds Bun, installs the service,
+and verifies health in the same startup attempt. If the runtime switch fails,
+the app reinstalls and verifies the same-version Node service and shows the
+update failure with Retry. Fresh profiles retain app hosting; channel policies,
+attach-only profiles, and independently managed installations are not adopted.
 
 ## Version compatibility
 

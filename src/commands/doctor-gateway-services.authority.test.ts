@@ -430,7 +430,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
         const tokenRef = persisted.gateway?.auth?.token;
         const storedToken =
           typeof tokenRef === "object" && tokenRef.source === "store"
-            ? readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
+            ? await readSecretStoreValue({ scope: { kind: "team" }, name: tokenRef.id })
             : undefined;
         const diagnostics = [...edges.note.mock.calls.map(([message]) => message), ...errors].join(
           "\n",
@@ -598,7 +598,7 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
       observations.events.indexOf("service-published"),
     );
     expect(observations.nativeActions).toEqual(["daemon-reload", "enable", "restart"]);
-    expect(observations.unitDirectoryEntries).toEqual([
+    expect(observations.unitDirectoryEntries.toSorted()).toEqual([
       "openclaw-gateway.service",
       "openclaw-gateway.service.bak",
     ]);

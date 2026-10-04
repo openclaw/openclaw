@@ -1,4 +1,3 @@
-/** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
@@ -61,15 +60,17 @@ import {
   appendCronRunInspectionLink,
   normalizeDirectCronDeliveryPayloads,
 } from "./delivery-payload-normalization.js";
-import { pickSummaryFromOutput } from "./helpers.js";
+import { pickSummaryFromOutput, readAutomationFailedReport } from "./helpers.js";
 import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 const deliveryOutboundRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-outbound.runtime.js"),
 );
+const subagentFollowupRuntimeLoader = createLazyImportLoader(
+  () => import("./subagent-followup.runtime.js"),
+);
 export { queueCronMessageToolDeliveryAwareness };
-/** Dispatches cron run output through verified message-tool or direct delivery paths. */
 export async function dispatchCronDelivery(
   params: DispatchCronDeliveryParams,
 ): Promise<DispatchCronDeliveryState> {
@@ -80,6 +81,17 @@ export async function dispatchCronDelivery(
   let outputText = params.outputText;
   let synthesizedText = params.synthesizedText;
   let deliveryPayloads = params.deliveryPayloads;
+  let agentReportedFailure: string | undefined;
+  // A settled descendant answer is the run's terminal answer; classify it like the parent's
+  // own reply so a reported failure is recorded as one and never delivered as a token.
+  const adoptSettledChildReply = (childReply: string) => {
+    agentReportedFailure = readAutomationFailedReport(childReply);
+    const reply = agentReportedFailure ?? childReply;
+    outputText = reply;
+    summary = pickSummaryFromOutput(reply) ?? summary;
+    synthesizedText = reply;
+    deliveryPayloads = [{ text: reply }];
+  };
 
   const deliveryState: CronResolvedDeliveryState = {
     status: params.deliveryRequested ? "not-delivered" : "not-requested",
@@ -103,16 +115,17 @@ export async function dispatchCronDelivery(
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = async (disposition?: CronDeliveryDisposition) => {
+    const executionFailed = disposition?.kind === "error" || agentReportedFailure !== undefined;
     const completion = resolveAdmittedCronCompletionStatus(
       params.job,
-      disposition?.kind === "error" ? "error" : params.undeliveredRunStatus,
+      executionFailed ? "error" : params.undeliveredRunStatus,
       deliveryState.status,
       deliveryState.deliverySuppressionReason,
     );
     // Quiet/best-effort successes retire with their jobs; failed executions retain evidence.
     if (
       deliveryState.status === "delivered" ||
-      deliveryState.status === "not-requested" ||
+      (deliveryState.status === "not-requested" && !executionFailed) ||
       completion === "succeeded"
     ) {
       await cleanupDirectCronSessionIfNeeded();
@@ -129,6 +142,7 @@ export async function dispatchCronDelivery(
       outputText,
       synthesizedText,
       deliveryPayloads,
+      ...(agentReportedFailure ? { agentReportedFailure } : {}),
     };
   };
   const formatDeliveryTargetError = (error: string) =>
@@ -253,22 +267,17 @@ export async function dispatchCronDelivery(
       deliveryAttempted = true;
       // Custom session targets retain their caller-selected identity.
       const { sessionKey: deliverySessionKey, route: directCronOutboundRoute } =
-        await (async () => {
-          if (
-            typeof params.job.sessionTarget === "string" &&
-            params.job.sessionTarget.startsWith("session:")
-          ) {
-            return { sessionKey: params.agentSessionKey, route: null };
-          }
-          return await resolveCronDeliveryRouteSessionKey({
-            cfg: params.cfgWithAgentDefaults,
-            job: params.job,
-            agentId: params.agentId,
-            agentSessionKey: params.agentSessionKey,
-            delivery,
-            warningContext: "direct delivery mirror",
-          });
-        })();
+        typeof params.job.sessionTarget === "string" &&
+        params.job.sessionTarget.startsWith("session:")
+          ? { sessionKey: params.agentSessionKey, route: null }
+          : await resolveCronDeliveryRouteSessionKey({
+              cfg: params.cfgWithAgentDefaults,
+              job: params.job,
+              agentId: params.agentId,
+              agentSessionKey: params.agentSessionKey,
+              delivery,
+              warningContext: "direct delivery mirror",
+            });
       const deliverySession = buildOutboundSessionContext({
         cfg: params.cfgWithAgentDefaults,
         agentId: params.agentId,
@@ -428,8 +437,6 @@ export async function dispatchCronDelivery(
       }
       // Partial platform evidence remains unknown; never mint a full receipt.
       const deliveryAwarenessText = resolveCronAwarenessText({
-        outputText,
-        synthesizedText,
         deliveryPayloads: linkedPayloadsForDelivery,
         outboundPayloads: attemptedPayloadsForMirror,
       });
@@ -553,10 +560,7 @@ export async function dispatchCronDelivery(
         abortSignal: params.abortSignal,
       });
     if (finalReply) {
-      outputText = finalReply;
-      summary = pickSummaryFromOutput(finalReply) ?? summary;
-      synthesizedText = finalReply;
-      deliveryPayloads = [{ text: finalReply }];
+      adoptSettledChildReply(finalReply);
     }
     if (spawnOnlyHandoff && !synthesizedText?.trim()) {
       // An accepted spawn is the turn's only completion; retiring it without
@@ -694,6 +698,34 @@ export async function dispatchCronDelivery(
       if (finalizedTextResult) {
         return buildDeliveryState(finalizedTextResult);
       }
+    }
+  } else if (
+    params.deliveryPlan.mode === "none" &&
+    params.spawnOnlyHandoff &&
+    !requiresCurrentSessionCompletion
+  ) {
+    // A no-delivery run whose turn only handed off records its children's result instead
+    // of reporting ok while that result is dropped.
+    const { waitForDescendantSubagentResult } = await subagentFollowupRuntimeLoader.load();
+    const settled = await waitForDescendantSubagentResult({
+      sessionKey: params.runSessionKey,
+      runStartedAt: params.runStartedAt,
+      timeoutMs: params.timeoutMs,
+      abortSignal: params.abortSignal,
+    });
+    if (!settled?.reply || params.isAborted()) {
+      return buildDeliveryState({
+        kind: "error",
+        error: params.isAborted()
+          ? params.abortReason()
+          : settled
+            ? "cron child-session handoff completed without a final assistant payload"
+            : "cron child-session handoff timed out before producing a final assistant payload",
+        delivered: false,
+      });
+    }
+    if (!isSilentReplyText(settled.reply, SILENT_REPLY_TOKEN)) {
+      adoptSettledChildReply(settled.reply);
     }
   }
 

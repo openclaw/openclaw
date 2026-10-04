@@ -31,18 +31,6 @@ type FeishuExplorerRootFolderMetaResponse = {
   };
 };
 
-type FeishuDriveInternalClient = Lark.Client & {
-  domain?: string;
-  httpInstance: Pick<Lark.HttpInstance, "get">;
-  request(params: {
-    method: "GET" | "POST";
-    url: string;
-    params?: Record<string, string | undefined>;
-    data: unknown;
-    timeout?: number;
-  }): Promise<unknown>;
-};
-
 type FeishuDriveApiResponse<T> = {
   code: number;
   log_id?: string;
@@ -72,25 +60,20 @@ type FeishuDriveToolContext = {
 
 const FEISHU_DRIVE_REQUEST_TIMEOUT_MS = 30_000;
 
-function getDriveInternalClient(client: Lark.Client): FeishuDriveInternalClient {
-  return client as FeishuDriveInternalClient;
-}
-
-async function requestDriveApi<T>(params: {
+function requestDriveApi<T>(params: {
   client: Lark.Client;
   method: "GET" | "POST";
   url: string;
   query?: Record<string, string | undefined>;
   data?: unknown;
 }): Promise<T> {
-  const internalClient = getDriveInternalClient(params.client);
-  return (await internalClient.request({
+  return params.client.request<T>({
     method: params.method,
     url: params.url,
     params: params.query ?? {},
     data: params.data ?? {},
     timeout: FEISHU_DRIVE_REQUEST_TIMEOUT_MS,
-  })) as T;
+  });
 }
 
 function assertDriveApiSuccess<T extends { code: number; msg?: string }>(response: T): T {
@@ -207,11 +190,10 @@ function extractDriveApiErrorMeta(error: unknown): {
 async function getRootFolderToken(client: Lark.Client): Promise<string> {
   // Use generic HTTP client to call the root folder meta API
   // as it's not directly exposed in the SDK
-  const internalClient = getDriveInternalClient(client);
-  const domain = internalClient.domain ?? "https://open.feishu.cn";
-  const res = (await internalClient.httpInstance.get(
+  const domain = client.domain ?? "https://open.feishu.cn";
+  const res = await client.httpInstance.get<FeishuExplorerRootFolderMetaResponse>(
     `${domain}/open-apis/drive/explorer/v2/root_folder/meta`,
-  )) as FeishuExplorerRootFolderMetaResponse;
+  );
   if (res.code !== 0) {
     throw new Error(res.msg ?? "Failed to get root folder");
   }
@@ -593,22 +575,16 @@ export async function deliverCommentThreadText(
       `[feishu_drive] whole-comment compatibility path ` +
         `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment`,
     );
-    return {
-      delivery_mode: "add_comment",
-      ...(await addComment(client, {
-        file_token: params.file_token,
-        file_type: params.file_type,
-        content: params.content,
-      })),
-    };
-  }
-  try {
-    return {
-      delivery_mode: "reply_comment",
-      ...(await replyComment(client, params)),
-    };
-  } catch (error) {
-    if (error instanceof FeishuReplyCommentError && error.feishuCode === 1069302) {
+  } else {
+    try {
+      return {
+        delivery_mode: "reply_comment",
+        ...(await replyComment(client, params)),
+      };
+    } catch (error) {
+      if (!(error instanceof FeishuReplyCommentError) || error.feishuCode !== 1069302) {
+        throw error;
+      }
       if (params.file_type !== "doc" && params.file_type !== "docx") {
         throw error;
       }
@@ -617,17 +593,16 @@ export async function deliverCommentThreadText(
           `comment=${params.comment_id} file_type=${params.file_type} mode=add_comment ` +
           `log_id=${error.feishuLogId ?? "unknown"}`,
       );
-      return {
-        delivery_mode: "add_comment",
-        ...(await addComment(client, {
-          file_token: params.file_token,
-          file_type: params.file_type,
-          content: params.content,
-        })),
-      };
     }
-    throw error;
   }
+  return {
+    delivery_mode: "add_comment",
+    ...(await addComment(client, {
+      file_token: params.file_token,
+      file_type: params.file_type,
+      content: params.content,
+    })),
+  };
 }
 
 export function registerFeishuDriveTools(api: OpenClawPluginApi) {
@@ -675,7 +650,7 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
             } finally {
               // Typing cleanup must not delay the visible write result.
               void cleanupAmbientCommentTypingReaction({
-                client: getDriveInternalClient(client),
+                client,
                 deliveryContext: ctx.deliveryContext,
               });
             }

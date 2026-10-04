@@ -2,7 +2,6 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import {
   isOffsetInProtectedRanges,
   type PlainTextToolCallNameMatcher,
-  type PlainTextToolCallProtectedRange,
   type PlainTextToolCallProtectedRangeResolver,
 } from "./contracts.js";
 import {
@@ -12,11 +11,11 @@ import {
   indexOfAsciiMarkerIgnoreCase,
   isAsciiMarkerPrefixIgnoreCase,
   isXmlishNameChar,
+  type JsonObjectScanState,
   scanJsonObject,
   skipLineIndentation,
   skipWhitespace,
   startsWithAsciiMarkerIgnoreCase,
-  type StructuralLineBreakOptions,
   utf8ByteLengthWithinLimit,
 } from "./grammar.js";
 import { scanPlainTextToolCall, type PlainTextToolCallScan } from "./payload.js";
@@ -75,11 +74,8 @@ type StandalonePlainTextToolCallCandidate = {
 type ScannedCallSequence = TextRange & { activeStart?: number; overCap: boolean };
 type XmlSuppressor = { carry: string; kind: "xml"; phase: "body" | "parameter" };
 
-type JsonSuppressor = {
+type JsonSuppressor = JsonObjectScanState & {
   carry: string;
-  depth: number;
-  escaped: boolean;
-  inString: boolean;
   kind: "json";
   optionalClosings?: readonly string[];
   phase: "closing" | "opening" | "payload";
@@ -208,13 +204,17 @@ function findUtf8OverCapOffset(text: string, start: number): number | null {
   return null;
 }
 
-function findCallSequences(
-  text: string,
+function findCandidateCallSequences(
+  candidate: StandalonePlainTextToolCallCandidate,
   matcher: PlainTextToolCallNameMatcher,
-  structuralBoundaries: readonly number[] = [],
-  structuralLineBreaks?: StructuralLineBreakOptions,
-  protectedRanges: readonly PlainTextToolCallProtectedRange[] = [],
+  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
 ): ScannedCallSequence[] {
+  const {
+    text,
+    boundaries: structuralBoundaries,
+    structuralLineBreaks,
+  } = createCandidateScanView(candidate);
+  const protectedRanges = resolveProtectedRanges?.(text) ?? [];
   const sequences: ScannedCallSequence[] = [];
   const structuralBoundarySet = new Set(structuralBoundaries);
   let structuralBoundaryIndex = 0;
@@ -337,21 +337,6 @@ function createCandidateScanView(candidate: StandalonePlainTextToolCallCandidate
       ? { structuralLineBreaks: { lineBreakOffsets: new Set(boundaries) } }
       : {}),
   };
-}
-
-function findCandidateCallSequences(
-  candidate: StandalonePlainTextToolCallCandidate,
-  matcher: PlainTextToolCallNameMatcher,
-  resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver,
-): ScannedCallSequence[] {
-  const view = createCandidateScanView(candidate);
-  return findCallSequences(
-    view.text,
-    matcher,
-    view.boundaries,
-    view.structuralLineBreaks,
-    resolveProtectedRanges?.(view.text),
-  );
 }
 
 function createRangeRemover(ranges: readonly TextRange[]) {
@@ -537,14 +522,11 @@ function resolvePartialProtectionCheck(params: {
     blockText = record.content;
   } else {
     const part = candidate.parts.find((entry) => entry.contentIndex === params.contentIndex);
-    const block = Array.isArray(record.content)
-      ? asOptionalObjectRecord(record.content[params.contentIndex])
-      : undefined;
-    if (!part || block?.type !== "text" || typeof block.text !== "string") {
+    if (!part) {
       return undefined;
     }
     blockStart = part.start;
-    blockText = block.text;
+    blockText = candidate.text.slice(part.start, part.end);
   }
   const incomingStart = params.authoritative ? 0 : blockText.length - params.incoming.length;
   if (
@@ -578,9 +560,8 @@ function createSyntheticTextDelta(
   text: string,
   partial?: Record<string, unknown>,
 ): Record<string, unknown> {
-  const event = eventTemplate(template);
   return {
-    ...event,
+    ...eventTemplate(template),
     type: "text_delta",
     delta: text,
     ...(partial ? { partial } : {}),
@@ -691,44 +672,6 @@ function replayFalsePositiveCandidate(pending: CandidatePendingState): Record<st
   return pending.entries ?? [createSyntheticTextDelta(pending.template, pending.buffer)];
 }
 
-function projectPendingAuxEvents(
-  pending: PendingState,
-  projection?: PlainTextToolCallMessageProjection,
-  projectPartial?: (message: unknown) => PlainTextToolCallMessageProjection | undefined,
-  retainedTextContentIndex?: number,
-): Record<string, unknown>[] {
-  return (pending.entries ?? []).flatMap((event) => {
-    if (isTextStreamEvent(event)) {
-      if (event.type !== "text_start" || eventContentIndex(event) !== retainedTextContentIndex) {
-        return [];
-      }
-    }
-    let eventProjection = projection ?? projectPartial?.(event.partial);
-    const projectedEvent = { ...event };
-    if (eventProjection && typeof event.contentIndex === "number") {
-      let contentIndex = eventProjection.sourceToProjectedContentIndex.get(event.contentIndex);
-      if (contentIndex === undefined && projection) {
-        const partialProjection = projectPartial?.(event.partial);
-        const partialContentIndex = partialProjection?.sourceToProjectedContentIndex.get(
-          event.contentIndex,
-        );
-        if (partialProjection && partialContentIndex !== undefined) {
-          eventProjection = partialProjection;
-          contentIndex = partialContentIndex;
-        }
-      }
-      if (contentIndex === undefined) {
-        return [];
-      }
-      projectedEvent.contentIndex = contentIndex;
-    }
-    if (eventProjection && Object.hasOwn(projectedEvent, "partial")) {
-      projectedEvent.partial = eventProjection.message;
-    }
-    return [projectedEvent];
-  });
-}
-
 function projectEventIndex(
   event: Record<string, unknown>,
   projection: PlainTextToolCallMessageProjection,
@@ -757,9 +700,8 @@ function projectedTextForEvent(
 }
 
 type PendingClassification =
-  | { kind: "complete" }
   | { kind: "false-positive" }
-  | { kind: "incomplete" }
+  | { kind: "pending" }
   | { kind: "stripped"; text: string }
   | { kind: "suppress"; suppressor: OverCapSuppressor }
   | { candidate: StandalonePlainTextToolCallCandidate; kind: "trim" };
@@ -910,10 +852,10 @@ function classifyPending(
   if (leading && leading.activeStart === undefined) {
     return pending.sequenceOverCap || pending.bufferBytes > MAX_PAYLOAD_BYTES
       ? { kind: "stripped", text: "" }
-      : { kind: "complete" };
+      : { kind: "pending" };
   }
   if (leading?.activeStart !== undefined) {
-    return !hasNamedCandidate && finalize ? { kind: "false-positive" } : { kind: "incomplete" };
+    return !hasNamedCandidate && finalize ? { kind: "false-positive" } : { kind: "pending" };
   }
   if (
     terminalScan.kind === "prefix" &&
@@ -923,7 +865,7 @@ function classifyPending(
     return { kind: "false-positive" };
   }
   if (terminalScan.kind === "prefix" && (!finalize || hasNamedCandidate)) {
-    return { kind: "incomplete" };
+    return { kind: "pending" };
   }
   return pending.sequenceOverCap
     ? { kind: "stripped", text: candidate.text }
@@ -1108,9 +1050,9 @@ export async function* normalizePlainTextToolCallStreamEvents(
   let forceScrubTerminal = false;
   let sawStreamStart = false;
   let preserveTerminalContentIndexes = false;
-  const heldTextStarts = new Map<string, Record<string, unknown>>();
-  const lineStarts = new Map<string, boolean>();
-  const emittedTextUnits = new Map<string, number>();
+  const heldTextStarts = new Map<number, Record<string, unknown>>();
+  const lineStarts = new Map<number, boolean>();
+  const emittedTextUnits = new Map<number, number>();
   const protectionChunks: string[] = [];
   let protectionContextLength = 0;
   let protectionContextOverflow = false;
@@ -1212,15 +1154,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
     });
     return normalized?.kind === "scrubbed" ? normalized : undefined;
   };
-  const eventKey = (record: Record<string, unknown>) => String(eventContentIndex(record));
   const sanitizeEventPartial = (
     record: Record<string, unknown>,
-    forceKnownCandidates = false,
   ): Record<string, unknown> | undefined => {
     if (record.partial === undefined) {
       return record;
     }
-    const projection = scrubSnapshot(record.partial, true, forceKnownCandidates);
+    const projection = scrubSnapshot(record.partial, true, true);
     if (!projection) {
       return record;
     }
@@ -1231,13 +1171,38 @@ export async function* normalizePlainTextToolCallStreamEvents(
     candidate: PendingState,
     projection?: PlainTextToolCallMessageProjection,
     retainedTextContentIndex?: number,
-  ) =>
-    projectPendingAuxEvents(
-      candidate,
-      projection,
-      (message) => scrubSnapshot(message, true, true),
-      retainedTextContentIndex,
-    );
+  ): Record<string, unknown>[] => {
+    return (candidate.entries ?? []).flatMap((event) => {
+      if (isTextStreamEvent(event)) {
+        if (event.type !== "text_start" || eventContentIndex(event) !== retainedTextContentIndex) {
+          return [];
+        }
+      }
+      let eventProjection = projection ?? scrubSnapshot(event.partial, true, true);
+      const projectedEvent = { ...event };
+      if (eventProjection && typeof event.contentIndex === "number") {
+        let contentIndex = eventProjection.sourceToProjectedContentIndex.get(event.contentIndex);
+        if (contentIndex === undefined && projection) {
+          const partialProjection = scrubSnapshot(event.partial, true, true);
+          const partialContentIndex = partialProjection?.sourceToProjectedContentIndex.get(
+            event.contentIndex,
+          );
+          if (partialProjection && partialContentIndex !== undefined) {
+            eventProjection = partialProjection;
+            contentIndex = partialContentIndex;
+          }
+        }
+        if (contentIndex === undefined) {
+          return [];
+        }
+        projectedEvent.contentIndex = contentIndex;
+      }
+      if (eventProjection && Object.hasOwn(projectedEvent, "partial")) {
+        projectedEvent.partial = eventProjection.message;
+      }
+      return [projectedEvent];
+    });
+  };
 
   async function* normalizeEvents() {
     for await (const sourceEvent of source) {
@@ -1255,14 +1220,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
         type !== "error" &&
         record.partial !== undefined
       ) {
-        const projection = scrubSnapshot(record.partial, true, true);
-        const projectedEvent = projection ? projectEventIndex(record, projection) : record;
-        if (!projectedEvent) {
+        const sanitized = sanitizeEventPartial(record);
+        if (!sanitized) {
           continue;
         }
-        record = projection
-          ? { ...projectedEvent, partial: projection.message }
-          : (sanitizeEventPartial(projectedEvent, true) ?? projectedEvent);
+        record = sanitized;
       }
 
       if (isTextStreamEvent(record)) {
@@ -1272,7 +1234,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             : typeof record.content === "string"
               ? record.content
               : undefined;
-        const key = eventKey(record);
+        const key = eventContentIndex(record);
         if (type === "text_start" && (text === undefined || text === "") && !pending) {
           const previous = heldTextStarts.get(key);
           if (previous) {
@@ -1539,7 +1501,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
             options.resolveProtectedRanges,
           );
           pending.nextScanChars = Math.max(pending.buffer.length + 1, pending.nextScanChars * 2);
-          if (classification.kind === "complete" || classification.kind === "incomplete") {
+          if (classification.kind === "pending") {
             break;
           }
           if (classification.kind === "trim") {
@@ -1578,12 +1540,11 @@ export async function* normalizePlainTextToolCallStreamEvents(
           if (classification.kind === "false-positive") {
             yield* replayFalsePositiveCandidate(pending);
             const replayText = pending.buffer;
-            const replayedCandidate = pending;
             pending = undefined;
             if (replayText) {
               overCapSequenceOpen = false;
               lineStarts.set(key, nextAtLineStart(lineStarts.get(key) ?? true, replayText));
-              advanceProtectionContext(replayedCandidate.buffer);
+              advanceProtectionContext(replayText);
             }
             break;
           }
@@ -1693,7 +1654,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
               if (template) {
                 const projectedText = projectedTextForEvent(pending.template, normalized);
                 const sanitizedText = projectedText ?? classification.text;
-                const emittedUnits = emittedTextUnits.get(eventKey(pending.template)) ?? 0;
+                const emittedUnits = emittedTextUnits.get(eventContentIndex(pending.template)) ?? 0;
                 const novelText = sanitizedText.slice(projectedText ? emittedUnits : 0);
                 if (novelText) {
                   yield createSyntheticTextDelta(template, novelText, normalized.message);
@@ -1721,8 +1682,13 @@ export async function* normalizePlainTextToolCallStreamEvents(
           yield message === record.message ? record : { ...record, message };
         }
         pending = undefined;
+        overCapSequenceOpen = false;
+        scrubFuturePartials = false;
         forceScrubTerminal = false;
+        sawStreamStart = false;
+        preserveTerminalContentIndexes = false;
         heldTextStarts.clear();
+        lineStarts.clear();
         emittedTextUnits.clear();
         protectionChunks.length = 0;
         protectionContextLength = 0;
@@ -1769,7 +1735,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
 
       if (pending) {
         if (!pending.entries) {
-          const sanitized = sanitizeEventPartial(record, true);
+          const sanitized = sanitizeEventPartial(record);
           if (sanitized) {
             yield sanitized;
           }
@@ -1832,7 +1798,7 @@ export async function* normalizePlainTextToolCallStreamEvents(
   for await (const event of normalizeEvents()) {
     const record = asOptionalObjectRecord(event);
     if (record?.type === "text_delta" && typeof record.delta === "string") {
-      const key = eventKey(record);
+      const key = eventContentIndex(record);
       const previous = emittedTextUnits.get(key) ?? 0;
       emittedTextUnits.set(key, previous + record.delta.length);
     }

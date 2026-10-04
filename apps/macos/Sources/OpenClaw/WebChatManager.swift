@@ -105,8 +105,7 @@ final class WebChatManager {
     @ObservationIgnored private var sessionObserverMonitors: [ObjectIdentifier: Task<Void, Never>] = [:]
     @ObservationIgnored private var sessionObserverRequests: [ObjectIdentifier: (id: UUID, task: Task<Void, Never>)] =
         [:]
-    @ObservationIgnored private var sessionObserverDeclarations:
-        [ObjectIdentifier: (lease: GatewayConnection.ServerLease, visible: Bool)] = [:]
+    @ObservationIgnored private var sessionObserverDeclarations: [ObjectIdentifier: GatewayConnection.ServerLease] = [:]
 
     var onChatWindowVisibilityChanged: ((Bool) -> Void)?
 
@@ -219,7 +218,12 @@ final class WebChatManager {
     #endif
 
     @discardableResult
-    func openGatewayWindow(for target: DashboardGatewayTarget, newWindow: Bool = false) -> Task<Void, Never> {
+    func openGatewayWindow(
+        for target: DashboardGatewayTarget,
+        newWindow: Bool = false,
+        route: WebChatRoute? = nil,
+        sourceIsCurrent: @escaping () -> Bool = { true }) -> Task<Void, Never>
+    {
         if target == .primary {
             self.preparePrimaryGateway(gatewayID: GatewayDiscoveryPreferences.deviceAuthGatewayID(
                 root: OpenClawConfigFile.loadDict()))
@@ -241,7 +245,12 @@ final class WebChatManager {
                     name = profile.name
                 }
                 guard generation == self.windowGeneration else { return }
-                try await self.showGateway(target: target, name: name, newWindow: newWindow)
+                try await self.showGateway(
+                    target: target,
+                    name: name,
+                    newWindow: newWindow,
+                    requestedRoute: route,
+                    sourceIsCurrent: sourceIsCurrent)
             } catch is CancellationError {
                 webChatManagerLogger.debug("Cancelled native Gateway window open after its owner changed")
             } catch {
@@ -251,7 +260,13 @@ final class WebChatManager {
         }
     }
 
-    private func showGateway(target: DashboardGatewayTarget, name: String, newWindow: Bool) async throws {
+    private func showGateway(
+        target: DashboardGatewayTarget,
+        name: String,
+        newWindow: Bool,
+        requestedRoute: WebChatRoute?,
+        sourceIsCurrent: () -> Bool) async throws
+    {
         let generation = self.windowGeneration
         let primaryGeneration = self.primaryGeneration
         // An older close must finish retiring the fleet before this open can acquire its successor.
@@ -292,11 +307,12 @@ final class WebChatManager {
         // Another admission can finish while connection setup is suspended.
         // Recheck at the presentation boundary to keep ordinary opens single-window.
         if !newWindow, self.showExistingWindow(for: target) { return }
+        guard sourceIsCurrent() else { throw CancellationError() }
+        let route = requestedRoute ?? WebChatRoute(sessionKey: resolved.sessionKey, agentID: nil)
         if target == .primary {
-            self.presentChat(sessionKey: resolved.sessionKey, agentID: nil, draft: nil, newWindow: newWindow)
+            self.presentChat(sessionKey: route.sessionKey, agentID: route.agentID, draft: nil, newWindow: newWindow)
             return
         }
-        let route = WebChatRoute(sessionKey: resolved.sessionKey, agentID: nil)
         let controller = WebChatSwiftUIWindowController(
             sessionKey: route.sessionKey,
             agentID: route.agentID,
@@ -306,6 +322,23 @@ final class WebChatManager {
             windowTitle: "\(name) — OpenClaw",
             windowAutosaveName: "OpenClawChatWindow-\(autosaveID)")
         self.install(controller, target: target, route: route, connection: connection)
+    }
+
+    static func sessionLink(base: URL, sessionKey: String, agentID: String?, preview: Bool) -> URL? {
+        guard var url = URLComponents(url: base, resolvingAgainstBaseURL: false),
+              let route = WebChatRoute.dashboardPath(sessionKey: sessionKey, agentID: agentID) else { return nil }
+        if url.scheme == "ws" { url.scheme = "http" }
+        if url.scheme == "wss" { url.scheme = "https" }
+        guard url.scheme == "http" || url.scheme == "https" else { return nil }
+        url.user = nil
+        url.password = nil
+        url.query = nil
+        url.fragment = nil
+        while url.percentEncodedPath.hasSuffix("/") {
+            url.percentEncodedPath.removeLast()
+        }
+        url.percentEncodedPath += (preview ? "/share" : "") + route
+        return url.url
     }
 
     private func install(
@@ -405,6 +438,14 @@ final class WebChatManager {
 
     func openWindowCount(for target: DashboardGatewayTarget) -> Int {
         self.gatewayWindowOrder.count { self.gatewayWindows[$0]?.target == target }
+    }
+
+    var openProfileIDs: Set<String> {
+        // Hidden windows still retain their saved route until the window owner closes them.
+        Set(self.gatewayWindows.values.compactMap {
+            guard case let .profile(id) = $0.target else { return nil }
+            return id
+        })
     }
 
     func closeGatewayWindows(profileID: String) {
@@ -532,9 +573,8 @@ final class WebChatManager {
                   self.sessionObserverOwners.isVisible(connection: connectionID) == visible
             else { return }
 
-            if let declaration = self.sessionObserverDeclarations[connectionID],
-               declaration.visible == visible,
-               await connection.isCurrentServerLease(declaration.lease)
+            if visible, let lease = self.sessionObserverDeclarations[connectionID],
+               await connection.isCurrentServerLease(lease)
             { return }
 
             // A timed-out mutation may already have changed the Gateway. Clear
@@ -554,7 +594,7 @@ final class WebChatManager {
                     request, ifCurrentServerLease: lease)
                 guard !Task.isCancelled else { return }
                 if visible {
-                    self.sessionObserverDeclarations[connectionID] = (lease: lease, visible: true)
+                    self.sessionObserverDeclarations[connectionID] = lease
                 } else {
                     self.sessionObserverDeclarations.removeValue(forKey: connectionID)
                     if !self.sessionObserverOwners.isVisible(connection: connectionID) {
@@ -594,7 +634,7 @@ final class WebChatManager {
     static func promptForGatewayProfile(
         profiles: [MacGatewayProfile],
         preferredID: String?,
-        local: DashboardGatewayEntry? = nil) -> GatewayProfileSelection?
+        local: DashboardGatewayEntry? = nil) async -> GatewayProfileSelection?
     {
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 360, height: 28), pullsDown: false)
         if let local { popup.addItem(withTitle: local.name) }
@@ -610,7 +650,7 @@ final class WebChatManager {
         alert.addButton(withTitle: "Open Window")
         alert.addButton(withTitle: "Manage Gateways…")
         alert.addButton(withTitle: "Cancel")
-        switch alert.runModal() {
+        switch await AppActivation.shared.response(to: alert) {
         case .alertFirstButtonReturn:
             if local != nil, popup.indexOfSelectedItem == 0 { return .local }
             let index = popup.indexOfSelectedItem - offset
@@ -630,7 +670,7 @@ final class WebChatManager {
     private static func showProfileError(_ error: Error, message: String) {
         let alert = NSAlert(error: error)
         alert.messageText = message
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     #if DEBUG

@@ -14,7 +14,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import pMap from "p-map";
 import { Type } from "typebox";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -208,11 +208,7 @@ async function fetchOpenRouterModels(
               asPositiveSafeInteger(obj.max_output_tokens) ??
               null;
 
-            const supportedParameters = Array.isArray(obj.supported_parameters)
-              ? normalizeStringEntries(
-                  obj.supported_parameters.filter((value) => typeof value === "string"),
-                )
-              : [];
+            const supportedParameters = normalizeTrimmedStringList(obj.supported_parameters);
 
             return {
               id,

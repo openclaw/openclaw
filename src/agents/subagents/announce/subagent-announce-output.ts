@@ -11,12 +11,13 @@ import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.j
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
-import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
-import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
+import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import type { getLatestSubagentRunByChildSessionKey } from "../registry/subagent-registry-read.js";
+import { prepareSubagentRunsSnapshotForRunIds } from "../registry/subagent-registry-state.js";
+import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import { recordLatestSubagentRun } from "../registry/subagent-run-generation.js";
 import type { SubagentRunOutcome } from "../subagent-run-outcome.types.js";
-import { classifySubagentTerminalOutcome } from "../subagent-terminal-outcome.js";
 import {
   captureSubagentCompletionReplyUsing,
   readLatestSubagentOutputWithRetryUsing,
@@ -45,19 +46,6 @@ type SubagentOutputSnapshot = {
   waitingForContinuation?: boolean;
 };
 
-type AgentWaitResult = {
-  status?: string;
-  startedAt?: number;
-  endedAt?: number;
-  error?: string;
-  stopReason?: string;
-  livenessState?: string;
-  yielded?: boolean;
-  pendingError?: boolean;
-  timeoutPhase?: string;
-  providerStarted?: boolean;
-};
-
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
   timing: {
@@ -78,16 +66,6 @@ export function withSubagentOutcomeTiming(
     nextTiming.elapsedMs = Math.max(0, endedAt - startedAt);
   }
   return { ...outcome, ...nextTiming };
-}
-
-function countAssistantToolCalls(message: unknown): number {
-  const record = asOptionalObjectRecord(message);
-  const content = record?.content;
-  const contentToolCalls = Array.isArray(content)
-    ? content.filter((block) => isContractToolCallBlock(block)).length
-    : 0;
-  const toolCalls = record?.toolCalls ?? record?.tool_calls;
-  return contentToolCalls + (Array.isArray(toolCalls) ? toolCalls.length : 0);
 }
 
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
@@ -115,7 +93,11 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         snapshot.latestText = undefined;
         continue;
       }
-      const toolCallCount = countAssistantToolCalls(message);
+      const toolCalls = record.toolCalls ?? record.tool_calls;
+      const toolCallCount =
+        (Array.isArray(record.content)
+          ? record.content.filter(isContractToolCallBlock).length
+          : 0) + (Array.isArray(toolCalls) ? toolCalls.length : 0);
       if (toolCallCount > 0) {
         // Any assistant tool call proves this was an intermediate turn. Do not
         // retain commentary from this message or an earlier assistant message
@@ -141,28 +123,6 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
   return snapshot;
 }
 
-function selectSubagentOutputText(
-  snapshot: SubagentOutputSnapshot,
-  outcome?: SubagentRunOutcome,
-): string | undefined {
-  if (snapshot.waitingForContinuation) {
-    return undefined;
-  }
-  if (snapshot.latestText) {
-    return snapshot.latestText;
-  }
-  // Tool activity is partial-progress evidence only for a timed-out run. It is
-  // not authoritative completion output when producer terminal facts are absent.
-  if (
-    outcome?.status === "timeout" &&
-    snapshot.latestToolCallCount &&
-    snapshot.latestToolCallCount > 0
-  ) {
-    return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
-  }
-  return undefined;
-}
-
 export async function readSubagentOutput(
   sessionKey: string,
   outcome?: SubagentRunOutcome,
@@ -185,9 +145,16 @@ export async function readSubagentOutput(
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot, outcome);
-  if (selected?.trim()) {
-    return selected;
+  if (snapshot.waitingForContinuation) {
+    return undefined;
+  }
+  if (snapshot.latestText) {
+    return snapshot.latestText;
+  }
+  // Tool activity is partial-progress evidence only for a timed-out run. It is
+  // not authoritative completion output when producer terminal facts are absent.
+  if (outcome?.status === "timeout" && (snapshot.latestToolCallCount ?? 0) > 0) {
+    return `${snapshot.latestToolCallCount} tool call(s) made without visible output.`;
   }
   return undefined;
 }
@@ -198,9 +165,7 @@ export async function readLatestSubagentOutputWithRetry(params: {
   outcome?: SubagentRunOutcome;
 }): Promise<string | undefined> {
   return await readLatestSubagentOutputWithRetryUsing({
-    sessionKey: params.sessionKey,
-    maxWaitMs: params.maxWaitMs,
-    outcome: params.outcome,
+    ...params,
     retryIntervalMs: isFastTestRuntimeEnv() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput,
   });
@@ -215,73 +180,7 @@ export async function readSubagentTimeoutProgress(
   const progress = initial?.trim()
     ? initial
     : await readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs, outcome });
-  return progress && !isAnnounceSkip(progress) && !isSilentReplyText(progress, SILENT_REPLY_TOKEN)
-    ? progress
-    : undefined;
-}
-
-export async function waitForSubagentRunOutcome(
-  runId: string,
-  timeoutMs: number,
-): Promise<AgentWaitResult> {
-  const waitMs = Math.max(0, Math.floor(timeoutMs));
-  return await callSubagentLifecycleGateway({
-    method: "agent.wait",
-    params: {
-      runId,
-      timeoutMs: waitMs,
-    },
-    timeoutMs: waitMs + 2000,
-  });
-}
-
-export function applySubagentWaitOutcome(params: {
-  wait: AgentWaitResult | undefined;
-  outcome: SubagentRunOutcome | undefined;
-  startedAt?: number;
-  endedAt?: number;
-}) {
-  const next = {
-    outcome: params.outcome,
-    startedAt: params.startedAt,
-    endedAt: params.endedAt,
-  };
-  if (typeof params.wait?.startedAt === "number" && typeof next.startedAt !== "number") {
-    next.startedAt = params.wait.startedAt;
-  }
-  if (typeof params.wait?.endedAt === "number" && typeof next.endedAt !== "number") {
-    next.endedAt = params.wait.endedAt;
-  }
-  const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
-  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
-  let outcome = next.outcome;
-  // Capture/announcement callers can pass raw wait snapshots that bypass the
-  // primary normalizers, so apply the canonical classification here instead
-  // of re-enumerating reason groups.
-  if (terminalOutcome) {
-    switch (classifySubagentTerminalOutcome(terminalOutcome)) {
-      case "timeout": {
-        // Retry-grace timeouts retain their pending failure cause; budget timeouts do not.
-        const pendingErrorText =
-          params.wait?.pendingError === true ? (terminalOutcome.error ?? waitError) : undefined;
-        outcome = pendingErrorText
-          ? { status: "timeout", error: pendingErrorText }
-          : { status: "timeout" };
-        break;
-      }
-      case "cancellation":
-        outcome = { status: "error", error: "subagent run terminated" };
-        break;
-      case "failure":
-        outcome = { status: "error", error: terminalOutcome.error ?? waitError };
-        break;
-      case "success":
-        outcome = { status: "ok" };
-        break;
-    }
-  }
-  next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
-  return next;
+  return progress && !isSilentReplyText(progress, SILENT_REPLY_TOKEN) ? progress : undefined;
 }
 
 export async function captureSubagentCompletionReply(
@@ -304,10 +203,22 @@ export async function captureSubagentCompletionReply(
   });
 }
 
+type AnnounceRunReader = (runId: string) => SubagentRunRecord | undefined;
+
+async function prepareAnnounceRunReader(runIds: string[]): Promise<AnnounceRunReader> {
+  const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, runIds);
+  return (runId) => {
+    const current = prepared.consume((runs) => runs.get(runId));
+    return current.ready ? current.value : undefined;
+  };
+}
+
 export async function readSubagentRunAnnounceResult(
-  child: Parameters<typeof readSubagentRunAnnounceResultUsing>[0],
+  child: SubagentRunRecord,
+  readSubagentRun?: AnnounceRunReader,
 ): Promise<PreparedAnnounceResult> {
   return await readSubagentRunAnnounceResultUsing(child, {
+    readSubagentRun: readSubagentRun ?? (await prepareAnnounceRunReader([child.runId])),
     findTranscriptEvent,
     findSessionTranscriptArchiveEventReadOnly,
     getRuntimeConfig,
@@ -319,13 +230,20 @@ export async function readSubagentRunAnnounceResult(
 
 /** Prepare complete result text without changing the bounded lifecycle evidence. */
 export async function readChildCompletionFindings(
-  children: Array<ChildCompletionRow & { runId: string }>,
+  children: SubagentRunRecord[],
+  readSubagentRun?: AnnounceRunReader,
 ): Promise<PreparedAnnounceResult> {
+  const readCurrent =
+    readSubagentRun ?? (await prepareAnnounceRunReader(children.map((child) => child.runId)));
   const results = await Promise.all(
-    children.map(async (child) => ({
-      child,
-      ...(await readSubagentRunAnnounceResult(child)),
-    })),
+    children.map(async (observed) => {
+      const prepared = await readSubagentRunAnnounceResult(observed, readCurrent);
+      const child = readCurrent(observed.runId);
+      if (!child || !prepared.isCurrent()) {
+        throw new Error("A child result changed while preparing the completion batch.");
+      }
+      return { child, ...prepared };
+    }),
   );
   const isCurrent = () => results.every((result) => result.isCurrent());
   if (!isCurrent()) {
@@ -334,15 +252,15 @@ export async function readChildCompletionFindings(
   return {
     text: buildChildCompletionFindings(
       results.map(({ child, text }) => ({
-        announceResult: text,
         childSessionKey: child.childSessionKey,
         task: child.task,
         taskName: child.taskName,
         label: child.label,
         createdAt: child.createdAt,
-        execution: child.execution,
         endedReason: child.endedReason,
+        execution: child.execution,
         completion: child.completion,
+        announceResult: text,
       })),
     ),
     isCurrent,
@@ -362,6 +280,7 @@ export function dedupeLatestChildCompletionRows<
 export function filterCurrentDirectChildCompletionRows<
   T extends ChildCompletionRow & {
     runId: string;
+    childAgentId?: string;
     requesterSessionKey: string;
     requesterAgentId?: string;
   },
@@ -370,21 +289,14 @@ export function filterCurrentDirectChildCompletionRows<
   params: {
     requesterSessionKey: string;
     requesterAgentId?: string;
-    getLatestSubagentRunByChildSessionKey?: (childSessionKey: string) =>
-      | {
-          runId: string;
-          requesterSessionKey: string;
-          requesterAgentId?: string;
-        }
-      | null
-      | undefined;
+    getLatestSubagentRunByChildSessionKey: typeof getLatestSubagentRunByChildSessionKey;
   },
 ): T[] {
-  if (typeof params.getLatestSubagentRunByChildSessionKey !== "function") {
-    return children;
-  }
   return children.filter((child) => {
-    const latest = params.getLatestSubagentRunByChildSessionKey?.(child.childSessionKey);
+    const latest = params.getLatestSubagentRunByChildSessionKey(
+      child.childSessionKey,
+      child.childAgentId,
+    );
     if (!latest) {
       return true;
     }

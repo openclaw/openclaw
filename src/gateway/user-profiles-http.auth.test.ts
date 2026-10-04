@@ -12,14 +12,14 @@ import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-to
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import * as hostAccountAvatar from "../infra/host-account-avatar.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as profileAvatars from "../state/user-profiles-avatar.js";
 import {
-  ensureGatewayOwnerProfile,
   linkEmail,
   setAvatar,
   setUserProfileRole,
   syncGitHubIdentity,
-} from "../state/user-profiles.js";
+} from "../state/user-profile-writes.worker.js";
+import * as profileAvatars from "../state/user-profiles-avatar.js";
+import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createGatewayAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";

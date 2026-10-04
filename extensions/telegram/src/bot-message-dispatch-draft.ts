@@ -192,9 +192,12 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
       ? false
       : typeof resolvedBlockStreamingEnabled === "boolean"
         ? !resolvedBlockStreamingEnabled
-        : canStreamAnswerDraft
-          ? true
-          : undefined;
+        : !params.allowProviderPreview && !params.context.ctxPayload.GroupThread
+          ? // Hooked blocks replace gated drafts, but preserve an explicit global opt-out.
+            params.cfg.agents?.defaults?.blockStreamingDefault === "off"
+          : canStreamAnswerDraft
+            ? true
+            : undefined;
 
   return {
     answerLane: lanes.answer,

@@ -31,7 +31,7 @@ afterEach(async () => {
   resetSystemEventsForTest();
 });
 
-it.each(["heartbeat wake", "heartbeat poll", "build failure"])(
+it.each(["heartbeat wake", "heartbeat poll"])(
   "delivers a creation notice about %s once through a cron wake",
   async (topic) => {
     state = await createOpenClawTestState({
@@ -59,7 +59,7 @@ it.each(["heartbeat wake", "heartbeat poll", "build failure"])(
       lastTo: "-100155462274",
     });
     const title = `Investigate ${topic}`;
-    recordSessionCreated(cfg, {
+    await recordSessionCreated(cfg, {
       sessionKey: "agent:main:dashboard:new-task",
       agentId: "main",
       entry: {

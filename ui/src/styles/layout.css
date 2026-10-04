@@ -1161,7 +1161,7 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-brand__header-control svg {
-  opacity: 0.72;
+  opacity: var(--sidebar-header-icon-opacity, 0.72);
   stroke-width: 1.6px;
   transition: opacity var(--duration-fast) ease;
 }
@@ -1171,8 +1171,8 @@ openclaw-settings-save-indicator:empty {
   height: var(--shell-chrome-control-size);
 }
 
-.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) svg {
-  opacity: 1;
+.sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) {
+  --sidebar-header-icon-opacity: 1;
 }
 
 .sidebar-brand__icon {
@@ -1446,7 +1446,8 @@ openclaw-settings-save-indicator:empty {
   cursor: not-allowed;
 }
 
-.sidebar-session-toolbar__button svg {
+.sidebar-session-toolbar__button svg,
+.sidebar-session-group-actions svg {
   width: 14px;
   height: 14px;
   stroke: currentColor;
@@ -1657,7 +1658,10 @@ openclaw-settings-save-indicator:empty {
   opacity: 0.75;
 }
 
-.sidebar-session-group-toggle__icon svg {
+.sidebar-session-group-toggle__icon svg,
+.sidebar-session-catalog-host__count--error svg,
+.sidebar-session__archive-glyph svg,
+.sidebar-child-session-toggle__icon svg {
   width: 11px;
   height: 11px;
   stroke: currentColor;
@@ -1832,10 +1836,6 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-person-filter {
-  position: relative;
-}
-
 .sidebar-recent-sessions__head:where(:hover, :has(:focus-visible)) .sidebar-session-group-actions,
 .sidebar-session-group-actions[aria-expanded="true"],
 .sidebar-session-group-actions.sidebar-session-sort--filtered {
@@ -1848,16 +1848,6 @@ openclaw-settings-save-indicator:empty {
   background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
   color: var(--text);
   opacity: 1;
-}
-
-.sidebar-session-group-actions svg {
-  width: 14px;
-  height: 14px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 @media (hover: none), (pointer: coarse) {
@@ -1994,14 +1984,6 @@ openclaw-settings-save-indicator:empty {
   color: var(--warn);
 }
 
-.sidebar-session-catalog-host__count--error svg {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
-}
-
 .sidebar-session-catalog-project__head {
   display: flex;
   align-items: center;
@@ -2101,6 +2083,12 @@ openclaw-settings-save-indicator:empty {
   font-size: var(--control-ui-text-xs);
 }
 
+.sidebar-session-empty-hint--startup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
 .sidebar-session--archived {
   opacity: 0.62;
 }
@@ -2115,14 +2103,6 @@ openclaw-settings-save-indicator:empty {
   display: inline-flex;
   margin-right: 5px;
   vertical-align: -2px;
-}
-
-.sidebar-session__archive-glyph svg {
-  width: 11px;
-  height: 11px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.8px;
 }
 
 .sidebar-recent-session--dragging {
@@ -2259,14 +2239,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-child-session-toggle__icon {
   display: inline-flex;
-}
-
-.sidebar-child-session-toggle__icon svg {
-  width: 11px;
-  height: 11px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.8px;
 }
 
 .sidebar-child-session-toggle__count {
@@ -2521,6 +2493,23 @@ openclaw-settings-save-indicator:empty {
   border-radius: 0;
 }
 
+.sidebar-online__filter-toggle {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sidebar-online:where(:hover, :has(:focus-visible)) .sidebar-online__filter-toggle {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (hover: none), (pointer: coarse) {
+  .sidebar-online__filter-toggle {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
 .sidebar-online__list {
   display: flex;
   flex-direction: column;
@@ -2639,6 +2628,10 @@ openclaw-settings-save-indicator:empty {
 .sidebar-online__person:hover .sidebar-online__counts,
 .sidebar-online__person:focus-visible .sidebar-online__counts {
   background: color-mix(in srgb, var(--text) 10%, transparent);
+}
+
+.sidebar-online__count {
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-online__open,
@@ -3280,6 +3273,16 @@ a:is(
     background var(--duration-fast) ease,
     color var(--duration-fast) ease,
     transform var(--duration-fast) ease;
+}
+
+.nav-item__children {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.nav-item--child {
+  padding-inline-start: calc(var(--space-2) + var(--space-4));
 }
 
 .nav-item__icon {
@@ -4846,35 +4849,6 @@ html.openclaw-native-macos:not(.openclaw-native-nav):not(.openclaw-native-web-ch
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.content--chat .content-header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-height: 44px;
-  padding: 4px 8px;
-  overflow: visible;
-  max-height: 44px;
-}
-
-.content--chat .content-header > div:first-child {
-  display: grid;
-  align-items: center;
-  position: relative;
-  text-align: left;
-  min-width: 0;
-}
-
-.content--chat .page-meta {
-  align-self: center;
-  justify-content: flex-end;
-  height: 36px;
-  align-items: center;
-  min-width: max-content;
-  overflow: visible;
 }
 
 .grid {

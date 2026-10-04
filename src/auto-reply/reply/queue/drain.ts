@@ -15,7 +15,7 @@ import {
 import {
   getGatewayRestartDrainSignal,
   isGatewayRestartDrainError,
-  runWithGatewayIndependentRootWorkContinuation,
+  runWithGatewayDetachedWorkContinuation,
   waitForGatewayRestartFenceSettlement,
 } from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -512,10 +512,8 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     };
   }
   const controller = new AbortController();
-  const listeners = new Map<AbortSignal, () => void>();
+  const abort = () => controller.abort();
   for (const signal of signals) {
-    const abort = () => controller.abort();
-    listeners.set(signal, abort);
     if (signal.aborted) {
       abort();
     } else {
@@ -523,12 +521,8 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
     }
   }
   const disposeSignal = (signal: AbortSignal) => {
-    const listener = listeners.get(signal);
-    if (!listener) {
-      return;
-    }
-    signal.removeEventListener("abort", listener);
-    listeners.delete(signal);
+    signal.removeEventListener("abort", abort);
+    signals.delete(signal);
   };
   return {
     signal: controller.signal,
@@ -542,7 +536,7 @@ function createAggregateCancellation(items: readonly FollowupRun[]): AggregateCa
       }
     },
     dispose: () => {
-      for (const signal of listeners.keys()) {
+      for (const signal of signals) {
         disposeSignal(signal);
       }
     },
@@ -573,7 +567,6 @@ type FollowupQueueSummaryState = Pick<
 >;
 
 type QueueSummaryDelivery = {
-  prompt: string;
   droppedCount: number;
   sources: FollowupRun[];
 };
@@ -902,32 +895,33 @@ async function runSyntheticOverflowSummary(params: {
   });
 }
 
-async function drainElidedOverflowSummary(params: {
-  queue: FollowupQueueSummaryState;
-  runFollowup: (run: FollowupRun) => Promise<void>;
-}): Promise<boolean> {
-  const entry = params.queue.summaryElisions[0];
-  if (!entry) {
-    return false;
-  }
-  const retainedSources =
-    params.queue.summaryElisions.length === 1
+async function drainOverflowSummarySources(
+  params: {
+    queue: FollowupQueueSummaryState;
+    runFollowup: (run: FollowupRun) => Promise<void>;
+  },
+  entry?: FollowupQueueSummaryState["summaryElisions"][number],
+): Promise<boolean> {
+  const retainedSources = !entry
+    ? resolveOverflowSummarySourceGroup(params.queue)
+    : params.queue.summaryElisions.length === 1
       ? resolveOverflowSummarySourceGroup(params.queue).filter(
           (source) => resolveFollowupDeliveryContextKey(source) === entry.contextKey,
         )
       : [];
-  const source = retainedSources.at(-1) ?? entry.sources.at(-1);
+  const source = retainedSources.at(-1) ?? entry?.sources.at(-1);
   if (!source) {
     return false;
   }
-  const elidedCount = entry.sources.length;
-  const elidedSources = [...entry.sources];
-  const droppedCount = elidedCount + retainedSources.length;
+  const elidedCount = entry?.sources.length ?? 0;
+  const sources = [...(entry?.sources ?? []), ...retainedSources];
   const retainedSummaryLines = resolveQueueSummaryLines(params.queue, retainedSources);
-  const summaryLines = [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap);
+  const summaryLines = entry
+    ? [...entry.summaryLines, ...retainedSummaryLines].slice(-params.queue.cap)
+    : retainedSummaryLines;
   const prompt = previewQueueSummaryPrompt({
     state: {
-      droppedCount,
+      droppedCount: sources.length,
       summaryLines,
     },
     noun: "message",
@@ -938,23 +932,21 @@ async function drainElidedOverflowSummary(params: {
   const delivered = await runQueueSummaryDelivery(
     params.queue,
     {
-      prompt,
       droppedCount: retainedSources.length,
       sources: retainedSources,
     },
-    async ({ abortSignal, onAdmitted }) => {
-      await runSyntheticOverflowSummary({
+    ({ abortSignal, onAdmitted }) =>
+      runSyntheticOverflowSummary({
         source,
-        sources: [...elidedSources, ...retainedSources],
+        sources,
         prompt,
         abortSignal,
         onAdmitted,
         runFollowup: params.runFollowup,
-      });
-    },
-    [...elidedSources, ...retainedSources],
+      }),
+    sources,
   );
-  if (!delivered) {
+  if (!delivered || !entry) {
     return true;
   }
   const entryIndex = params.queue.summaryElisions.indexOf(entry);
@@ -993,36 +985,11 @@ async function drainOverflowSummaryGroup(params: {
     );
     return true;
   }
-  if (await drainElidedOverflowSummary(params)) {
-    return true;
-  }
-  const sources = resolveOverflowSummarySourceGroup(params.queue);
-  const source = sources.at(-1);
-  if (!source) {
-    return false;
-  }
-  const prompt = previewQueueSummaryPrompt({
-    state: {
-      droppedCount: sources.length,
-      summaryLines: resolveQueueSummaryLines(params.queue, sources),
-    },
-    noun: "message",
-  });
-  if (!prompt) {
-    return false;
-  }
-  const delivery = { prompt, droppedCount: sources.length, sources };
-  await runQueueSummaryDelivery(params.queue, delivery, async ({ abortSignal, onAdmitted }) => {
-    await runSyntheticOverflowSummary({
-      source,
-      sources: delivery.sources,
-      prompt: delivery.prompt,
-      abortSignal,
-      onAdmitted,
-      runFollowup: params.runFollowup,
-    });
-  });
-  return true;
+  const entry = params.queue.summaryElisions[0];
+  return (
+    (entry !== undefined && (await drainOverflowSummarySources(params, entry))) ||
+    (await drainOverflowSummarySources(params))
+  );
 }
 
 export function scheduleFollowupDrain(
@@ -1302,8 +1269,10 @@ export function scheduleFollowupDrain(
   // Give the detached chain its own root so inherited request admission cannot go stale.
   // Queued turns re-admit on the generation current at drain time: the detached
   // drain runs outside any ambient prepared-generation scope, so a parked turn
-  // never inherits the predecessor run's replaced generation.
-  void runWithGatewayIndependentRootWorkContinuation(
+  // never inherits the predecessor run's replaced generation. The drain also owns
+  // a fresh async work scope: drained turns run tracked agent work that must keep
+  // working after the triggering request's scope has closed.
+  void runWithGatewayDetachedWorkContinuation(
     () => runOutsidePreparedModelRuntimePluginGenerationScope(drainQueuedFollowups),
     "session:followup-drain",
   ).catch((err: unknown) => {

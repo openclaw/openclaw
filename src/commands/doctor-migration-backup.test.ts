@@ -8,6 +8,7 @@ import * as sqliteSnapshot from "../infra/sqlite-snapshot.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import * as version from "../version.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
+import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -76,6 +77,19 @@ describe("Doctor migration backup retries", () => {
     expect(listBackups(fixture.shared)).toHaveLength(1);
     expect(listBackups(fixture.agent)).toHaveLength(1);
     expect(readPreservedValue(listBackups(fixture.agent)[0]!)).toBe("agent before migration");
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: fixture.env });
+    expect(preview.artifacts).toHaveLength(2);
+    expect(preview.artifacts).toEqual(
+      expect.arrayContaining(
+        [fixture.shared, fixture.agent].map((database) =>
+          expect.objectContaining({
+            path: listBackups(database)[0],
+            outcome: "protected",
+            reason: "incomplete-recovery-operation",
+          }),
+        ),
+      ),
+    );
   });
 
   it("does not reuse a completed group until capture-marker removal is durable", async () => {

@@ -2,15 +2,8 @@ import path from "node:path";
 import { vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { readAcpSessionMeta } from "../../acp/runtime/session-meta.js";
-import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import {
-  onSubagentRegistryPersisted,
-  persistSubagentRunsToDiskOrThrow,
-} from "../../agents/subagents/registry/subagent-registry-state.js";
-import {
-  createCanonicalSubagentRunFixture,
-  settleSubagentRegistryPersistenceWork,
-} from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
+import { subscribeSubagentRunChanges } from "../../agents/subagents/registry/subagent-registry-publication.js";
+import { settleSubagentRegistryPersistenceWork } from "../../agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   getSubagentRunByChildSessionKey,
@@ -45,7 +38,7 @@ export function nativeSubagentClient(): AgentHandlerArgs["client"] {
 
 export function observeAgentSubagentCleanup(params: { runId: string; childSessionKey: string }) {
   const cleanupCompleted = createDeferred();
-  const unsubscribe = onSubagentRegistryPersisted(() => {
+  const unsubscribe = subscribeSubagentRunChanges("persistence", () => {
     const entry = getSubagentRunByChildSessionKey(params.childSessionKey);
     if (entry?.runId === params.runId && entry.cleanupCompletedAt) {
       cleanupCompleted.resolve();
@@ -75,24 +68,17 @@ export function createPluginSubagentTestLifetime(params: {
     async [Symbol.asyncDispose]() {
       cleanup[Symbol.dispose]();
       await work.drain();
-      resetSubagentRegistryForTests({ persist: false });
+      await resetSubagentRegistryForTests({ persist: false });
       await cleanupSessionStateForTest({ stateDir: params.root });
     },
   };
 }
 
-/** Native replacement compares the complete paused owner with its durable source row. */
-export function seedPersistedSubagentRunForAgentTest(
+/** Seed the paused owner's durable row and published projection together. */
+export async function seedPersistedSubagentRunForAgentTest(
   overrides: Parameters<typeof addSubagentRunForTests>[0],
 ) {
-  const entry = createCanonicalSubagentRunFixture({
-    ...createSubagentRunRecord(overrides),
-    endedAt: overrides.endedAt,
-  });
-  // The registry fixture binds physical requester/controller stores before persistence.
-  addSubagentRunForTests(entry);
-  persistSubagentRunsToDiskOrThrow(new Map([[entry.runId, entry]]), [entry.runId]);
-  return entry;
+  await addSubagentRunForTests(overrides);
 }
 
 // Shared by spawned-child handler fixtures; real transcript reads stay in the fixture root.
@@ -118,15 +104,15 @@ export async function withPluginSubagentTestState(
 ): Promise<void> {
   const state = await createOpenClawTestState({ prefix, layout: "state-only" });
   try {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await run(state);
   } finally {
     // Stop producers, then join admitted work before deleting storage. A failed join retains it.
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await vi.dynamicImportSettled();
     await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
     await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await state.cleanup();
   }
 }

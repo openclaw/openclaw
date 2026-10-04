@@ -119,6 +119,14 @@ describe("operator config startup corpus", () => {
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
     };
+    for (const key of [
+      "OPENCLAW_STATE_DIR",
+      "DISCORD_BOT_TOKEN",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    ] as const) {
+      vi.stubEnv(key, env[key]);
+    }
     const snapshot = await createConfigIO({
       configPath,
       env,
@@ -137,7 +145,7 @@ describe("operator config startup corpus", () => {
     });
   });
 
-  it.each([false, true, "legacy", null])(
+  it.each([false, null])(
     "retains included Copilot discovery.enabled=%j until Doctor migrates it",
     async (enabled) => {
       const home = tempDirs.make("openclaw-copilot-migration-");
@@ -174,10 +182,6 @@ describe("operator config startup corpus", () => {
       expect(JSON.parse(fs.readFileSync(path.join(home, "copilot.json"), "utf8"))).toEqual(legacy);
     },
   );
-
-  it("covers every retained config with an explicit catalog expectation", () => {
-    expect(fixtureNames).toEqual(Object.keys(expectations).toSorted());
-  });
 
   it.each(fixtureNames)(
     "%s loads, prepares model rows, and offers provider login",

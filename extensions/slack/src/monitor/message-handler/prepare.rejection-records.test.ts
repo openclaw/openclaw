@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../../types.js";
 import { prepareSlackMessage } from "./prepare.js";
 import {
@@ -8,8 +8,6 @@ import {
 } from "./prepare.test-helpers.js";
 
 const store = createSlackSessionStoreFixture("slack-rejection-record-");
-beforeAll(() => store.setup());
-afterAll(() => store.cleanup());
 afterEach(() => vi.restoreAllMocks());
 function fixture() {
   const ctx = createInboundSlackTestContext({

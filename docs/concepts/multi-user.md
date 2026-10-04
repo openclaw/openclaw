@@ -51,7 +51,7 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 - **Assign to me**: take responsibility for the session yourself.
 - **Assign to…**: pick any registered person or configured agent, including offline people and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
-Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action, not session settings, reset/delete, or global group controls. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action. An admitted operator with `operator.sessions.write` can also ask the agent to rename a session they created through a label-only patch; other session settings, reset/delete, and global group controls remain restricted. The default sandbox exposes only renaming for these non-owner writers. Explicit sandbox allowlists and denials still apply; explicitly permitting `sessions` retains the actions allowed by the caller’s authority. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
 
 Archive and restore require the creator or a Gateway admin (`operator.admin`), including for existing sessions after an upgrade. Assigned owners who are not the creator no longer receive these permissions. If the creator is unavailable, or the session has no usable profile creator, an admin can archive or restore it from the session menu. Reassigning an owner does not change archive authority.
 
@@ -186,11 +186,11 @@ Reactions on channel-origin prompts are also mirrored to that channel as the
 bot's reaction when the channel supports them. A skipped or failed channel
 mirror does not remove the Control UI reaction. On channels where the bot holds
 one reaction per message, such as Telegram bots and WhatsApp, the channel shows
-the most recently mirrored emoji, and removing it clears the channel reaction
-even when other emoji remain in the Control UI. Reactions on assistant replies
-are not mirrored because the transcript does not retain their delivered channel
-message IDs. See [Chat reactions](/web/control-ui/chat#reactions) for the palette
-and toggle controls.
+the most recently mirrored emoji. Removing an emoji keeps the newest remaining
+Control UI emoji on the channel; removing the last emoji clears the channel
+reaction. Reactions on assistant replies are not mirrored because the transcript
+does not retain their delivered channel message IDs. See
+[Chat reactions](/web/control-ui/chat#reactions) for the palette and toggle controls.
 
 ## Mentioning people
 

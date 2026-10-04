@@ -8,6 +8,7 @@ import {
   CHROME_MCP_SESSION_TARGET_PREFIX,
   CHROME_MCP_SNAPSHOT_REF_PREFIX,
   MCP_REQUEST_TIMEOUT_CODE,
+  STALE_SELECTED_PAGE_ERROR,
   ChromeMcpReconnectRequiredError,
   type ChromeMcpCallOptions,
   type ChromeMcpOptionsInput,
@@ -26,7 +27,6 @@ import {
   extractChromeMcpToolError,
   extractStructuredPages,
   formatChromeMcpToolErrorMessage,
-  shouldReconnectForToolError,
 } from "./chrome-mcp-result.js";
 import { getChromeMcpSessionOwner } from "./chrome-mcp-session.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
@@ -118,18 +118,6 @@ async function withChromeMcpOperationLock<T>(
       void queued.catch(() => {});
     }
   }
-}
-
-function updateChromeMcpTargetMappings(
-  routing: ChromeMcpRoutingState,
-  targetIdByPageId: Map<number, string>,
-): void {
-  for (const [pageId, targetId] of routing.targetIdByPageId) {
-    if (!targetIdByPageId.has(pageId)) {
-      routing.snapshotsByTarget.delete(targetId);
-    }
-  }
-  routing.targetIdByPageId = targetIdByPageId;
 }
 
 /** UID-only MCP actions cannot distinguish collisions between renderer documents. */
@@ -277,7 +265,7 @@ export async function callTool(
   // poisons it, so the outer pre-operation list may reconnect once.
   const message = extractChromeMcpToolError(result, name, args);
   if (message) {
-    if (shouldReconnectForToolError(name, message)) {
+    if (name === "list_pages" && message.includes(STALE_SELECTED_PAGE_ERROR)) {
       if (!lease.temporary && lease.owner.isCurrent(lease.session)) {
         await lease.owner.close(lease.session);
       }
@@ -391,7 +379,12 @@ export function registerChromeMcpTargets(
     targetIdByPageId.set(page.id, targetId);
     targets.push({ page, targetId });
   }
-  updateChromeMcpTargetMappings(routing, targetIdByPageId);
+  for (const [pageId, targetId] of routing.targetIdByPageId) {
+    if (!targetIdByPageId.has(pageId)) {
+      routing.snapshotsByTarget.delete(targetId);
+    }
+  }
+  routing.targetIdByPageId = targetIdByPageId;
   return targets;
 }
 
@@ -401,7 +394,7 @@ export async function withChromeMcpTarget<T>(
 ): Promise<T> {
   return await withChromeMcpLease(
     params.profileName,
-    params.profile ?? params.userDataDir,
+    params.profile,
     params,
     async (lease, normalizedProfileOptions) => {
       const routing = getChromeMcpRoutingState(lease.session);

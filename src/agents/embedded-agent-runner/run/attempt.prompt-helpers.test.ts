@@ -91,6 +91,33 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     expect(runBeforePromptBuild).toHaveBeenCalledOnce();
   });
 
+  it("separates verbatim ordinary prompt-build fields from other pending context", async () => {
+    hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
+      queuedInjections: [],
+    });
+    const promptFields = {
+      systemPrompt: "  system  ",
+      prependContext: "prefix\n",
+      appendContext: " suffix",
+      prependSystemContext: "system prefix",
+      appendSystemContext: "system suffix",
+    };
+
+    const result = await resolvePromptBuildHookResult({
+      config: {},
+      prompt: "hello",
+      messages: [],
+      hookCtx: { sessionKey: "agent:main:main" },
+      hookRunner: {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => promptFields),
+      },
+    });
+
+    expect(result.decisionPromptBuildFields).toEqual(promptFields);
+    expect(result.hasPendingNonPromptBuildContext).toBe(false);
+  });
+
   it("reuses drained injections across retries and releases them when the run ends", async () => {
     hostHookStateMocks.drainPluginNextTurnInjectionContext.mockResolvedValue({
       queuedInjections: [

@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
+import {
+  createRetainedOperation,
+  type RetainedOperation,
+} from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, beforeEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
-import type {
-  OwnedWorkerTask,
-  WorkerTaskInput,
-  WorkerTaskOptions,
-} from "../infra/worker-task-pool.types.js";
+import { createOwnedWorkerTaskPoolMock } from "../infra/worker-task-pool.mock.test-support.js";
+import type { WorkerTaskInput, WorkerTaskOptions } from "../infra/worker-task-pool.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   OpenClawStateReadReply,
@@ -73,12 +74,14 @@ beforeEach(() => {
   mock.closePool.mockReset().mockResolvedValue();
   mock.closeResources.mockReset().mockResolvedValue();
   mock.rotate.mockReset().mockResolvedValue();
-  mock.create.mockReset().mockImplementation(() => ({
-    startTask: mock.runTask,
-    close: mock.closePool,
-    closeResources: mock.closeResources,
-    rotate: mock.rotate,
-  }));
+  mock.create.mockReset().mockImplementation(() =>
+    createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
+      startTask: mock.runTask,
+      close: mock.closePool,
+      closeResources: mock.closeResources,
+      rotate: mock.rotate,
+    }),
+  );
 });
 
 export function source(name = "source.sqlite") {

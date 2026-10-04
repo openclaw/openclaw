@@ -98,19 +98,14 @@ export function normalizeConfig({
     return providerConfig;
   }
 
-  const next: OllamaProviderConfigDraft = { ...providerConfig };
-
-  // If baseUrl is missing, empty, or whitespace-only, default to local Ollama host.
-  if (typeof next.baseUrl !== "string" || !next.baseUrl.trim()) {
-    next.baseUrl = OLLAMA_DEFAULT_BASE_URL;
-  }
-
-  // If models is missing/not an array, default to empty array to signal discovery.
-  if (!Array.isArray(next.models)) {
-    next.models = [];
-  }
-
-  return next;
+  return {
+    ...providerConfig,
+    baseUrl:
+      typeof providerConfig.baseUrl === "string" && providerConfig.baseUrl.trim()
+        ? providerConfig.baseUrl
+        : OLLAMA_DEFAULT_BASE_URL,
+    models: Array.isArray(providerConfig.models) ? providerConfig.models : [],
+  };
 }
 
 /**

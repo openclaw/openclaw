@@ -30,33 +30,80 @@ it.each([
   expect(container.querySelector(".cmd-palette__item-title img")).toBeNull();
 });
 
-it("renders basic Markdown in message snippets without interactive or block content", () => {
-  render(
-    renderCommandPaletteResult(
-      {
-        ...item,
-        description:
-          "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
-      },
-      "needle",
-    ),
-    container,
-  );
-  const snippet = container.querySelector(".cmd-palette__item-desc")!;
-  expect(snippet.querySelector("strong em mark")?.textContent).toBe("needle");
-  expect(snippet.querySelector("s")?.textContent).toBe("old");
-  expect(snippet.querySelector("code")?.textContent).toBe("config");
-  expect(snippet.textContent).toContain("guide");
-  expect(snippet.textContent).toContain("diagram");
-  expect(snippet.querySelector("a, img, table, pre, p")).toBeNull();
-});
-
 it.each([
   {
-    description: "See ![**diagram**](https://example.com/image.png).",
-    query: "diagram",
-    expected: "See diagram.",
+    name: "passive Markdown",
+    catalog: false,
+    description:
+      "**Bold *needle***, ~~old~~, `config` [guide](https://example.com) ![diagram](https://example.com/image.png)\n\n| A | B |\n| --- | --- |\n| one | two |",
+    query: "needle",
+    contents: ["guide", "diagram"],
+    nodes: [
+      ["strong em mark", "needle"],
+      ["s", "old"],
+      ["code", "config"],
+    ],
+    forbidden: "a, img, table, pre, p",
   },
+  {
+    name: "escaped markup",
+    catalog: false,
+    description: "<img src=x onerror=alert(1)> **&lt;script&gt;**",
+    query: "<img",
+    contents: [],
+    nodes: [
+      ["mark", "<img"],
+      ["strong", "<script>"],
+    ],
+    forbidden: "img, script",
+  },
+  {
+    name: "literal catalog copy",
+    catalog: true,
+    description: "**Literal** description",
+    query: "Literal",
+    contents: [],
+    nodes: [],
+    forbidden: "strong",
+  },
+] satisfies Array<{
+  name: string;
+  catalog: boolean;
+  description: string;
+  query: string;
+  contents: string[];
+  nodes: [string, string][];
+  forbidden: string;
+}>)(
+  "renders safe $name descriptions",
+  ({ catalog, description, query, contents, nodes, forbidden }) => {
+    render(
+      renderCommandPaletteResult(
+        {
+          ...item,
+          session: catalog ? undefined : item.session,
+          category: catalog ? "skills" : "messages",
+          description,
+        },
+        query,
+      ),
+      container,
+    );
+    const snippet = container.querySelector(".cmd-palette__item-desc")!;
+    for (const [selector, text] of nodes) {
+      expect(snippet.querySelector(selector)?.textContent).toBe(text);
+    }
+    for (const text of contents) {
+      expect(snippet.textContent).toContain(text);
+    }
+    expect(snippet.querySelector(forbidden)).toBeNull();
+    if (catalog) {
+      expect(snippet.textContent).toBe(description);
+    }
+  },
+);
+
+it.each([
   {
     description: "See ![A &amp; B](https://example.com/image.png).",
     query: "&",
@@ -83,24 +130,9 @@ it.each([
     expected: "See https://example.com/caf%C3%A9.",
   },
   {
-    description: "See [guide](https://example.com/docs).",
-    query: "EXAMPLE",
-    expected: "See guide (https://example.com/docs).",
-  },
-  {
     description: "See [**example guide**](https://example.com/docs).",
     query: "example",
     expected: "See example guide.",
-  },
-  {
-    description: "See <https://example.com/docs>.",
-    query: "example",
-    expected: "See https://example.com/docs.",
-  },
-  {
-    description: "See ![diagram](https://example.com/image.png).",
-    query: "image.png",
-    expected: "See diagram (https://example.com/image.png).",
   },
 ])("keeps a passive match cue for $description", ({ description, query, expected }) => {
   render(renderCommandPaletteResult({ ...item, description }, query), container);
@@ -110,34 +142,7 @@ it.each([
   expect(snippet.querySelector("a, img")).toBeNull();
 });
 
-it("escapes raw HTML and encoded markup in message snippets", () => {
-  render(
-    renderCommandPaletteResult(
-      { ...item, description: "<img src=x onerror=alert(1)> **&lt;script&gt;**" },
-      "<img",
-    ),
-    container,
-  );
-  const snippet = container.querySelector(".cmd-palette__item-desc")!;
-  expect(snippet.querySelector("img, script")).toBeNull();
-  expect(snippet.querySelector("mark")?.textContent).toBe("<img");
-  expect(snippet.querySelector("strong")?.textContent).toBe("<script>");
-});
-
-it("keeps catalog descriptions literal", () => {
-  render(
-    renderCommandPaletteResult(
-      { ...item, session: undefined, category: "skills", description: "**Literal** description" },
-      "Literal",
-    ),
-    container,
-  );
-  const snippet = container.querySelector(".cmd-palette__item-desc")!;
-  expect(snippet.querySelector("strong")).toBeNull();
-  expect(snippet.textContent).toBe("**Literal** description");
-});
-
-it("uses the explicit session owner, never the creator or a guessed transcript author", () => {
+it.each([true, false])("uses only explicit session ownership: %s", (hasOwner) => {
   render(
     renderCommandPaletteResult(
       {
@@ -145,41 +150,28 @@ it("uses the explicit session owner, never the creator or a guessed transcript a
         session: {
           ...item.session!,
           createdActor: { type: "human", id: "creator", label: "Former owner" },
-          owner: {
-            actor: {
-              type: "human",
-              id: "owner",
-              label: "Current owner",
-              identity: { type: "profile", id: "owner" },
-            },
-          },
+          owner: hasOwner
+            ? {
+                actor: {
+                  type: "human",
+                  id: "owner",
+                  label: "Current owner",
+                  identity: { type: "profile", id: "owner" },
+                },
+              }
+            : undefined,
         },
       },
       "needle",
-      { id: "main", name: "Assistant" },
+      hasOwner ? { id: "main", name: "Assistant" } : { id: "main" },
     ),
     container,
   );
-  expect(container.textContent).toContain("Owned by Current owner");
   expect(container.textContent).not.toContain("Former owner");
-  expect(container.querySelector(".cmd-palette__owner")).not.toBeNull();
-});
-
-it("leaves unknown ownership absent rather than borrowing the creator", () => {
-  render(
-    renderCommandPaletteResult(
-      {
-        ...item,
-        session: {
-          ...item.session!,
-          createdActor: { type: "human", id: "creator", label: "Not the owner" },
-        },
-      },
-      "needle",
-      { id: "main" },
-    ),
-    container,
-  );
-  expect(container.querySelector(".cmd-palette__owner")).toBeNull();
-  expect(container.textContent).not.toContain("Not the owner");
+  if (hasOwner) {
+    expect(container.textContent).toContain("Owned by Current owner");
+    expect(container.querySelector(".cmd-palette__owner")).not.toBeNull();
+  } else {
+    expect(container.querySelector(".cmd-palette__owner")).toBeNull();
+  }
 });

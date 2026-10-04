@@ -22,6 +22,7 @@ import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
 import type { SkillsConfig } from "./types.skills.js";
+import type { StorageConfig } from "./types.storage.js";
 import type { TelemetryConfig } from "./types.telemetry.js";
 import type { ToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
@@ -97,6 +98,8 @@ export type OpenClawConfig = {
   worktreeRoot?: string;
   /** Use filesystem acceleration for new worktrees when supported (default: true). */
   worktreeAcceleration?: boolean;
+  /** Global live managed-worktree cap; oldest idle checkouts may lose unsaved data (default: 4096). */
+  worktreeMaxCount?: number;
   /** Tool exposure, policy, web/media tools, exec, and code-mode settings. */
   tools?: ToolsConfig;
   /** Legacy/direct agent bindings used by runtime resolution. */
@@ -130,6 +133,8 @@ export type OpenClawConfig = {
   gateway?: GatewayConfig;
   /** Opt-in cloud-worker provider profiles. */
   cloudWorkers?: CloudWorkersConfig;
+  /** Named storage destinations and their encryption settings. */
+  storage?: StorageConfig;
   /** Experimental desktop sources owned by the gateway host. */
   desktop?: DesktopConfig;
   /** Memory indexing/search configuration. */
@@ -151,8 +156,6 @@ type BrandedConfigState<TState extends string> = OpenClawConfig & {
   readonly [openClawConfigStateBrand]?: TState;
 };
 
-/** Authored config before include/env resolution and runtime defaults. */
-export type SourceConfig = BrandedConfigState<"source">;
 /** Source config after includes/env substitution, before runtime defaults. */
 export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
 /** Runtime-materialized config with defaults/normalization applied. */
@@ -175,12 +178,8 @@ export type ConfigValidationIssue = {
   allowedValuesHiddenCount?: number;
 };
 
-export type LegacyConfigIssue = {
-  /** Dot-path to the legacy config value. */
-  path: string;
-  /** Human-readable migration or rejection message. */
-  message: string;
-};
+/** Dot-path and migration or rejection message for a legacy config value. */
+export type LegacyConfigIssue = Pick<ConfigValidationIssue, "path" | "message">;
 
 export type ConfigFileSnapshot = {
   /** Config file path that was read. */

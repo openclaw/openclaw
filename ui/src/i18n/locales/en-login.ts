@@ -32,10 +32,11 @@ const enLogin = {
         retrying: "Retrying now…",
       },
       profileUnavailable: {
-        title: "Profile verification unavailable",
+        title: "Couldn't verify your account",
+        summary: "OpenClaw couldn't check your account right now. Please try again shortly.",
         stepRetry: "Retry shortly.",
         stepAdmin:
-          "If this continues, ask a Gateway administrator to check the identity provider and GitHub API credential.",
+          "If this continues, ask the person who manages OpenClaw to check account access.",
       },
       verifiedUserRequired: {
         title: "Verified identity required",
@@ -119,6 +120,13 @@ const enLogin = {
         waiting:
           "Waiting for approval… this page connects on its own once the request is approved.",
         checkNow: "Check now",
+        declinedTitle: "Access request declined",
+        declinedSummary:
+          "The operator declined this browser's access request. Automatic retries have stopped. You can request approval again when you are ready.",
+        expiredTitle: "Access request expired",
+        expiredSummary:
+          "This browser's access request timed out without approval. Request approval again to continue.",
+        requestAgain: "Request again",
       },
       insecure: {
         title: "Secure browser context required",

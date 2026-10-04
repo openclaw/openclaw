@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { DirectiveResult } from "lit/directive.js";
 import { t } from "../i18n/index.ts";
 import {
   summarizeSidebarSessionAttention,
@@ -166,6 +167,7 @@ export function renderTeamSessionSlots(
   includeChildren: boolean,
   childCount: number,
   groupConflicts = 0,
+  runVisibility?: DirectiveResult,
 ) {
   const attention = summarizeSidebarSessionAttention(
     rows.flatMap((row) =>
@@ -207,7 +209,12 @@ export function renderTeamSessionSlots(
               >${icons.globe}</span
             >`
           : active
-            ? renderSessionGlyph({ content: nothing, running: true, queued: active === queued })
+            ? renderSessionGlyph({
+                content: nothing,
+                running: true,
+                queued: active === queued,
+                runVisibility,
+              })
             : rows.length === 1 && rows[0]?.isChild
               ? renderSessionIdleState(rows[0])
               : nothing;

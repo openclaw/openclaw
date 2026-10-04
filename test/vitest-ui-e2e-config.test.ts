@@ -113,6 +113,7 @@ const qaLabFiles = [
 const realGatewayFiles = [
   "activity-run-inspector.real-gateway",
   "agent-file-lifecycle.real-gateway",
+  "background-work.real-gateway",
   "chat-agent-avatar.real-gateway",
   "chat-collaborator-scroll.real-gateway",
   "chat-composer-websearch-kill-switch.real-gateway",
@@ -605,6 +606,13 @@ describe("Control UI E2E resource ownership", () => {
         expect(result.rootWorkers).toBe(workers);
       }
       expect(result.files.filter((entry) => entry.phase === 1)).toEqual([
+        {
+          file: "ui/src/e2e/background-work.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
         {
           file: "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",

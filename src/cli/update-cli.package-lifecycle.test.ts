@@ -3,7 +3,7 @@ import path from "node:path";
 import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
 import { describe, expect, it, vi } from "vitest";
 import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
-import type { PackageUpdateTransaction } from "../infra/package-update-steps.js";
+import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
 import {
   createDeferredConfiguredPluginRepairDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
@@ -14,6 +14,7 @@ import { cleanupStaleManagedServiceUpdateHandoffs } from "../infra/update-manage
 import { renderUpdateRunReport } from "../infra/update-run-report.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { createCommandResult as commandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../version.js";
 import {
@@ -68,6 +69,7 @@ import {
 await vi.hoisted(() => import("./update-cli-mocks.test-support.js"));
 
 describe("update-cli", () => {
+  const nodeExecutable = resolveTestNodeExecPath();
   const {
     createCaseDir,
     mockCurrentProcessFreshDoctor,
@@ -136,15 +138,12 @@ describe("update-cli", () => {
     },
   );
 
-  it.each([
-    {
-      name: "dry-run",
-      options: { dryRun: true, json: true, tag: "main", yes: true },
-    },
-  ] as const)("refuses --tag main before package resolution: $name", async ({ options }) => {
+  it("refuses --tag main before dry-run package resolution", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update-main-refusal"));
 
-    await expect(updateCommand(options)).rejects.toEqual(new ExitError(1));
+    await expect(
+      updateCommand({ dryRun: true, json: true, tag: "main", yes: true }),
+    ).rejects.toEqual(new ExitError(1));
 
     const result = lastWriteJsonCall() as UpdateRunResult | undefined;
     expect(result).toMatchObject({
@@ -165,9 +164,7 @@ describe("update-cli", () => {
     });
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
     expectNoSideEffects(resolveGlobalManager, replaceConfigFile, updateGitCheckout);
-    if ("dryRun" in options && options.dryRun) {
-      expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
-    }
+    expect(cleanupStaleManagedServiceUpdateHandoffs).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getErrorOutput()).toContain("openclaw update --channel dev");
   });
@@ -321,14 +318,16 @@ describe("update-cli", () => {
     expectNoSideEffects(serviceStart, serviceRestart);
   });
 
-  it.each(["config-input-changed", "requester-revoked"])(
-    "reports a refused activation Doctor write with its keys (%s)",
+  it.each(["config-input-changed", "requester-revoked", "timeout"] as const)(
+    "fails package activation when Doctor reports %s",
     async (reason) => {
+      const timedOut = reason === "timeout";
+      const target = timedOut ? "2026.4.21" : "2026.9.4";
       const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
-        tempDirs.make("openclaw-update-doctor-refusal-"),
-        "2026.9.3",
+        tempDirs.make("openclaw-update-doctor-failure-"),
+        timedOut ? "2026.4.20" : "2026.9.3",
       );
-      primeNpmChannelTag("latest", "2026.9.4");
+      primeNpmChannelTag("latest", target);
       mockFileBackedPathExists();
       const refusal = {
         reason,
@@ -337,6 +336,14 @@ describe("update-cli", () => {
       };
       mockNpmGlobalCommands(nodeModules, async (argv, options) => {
         if (argv[1] === entryPath && argv[2] === "doctor") {
+          if (timedOut) {
+            return commandResult({
+              stderr: "doctor timed out",
+              code: 124,
+              killed: true,
+              termination: "timeout",
+            });
+          }
           const env = typeof options === "number" ? undefined : options.env;
           const resultPath = requireValue(
             env?.[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV],
@@ -349,18 +356,36 @@ describe("update-cli", () => {
           return commandResult({ code: 1 });
         }
         if (argv[0] === "npm" && argv[1] === "i") {
-          await writeNpmPackageInstall(argv, pkgRoot, "2026.9.4");
+          await writeNpmPackageInstall(argv, pkgRoot, target);
         }
         return undefined;
       });
       await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
         new ExitError(1),
       );
-      expect(lastWriteJsonCall()).toMatchObject({
-        status: "error",
-        reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
-        steps: expect.arrayContaining([expect.objectContaining({ configWriteRefusal: refusal })]),
-      });
+      if (!timedOut) {
+        expect(lastWriteJsonCall()).toMatchObject({
+          status: "error",
+          reason: reason === "requester-revoked" ? reason : "repair-requires-config-change",
+          steps: expect.arrayContaining([expect.objectContaining({ configWriteRefusal: refusal })]),
+        });
+      } else {
+        expect(doctorCommandCall()?.[0].slice(1)).toEqual([
+          entryPath,
+          "doctor",
+          "--non-interactive",
+        ]);
+        expect(spawn).not.toHaveBeenCalled();
+        expect(defaultRuntime.exit).not.toHaveBeenCalled();
+        const result = lastWriteJsonCall() as UpdateRunResult | undefined;
+        const doctorStep = result?.steps.find((step) => step.name === "openclaw doctor");
+        expect(doctorStep?.exitCode).toBe(124);
+        expect(doctorStep?.advisory).toBeUndefined();
+        expect(doctorStep?.termination).toBe("timeout");
+        expect(getLogOutput()).not.toContain(
+          "Post-install doctor failed after the package install was verified",
+        );
+      }
     },
   );
 
@@ -428,7 +453,7 @@ describe("update-cli", () => {
           ?.OPENCLAW_UPDATE_PARENT_SUPPORTS_GATEWAY_RESTART,
       ).toBe("1");
       const postCoreCall = spawnCall();
-      expect(postCoreCall?.[0]).toMatch(/node/);
+      expect(postCoreCall?.[0]).toBe(process.execPath);
       expect(postCoreCall?.[1]).toEqual([
         entryPath,
         "update",
@@ -474,47 +499,6 @@ describe("update-cli", () => {
     },
   );
 
-  it("fails package updates when the post-update doctor is killed after verification", async () => {
-    const tempDir = tempDirs.make("openclaw-update-package-doctor-timeout-");
-    const { nodeModules, pkgRoot, entryPath } = await setupInstalledPackageRoot(
-      tempDir,
-      "2026.4.20",
-    );
-    primeNpmChannelTag("latest", "2026.4.21");
-    mockFileBackedPathExists();
-    mockNpmGlobalCommands(nodeModules, async (argv) => {
-      if (argv[1] === entryPath && argv[2] === "doctor") {
-        return commandResult({
-          stderr: "doctor timed out",
-          code: 124,
-          killed: true,
-          termination: "timeout",
-        });
-      }
-      if (argv[0] === "npm" && argv[1] === "i") {
-        await writeNpmPackageInstall(argv, pkgRoot, "2026.4.21");
-      }
-      return undefined;
-    });
-
-    await expect(updateCommand({ yes: true, restart: false, json: true })).rejects.toEqual(
-      new ExitError(1),
-    );
-
-    const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
-    expect(spawn).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-    const jsonOutput = lastWriteJsonCall() as UpdateRunResult | undefined;
-    const doctorStep = jsonOutput?.steps.find((step) => step.name === "openclaw doctor");
-    expect(doctorStep?.exitCode).toBe(124);
-    expect(doctorStep?.advisory).toBeUndefined();
-    expect(doctorStep?.termination).toBe("timeout");
-    expect(getLogOutput()).not.toContain(
-      "Post-install doctor failed after the package install was verified",
-    );
-  });
-
   it.each([
     { json: true, handoff: "1", expectedExitCode: 79 },
     { json: false, handoff: undefined, expectedExitCode: 1 },
@@ -526,7 +510,12 @@ describe("update-cli", () => {
       resumeScheduledTaskAutoStartAfterUpdate.mockRejectedValue(new Error("task restore denied"));
       const root = await mockPackageInstallAtCaseDir("openclaw-update-autostart-restore-failure");
       mockCurrentProcessFreshDoctor({ packageRoot: root });
-      mockRunningManagedGateway(["node", path.join(root, "dist", "index.js"), "gateway", "run"]);
+      mockRunningManagedGateway([
+        nodeExecutable,
+        path.join(root, "dist", "index.js"),
+        "gateway",
+        "run",
+      ]);
       mockFileBackedPathExists();
       setTty(true);
       setStdoutTty(true);
@@ -688,7 +677,7 @@ describe("update-cli", () => {
     });
     await fs.mkdir(path.join(foreignRoot, "src"));
     await fs.mkdir(path.join(foreignRoot, "extensions"));
-    primeServiceCommand(["node", foreignEntry, "gateway", "run"]);
+    primeServiceCommand([nodeExecutable, foreignEntry, "gateway", "run"]);
     serviceLoaded.mockResolvedValue(true);
     serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
     readPackageVersion.mockImplementation(
@@ -708,7 +697,7 @@ describe("update-cli", () => {
     });
 
     const doctorCall = doctorCommandCall();
-    expect(doctorCall?.[0][0]).toContain("node");
+    expect(doctorCall?.[0][0]).toBe(nodeExecutable);
     expect(doctorCall?.[0].slice(1)).toEqual([entryPath, "doctor", "--non-interactive"]);
     expect(
       (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_UPDATE_IN_PROGRESS,

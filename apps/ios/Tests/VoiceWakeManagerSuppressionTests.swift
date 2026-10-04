@@ -11,8 +11,8 @@ struct VoiceWakeManagerSuppressionTests {
         manager.isEnabled = true
         manager.statusText = "Paused"
 
-        manager.setSuppressedByTalk(true)
-        manager.setSuppressedByTalk(false)
+        manager.setSuppressed(true, reason: .talk)
+        manager.setSuppressed(false, reason: .talk)
 
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
@@ -25,15 +25,15 @@ struct VoiceWakeManagerSuppressionTests {
         manager.isEnabled = true
         manager.statusText = "Listening"
 
-        manager.setSuppressedByVoiceNote(true)
-        manager.setSuppressedByTalk(true)
-        manager.setSuppressedByTalk(false)
+        manager.setSuppressed(true, reason: .voiceNote)
+        manager.setSuppressed(true, reason: .talk)
+        manager.setSuppressed(false, reason: .talk)
 
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Paused")
         #expect(manager.isListening == false)
 
-        manager.setSuppressedByVoiceNote(false)
+        manager.setSuppressed(false, reason: .voiceNote)
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
@@ -41,7 +41,7 @@ struct VoiceWakeManagerSuppressionTests {
     @Test
     @MainActor func `enabling Voice Wake during push to talk remains suppressed`() async {
         let manager = VoiceWakeManager._test_withoutRestartDelays()
-        manager.setSuppressedByPushToTalk(true)
+        manager.setSuppressed(true, reason: .pushToTalk)
 
         manager.setEnabled(true)
         await manager._test_waitForScheduledStart()
@@ -49,7 +49,7 @@ struct VoiceWakeManagerSuppressionTests {
         #expect(manager.statusText == "Paused")
         #expect(manager.isListening == false)
 
-        manager.setSuppressedByPushToTalk(false)
+        manager.setSuppressed(false, reason: .pushToTalk)
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
@@ -59,14 +59,14 @@ struct VoiceWakeManagerSuppressionTests {
         let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.statusText = "Listening"
-        manager.setSuppressedByTalk(true)
-        manager.setSuppressedByPushToTalk(true)
+        manager.setSuppressed(true, reason: .talk)
+        manager.setSuppressed(true, reason: .pushToTalk)
 
-        manager.setSuppressedByTalk(false)
+        manager.setSuppressed(false, reason: .talk)
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Paused")
 
-        manager.setSuppressedByPushToTalk(false)
+        manager.setSuppressed(false, reason: .pushToTalk)
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
@@ -76,16 +76,16 @@ struct VoiceWakeManagerSuppressionTests {
         let manager = VoiceWakeManager._test_withoutRestartDelays()
         manager.isEnabled = true
         manager.statusText = "Listening"
-        manager.setSuppressedForAuxiliaryAudio(true)
-        manager.setSuppressedForBackground(true)
+        manager.setSuppressed(true, reason: .auxiliaryAudio)
+        manager.setSuppressed(true, reason: .background)
 
-        manager.setSuppressedForAuxiliaryAudio(false)
+        manager.setSuppressed(false, reason: .auxiliaryAudio)
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Paused")
         #expect(manager._test_isSuppressedForBackground())
         #expect(!manager._test_isSuppressedForAuxiliaryAudio())
 
-        manager.setSuppressedForBackground(false)
+        manager.setSuppressed(false, reason: .background)
         await manager._test_waitForScheduledStart()
         #expect(manager.statusText == "Voice Wake isn’t supported on Simulator")
     }
@@ -98,7 +98,7 @@ struct VoiceWakeManagerSuppressionTests {
         manager.isListening = true
         let staleGeneration = manager._test_recognitionGeneration()
 
-        manager.setSuppressedByPushToTalk(true)
+        manager.setSuppressed(true, reason: .pushToTalk)
 
         let transcript = "openclaw hello"
         let triggerRange = try #require(transcript.range(of: "openclaw"))

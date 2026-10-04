@@ -31,45 +31,36 @@ beforeEach(() => {
   userctl.mockReset();
 });
 
-it("finds a running Gateway whose system unit file is gone", async () => {
-  systemctl.mockImplementation(async (args) =>
-    args.includes("list-units")
-      ? success("custom-rescue.service loaded active running custom Gateway\n")
-      : success(
-          "Id=custom-rescue.service\n" +
-            "FragmentPath=/etc/systemd/system/custom-rescue.service\n" +
-            "ExecStart={ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }\n" +
-            "ActiveState=active\n",
-        ),
-  );
-
-  await expect(
-    listLoadedSystemdUnits("system", { DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus" }),
-  ).resolves.toEqual([
-    {
-      name: "custom-rescue.service",
-      fragmentPath: "/etc/systemd/system/custom-rescue.service",
-      execStart:
-        "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }",
-    },
-  ]);
-  expect(systemctl).toHaveBeenCalledTimes(2);
-  expect(systemctl.mock.calls[1]?.[0]).toContain(
-    "--property=Id,FragmentPath,ExecStart,ActiveState",
-  );
-});
-
-it("refuses a partial loaded-unit reply", async () => {
-  systemctl.mockImplementation(async (args) =>
-    args.includes("list-units")
-      ? success("custom-rescue.service loaded active running custom Gateway\n")
-      : success("Id=unrelated.service\nFragmentPath=\nActiveState=active\n"),
-  );
-
-  await expect(
-    listLoadedSystemdUnits("system", { DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus" }),
-  ).rejects.toThrow("properties could not be inspected");
-});
+it.each([false, true])(
+  "inspects removed system units and refuses partial replies (partial=%s)",
+  async (partial) => {
+    const name = "custom-rescue.service";
+    const fragmentPath = "/etc/systemd/system/custom-rescue.service";
+    const execStart =
+      "{ path=/usr/bin/node ; argv[]=/usr/bin/node /opt/openclaw/dist/entry.js gateway ; }";
+    systemctl.mockImplementation(async (args) =>
+      args.includes("list-units")
+        ? success(`${name} loaded active running custom Gateway\n`)
+        : success(
+            partial
+              ? "Id=unrelated.service\nFragmentPath=\nActiveState=active\n"
+              : `Id=${name}\nFragmentPath=${fragmentPath}\nExecStart=${execStart}\nActiveState=active\n`,
+          ),
+    );
+    const inventory = listLoadedSystemdUnits("system", {
+      DBUS_SYSTEM_BUS_ADDRESS: "unix:path=/fixture/bus",
+    });
+    if (partial) {
+      await expect(inventory).rejects.toThrow("properties could not be inspected");
+    } else {
+      await expect(inventory).resolves.toEqual([{ name, fragmentPath, execStart }]);
+      expect(systemctl).toHaveBeenCalledTimes(2);
+      expect(systemctl.mock.calls[1]?.[0]).toContain(
+        "--property=Id,FragmentPath,ExecStart,ActiveState",
+      );
+    }
+  },
+);
 
 it.each(
   (["user", "system"] as const).flatMap((scope) =>

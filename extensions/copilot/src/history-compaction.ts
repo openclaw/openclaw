@@ -2,6 +2,7 @@ import {
   buildAgentHookContextChannelFields,
   type AgentHarnessCompactParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createCopilotAbortError } from "./prompt-error.js";
 
 export interface CopilotHistoryCompactResult {
   success: boolean;
@@ -30,16 +31,9 @@ export interface CopilotHistoryCompactSession {
 }
 
 export function throwIfAborted(signal: AbortSignal | undefined): void {
-  if (!signal?.aborted) {
-    return;
+  if (signal?.aborted) {
+    throw createCopilotAbortError(signal.reason);
   }
-  const reason = "reason" in signal ? signal.reason : undefined;
-  if (reason instanceof Error) {
-    throw reason;
-  }
-  const error = reason ? new Error("aborted", { cause: reason }) : new Error("aborted");
-  error.name = "AbortError";
-  throw error;
 }
 
 export function isStaleSdkSessionError(error: unknown): boolean {

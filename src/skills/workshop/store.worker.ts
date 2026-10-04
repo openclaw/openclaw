@@ -1,11 +1,13 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import { requestSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { assertOpenClawStateLeasesWorkerOwnedInTransaction } from "../../state/openclaw-state-lease-worker.js";
-import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
+import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+} from "../../state/worker-operation-registry.js";
 import {
   listSkillCollectionReviewOutcomesInDatabase,
   readSkillCollectionBackupDropsInDatabase,
@@ -32,162 +34,197 @@ import {
   commitPendingSkillProposalTransitionInDatabase,
   readCommittedSkillProposalTransitionInDatabase,
 } from "./store-sqlite-transition.js";
-import type { SkillWorkshopExecutionOperations } from "./store.worker-contract.js";
 
-type Operations = SkillWorkshopExecutionOperations &
-  Pick<
-    OpenClawStateWorkerOperations,
-    "skills.curator.read" | "skills.usage.record" | "workshop.events.list"
-  >;
+type WorkshopInput<Value> = {
+  value: Value;
+  agentId?: string;
+  leaseIdentities?: readonly OpenClawStateLeaseIdentity[];
+};
 
-export function isSkillWorkshopCommand(command: {
-  type: string;
-  input: unknown;
-}): command is SqliteWorkerCommand<Operations> {
-  switch (command.type) {
-    case "skills.curator.read":
-    case "skills.usage.record":
-    case "workshop.events.list":
-    case "workshop.schema.ensure":
-    case "workshop.proposal.read":
-    case "workshop.proposals.list":
-    case "workshop.proposal.create":
-    case "workshop.proposal.update":
-    case "workshop.proposal.import":
-    case "workshop.proposal.evaluate":
-    case "workshop.transition.commit":
-    case "workshop.transition.committed":
-    case "workshop.rollback.read":
-    case "workshop.rollback.write":
-    case "workshop.rollback.clear":
-    case "workshop.collection.list":
-    case "workshop.collection.drops":
-    case "workshop.experience.record":
-      return true;
-    default:
-      return false;
+function assertWrite(
+  db: DatabaseSync,
+  input: WorkshopInput<unknown>,
+  stage: "transaction" | "commit",
+) {
+  if (input.leaseIdentities) {
+    assertOpenClawStateLeasesWorkerOwnedInTransaction(db, input.leaseIdentities, stage);
+  } else {
+    requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
   }
 }
 
-export function executeSkillWorkshopCommand(
-  command: SqliteWorkerCommand<Operations>,
-  database: OpenClawStateDatabase,
-  databasePath: string,
-): Operations[keyof Operations]["output"] {
-  if (command.type === "skills.curator.read") {
-    return readSkillCuratorStateInDatabase(database, command.input.skillFiles);
-  }
-  const options = {
-    database,
-    path: databasePath,
-    env: getSqliteWorkerStateContext().environment,
-  };
-  if (command.type === "skills.usage.record") {
-    return runOpenClawStateWriteTransaction(
-      (current) => recordSkillUsageInDatabase(current, command.input),
-      options,
-    );
-  }
-  if (command.type === "workshop.events.list") {
-    ensureSkillWorkshopSchemaInDatabase(database, options);
-    return listStoredSkillProposalEventsInDatabase(database.db, command.input);
-  }
-  const { leaseIdentities } = command.input;
-  const assertWrite = (db: DatabaseSync, stage: "transaction" | "commit") => {
-    if (leaseIdentities) {
-      assertOpenClawStateLeasesWorkerOwnedInTransaction(db, leaseIdentities, stage);
-    } else {
-      requestSqliteWorkerOperationAdmission({ stage, facts: undefined });
-    }
-  };
-  if (command.type === "workshop.schema.ensure") {
-    return ensureSkillWorkshopSchemaInDatabase(database, options, assertWrite);
-  }
-  const write = <T>(operationLabel: string, operation: () => T, proposalId?: string): T =>
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        assertWrite(db, "transaction");
-        if (leaseIdentities) {
-          const stored = proposalId ? readStoredProposalInDatabase(db, proposalId) : null;
-          const agentId = command.input.agentId;
-          for (const identity of leaseIdentities) {
-            if (
-              !agentId ||
-              (identity.scope === "skill-collection"
-                ? identity.key !== agentId
-                : identity.scope !== "skill-workshop-target" ||
-                  !stored ||
-                  identity.key !==
-                    `${agentId}:${hashSkillProposalContent(stored.record.target.skillFile)}`) ||
-              (stored !== null &&
-                stored.row.owner_agent_id !== null &&
-                stored.row.owner_agent_id !== agentId)
-            ) {
-              throw new Error("Skill Workshop lease does not match its proposal target.");
-            }
+function write<T>(
+  input: WorkshopInput<unknown>,
+  { open, stateOptions }: WorkerOperationContext,
+  operationLabel: string,
+  operation: (database: OpenClawStateDatabase) => T,
+  proposalId?: string,
+): T {
+  const database = open();
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      assertWrite(db, input, "transaction");
+      if (input.leaseIdentities) {
+        const stored = proposalId ? readStoredProposalInDatabase(db, proposalId) : null;
+        const { agentId } = input;
+        for (const identity of input.leaseIdentities) {
+          if (
+            !agentId ||
+            (identity.scope === "skill-collection"
+              ? identity.key !== agentId
+              : identity.scope !== "skill-workshop-target" ||
+                !stored ||
+                identity.key !==
+                  `${agentId}:${hashSkillProposalContent(stored.record.target.skillFile)}`) ||
+            (stored !== null &&
+              stored.row.owner_agent_id !== null &&
+              stored.row.owner_agent_id !== agentId)
+          ) {
+            throw new Error("Skill Workshop lease does not match its proposal target.");
           }
         }
-        const result = operation();
-        assertWrite(db, "commit");
-        return result;
-      },
-      options,
-      { operationLabel },
-    );
-  switch (command.type) {
-    case "workshop.proposal.read":
-      return readStoredProposalInDatabase(database.db, command.input.value);
-    case "workshop.proposals.list":
-      return listStoredSkillProposalsInDatabase(database.db, command.input.value);
-    case "workshop.proposal.create":
-      return write("skill-workshop.proposal.create", () =>
-        createSkillProposalInDatabase(database.db, command.input.value),
-      );
-    case "workshop.proposal.update":
-      return write(
-        "skill-workshop.proposal.update",
-        () => updateSkillProposalRecordInDatabase(database.db, command.input.value),
-        command.input.value.record.id,
-      );
-    case "workshop.proposal.import":
-      return write("doctor.skill-workshop.import", () =>
-        importLegacySkillProposalInDatabase(database.db, command.input.value),
-      );
-    case "workshop.proposal.evaluate":
-      return write(
-        "skill-workshop.proposal.evaluate",
-        () => recordSkillProposalEvaluationInDatabase(database.db, command.input.value),
-        command.input.value.proposalId,
-      );
-    case "workshop.transition.commit":
-      return write(
-        command.input.value.operationLabel,
-        () => commitPendingSkillProposalTransitionInDatabase(database.db, command.input.value),
-        command.input.value.expected.id,
-      );
-    case "workshop.transition.committed":
-      return readCommittedSkillProposalTransitionInDatabase(database.db, command.input.value);
-    case "workshop.rollback.read":
-      return readSkillProposalRollbackInDatabase(database.db, command.input.value);
-    case "workshop.rollback.write":
-      return write(
-        "skill-workshop.rollback.write",
-        () => writeSkillProposalRollbackInDatabase(database.db, command.input.value),
-        command.input.value.proposalId,
-      );
-    case "workshop.rollback.clear":
-      return write(
-        "skill-workshop.rollback.clear",
-        () => clearSkillProposalRollbackInDatabase(database.db, command.input.value),
-        command.input.value.proposalId,
-      );
-    case "workshop.collection.list":
-      return listSkillCollectionReviewOutcomesInDatabase(database.db, command.input.value);
-    case "workshop.collection.drops":
-      return readSkillCollectionBackupDropsInDatabase(database.db, command.input.value);
-    case "workshop.experience.record":
-      return write("skill-workshop.experience.record", () =>
-        recordSkillExperienceReviewOutcomeInDatabase(database, command.input.value),
-      );
-  }
+      }
+      const result = operation(database);
+      assertWrite(db, input, "commit");
+      return result;
+    },
+    { database, ...stateOptions() },
+    { operationLabel },
+  );
 }
+
+export const skillCuratorOperations = {
+  "skills.curator.read": (input: { skillFiles: readonly string[] }, { open }) =>
+    readSkillCuratorStateInDatabase(open(), input.skillFiles),
+  "skills.usage.record": (
+    input: Parameters<typeof recordSkillUsageInDatabase>[1],
+    { open, stateOptions },
+  ) =>
+    runOpenClawStateWriteTransaction((current) => recordSkillUsageInDatabase(current, input), {
+      database: open(),
+      ...stateOptions(),
+    }),
+} satisfies WorkerOperationHandlers;
+
+export const skillWorkshopOperations = {
+  "workshop.events.list": (
+    input: Parameters<typeof listStoredSkillProposalEventsInDatabase>[1],
+    { open, stateOptions },
+  ) => {
+    const database = open();
+    ensureSkillWorkshopSchemaInDatabase(database, { database, ...stateOptions() });
+    return listStoredSkillProposalEventsInDatabase(database.db, input);
+  },
+  "workshop.schema.ensure": (input: WorkshopInput<undefined>, { open, stateOptions }) => {
+    const database = open();
+    return ensureSkillWorkshopSchemaInDatabase(
+      database,
+      { database, ...stateOptions() },
+      (db, stage) => assertWrite(db, input, stage),
+    );
+  },
+  "workshop.proposal.read": (
+    input: WorkshopInput<Parameters<typeof readStoredProposalInDatabase>[1]>,
+    { open },
+  ) => readStoredProposalInDatabase(open().db, input.value),
+  "workshop.proposals.list": (
+    input: WorkshopInput<Parameters<typeof listStoredSkillProposalsInDatabase>[1]>,
+    { open },
+  ) => listStoredSkillProposalsInDatabase(open().db, input.value),
+  "workshop.proposal.create": (
+    input: WorkshopInput<Parameters<typeof createSkillProposalInDatabase>[1]>,
+    context,
+  ) =>
+    write(input, context, "skill-workshop.proposal.create", (database) =>
+      createSkillProposalInDatabase(database.db, input.value),
+    ),
+  "workshop.proposal.update": (
+    input: WorkshopInput<Parameters<typeof updateSkillProposalRecordInDatabase>[1]>,
+    context,
+  ) =>
+    write(
+      input,
+      context,
+      "skill-workshop.proposal.update",
+      (database) => updateSkillProposalRecordInDatabase(database.db, input.value),
+      input.value.record.id,
+    ),
+  "workshop.proposal.import": (
+    input: WorkshopInput<Parameters<typeof importLegacySkillProposalInDatabase>[1]>,
+    context,
+  ) =>
+    write(input, context, "doctor.skill-workshop.import", (database) =>
+      importLegacySkillProposalInDatabase(database.db, input.value),
+    ),
+  "workshop.proposal.evaluate": (
+    input: WorkshopInput<Parameters<typeof recordSkillProposalEvaluationInDatabase>[1]>,
+    context,
+  ) =>
+    write(
+      input,
+      context,
+      "skill-workshop.proposal.evaluate",
+      (database) => recordSkillProposalEvaluationInDatabase(database.db, input.value),
+      input.value.proposalId,
+    ),
+  "workshop.transition.commit": (
+    input: WorkshopInput<
+      Parameters<typeof commitPendingSkillProposalTransitionInDatabase>[1] & {
+        operationLabel: string;
+      }
+    >,
+    context,
+  ) =>
+    write(
+      input,
+      context,
+      input.value.operationLabel,
+      (database) => commitPendingSkillProposalTransitionInDatabase(database.db, input.value),
+      input.value.expected.id,
+    ),
+  "workshop.transition.committed": (
+    input: WorkshopInput<Parameters<typeof readCommittedSkillProposalTransitionInDatabase>[1]>,
+    { open },
+  ) => readCommittedSkillProposalTransitionInDatabase(open().db, input.value),
+  "workshop.rollback.read": (
+    input: WorkshopInput<Parameters<typeof readSkillProposalRollbackInDatabase>[1]>,
+    { open },
+  ) => readSkillProposalRollbackInDatabase(open().db, input.value),
+  "workshop.rollback.write": (
+    input: WorkshopInput<Parameters<typeof writeSkillProposalRollbackInDatabase>[1]>,
+    context,
+  ) =>
+    write(
+      input,
+      context,
+      "skill-workshop.rollback.write",
+      (database) => writeSkillProposalRollbackInDatabase(database.db, input.value),
+      input.value.proposalId,
+    ),
+  "workshop.rollback.clear": (
+    input: WorkshopInput<Parameters<typeof clearSkillProposalRollbackInDatabase>[1]>,
+    context,
+  ) =>
+    write(
+      input,
+      context,
+      "skill-workshop.rollback.clear",
+      (database) => clearSkillProposalRollbackInDatabase(database.db, input.value),
+      input.value.proposalId,
+    ),
+  "workshop.collection.list": (
+    input: WorkshopInput<Parameters<typeof listSkillCollectionReviewOutcomesInDatabase>[1]>,
+    { open },
+  ) => listSkillCollectionReviewOutcomesInDatabase(open().db, input.value),
+  "workshop.collection.drops": (
+    input: WorkshopInput<Parameters<typeof readSkillCollectionBackupDropsInDatabase>[1]>,
+    { open },
+  ) => readSkillCollectionBackupDropsInDatabase(open().db, input.value),
+  "workshop.experience.record": (
+    input: WorkshopInput<Parameters<typeof recordSkillExperienceReviewOutcomeInDatabase>[1]>,
+    context,
+  ) =>
+    write(input, context, "skill-workshop.experience.record", (database) =>
+      recordSkillExperienceReviewOutcomeInDatabase(database, input.value),
+    ),
+} satisfies WorkerOperationHandlers;

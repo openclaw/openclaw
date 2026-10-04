@@ -486,7 +486,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       environmentId: "handoff-worker",
       ownerEpoch: 1,
     });
-    const draining = placements.startDrain({
+    const draining = await placements.startDrain({
       sessionId: REQUEST.sessionId,
       environmentId: "handoff-worker",
       ownerEpoch: 1,
@@ -495,7 +495,7 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
     if (draining.state !== "draining") {
       throw new Error(`Expected draining placement, received ${draining.state}`);
     }
-    const claim = placements.claimReclaimWorkspaceResult({
+    const claim = await placements.claimReclaimWorkspaceResult({
       sessionId: REQUEST.sessionId,
       sessionKey: REQUEST.sessionKey,
       agentId: "main",

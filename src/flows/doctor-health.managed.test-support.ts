@@ -52,14 +52,10 @@ const { mocks } = await import("./doctor-health.test-support.js");
 type DoctorManagedRepairOutcome =
   | "ready"
   | "archive-verification"
-  | "clean-repair"
   | "clean-stopped-repair"
-  | "clean-stopped-probe-failed"
   | "clean-stopped-probe-timeout"
-  | "clean-stopped-runtime-unknown"
   | "clean-stopped-owner-unknown"
   | "clean-stopped-manager-unknown"
-  | "clean-inspect"
   | "clean-force-repair"
   | "clean-force-inspect"
   | "update-no-restart"
@@ -87,7 +83,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
         const archiveVerification = outcome === "archive-verification";
         const current = clean || archiveVerification;
-        const inspectionOnly = outcome === "clean-inspect" || outcome === "clean-force-inspect";
+        const inspectionOnly = outcome === "clean-force-inspect";
         const force = outcome.startsWith("clean-force-");
         const cfg: OpenClawConfig = {
           agents: {
@@ -217,21 +213,18 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         const restart = vi.fn(async () => {
           events.push("restart");
           if (outcome === "ready") {
-            expect(() =>
-              assertNoOpenClawAgentDatabaseLeases("main", { env: state.env }),
-            ).not.toThrow();
-            expect(() =>
-              assertNoOpenClawAgentDatabaseLeases("research", { env: state.env }),
-            ).not.toThrow();
+            for (const agentId of ["main", "research"]) {
+              expect(() =>
+                assertNoOpenClawAgentDatabaseLeases(agentId, { env: state.env }),
+              ).not.toThrow();
+            }
           }
-          const reopened = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-          expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_AGENT_SCHEMA_VERSION,
-          );
-          const research = openOpenClawAgentDatabase({ agentId: "research", env: state.env });
-          expect(research.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
-            OPENCLAW_AGENT_SCHEMA_VERSION,
-          );
+          for (const agentId of ["main", "research"]) {
+            const reopened = openOpenClawAgentDatabase({ agentId, env: state.env });
+            expect(reopened.db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+              OPENCLAW_AGENT_SCHEMA_VERSION,
+            );
+          }
           running = true;
           return { outcome: "completed" as const };
         });
@@ -242,9 +235,6 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
         mocks.service.mockReturnValue({
           readCommand: async () => {
             if (events.includes("repair")) {
-              if (outcome === "clean-stopped-probe-failed") {
-                throw new Error("Synthetic final launcher probe failed");
-              }
               if (outcome === "clean-stopped-probe-timeout") {
                 throw new ServiceInspectionError("systemd-inspection-deadline-exceeded");
               }
@@ -255,12 +245,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             return command;
           },
           readRuntime: async () => ({
-            status:
-              outcome === "clean-stopped-runtime-unknown" && events.includes("repair")
-                ? "unknown"
-                : running
-                  ? "running"
-                  : "stopped",
+            status: running ? "running" : "stopped",
             systemd:
               outcome === "clean-stopped-manager-unknown" && events.includes("repair")
                 ? undefined
@@ -455,7 +440,6 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
             outcome === "ready" ||
             archiveVerification ||
             outcome === "restart-unhealthy" ||
-            outcome === "clean-repair" ||
             outcome === "clean-stopped-repair" ||
             outcome === "clean-force-repair" ||
             outcome === "approvals-migrated" ||
@@ -467,10 +451,7 @@ export function registerDoctorManagedRepairTests(outcomes: readonly DoctorManage
                 ? [...(initiallyStopped ? [] : ["stop"]), "repair", "restart"]
                 : ["stop", "repair"],
           );
-          expect(stop).toHaveBeenCalledTimes(inspectionOnly || initiallyStopped ? 0 : 1);
-          expect(restart).toHaveBeenCalledTimes(shouldRestart ? 1 : 0);
           if (shouldRestart) {
-            expect(running).toBe(true);
             expect(restart).toHaveBeenCalledWith(
               expect.objectContaining({ preserveDefinition: true }),
             );

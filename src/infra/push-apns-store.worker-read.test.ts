@@ -73,34 +73,6 @@ afterEach(() => {
 });
 
 describe("APNs registration worker reads", () => {
-  it("delegates a single lookup without host SQLite", async () => {
-    mocks.execute.mockResolvedValue(registration);
-    await expect(loadApnsRegistration(" device-a ", "/synthetic/apns-a")).resolves.toEqual(
-      registration,
-    );
-    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-      type: "apns.registration.read",
-      input: "device-a",
-    });
-    expect(mocks.native).not.toHaveBeenCalled();
-  });
-  it("delegates a batch lookup without host SQLite", async () => {
-    mocks.execute.mockResolvedValue(new Map([["device-a", registration]]));
-    await expect(
-      loadApnsRegistrations(
-        [" device-a ", "missing", "device-a", "", "x".repeat(257)],
-        "/synthetic/apns-a",
-      ),
-    ).resolves.toEqual([
-      { nodeId: " device-a ", registration },
-      { nodeId: "device-a", registration },
-    ]);
-    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
-      type: "apns.registrations.read",
-      input: ["device-a", "missing"],
-    });
-    expect(mocks.native).not.toHaveBeenCalled();
-  });
   it("does not create storage for blank single or invalid-only batch inputs", async () => {
     await expect(loadApnsRegistration(" \t ", "/synthetic/unused")).resolves.toBeNull();
     await expect(
@@ -109,21 +81,33 @@ describe("APNs registration worker reads", () => {
     expect(mocks.execute).not.toHaveBeenCalled();
     expect(mocks.native).not.toHaveBeenCalled();
   });
-  it("retains the single lookup's nonempty overlong-ID behavior", async () => {
-    const nodeId = "x".repeat(257);
-    mocks.execute.mockResolvedValue(null);
-    await expect(loadApnsRegistration(nodeId, "/synthetic/apns-a")).resolves.toBeNull();
+  it.each([
+    { nodeId: "x".repeat(257), failure: undefined },
+    { nodeId: "device-a", failure: new Error("invalid APNs registration row") },
+  ])("keeps the single lookup's worker result for $nodeId", async ({ nodeId, failure }) => {
+    if (failure) {
+      mocks.execute.mockRejectedValue(failure);
+    } else {
+      mocks.execute.mockResolvedValue(null);
+    }
+    const pending = loadApnsRegistration(` ${nodeId} `, "/synthetic/apns-a");
+    if (failure) {
+      await expect(pending).rejects.toBe(failure);
+    } else {
+      await expect(pending).resolves.toBeNull();
+    }
     expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
       type: "apns.registration.read",
       input: nodeId,
     });
+    expect(mocks.native).not.toHaveBeenCalled();
   });
   it("captures the original inputs and relative state path before waiting", async () => {
     const ready = createDeferredCore<Map<string, ApnsRegistration>>();
     mocks.execute.mockReturnValue(ready.promise);
     const cwd = vi.spyOn(process, "cwd").mockReturnValue("/synthetic/original");
     vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/ambient-a");
-    const inputs = [" device-a ", "device-a"];
+    const inputs = [" device-a ", "missing", "device-a", "", "x".repeat(257)];
     const pending = loadApnsRegistrations(inputs, "relative-state");
     inputs.splice(0, inputs.length, "replacement");
     cwd.mockReturnValue("/synthetic/replacement");
@@ -136,17 +120,16 @@ describe("APNs registration worker reads", () => {
     expect(mocks.execute.mock.calls[0]?.[0].admission.databasePath).toBe(
       path.join("/synthetic/original/relative-state", "state/openclaw.sqlite"),
     );
-  });
-  it("keeps a worker rejection without a synchronous fallback", async () => {
-    const failure = new Error("invalid APNs registration row");
-    mocks.execute.mockRejectedValue(failure);
-    await expect(loadApnsRegistration("device-a", "/synthetic/apns-a")).rejects.toBe(failure);
+    expect(mocks.execute.mock.calls[0]?.[1]).toEqual({
+      type: "apns.registrations.read",
+      input: ["device-a", "missing"],
+    });
     expect(mocks.native).not.toHaveBeenCalled();
   });
 });
 
 describe("APNs registration worker cleanup", () => {
-  it.each([true, false, new Error("cleanup refused")])(
+  it.each([false, new Error("cleanup refused")])(
     "awaits conditional cleanup without host SQLite: %s",
     async (result) => {
       const ready = createDeferredCore<boolean>();

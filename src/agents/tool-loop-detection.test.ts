@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { wrapExternalContent } from "../security/external-content.js";
+import { getCodeModeToolOutcome, recordCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { reconcileToolCallExecutionParams } from "./tool-loop-call-reconciliation.js";
 import {
   UNKNOWN_TOOL_THRESHOLD,
@@ -628,6 +629,28 @@ describe("tool-loop-detection", () => {
       details: { status: "running", totalLines: 1, totalChars: 40_000 },
     });
     expect(recorded?.resultHash).toHaveLength(64);
+  });
+
+  it("keeps only bounded Code Mode identities across 2,000 retained receipts", () => {
+    const loop = createLoop("exec", { code: "return result;" });
+    const receipts: object[] = [];
+    let retainedBytes = 0;
+    for (let index = 0; index < 2_000; index++) {
+      const payload = {
+        status: "completed",
+        value: wrapExternalContent("same result ".repeat(512), { source: "browser" }),
+        telemetry: { callCount: index },
+      };
+      const receipt = recordCodeModeToolOutcome({}, payload);
+      receipts.push(receipt);
+      retainedBytes += Buffer.byteLength(getCodeModeToolOutcome(receipt)!);
+      loop.record(receipt);
+    }
+    expect(retainedBytes).toBeLessThanOrEqual(receipts.length * 64);
+    expect(loop.state.toolCallHistory).toHaveLength(HISTORY_SIZE);
+    expect(loop.detect()).toMatchObject({ stuck: true, level: "critical" });
+    loop.record(recordCodeModeToolOutcome({}, { status: "completed", value: "new result" }));
+    expect(loop.detect()).not.toMatchObject({ level: "critical" });
   });
 
   it("attaches outcomes to pending calls while trimming the history window", () => {

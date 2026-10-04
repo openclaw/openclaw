@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
@@ -531,13 +532,7 @@ function trimGroupContextCache(now: number): void {
     }
     groupContextCache.delete(key);
   }
-  while (groupContextCache.size > GROUP_CONTEXT_CACHE_MAX_ENTRIES) {
-    const oldestKey = groupContextCache.keys().next().value;
-    if (!oldestKey) {
-      break;
-    }
-    groupContextCache.delete(oldestKey);
-  }
+  pruneMapToMaxSize(groupContextCache, GROUP_CONTEXT_CACHE_MAX_ENTRIES);
 }
 
 function writeCachedGroupContext(profile: string, context: ZaloGroupContext): void {

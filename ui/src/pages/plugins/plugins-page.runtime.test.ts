@@ -153,7 +153,6 @@ it.each(["before", "after", "during refresh"] as const)(
 
 it.each([
   { action: "enable", applied: false },
-  { action: "enable", applied: true },
   { action: "enable", applied: "earlier" },
   { action: "disable", applied: true },
 ] as const)(

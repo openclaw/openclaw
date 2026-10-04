@@ -1,6 +1,6 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
@@ -32,7 +32,6 @@ import {
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { buildFileLogMessage, type FileLogMessagePart } from "./logger-file-message.js";
 import { fileLogTransport } from "./logger-file-transport.js";
-import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import {
   redactSecrets,
@@ -50,6 +49,7 @@ const DEFAULT_LOG_FILE = `${DEFAULT_LOG_DIR}/openclaw.log`; // legacy single-fil
 
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 const DEFAULT_MAX_LOG_FILE_BYTES = 100 * 1024 * 1024; // 100 MB
+let cachedHostname: string | null = null;
 
 type LogObj = { date?: Date } & Record<string, unknown>;
 
@@ -227,14 +227,14 @@ function readFirstContextString(
 }
 
 function resolveLogHostname(): string {
-  if (loggerHostnameState.cached) {
-    return loggerHostnameState.cached;
+  if (cachedHostname) {
+    return cachedHostname;
   }
-  const hostname = loggerHostnameState.resolver().trim();
+  const hostname = os.hostname().trim();
   if (!hostname) {
     return "unknown";
   }
-  loggerHostnameState.cached = hostname;
+  cachedHostname = hostname;
   return hostname;
 }
 
@@ -266,30 +266,15 @@ function extractLogBindingPrefix(numericArgs: unknown[]): {
   return { args: numericArgs };
 }
 
-function findLogTraceContext(
-  bindings: Record<string, unknown> | undefined,
-  numericArgs: readonly unknown[],
-): DiagnosticTraceContext | undefined {
-  const fromBindings = extractTraceContext(bindings);
-  if (fromBindings) {
-    return fromBindings;
-  }
-  for (const arg of numericArgs) {
-    const fromArg = extractTraceContext(arg);
-    if (fromArg) {
-      return fromArg;
-    }
-  }
-  return undefined;
-}
-
 function resolveLogTraceContext(
   bindings: Record<string, unknown> | undefined,
   numericArgs: readonly unknown[],
 ): { trace?: DiagnosticTraceContext; trustedTraceContext: boolean } {
-  const explicitTrace = findLogTraceContext(bindings, numericArgs);
-  if (explicitTrace) {
-    return { trace: explicitTrace, trustedTraceContext: false };
+  for (const value of [bindings, ...numericArgs]) {
+    const trace = extractTraceContext(value);
+    if (trace) {
+      return { trace, trustedTraceContext: false };
+    }
   }
   const activeTrace = getActiveDiagnosticTraceContext();
   return activeTrace
@@ -298,7 +283,7 @@ function resolveLogTraceContext(
 }
 
 function prepareFileLogRecord(logObj: TsLogRecord): {
-  fields: Record<string, string>;
+  fields: Record<string, string> & { hostname: string };
   messageParts: FileLogMessagePart[];
 } {
   const entries = getSortedNumericLogEntries(logObj);
@@ -573,10 +558,7 @@ function buildLogger(): TsLogger<LogObj> {
         const line = serializeRedactedFileLogRecord(
           {
             ...logObj,
-            _meta: withResolvedLogMetaHostname(
-              logObj["_meta"],
-              expectDefined(fields.hostname, "structured log hostname"),
-            ),
+            _meta: withResolvedLogMetaHostname(logObj["_meta"], fields.hostname),
             time,
             ...fields,
           },
@@ -587,7 +569,7 @@ function buildLogger(): TsLogger<LogObj> {
         );
         fileLogTransport.enqueue({
           file: activeFile,
-          hostname: expectDefined(fields.hostname, "structured log hostname"),
+          hostname: fields.hostname,
           maxFileBytes: settings.maxFileBytes,
           payload: `${line}\n`,
         });
@@ -685,8 +667,7 @@ export function resetLogger() {
   loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
   loggingState.overrideSettings = null;
   invalidateLoggingConfigCache();
-  loggerHostnameState.resolver = defaultLoggerHostnameResolver;
-  loggerHostnameState.cached = null;
+  cachedHostname = null;
   invalidateLoggerSettings();
 }
 

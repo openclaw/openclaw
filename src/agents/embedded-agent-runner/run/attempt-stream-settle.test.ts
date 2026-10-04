@@ -35,6 +35,7 @@ import {
 } from "../session-prompt-state.js";
 import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
@@ -90,7 +91,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
     isProbeSession: true,
     abortable: async <T>(promise: Promise<T>) => await promise,
     prePromptMessageCount: 0,
-    nestedToolActivities: [],
+    nestedToolActivityState: createAttemptNestedToolActivityState(),
     cache: {
       retention: undefined,
     },
@@ -222,8 +223,12 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-      const sessionManager = SessionManager.open(target, state.workspaceDir);
-      sessionManager.appendMessage({ role: "user", content: "test prompt", timestamp: 1 });
+      const sessionManager = await SessionManager.openAsync(target, state.workspaceDir);
+      await sessionManager.appendMessageAsync({
+        role: "user",
+        content: "test prompt",
+        timestamp: 1,
+      });
       const originalEntries = sessionManager.getEntries();
       const controller = new AbortController();
       const promptError = new Error("synthetic provider failure");
@@ -268,9 +273,9 @@ describe("settleEmbeddedAttemptStream liveness", () => {
       const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
       const append =
         scenario === "storage failure"
-          ? vi.spyOn(sessionManager, "appendCustomEntry").mockImplementation(() => {
-              throw new Error("synthetic storage failure");
-            })
+          ? vi
+              .spyOn(sessionManager, "appendCustomEntryAsync")
+              .mockRejectedValue(new Error("synthetic storage failure"))
           : undefined;
       const entered = createDeferredCore();
       const release = createDeferredCore();
@@ -307,7 +312,7 @@ describe("settleEmbeddedAttemptStream liveness", () => {
         expect(result.messagesSnapshot).toEqual([assistant]);
         expect(result.currentAttemptAssistant).toBe(assistant);
         expect(result.attemptUsage).toEqual(usage);
-        const entries = SessionManager.open(target, state.workspaceDir).getEntries();
+        const entries = (await SessionManager.openAsync(target, state.workspaceDir)).getEntries();
         if (scenario === "active provider failure") {
           expect(entries).toHaveLength(originalEntries.length + 1);
           expect(entries.at(-1)).toMatchObject({
@@ -468,13 +473,12 @@ describe("attempt projection persistence through settlement", () => {
           onFinalPromptText: () => {},
           onSteeringAcknowledged: () => {},
           persistToolResultProjections: async () => {
-            persistToolResultProjections(projectionState, (customType, data) =>
-              manager.appendCustomEntry(customType, data),
+            await persistToolResultProjections(projectionState, (customType, data) =>
+              manager.appendCustomEntryAsync(customType, data),
             );
           },
           promptActiveSession: (prompt, options) => session.prompt(prompt, options),
           runtimeOnly: false,
-          sessionPromptState,
           systemPrompt: "test prompt",
           toolResultAggregateMaxChars: 8_000,
           toolResultMaxChars: 4_000,

@@ -1,5 +1,4 @@
 import type { RequestListener } from "node:http";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 /**
  * Shared Browser control-server test harness with mocked Chrome, CDP,
@@ -7,6 +6,8 @@ import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
  */
 import { afterEach, beforeEach, vi } from "vitest";
 import { deriveDefaultBrowserCdpPortRange } from "../config/port-defaults.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import * as browserServer from "../server.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import { installChromeUserDataDirHooks } from "./chrome-user-data-dir.test-harness.js";
 import { reserveBrowserTestListener } from "./test-port.js";
@@ -556,7 +557,6 @@ vi.mock("./chrome.js", () => ({
       exe: { kind: "chrome", path: "/fake/chrome" },
       userDataDir: chromeUserDataDir.dir,
       cdpPort: profile.cdpPort,
-      startedAt: Date.now(),
       proc,
     };
   }),
@@ -605,15 +605,13 @@ vi.mock("./screenshot.js", () => ({
   })),
 }));
 
-const loadBrowserServerModule = createLazyRuntimeModule(() => import("../server.js"));
-
 /** Starts the Browser control server from the mocked config module. */
 export async function startBrowserControlServerFromConfig() {
-  return await (await loadBrowserServerModule()).startBrowserControlServerFromConfig();
+  return await browserServer.startBrowserControlServerFromConfig();
 }
 
 async function stopBrowserControlServer(): Promise<void> {
-  await (await loadBrowserServerModule()).stopBrowserControlServer();
+  await browserServer.stopBrowserControlServer();
 }
 
 /** Creates a minimal Response-like object for mocked fetch handlers. */

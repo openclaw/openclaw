@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   appendTranscriptEvent,
   assignSessionOwner,
@@ -11,6 +10,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { observeSessionMaintenanceCompletion } from "../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import type * as ConfigSessionTypes from "../config/sessions/types.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   cleanupSessionLifecycleArtifacts,
   deleteSessionEntry,
@@ -36,17 +36,15 @@ const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyo
 void sessionEntryKeepsRecoveryPrivate;
 void configSessionEntryKeepsRecoveryPrivate;
 
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-session-store-");
+
 describe("session-store-runtime", () => {
   let tempDir: string;
   let storePath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sdk-session-store-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   async function seedSessionEntry(sessionKey: string, entry: SessionEntry): Promise<void> {

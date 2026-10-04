@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { ProjectRecent } from "../../../packages/gateway-protocol/src/index.js";
 import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
-import type { ProjectRegistryRecord } from "../../projects/project-registry.js";
+import type { ProjectRegistryRecord } from "../../projects/project-registry.types.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 

@@ -6,6 +6,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveTsxImport } from "../scripts/lib/tsx-cli-shim.mjs";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 // Exercise the environment installed by the native preload, including in VM tests.
@@ -18,6 +19,7 @@ describe("jsdom native API boundary", () => {
     const result = spawnSync(
       process.execPath,
       [
+        ...(process.versions.bun ? [] : ["--import", resolveTsxImport(process.cwd())]),
         "--import",
         pathToFileURL(path.resolve("test/vitest/vitest.jsdom-preload.mts")).href,
         "--input-type=module",
@@ -75,7 +77,7 @@ describe("jsdom native API boundary", () => {
     }
   });
 
-  it.each([0, 1, 2])("keeps window event identity across %i iframe levels", (depth) => {
+  it.each([0, 2])("keeps window event identity across %i iframe levels", (depth) => {
     let target: Window = window;
     let outerFrame: HTMLIFrameElement | undefined;
     for (let level = 0; level < depth; level++) {

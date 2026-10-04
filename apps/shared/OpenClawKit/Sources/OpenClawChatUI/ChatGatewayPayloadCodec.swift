@@ -4,13 +4,48 @@ import OpenClawProtocol
 
 public enum OpenClawChatSessionKey {
     public static func matchesIncludingDefaultMainAlias(_ incoming: String, _ current: String) -> Bool {
-        let incoming = incoming.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let current = current.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let incoming = self.comparisonKey(incoming)
+        let current = self.comparisonKey(current)
         if incoming == current {
             return true
         }
         return (incoming == "agent:main:main" && current == "main") ||
             (incoming == "main" && current == "agent:main:main")
+    }
+
+    /// Match the Control UI's session-key comparison without folding opaque channel identifiers.
+    static func comparisonKey(_ key: String) -> String {
+        let raw = key.trimmingCharacters(in: .whitespacesAndNewlines)
+        var parts = raw.components(separatedBy: ":")
+        var start = 0
+        while parts.count - start >= 3, parts[start].lowercased() == "agent" {
+            parts[start] = "agent"
+            parts[start + 1] = parts[start + 1].lowercased()
+            start += 2
+        }
+        while start < parts.count, parts[start].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            start += 1
+        }
+        guard start < parts.count else { return raw.lowercased() }
+        let channel = parts[start].lowercased()
+        if channel == "catalog" { return parts.joined(separator: ":") }
+        guard start + 1 < parts.count else { return raw.lowercased() }
+        let peer = parts[start + 1].lowercased()
+        let matrix = channel == "matrix" && ["channel", "group"].contains(peer)
+        guard matrix || (channel == "signal" && peer == "group") else { return raw.lowercased() }
+        parts[start] = channel
+        parts[start + 1] = peer
+        if matrix {
+            if let index = parts.indices.reversed().first(where: {
+                $0 >= start + 2 && $0 < parts.count - 1 && parts[$0].lowercased() == "thread"
+            }) { parts[index] = "thread" }
+        } else if start + 2 < parts.count {
+            parts[start + 2] = parts[start + 2].trimmingCharacters(in: .whitespacesAndNewlines)
+            for index in (start + 3)..<parts.count {
+                parts[index] = parts[index].lowercased()
+            }
+        }
+        return parts.joined(separator: ":")
     }
 
     public static func agentID(from sessionKey: String?) -> String? {
@@ -100,7 +135,10 @@ public enum OpenClawChatGatewayPayloadCodec {
                         ?? OpenClawChatAgentChoice.normalizedName($0.identity?["name"]?.value as? String),
                     emoji: OpenClawChatAgentChoice.textAvatar($0.identity?["emoji"]?.value as? String)
                         ?? OpenClawChatAgentChoice.textAvatar($0.identity?["avatar"]?.value as? String),
-                    workspaceGit: $0.workspacegit)
+                    avatar: OpenClawChatAgentChoice.imageAvatar($0.identity?["avatarUrl"]?.value as? String)
+                        ?? OpenClawChatAgentChoice.imageAvatar($0.identity?["avatar"]?.value as? String),
+                    workspaceGit: $0.workspacegit,
+                    workspace: $0.workspace)
             },
             sessionRoutingContract: OpenClawChatSessionRoutingContract.make(
                 scope: result.scope.value as? String,
