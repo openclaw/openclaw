@@ -2093,6 +2093,7 @@
     "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:node-auto-update": "node scripts/e2e/lib/node-auto-update/scenario.mjs",
     "test:e2e:openshell": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_E2E_OPENSHELL=1 -- node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
+    "test:event-assets": "node ui/event/asset-manifest.node-test.mjs",
     "test:extension": "node --import ./scripts/tsx.mjs scripts/test-extension.mts",
     "test:extensions": "node --import ./scripts/tsx.mjs scripts/test-projects.mts extensions",
     "test:extensions:batch": "node --import ./scripts/tsx.mjs scripts/test-extension-batch.mts",
