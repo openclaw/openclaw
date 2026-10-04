@@ -146,7 +146,7 @@ describe("chat history stored ownership", () => {
       for (const [sessionKey, sessionId] of [
         ["global", "global-research"],
         ["agent:research:main", "main-research"],
-      ]) {
+      ] as const) {
         expect(await read({ sessionKey })).toHaveBeenCalledWith(
           true,
           expect.objectContaining({ sessionKey, sessionId }),
@@ -171,7 +171,7 @@ describe("chat history stored ownership", () => {
         for (const [sessionKey, wrongSessionKey, sessionId] of [
           [sentinel, qualifiedKey, `${sentinel}-research`],
           [qualifiedKey, sentinel, `qualified-${sentinel}-research`],
-        ]) {
+        ] as const) {
           const messageId = `${sessionId}-message`;
           expect(
             await read({ sessionKey: wrongSessionKey, sessionId, messageId }),
