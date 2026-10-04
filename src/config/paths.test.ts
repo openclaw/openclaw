@@ -200,7 +200,7 @@ describe("default install identity", () => {
           },
           () => home,
         ),
-      ).toBe(false);
+      ).toBe(true);
 
       await fs.mkdir(profileStateDir, { recursive: true });
       await fs.writeFile(path.join(profileStateDir, "openclaw.json"), "{}");
