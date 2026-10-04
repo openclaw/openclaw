@@ -104,6 +104,12 @@ export const OpenClawSchemaShape = {
       allowSystemProfileImport: z.boolean().optional(),
       /** If false, disable browser act:evaluate (arbitrary JS). Default: true */
       evaluateEnabled: z.boolean().optional(),
+      /**
+       * If true, expose the privileged browser requestSecureInput action.
+       * Disabled by default so wildcard/default Browser tool surfaces never
+       * implicitly grant secure DOM fill without explicit operator opt-in.
+       */
+      secureInputEnabled: z.boolean().optional(),
       /** Base URL of the CDP endpoint (for remote browsers). Default: loopback CDP on the derived port. */
       cdpUrl: z.string().optional(),
       /** Override the browser executable path (all platforms). */

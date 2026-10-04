@@ -52,7 +52,10 @@ const BROWSER_TOOL_ACTIONS = [
   "upload",
   "dialog",
   "act",
+  "requestSecureInput",
 ] as const;
+
+const BROWSER_SECURE_INPUT_FIELD_ROLES = ["username", "password", "otp", "email"] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
 
@@ -77,6 +80,7 @@ export type BrowserToolCapabilities = {
 export function resolveBrowserToolCapabilities(params?: {
   tabBound?: boolean;
   evaluateEnabled?: boolean;
+  secureInputEnabled?: boolean;
   profileCapabilities?: Pick<
     BrowserProfileCapabilities,
     "supportsBatchActions" | "supportsDownloads" | "supportsPdf"
@@ -103,6 +107,11 @@ export function resolveBrowserToolCapabilities(params?: {
   return {
     actions: actions.filter(
       (action) =>
+        // Keep secure browser form fill off every default/wildcard Browser tool
+        // surface unless config opts in explicitly, mirroring the defense-in-depth
+        // allowlist treatment used for sensitive sandbox/core tools in
+        // src/agents/sandbox/constants.ts and src/agents/tool-policy.ts.
+        (params?.secureInputEnabled === true || action !== "requestSecureInput") &&
         (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
         (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
         (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
@@ -275,6 +284,24 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
           promptText: Type.Optional(Type.String()),
         }
       : {}),
+    ...(capabilities.actions.includes("requestSecureInput")
+      ? {
+          loginHint: Type.Optional(
+            Type.Object(
+              {
+                fieldRoles: Type.Array(stringEnum(BROWSER_SECURE_INPUT_FIELD_ROLES), {
+                  minItems: 1,
+                }),
+              },
+              {
+                additionalProperties: false,
+                description:
+                  "Structural login-form hint only. Deliberately excludes selectors and origin strings: the gateway must derive the live tab origin and concrete fields itself to prevent phishing or wrong-field targeting by a compromised agent.",
+              },
+            ),
+          ),
+        }
+      : {}),
     // Legacy flattened act params (preferred: request={...})
     kind: Type.Optional(stringEnum(capabilities.actKinds, { description: actKindDescription })),
     ...actProperties,
@@ -359,6 +386,24 @@ export const BrowserToolOutputSchema = Type.Object(
         },
       ),
     ),
+    requestId: Type.Optional(Type.String()),
+    tabId: Type.Optional(Type.String()),
+    documentId: Type.Optional(Type.String()),
+    origin: Type.Optional(Type.String()),
+    fields: Type.Optional(
+      Type.Array(
+        Type.Object(
+          {
+            fieldId: Type.String(),
+            role: stringEnum(BROWSER_SECURE_INPUT_FIELD_ROLES),
+          },
+          { additionalProperties: false },
+        ),
+      ),
+    ),
+    expiresAt: Type.Optional(Type.String()),
+    filled: Type.Optional(Type.Boolean()),
+    reason: Type.Optional(stringEnum(["page_changed", "expired", "not_found"] as const)),
     enabled: Type.Optional(Type.Boolean()),
     running: Type.Optional(Type.Boolean()),
     profile: Type.Optional(Type.String()),

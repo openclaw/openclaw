@@ -59,6 +59,7 @@ export const BROWSER_TAB_BOUND_ACTIONS = [
   "focus",
   "navigate",
   "pdf",
+  "requestSecureInput",
   "screenshot",
   "snapshot",
   "tabs",
