@@ -1051,6 +1051,7 @@ describe("dispatchCronDelivery", () => {
     expect(maybeApplyTtsToPayloadMock).toHaveBeenCalledExactlyOnceWith({
       payload: { text: "[[tts]] Briefing" },
       cfg: params.cfgWithAgentDefaults,
+      preparedTtsPreferences: {},
       channel: "telegram",
       kind: "final",
       agentId: "main",

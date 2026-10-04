@@ -7,6 +7,7 @@ import {
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
 import { WORKSPACE_MUTATION_GUARD_COMPAT_RECORD } from "./workspace-mutation-guard.js";
@@ -24,6 +25,7 @@ export const PLUGIN_COMPAT_RECORDS = [
   MENTION_INBOX_COMPAT_RECORD,
   WORKSPACE_MUTATION_GUARD_COMPAT_RECORD,
   ...SESSION_PERSISTENCE_COMPAT_RECORDS,
+  TTS_PREFERENCES_COMPAT_RECORD,
   ...AGENT_LIST_RUNTIME_PROJECTION_COMPAT_RECORDS,
   WATCHED_SESSIONS_COMPAT_RECORD,
   {
