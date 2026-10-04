@@ -16,10 +16,8 @@ import {
 import { pathForRoute, pluginTabLocation } from "../app-route-paths.ts";
 import { t } from "../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
-import { showToast } from "../lib/toast.ts";
 import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { icons, type IconName } from "./icons.ts";
-import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 import { consumeDropdownKeyboardDismissal, trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type SidebarMenuPosition = { x: number; y: number };
@@ -327,7 +325,7 @@ export function renderSidebarCustomizeMenu(params: SidebarCustomizeMenuParams) {
   `;
 }
 
-function renderSidebarPluginNavigationMenu(params: {
+export function renderSidebarPluginNavigationMenu(params: {
   position: SidebarMenuPosition;
   item: ControlUiNavigationItem;
   onSelect: (id: string) => Promise<void>;
@@ -362,42 +360,4 @@ function renderSidebarPluginNavigationMenu(params: {
       </wa-dropdown-item>`;
     })}
   </wa-dropdown>`;
-}
-
-export function renderSidebarPluginNavigationMenuForController(controller: SidebarMenusController) {
-  const position = controller.pluginNavigationMenuPosition;
-  if (!position || position.entry.signal.aborted) {
-    return nothing;
-  }
-  const { entry } = position;
-  const trigger = controller.pluginNavigationMenuTrigger;
-  const actions = entry.value.actions ?? [];
-  return renderSidebarPluginNavigationMenu({
-    position,
-    item: entry.value,
-    onSelect: async (id) => {
-      if (controller.pluginNavigationMenuPosition !== position) {
-        return;
-      }
-      const action = actions.find((candidate) => candidate.id === id);
-      controller.closePositionedMenu("pluginNavigation", { restoreFocus: true });
-      if (!action || entry.signal.aborted || !trigger?.isConnected) {
-        return;
-      }
-      try {
-        await action.run();
-      } catch (error) {
-        if (!entry.signal.aborted) {
-          controller.host.sessionDataContext?.plugins.reportError(entry.pluginId, error);
-          showToast({ message: error instanceof Error ? error.message : String(error) });
-        }
-      }
-    },
-    onTabAway: () => trigger?.focus(),
-    onClose: (restoreFocus) => {
-      if (controller.pluginNavigationMenuPosition === position) {
-        controller.closePositionedMenu("pluginNavigation", { restoreFocus });
-      }
-    },
-  });
 }
