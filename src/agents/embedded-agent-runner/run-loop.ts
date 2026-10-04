@@ -222,6 +222,7 @@ export async function runPreparedEmbeddedLoop(
     getRuntimeAuthOwnerId: () => preparedRuntime.snapshot().agentHarness.id,
     getApiKeyInfo,
     advanceAuthProfile: preparedRuntime.advanceAttemptAuthProfile,
+    hasRemainingAuthAttempt: preparedRuntime.hasRemainingAuthAttempt,
   });
   const { contextEngine, contextEngineLogicalTurnLease, ownsContextEngineLogicalTurnLease } =
     await admitEmbeddedContextEngine(admittedRunInput, initialHarness);

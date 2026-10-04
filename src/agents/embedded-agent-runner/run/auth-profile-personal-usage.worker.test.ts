@@ -67,6 +67,7 @@ function fixture(
     globalLane: "personal-usage-test",
     agentDir,
     fallbackConfigured: false,
+    hasRemainingAuthAttempt: () => false,
     profileFailureStore: store,
     getLastProfileId: () => profileId,
     getSessionId: () => "personal-usage-session",

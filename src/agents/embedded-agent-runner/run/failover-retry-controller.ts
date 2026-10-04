@@ -81,6 +81,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
   globalLane: string;
   agentDir: string;
   fallbackConfigured: boolean;
+  hasRemainingAuthAttempt: () => boolean;
   profileFailureStore: PreparedRuntime["profileFailureStore"];
   getLastProfileId: () => string | undefined;
   getSessionId: () => string;
@@ -321,11 +322,11 @@ export function createEmbeddedRunFailoverRetryController(input: {
           : undefined;
       if (
         rateLimit &&
-        fallbackConfigured &&
         retry.failoverEligible !== false &&
         retryDelayCapMs !== undefined &&
         retry.retryAfterMs !== undefined &&
-        retry.retryAfterMs > retryDelayCapMs
+        retry.retryAfterMs > retryDelayCapMs &&
+        (fallbackConfigured || input.hasRemainingAuthAttempt())
       ) {
         recordDecision("rejected", "retry_delay_exceeds_cap");
         log.warn(

@@ -370,7 +370,9 @@ describe("createEmbeddedRunAuthController", () => {
     });
 
     await controller.initializeAuthProfile();
+    expect(controller.hasRemainingAuthAttempt()).toBe(true);
     await expect(controller.advanceAuthProfile()).resolves.toBe(false);
+    expect(controller.hasRemainingAuthAttempt()).toBe(false);
     await expect(controller.advanceAuthProfile()).resolves.toBe(false);
 
     expect(

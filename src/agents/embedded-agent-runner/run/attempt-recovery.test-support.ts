@@ -147,6 +147,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
     globalLane: "test",
     agentDir: "/tmp/provider-recovery-test",
     fallbackConfigured: scenario.fallbackConfigured ?? false,
+    hasRemainingAuthAttempt: () => false,
     profileFailureStore: { version: 1, profiles: {} },
     getLastProfileId: () => undefined,
     getSessionId: () => "session:transport-drop",

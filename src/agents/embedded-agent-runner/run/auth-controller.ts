@@ -131,6 +131,7 @@ export function createEmbeddedRunAuthController(params: {
   provider: string;
   modelId: string;
   state: EmbeddedRunAuthState;
+  isAuthProfileCandidateEligible?(profileId: string | undefined, attemptIndex: number): boolean;
   prepareModelForAuthProfile?(
     profileId: string | undefined,
     attemptIndex?: number,
@@ -556,19 +557,28 @@ export function createEmbeddedRunAuthController(params: {
     state.lastProfileId = profileId;
   };
 
-  const advanceAuthProfile = async (): Promise<boolean> => {
-    let nextIndex = state.profileIndex + 1;
-    while (nextIndex < params.profileCandidates.length) {
-      const candidateIndex = nextIndex++;
-      const candidate = params.profileCandidates[candidateIndex];
-      // Candidate exhaustion is run-local and never depends on a cooldown write.
-      state.profileIndex = candidateIndex;
+  const findNextAuthProfileIndex = (): number => {
+    for (let index = state.profileIndex + 1; index < params.profileCandidates.length; index++) {
+      const candidate = params.profileCandidates[index];
       if (
         candidate &&
         isProfileInCooldown(params.authStore, candidate, undefined, params.modelId)
       ) {
         continue;
       }
+      if (params.isAuthProfileCandidateEligible?.(candidate, index) === false) {
+        continue;
+      }
+      return index;
+    }
+    return params.profileCandidates.length;
+  };
+
+  const advanceAuthProfile = async (): Promise<boolean> => {
+    while ((state.profileIndex = findNextAuthProfileIndex()) < params.profileCandidates.length) {
+      const candidateIndex = state.profileIndex;
+      const candidate = params.profileCandidates[candidateIndex];
+      // Candidate exhaustion is run-local and never depends on a cooldown write.
       try {
         await applyApiKeyInfo(candidate, candidateIndex);
         state.thinkLevel = params.initialThinkLevel;
@@ -656,6 +666,7 @@ export function createEmbeddedRunAuthController(params: {
   return {
     applyAuthProfileCandidate: applyApiKeyInfo,
     advanceAuthProfile,
+    hasRemainingAuthAttempt: () => findNextAuthProfileIndex() < params.profileCandidates.length,
     initializeAuthProfile,
     maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer,

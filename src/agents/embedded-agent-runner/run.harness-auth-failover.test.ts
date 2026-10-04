@@ -1,13 +1,18 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createApiKeyCredential } from "../auth-profiles/credential-fixtures.test-support.js";
 import type { AgentHarness } from "../harness/types.js";
+import { buildEmbeddedRunnerAssistant } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedAcquireAgentRunPreparedModelRuntime,
   mockedBuildEmbeddedRunPayloads,
+  mockedClassifyAssistantFailoverReason,
+  mockedClassifyFailoverReason,
+  mockedIsFailoverAssistantError,
+  mockedIsRateLimitAssistantError,
   mockedEnsureAuthProfileStore,
   mockedGetApiKeyForModel,
   mockedMarkAuthProfileFailure,
@@ -282,6 +287,54 @@ describe("native harness auth failover", () => {
       }),
       expect.objectContaining({ retainIdleRunOwner: true }),
     );
+  });
+
+  it("uses a prepared harness auth attempt instead of waiting an above-cap rate-limit floor", async () => {
+    const helpers = await vi.importActual<typeof import("../embedded-agent-helpers.js")>(
+      "../embedded-agent-helpers.js",
+    );
+    mockedClassifyFailoverReason.mockImplementation(helpers.classifyFailoverReason);
+    mockedClassifyAssistantFailoverReason.mockImplementation(
+      helpers.classifyAssistantFailoverReason,
+    );
+    mockedIsFailoverAssistantError.mockImplementation(helpers.isFailoverAssistantError);
+    mockedIsRateLimitAssistantError.mockImplementation(helpers.isRateLimitAssistantError);
+    const runEmbeddedAgent = prepareAuthFailoverRun();
+    const { sleepWithAbort } = await import("../../infra/backoff.js");
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          providerRetryMaxRetries: 3,
+          providerRetryMaxDelayMs: 30_000,
+          lastAssistant: buildEmbeddedRunnerAssistant({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+            stopReason: "error",
+            errorMessage: "429 Too Many Requests: Please try again later.",
+            errorType: "rate_limit_error",
+            errorBody: JSON.stringify({ headers: { "retry-after": "9897" } }),
+          }),
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ assistantTexts: ["OK"] }));
+
+    await expect(
+      runEmbeddedAgent({
+        ...createOverflowRunParams(state),
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        modelFallbacksOverride: [],
+        authProfileId: failedProfile,
+        authProfileIdSource: "auto",
+        runId: "run-native-harness-rate-limit-cap",
+      }),
+    ).resolves.toMatchObject({ payloads: [{ text: "OK" }] });
+    expect(mockedRunEmbeddedAttempt.mock.calls.map(([params]) => params.authProfileId)).toEqual([
+      failedProfile,
+      backupProfile,
+    ]);
+    expect(vi.mocked(sleepWithAbort).mock.calls.map(([delay]) => delay)).not.toContain(9_897_000);
   });
 
   it("dispatches a supervised native connection without reselecting outer model auth", async () => {

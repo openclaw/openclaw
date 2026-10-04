@@ -7,6 +7,7 @@ import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ContextEngine, ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { AssistantMessage } from "../../llm/types.js";
 import type { ClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
@@ -254,7 +255,7 @@ type MockCoerceToFailoverError = (
 ) => unknown;
 type MockDescribeFailoverError = (err: unknown) => MockFailoverErrorDescription;
 type MockResolveFailoverStatus = (reason: string) => number | undefined;
-type MockAssistantErrorProbe = (assistant?: { errorMessage?: string }) => boolean;
+type MockAssistantErrorProbe = (assistant?: AssistantMessage) => boolean;
 export class MockedFailoverError extends Error {
   constructor(message: string) {
     super(message);
@@ -292,7 +293,7 @@ export const mockedClassifyFailoverReason = vi.fn<(raw: string) => FailoverReaso
   () => null,
 );
 export const mockedClassifyAssistantFailoverReason = vi.fn(
-  (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
+  (assistant?: AssistantMessage): FailoverReason | null =>
     mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
 );
 const mockedExtractObservedOverflowTokenCount = vi.fn(extractObservedOverflowTokenCount);
@@ -519,9 +520,8 @@ function resetRunOverflowCompactionHarnessMocks(): void {
   mockedClassifyFailoverReason.mockReset();
   mockedClassifyFailoverReason.mockReturnValue(null);
   mockedClassifyAssistantFailoverReason.mockReset();
-  mockedClassifyAssistantFailoverReason.mockImplementation(
-    (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
-      mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
+  mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
+    mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
   );
   mockedFormatBillingErrorMessage.mockReset();
   mockedFormatBillingErrorMessage.mockReturnValue("");
@@ -628,9 +628,8 @@ export function resetSharedRunIntegrationHarnessMocks(): void {
   mockedClassifyFailoverReason.mockReset();
   mockedClassifyFailoverReason.mockReturnValue(null);
   mockedClassifyAssistantFailoverReason.mockReset();
-  mockedClassifyAssistantFailoverReason.mockImplementation(
-    (assistant?: { errorMessage?: string | null }): FailoverReason | null =>
-      mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
+  mockedClassifyAssistantFailoverReason.mockImplementation((assistant) =>
+    mockedClassifyFailoverReason(assistant?.errorMessage ?? ""),
   );
   mockedCompactDirect.mockReset();
   mockedCompactDirect.mockResolvedValue({
