@@ -97,7 +97,7 @@ describe("native bounded launch preparation", () => {
       requirements: { artifactRefs: "required" },
     },
   ])("rejects invalid or incomplete configuration %j", (boundedLaunch) => {
-    expect(() => prepareBoundedLaunch({ ...base, dynamics })).toThrow();
+    expect(() => prepareBoundedLaunch({ ...base, boundedLaunch })).toThrow();
   });
 
   it("rejects requirements incompatible with the selected boundary", () => {
