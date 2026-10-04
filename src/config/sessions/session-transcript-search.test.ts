@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
@@ -40,6 +41,7 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "./session-transcript-reconcile.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "./session-transcript-search.js";
+import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -336,13 +338,154 @@ describe("searchSessionTranscripts", () => {
     expect(filtered.hits[0]?.sessionId).toBe("session-2");
   });
 
-  it("caps hits at the limit and reports truncation", async () => {
-    for (let index = 0; index < 4; index += 1) {
-      await appendUserMessage("session-1", "agent:main:main", `needle number ${index}`);
+  it("scopes content reads and bounds snippets while preserving ranked and recent results", async () => {
+    const sessionKeys: [string, string] = ["agent:main:permitted", "agent:main:dirty"];
+    for (const [id, key] of [
+      ["permitted", sessionKeys[0]],
+      ["generation", sessionKeys[0]],
+      ["dirty", sessionKeys[1]],
+      ["excluded", "agent:main:excluded"],
+    ] as const) {
+      await appendUserMessage(id, key, "anchor");
     }
-    const result = search("needle", { limit: 3 });
-    expect(result.hits).toHaveLength(3);
-    expect(result.truncated).toBe(true);
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        for (const id of ["permitted", "generation", "dirty", "excluded"]) {
+          const insert = createSessionTranscriptFtsInserter(db, id);
+          for (let index = 0; index < 80; index++) {
+            insert({
+              messageId: `${id}-${String(index).padStart(3, "0")}`,
+              text: "needle common payload",
+              role: index % 2 ? "assistant" : "user",
+              timestamp: String(Math.floor(index / 4)),
+            });
+          }
+        }
+        db.prepare(
+          "UPDATE session_transcript_index_state SET needs_rebuild=1 WHERE session_id='dirty'",
+        ).run();
+      },
+      { agentId: "main", env: env() },
+    );
+
+    // The native method is always invoked with its captured connection below.
+    // oxlint-disable-next-line typescript/unbound-method
+    const prepare = DatabaseSync.prototype.prepare;
+    const statements: Array<{
+      db: DatabaseSync;
+      query: string;
+      bindings: Parameters<StatementSync["all"]>;
+    }> = [];
+    const spy = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+      this: DatabaseSync,
+      query,
+    ) {
+      const statement = prepare.call(this, query);
+      if (query.includes("snippet(")) {
+        const all = statement.all.bind(statement);
+        vi.spyOn(statement, "all").mockImplementation(
+          (...bindings: Parameters<StatementSync["all"]>) => {
+            statements.push({ db: this, query, bindings });
+            return all(...bindings);
+          },
+        );
+      }
+      return statement;
+    });
+    try {
+      for (const options of [
+        { limit: 3 },
+        { limit: 25, order: "recent" },
+        { limit: 3, sessionId: "permitted", role: "assistant" },
+        { limit: 3, sessionId: "permitted", role: "assistant", order: "recent" },
+        { limit: 3, query: "need", match: "prefix" },
+        { limit: 25, sessionId: "dirty" },
+      ] satisfies Partial<SessionTranscriptSearchParams>[]) {
+        statements.length = 0;
+        const result = searchSessionTranscripts({
+          agentId: "main",
+          env: env(),
+          query: "needle",
+          sessionKeys,
+          ...options,
+        });
+        expect(statements).toHaveLength(1);
+        const captured = statements[0]!;
+        const { db, query, bindings } = captured;
+        const literal = options.match === "prefix" ? '"need"*' : '"needle"';
+        // The previous query is the equivalence oracle; it still pays the unbounded snippet cost.
+        const baseline = prepare
+          .call(
+            db,
+            `
+          SELECT w.session_key, f.session_id, f.message_id, f.role, f.timestamp,
+            snippet(session_transcript_fts, 0, '', '', ' … ', 48) AS snippet,
+            bm25(session_transcript_fts) AS rank
+          FROM session_transcript_fts f JOIN session_windows w ON w.session_id=f.session_id
+          WHERE session_transcript_fts MATCH ?
+            AND w.session_key IN (SELECT value FROM json_each(?))
+            AND f.session_id NOT IN (SELECT session_id FROM session_transcript_index_state WHERE needs_rebuild!=0)
+            ${options.sessionId ? "AND f.session_id=?" : ""}
+            ${options.role ? "AND f.role=?" : ""}
+          ORDER BY ${options.order === "recent" ? "f.timestamp DESC, f.rowid DESC" : "rank ASC, f.timestamp DESC, f.message_id ASC"}
+          LIMIT ?`,
+          )
+          .all(
+            literal,
+            JSON.stringify(sessionKeys),
+            ...(options.sessionId ? [options.sessionId] : []),
+            ...(options.role ? [options.role] : []),
+            options.limit + 1,
+          );
+        expect(result.hits).toEqual(
+          baseline.slice(0, options.limit).map((row) => ({
+            sessionKey: row.session_key,
+            sessionId: row.session_id,
+            messageId: row.message_id,
+            role: row.role,
+            timestamp: Number(row.timestamp),
+            snippet: row.snippet,
+            score: -Number(row.rank),
+          })),
+        );
+        expect(result.truncated).toBe(baseline.length > options.limit);
+        expect(
+          result.hits.every((hit) => hit.sessionId !== "dirty" && hit.sessionId !== "excluded"),
+        ).toBe(true);
+        let snippets = 0;
+        db.function("count_search_snippet", (value) => {
+          snippets++;
+          return value;
+        });
+        const counted = query.replace(/(snippet\([^)]*\))/u, "count_search_snippet($1)");
+        expect(prepare.call(db, counted).all(...bindings)).toHaveLength(baseline.length);
+        expect(snippets).toBe(baseline.length);
+        expect(snippets).toBeLessThanOrEqual(options.limit + 1);
+        const plan = prepare
+          .call(db, `EXPLAIN QUERY PLAN ${query}`)
+          .all(...bindings)
+          .map((row) => String(row.detail));
+        expect(plan).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("MATERIALIZE hits"),
+            expect.stringMatching(/SEARCH mapped USING INTEGER PRIMARY KEY/),
+            expect.stringMatching(/session_windows.*\(session_id=\?\)/),
+            expect.stringMatching(/VIRTUAL TABLE INDEX .*:=M5/),
+          ]),
+        );
+        expect(plan.filter((line) => /VIRTUAL TABLE INDEX .*:M5$/.test(line))).toHaveLength(1);
+        // SQLite bytecode must reject the key set before requesting any outer FTS content.
+        const bytecode = prepare.call(db, `EXPLAIN ${query}`).all(...bindings);
+        const matchScan = bytecode.find((row) => row.opcode === "VFilter" && row.p4 === "M5")!;
+        const firstContent = bytecode.find(
+          (row) => row.opcode === "VColumn" && row.p1 === matchScan.p1,
+        )!;
+        const scopeCheck = bytecode.find((row) => row.opcode === "NotFound")!;
+        expect(Number(firstContent.addr)).toBeGreaterThan(Number(scopeCheck.addr));
+      }
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it("filters role and generation before selecting the most recent matching messages", async () => {
