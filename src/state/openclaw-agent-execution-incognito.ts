@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-access.types.js";
+import type { IncognitoAcpSessionAccess } from "../acp/runtime/session-meta-incognito.types.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   createIncognitoSessionFacts,

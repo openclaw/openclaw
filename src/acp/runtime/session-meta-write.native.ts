@@ -15,7 +15,6 @@ import {
 } from "../../infra/legacy-acp-migration-source.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import type { AcpSessionMetaMutationFields } from "./session-meta-access.types.js";
 import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
 import { selectAcpSessionRowForStoreEntry } from "./session-meta-keys.js";
@@ -60,18 +59,22 @@ function consumeLegacyAcpMigrationSources(params: {
   }
 }
 
-export async function upsertAcpSessionMetaNative(
-  params: AcpSessionMetaMutationFields & {
-    assertCommitAllowed?: () => void;
-    sessionKey: string;
-    agentId?: string;
-    cfg?: OpenClawConfig;
-    env?: NodeJS.ProcessEnv;
-    databasePath?: string;
-    skipMaintenance?: boolean;
-    takeCacheOwnership?: boolean;
-  },
-): Promise<SessionEntry | null> {
+export async function upsertAcpSessionMetaNative(params: {
+  assertCommitAllowed?: () => void;
+  expectedControlBinding?: AcpSessionControlBinding;
+  sessionKey: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  databasePath?: string;
+  now?: () => number;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+  mutate: (
+    current: SessionAcpMeta | undefined,
+    entry: SessionEntry | undefined,
+  ) => SessionAcpMeta | null | undefined;
+}): Promise<SessionEntry | null> {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
     return null;

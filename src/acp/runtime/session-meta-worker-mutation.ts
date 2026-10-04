@@ -17,12 +17,12 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
-import type {
-  IncognitoAcpSessionReadParams,
-  IncognitoAcpSessionMutationParams,
-} from "./session-meta-access.types.js";
 import { captureAcpSessionEntryBinding } from "./session-meta-entry.kernel.js";
 import type { AcpSessionEntryMutation } from "./session-meta-entry.types.js";
+import type {
+  IncognitoAcpSessionMutation,
+  IncognitoAcpSessionParams,
+} from "./session-meta-incognito.types.js";
 import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import type {
@@ -181,7 +181,7 @@ export async function commitAcpSessionMutation(
   }
 }
 
-type Target = IncognitoAcpSessionReadParams & {
+type Target = IncognitoAcpSessionParams & {
   actor: Pick<
     IncognitoAgentDatabaseExecution,
     "agentId" | "path" | "identity" | "sessions" | "assertCurrent"
@@ -233,7 +233,7 @@ export function readIncognitoAcpSessionEntry(params: Target): Promise<SessionEnt
 
 /** Preserve entry → shared metadata ordering without holding an actor grant across a second owner. */
 export function upsertIncognitoAcpSessionMeta(
-  params: IncognitoAcpSessionMutationParams & Pick<Target, "actor">,
+  params: Target & IncognitoAcpSessionMutation,
 ): Promise<SessionEntry | null> {
   const { actor, authority, sessionKey, context, assertCurrent } = captureTarget(params);
   const expectedControlBinding =
