@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
@@ -85,6 +85,19 @@ afterEach(() => {
 });
 
 describe("ask_user prompt delivery", () => {
+  // Production deadlines seed and read the remaining budget with performance.now()
+  // (monotonic) while these tests drive time with vi.useFakeTimers +
+  // advanceTimersByTime, which only advance Date.now(). Alias performance.now to
+  // Date.now so existing wall-clock assertions hold; the clock-jump regression
+  // below restores it to model a divergence. Kept on the describe scope so
+  // `typescript(unbound-method)` does not flag a bare `performance.now`
+  // reference when restoring.
+  let performanceNowSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
+  });
+
   it("reserves duplicate bare keys independently per agent", () => {
     const questions = normalizeAskUserParams(validArgs).questions;
     const research = reserveAskUserPromptDelivery({
@@ -258,6 +271,78 @@ describe("ask_user prompt delivery", () => {
       answers: { answers: { deploy_target: ["Production"] } },
     });
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
+  });
+
+  it("keeps the prompt expiry bounded when the wall clock rewinds", async () => {
+    // Drop the beforeEach alias so performance.now() (driven by
+    // advanceTimersByTime) and Date.now() (driven by setSystemTime) can diverge,
+    // modeling an NTP correction or manual clock change mid-prompt.
+    performanceNowSpy.mockRestore();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const questions = normalizeAskUserParams(validArgs).questions;
+      const reservation = reserveAskUserPromptDelivery({
+        toolCallId: "call-wall-clock-rewind",
+        sessionKey: "agent:main:wall-clock-rewind",
+        questions,
+        timeoutSeconds: 30,
+      });
+      if (!reservation) {
+        throw new Error("expected prompt reservation");
+      }
+      // The Gateway lookup stalls forever so isAskUserPromptPending only exits
+      // via the expiry deadline armed by readAskUserQuestionStatusBeforeExpiry.
+      const gateway = gatewayStub(async () => await new Promise(() => {}));
+
+      // Rewind the wall clock by 30 minutes after the prompt is seeded but
+      // before the expiry revalidation reads the remaining budget. A
+      // wall-clock-based budget would recompute to ~30 minutes; the monotonic
+      // budget must still expire at 30 seconds of real elapsed time.
+      vi.setSystemTime(-30 * 60_000);
+
+      const pending = isAskUserPromptPending(reservation.questionId, gateway.call);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds the recheck loop under a wall-clock rewind when the Gateway status is indeterminate", async () => {
+    // The Gateway returns a non-pending, non-terminal status (undefined) so
+    // isAskUserPromptPending enters its recheck loop — the production
+    // revalidation path that keeps a prompt private until Gateway state is
+    // authoritative. Under a 30-minute wall-clock rewind a Date.now()-based
+    // budget would enlarge to ~30 min; the monotonic budget must still expire
+    // at the configured 5-second timeout.
+    performanceNowSpy.mockRestore();
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const questions = normalizeAskUserParams(validArgs).questions;
+      const reservation = reserveAskUserPromptDelivery({
+        toolCallId: "call-recheck-rewind",
+        sessionKey: "agent:main:recheck-rewind",
+        questions,
+        timeoutSeconds: 5,
+      });
+      if (!reservation) {
+        throw new Error("expected prompt reservation");
+      }
+      // Gateway returns a questions array whose status is missing — the
+      // production reader extracts undefined, triggering the recheck loop.
+      const gateway = gatewayStub(async () => ({ questions: [{ id: reservation.questionId }] }));
+
+      vi.setSystemTime(-30 * 60_000);
+
+      const pending = isAskUserPromptPending(reservation.questionId, gateway.call);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(pending).resolves.toBe(false);
+      expect(gateway.mock).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

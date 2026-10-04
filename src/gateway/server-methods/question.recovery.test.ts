@@ -63,6 +63,8 @@ let validateAuthority: ReturnType<typeof createAgentRuntimeApprovalAuthorityVali
 const abort = vi.fn();
 let handle: EmbeddedAgentQueueHandle;
 
+let performanceNowSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(async () => {
   handle = {
     runId: ref.runId,
@@ -72,6 +74,7 @@ beforeEach(async () => {
     abort,
   };
   vi.useFakeTimers();
+  performanceNowSpy = vi.spyOn(performance, "now").mockImplementation(() => Date.now());
   vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
   setDiagnosticsEnabledForProcess(true);
   scheduler = createTestGatewayScheduler("fake-timers");
@@ -128,6 +131,7 @@ afterEach(async () => {
   clearAgentRunContext(ref.runId);
   embeddedRunTesting.resetActiveEmbeddedRuns();
   resetDiagnosticEventsForTest();
+  performanceNowSpy?.mockRestore();
   vi.useRealTimers();
 });
 

@@ -446,6 +446,7 @@ describe("draining Gateway completion ownership", () => {
       expect(getActiveGatewayRootWorkCount()).toBe(2);
       const suspension = closeAdmission(mode);
       clock.setTime(original.expiresAtMs + 1);
+      clock.advanceMonotonicBy(original.expiresAtMs + 1 - original.createdAtMs);
       const handler = vi.fn<GatewayRequestHandler>();
       try {
         const response = await dispatch({

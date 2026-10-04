@@ -186,7 +186,7 @@ describe("QuestionManager", () => {
     const record = manager.request({ questions: [secret], timeoutMs: 10, onResolved });
     const observation = manager.observe(record.id)!;
     secret.isSecret = false;
-    clock.setTime(2_000);
+    clock.advanceMonotonicBy(2_000);
     expect(manager.observe(record.id)?.record.status).toBe("pending");
     expect(observation.ordinary).toBe(false);
     expect(onResolved).not.toHaveBeenCalled();
@@ -205,7 +205,7 @@ describe("QuestionManager", () => {
       },
     });
     const observation = manager.observe(original.id)!;
-    clock.setTime(1_011);
+    clock.advanceMonotonicBy(11);
     expect(() => manager.resolve(original.id, answers)).toThrow("was not found");
     expect(manager.get(original.id)?.status).toBe("pending");
     expect(observation.isCurrent()).toBe(false);
@@ -636,6 +636,25 @@ describe("QuestionManager", () => {
     }
   });
 
+  it("does not expire early when the wall clock jumps forward", () => {
+    const record = manager.request({ questions, timeoutMs: 50_000 });
+    // Advance only the wall clock (nowMs) without advancing monotonic time
+    // (elapsedMs). A wall-clock-based expiry check would see the question as
+    // expired; the monotonic deadline must keep it pending.
+    clock.setTime(60_000);
+    expect(manager.get(record.id)?.status).toBe("pending");
+    expect(manager.list()).toHaveLength(1);
+  });
+
+  it("expires on monotonic time even when the wall clock jumps backward", async () => {
+    const record = manager.request({ questions, timeoutMs: 50 });
+    // Rewind the wall clock below the creation time. A wall-clock-based check
+    // would never expire; the monotonic deadline must still fire.
+    clock.setTime(0);
+    await clock.advanceBy(50);
+    expect(manager.get(record.id)?.status).toBe("expired");
+  });
+
   it("cancels pending questions", async () => {
     const record = manager.request({ questions, timeoutMs: 10_000 });
     const waiting = manager.waitAnswer(record.id);
@@ -1017,7 +1036,7 @@ it.each(["answered", "cancelled", "expired"] as const)(
       } else if (status === "cancelled") {
         expect(manager.cancel(id)).toEqual({ status });
       } else {
-        clock.setTime(2_001);
+        clock.advanceMonotonicBy(1_001);
         expect(manager.get(id)?.status).toBe(status);
       }
       await manager.drain();

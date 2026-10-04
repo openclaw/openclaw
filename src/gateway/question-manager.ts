@@ -82,6 +82,8 @@ type QuestionEntry = {
   committing?: boolean;
   commitUnknown?: boolean;
   retired?: boolean;
+  /** Monotonic expiry deadline for wall-clock-independent enforcement. */
+  expiresAtMonotonicMs: number;
 };
 
 /** Private entry identity. Never reselect a successor by its public question id. */
@@ -159,6 +161,7 @@ export class QuestionManager {
     if (expiresAtMs === undefined) {
       throw new Error("question expiry is unavailable");
     }
+    const expiresAtMonotonicMs = this.scheduler.monotonicNow() + timeoutMs;
     const id = params.id ?? randomUUID();
     if (this.entries.has(id)) {
       throw new QuestionManagerError(
@@ -187,6 +190,7 @@ export class QuestionManager {
           return this.drain();
         },
       }),
+      expiresAtMonotonicMs,
       waiters: new Set(),
       onResolved: params.onResolved,
       sessionAccess: params.sessionAccess,
@@ -213,7 +217,10 @@ export class QuestionManager {
     if (!entry) {
       return null;
     }
-    if (entry.record.status === "pending" && entry.record.expiresAtMs <= this.scheduler.now()) {
+    if (
+      entry.record.status === "pending" &&
+      entry.expiresAtMonotonicMs <= this.scheduler.monotonicNow()
+    ) {
       this.expire(id);
     }
     this.refreshRequester(entry);
@@ -301,7 +308,7 @@ export class QuestionManager {
       !entry?.admissionContinuation ||
       entry.record !== record ||
       entry.record.status !== "pending" ||
-      entry.record.expiresAtMs <= this.scheduler.now()
+      entry.expiresAtMonotonicMs <= this.scheduler.monotonicNow()
     ) {
       return null;
     }
@@ -382,7 +389,7 @@ export class QuestionManager {
         entry.retired ||
         this.entries.get(id) !== entry ||
         entry.record.status !== "pending" ||
-        entry.record.expiresAtMs <= this.scheduler.now() ||
+        entry.expiresAtMonotonicMs <= this.scheduler.monotonicNow() ||
         active === false
       ) {
         throw new QuestionManagerError(

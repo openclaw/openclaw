@@ -83,6 +83,9 @@ export function createGatewaySchedulerClock(initialNowMs = 0) {
     setTime: (timeMs: number) => {
       nowMs = timeMs;
     },
+    advanceMonotonicBy: (deltaMs: number) => {
+      elapsedMs += Math.max(0, deltaMs);
+    },
     wake,
     get armedAtMs() {
       return armed?.atMs ?? null;
