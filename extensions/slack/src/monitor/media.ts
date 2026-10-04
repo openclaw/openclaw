@@ -46,10 +46,8 @@ function isSlackHostname(hostname: string, govSlack: boolean): boolean {
 }
 
 function assertSlackFileUrl(rawUrl: string, govSlack: boolean): URL {
-  let parsed: URL;
-  try {
-    parsed = new URL(rawUrl);
-  } catch {
+  const parsed = URL.parse(rawUrl);
+  if (!parsed) {
     throw new Error(`Invalid Slack file URL: ${rawUrl}`);
   }
   if (parsed.protocol !== "https:") {

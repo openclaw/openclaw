@@ -304,54 +304,52 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
     rules: [buildRoomKeyBackupUnavailableFaultRule(cliDevice.accessToken)],
   });
   let cli: Awaited<ReturnType<typeof createMatrixQaCliE2eeSetupRuntime>> | undefined;
-  const failures: unknown[] = [];
+  let outcome: PromiseSettledResult<MatrixQaScenarioExecution>;
   try {
-    let execution: MatrixQaScenarioExecution;
-    try {
-      cli = await createMatrixQaCliE2eeSetupRuntime({
-        artifactLabel: "cli-encryption-setup-bootstrap-failure",
-        context,
-        initialConfig: buildMatrixQaCliE2eeAccountConfig({
-          accountId,
-          accessToken: cliDevice.accessToken,
-          baseUrl: proxy.baseUrl,
-          deviceId: cliDevice.deviceId,
-          encryption: false,
-          name: "Matrix QA CLI Encryption Setup Bootstrap Failure",
-          password: account.password,
-          userId: cliDevice.userId,
-        }),
-      });
-      const failed = await runMatrixQaCliExpectedFailure({
-        args: ["matrix", "encryption", "setup", "--account", accountId, "--json"],
-        start: cli.start,
-        timeoutMs: context.timeoutMs,
-      });
-      const artifacts = await writeMatrixQaCliOutputArtifacts({
-        label: "encryption-setup-bootstrap-failure",
-        result: failed,
-        rootDir: cli.rootDir,
-      });
-      const payload = parseMatrixQaCliJson(failed) as MatrixQaCliEncryptionSetupStatus;
-      if (payload.success !== false && payload.bootstrap?.success !== false) {
-        throw new Error(
-          "Matrix CLI encryption setup failure did not report unsuccessful bootstrap",
-        );
-      }
-      const faultHits = proxy.hits();
-      if (!faultHits.some((hit) => hit.method === "POST")) {
-        throw new Error(
-          "Matrix CLI encryption setup did not attempt faulted room-key backup creation",
-        );
-      }
-      const bootstrapError = payload.bootstrap?.error ?? "";
-      if (!bootstrapError.toLowerCase().includes("room key backup")) {
-        throw new Error(
-          `Matrix CLI encryption setup failed for an unexpected reason: ${bootstrapError}`,
-        );
-      }
+    cli = await createMatrixQaCliE2eeSetupRuntime({
+      artifactLabel: "cli-encryption-setup-bootstrap-failure",
+      context,
+      initialConfig: buildMatrixQaCliE2eeAccountConfig({
+        accountId,
+        accessToken: cliDevice.accessToken,
+        baseUrl: proxy.baseUrl,
+        deviceId: cliDevice.deviceId,
+        encryption: false,
+        name: "Matrix QA CLI Encryption Setup Bootstrap Failure",
+        password: account.password,
+        userId: cliDevice.userId,
+      }),
+    });
+    const failed = await runMatrixQaCliExpectedFailure({
+      args: ["matrix", "encryption", "setup", "--account", accountId, "--json"],
+      start: cli.start,
+      timeoutMs: context.timeoutMs,
+    });
+    const artifacts = await writeMatrixQaCliOutputArtifacts({
+      label: "encryption-setup-bootstrap-failure",
+      result: failed,
+      rootDir: cli.rootDir,
+    });
+    const payload = parseMatrixQaCliJson(failed) as MatrixQaCliEncryptionSetupStatus;
+    if (payload.success !== false && payload.bootstrap?.success !== false) {
+      throw new Error("Matrix CLI encryption setup failure did not report unsuccessful bootstrap");
+    }
+    const faultHits = proxy.hits();
+    if (!faultHits.some((hit) => hit.method === "POST")) {
+      throw new Error(
+        "Matrix CLI encryption setup did not attempt faulted room-key backup creation",
+      );
+    }
+    const bootstrapError = payload.bootstrap?.error ?? "";
+    if (!bootstrapError.toLowerCase().includes("room key backup")) {
+      throw new Error(
+        `Matrix CLI encryption setup failed for an unexpected reason: ${bootstrapError}`,
+      );
+    }
 
-      execution = {
+    outcome = {
+      status: "fulfilled",
+      value: {
         artifacts: {
           accountId,
           bootstrapErrorPreview: truncateUtf16Safe(bootstrapError, 240),
@@ -369,31 +367,23 @@ export async function runMatrixQaE2eeCliEncryptionSetupBootstrapFailureScenario(
           `fault endpoint: ${faultHits[0]?.path ?? "<none>"}`,
           `bootstrap error: ${bootstrapError}`,
         ].join("\n"),
-      };
-    } catch (error) {
-      failures.push(error);
-      throw error;
-    } finally {
-      // Both disposers are async owners; join them before surfacing any failure.
-      const cleanup = await Promise.allSettled([cli?.dispose(), proxy.stop()]);
-      failures.push(
-        ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-      );
-    }
-    if (failures.length > 0) {
-      throw failures[0];
-    }
-    return execution;
-  } catch (error) {
-    if (failures.length > 1) {
-      // AggregateError retains the primary failure as cause and every cleanup failure in errors.
-      const aggregate = new AggregateError(
-        failures,
-        "Matrix QA CLI bootstrap-failure lifecycle failed",
-      );
-      aggregate.cause = error;
-      throw aggregate;
-    }
-    throw error;
+      },
+    };
+  } catch (reason) {
+    outcome = { status: "rejected", reason };
   }
+  // Join both async disposers before reporting the scenario or cleanup failures.
+  const cleanup = await Promise.allSettled([cli?.dispose(), proxy.stop()]);
+  const failures: unknown[] = outcome.status === "rejected" ? [outcome.reason] : [];
+  failures.push(
+    ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+  );
+  if (outcome.status === "fulfilled" && failures.length === 0) {
+    return outcome.value;
+  }
+  throw failures.length === 1
+    ? failures[0]
+    : new AggregateError(failures, "Matrix QA CLI bootstrap-failure lifecycle failed", {
+        cause: failures[0],
+      });
 }

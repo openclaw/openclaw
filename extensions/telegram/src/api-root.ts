@@ -28,14 +28,9 @@ export function hasTelegramBotEndpointApiRoot(apiRoot: unknown): boolean {
   if (typeof apiRoot !== "string" || !apiRoot.trim()) {
     return false;
   }
-  try {
-    const url = new URL(apiRoot.trim());
-    const segments = url.pathname.split("/").filter(Boolean);
-    const last = segments[segments.length - 1];
-    return Boolean(last && isTelegramBotEndpointSegment(last));
-  } catch {
-    return false;
-  }
+  const segments = URL.parse(apiRoot.trim())?.pathname.split("/").filter(Boolean);
+  const last = segments?.at(-1);
+  return Boolean(last && isTelegramBotEndpointSegment(last));
 }
 
 function readRequestUrl(input: unknown): string | null {
@@ -53,14 +48,8 @@ function readRequestUrl(input: unknown): string | null {
 
 export function extractTelegramApiMethod(input: unknown): string | null {
   const url = readRequestUrl(input);
-  if (!url) {
-    return null;
-  }
-  try {
-    const pathname = new URL(url).pathname;
-    const segments = pathname.split("/").filter(Boolean);
-    return segments.at(-1)?.toLowerCase() ?? null;
-  } catch {
-    return null;
-  }
+  const segments = URL.parse(url ?? "")
+    ?.pathname.split("/")
+    .filter(Boolean);
+  return segments?.at(-1)?.toLowerCase() ?? null;
 }

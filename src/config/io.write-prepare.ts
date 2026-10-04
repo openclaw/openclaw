@@ -188,7 +188,7 @@ function hasNewEquivalentArraySibling(value: unknown, nextValue: unknown, index:
   );
 }
 
-function getPathValue(value: unknown, path: string[]): unknown {
+function getPathValue(value: unknown, path: readonly string[]): unknown {
   let current = value;
   for (const segment of path) {
     if (Array.isArray(current)) {
@@ -209,7 +209,7 @@ function getPathValue(value: unknown, path: string[]): unknown {
 
 function setPathValue(
   value: unknown,
-  path: string[],
+  path: readonly string[],
   nextValue: unknown,
   createParents = false,
 ): unknown {
@@ -673,41 +673,35 @@ function preserveUntouchedIncludes(params: {
 }
 
 function hasPathValue(value: unknown, path: readonly string[]): boolean {
-  if (path.length === 0) {
-    return true;
-  }
-  const head = expectDefined(path[0], "config path head");
-  const tail = path.slice(1);
-  if (Array.isArray(value)) {
-    const index = parseConfigPathArrayIndex(head);
-    if (index === undefined || index >= value.length) {
+  let nextValue = value;
+  for (const segment of path) {
+    if (Array.isArray(nextValue)) {
+      const index = parseConfigPathArrayIndex(segment);
+      if (index === undefined || index >= nextValue.length) {
+        return false;
+      }
+      nextValue = nextValue[index];
+    } else if (
+      isRecord(nextValue) &&
+      !isBlockedObjectKey(segment) &&
+      Object.hasOwn(nextValue, segment)
+    ) {
+      nextValue = nextValue[segment];
+    } else {
       return false;
     }
-    return tail.length === 0 || hasPathValue(value[index], tail);
   }
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (isBlockedObjectKey(head) || !Object.hasOwn(value, head)) {
-    return false;
-  }
-  return tail.length === 0 || hasPathValue(value[head], tail);
+  return true;
 }
 
-function mergeMissingExplicitValues(
-  currentValue: unknown,
-  explicitValue: unknown,
-): {
-  changed: boolean;
-  value: unknown;
-} {
+function mergeMissingExplicitValues(currentValue: unknown, explicitValue: unknown): unknown {
   // Explicit ancestor writes must not copy resolved descendants back into preserved includes.
   if (hasOwnValidIncludeDirective(currentValue)) {
-    return { changed: false, value: currentValue };
+    return currentValue;
   }
   if (!isRecord(currentValue) || !isRecord(explicitValue)) {
     if (!Array.isArray(currentValue) || !Array.isArray(explicitValue)) {
-      return { changed: false, value: currentValue };
+      return currentValue;
     }
     let changed = false;
     const next = [...currentValue];
@@ -716,37 +710,33 @@ function mergeMissingExplicitValues(
       if (index === undefined) {
         continue;
       }
-      if (index >= next.length || next[index] === undefined) {
-        next[index] = structuredClone(childExplicitValue);
-        changed = true;
-        continue;
-      }
-      const childMerged = mergeMissingExplicitValues(next[index], childExplicitValue);
-      if (childMerged.changed) {
-        next[index] = childMerged.value;
+      const missing = index >= next.length || next[index] === undefined;
+      const childMerged = missing
+        ? structuredClone(childExplicitValue)
+        : mergeMissingExplicitValues(next[index], childExplicitValue);
+      if (missing || !Object.is(childMerged, next[index])) {
+        next[index] = childMerged;
         changed = true;
       }
     }
-    return { changed, value: changed ? next : currentValue };
+    return changed ? next : currentValue;
   }
   let changed = false;
-  const next: Record<string, unknown> = { ...currentValue };
+  const next = { ...currentValue };
   for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
     if (isBlockedObjectKey(key)) {
       continue;
     }
-    if (!Object.hasOwn(next, key)) {
-      next[key] = structuredClone(childExplicitValue);
-      changed = true;
-      continue;
-    }
-    const childMerged = mergeMissingExplicitValues(next[key], childExplicitValue);
-    if (childMerged.changed) {
-      next[key] = childMerged.value;
+    const missing = !Object.hasOwn(next, key);
+    const childMerged = missing
+      ? structuredClone(childExplicitValue)
+      : mergeMissingExplicitValues(next[key], childExplicitValue);
+    if (missing || !Object.is(childMerged, next[key])) {
+      next[key] = childMerged;
       changed = true;
     }
   }
-  return { changed, value: changed ? next : currentValue };
+  return changed ? next : currentValue;
 }
 
 export function injectExplicitlySetPaths(params: {
@@ -786,7 +776,7 @@ export function injectExplicitlySetPaths(params: {
     if (includeOwnedPath && !preserveDescendantInclude && !allowIncludeAncestorOverride) {
       throw includeOwnershipError(params.rootAuthoredConfig, includeOwnedPath);
     }
-    let nextValue = getPathValue(params.valueSource, [...path]);
+    let nextValue = getPathValue(params.valueSource, path);
     if (nextValue === undefined) {
       continue;
     }
@@ -812,7 +802,7 @@ export function injectExplicitlySetPaths(params: {
           getPathValue(params.sourceConfigBeforeMigrations, arrayPath),
         )
       ) {
-        const valuePath = arrayPath.length < path.length ? [...path] : arrayPath;
+        const valuePath = arrayPath.length < path.length ? path : arrayPath;
         const requested = getPathValue(params.valueSource, valuePath);
         if (
           !isDeepStrictEqual(requested, getPathValue(params.sourceConfig, valuePath)) &&
@@ -834,12 +824,13 @@ export function injectExplicitlySetPaths(params: {
       }
     }
     if (!hasPathValue(next, path)) {
-      next = setPathValue(next, [...path], nextValue, true);
+      next = setPathValue(next, path, nextValue, true);
       continue;
     }
-    const merged = mergeMissingExplicitValues(getPathValue(next, [...path]), nextValue);
-    if (merged.changed) {
-      next = setPathValue(next, [...path], merged.value);
+    const currentValue = getPathValue(next, path);
+    const merged = mergeMissingExplicitValues(currentValue, nextValue);
+    if (!Object.is(merged, currentValue)) {
+      next = setPathValue(next, path, merged);
     }
   }
   return next;
@@ -1306,13 +1297,9 @@ function canonicalizeAgentRosterForExplicitWrite(params: {
     }
   }
   if (authoredList && explicitList) {
-    for (const path of params.explicitSetPaths ?? []) {
-      if (path[0] !== "agents" || path[1] !== "list" || path.length !== 4 || path[3] !== "id") {
-        continue;
-      }
-      const index = parseConfigPathArrayIndex(path[2] ?? "");
-      const explicitEntry = index === undefined ? undefined : explicitList[index];
-      const oldId = index === undefined ? undefined : legacyIdsByIndex.get(index);
+    for (const index of renamedLegacyIndexes) {
+      const explicitEntry = explicitList[index];
+      const oldId = legacyIdsByIndex.get(index);
       const nextId = isRecord(explicitEntry) ? explicitEntry.id : undefined;
       if (typeof oldId === "string" && typeof nextId === "string") {
         entryIdentityByNextId.set(nextId, oldId);

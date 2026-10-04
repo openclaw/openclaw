@@ -544,12 +544,17 @@ export function startOpenClawStateLeaseHeartbeat(
       // Require a fresh acknowledgement, never a cached ready/alive observation.
       while (Atomics.load(shared, state.status) === state.ready) {
         const ack = Atomics.load(shared, state.ack);
+        // A completed ACK survives a delayed parent wake, but never an expired grant.
+        if (
+          ack === requestNumber &&
+          expiresAt > Date.now() &&
+          Atomics.load(shared, state.status) === state.ready
+        ) {
+          return;
+        }
         const remainingMs = remainingBudget();
         if (remainingMs <= 0) {
           break;
-        }
-        if (ack === requestNumber && Atomics.load(shared, state.status) === state.ready) {
-          return;
         }
         Atomics.wait(shared, state.ack, ack, remainingMs);
       }

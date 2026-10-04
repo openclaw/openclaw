@@ -164,6 +164,7 @@ type SubagentAnnounceFlowParams = {
   isCompletionDeliveryAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   signal?: AbortSignal;
+  onExecutionStarted?: () => void;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void | Promise<void>;
   onBeforeDeleteChildSession?: () => boolean | Promise<boolean>;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
@@ -613,6 +614,7 @@ async function runSubagentAnnounceFlowBound(
       directIdempotencyKey,
       onDeliveryResult: reportDeliveryResult,
       signal: params.signal,
+      onExecutionStarted: params.onExecutionStarted,
       resolveGatewayContext: params.resolveGatewayContext,
     });
     await reportDeliveryResult(delivery);

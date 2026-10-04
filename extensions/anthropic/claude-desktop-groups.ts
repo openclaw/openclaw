@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { setBoundedCache } from "./session-catalog-scan.js";
 
 const groupCache = new Map<string, { signature: string; assignments: Map<string, string> }>();
@@ -226,21 +227,11 @@ function collectLevelDbValues(block: Uint8Array, values: Map<string, LevelDbValu
   });
 }
 
-function isPlainGroupName(name: string): boolean {
-  for (let index = 0; index < name.length; index += 1) {
-    const code = name.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
   const text = localStorageText(raw);
   for (const match of text.matchAll(/"id":"(cg-[a-f0-9-]+)","name":"([^"\\]{1,500})"/gi)) {
     const [, id, name] = match;
-    if (id && name && isPlainGroupName(name) && !parsed.groups.has(id)) {
+    if (id && name && !containsAsciiControlCharacter(name) && !parsed.groups.has(id)) {
       parsed.groups.set(id, name);
     }
   }
