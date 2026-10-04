@@ -23,12 +23,14 @@ vi.mock("./model-selection.js", async () => {
   };
 });
 
+// mock-isolation: Model-selection cases use an in-memory store without opening SQLite writers.
 vi.mock("../config/sessions/session-accessor.js", () => {
   return {
     patchSessionEntryCore: (...args: unknown[]) => state.updateSessionStoreMock(...args),
   };
 });
 
+// mock-isolation: These policy cases supply persisted selections without starting read workers.
 vi.mock("../config/sessions/session-entry-read-runtime.js", () => ({
   readSessionEntryReadOnlyInWorker: async (scope: { sessionKey: string }) => {
     const store = state.loadSessionStoreMock(scope) as Record<string, unknown> | undefined;
