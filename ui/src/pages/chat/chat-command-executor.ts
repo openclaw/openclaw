@@ -15,6 +15,7 @@ import type {
 } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import {
   getSlashCommandCategoryLabel,
   getSlashCommandDescription,
@@ -42,6 +43,7 @@ import {
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { buildChatApiAttachments } from "./attachment-api.ts";
 import { normalizeChatSendAckStatus } from "./chat-send-ack.ts";
 import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-settings-patches.ts";
 
@@ -61,6 +63,7 @@ type SlashCommandResult = {
 };
 
 type SlashCommandContext = {
+  attachments?: readonly ChatAttachment[];
   sessions: SessionCapability;
   sessionAccessSnapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
   readSessionAccessSnapshot?: () => Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase">;
@@ -585,13 +588,17 @@ async function executeRunCommand(
   try {
     const message = args.trim();
     if (!message) {
-      return { content: t(`chat.commandResults.${command}.usage`) };
+      return {
+        content: t(`chat.commandResults.${command}.usage`),
+        ...(context.attachments?.length ? { failed: true } : {}),
+      };
     }
     assertCurrentSlashCommand(context);
     const response = await client.request<{ runId?: unknown; status?: unknown }>("chat.send", {
       sessionKey,
       ...selectedGlobalScope(sessionKey, context),
       message,
+      attachments: buildChatApiAttachments(context.attachments),
       ...(command === "steer"
         ? { deliver: false, queueMode: "steer" }
         : { queueMode: "interrupt" }),
