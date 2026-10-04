@@ -102,6 +102,7 @@ import {
   createDoctorSessionSqliteTargetReport,
   countBlockingSessionSqliteIssues,
   isRetainedSourceIssue,
+  isSettleableIssue,
   isInformationalMissingSessionIndex,
   type DoctorSessionSqliteMode,
   type DoctorSessionSqliteOptions,
@@ -607,7 +608,7 @@ export async function settleRetainedDoctorSessionSources(
     );
     verifyImports();
     await archiveImportedLegacySessionStores(
-      owners.filter((owner) => owner.report.issues.every(isRetainedSourceIssue)),
+      owners.filter((owner) => owner.report.issues.every(isSettleableIssue)),
       activeRun,
       coverage,
       assertCurrent,
@@ -616,7 +617,7 @@ export async function settleRetainedDoctorSessionSources(
     verifyImports();
     const issue = owners
       .flatMap((owner) => owner.report.issues)
-      .find((candidate) => !isRetainedSourceIssue(candidate));
+      .find((candidate) => !isSettleableIssue(candidate));
     if (issue || owners.some((owner) => fs.existsSync(owner.target.storePath))) {
       throw new Error(issue?.message ?? "Retained session sources could not be archived.");
     }
@@ -633,7 +634,7 @@ export async function settleRetainedDoctorSessionSources(
   } catch (error) {
     failure = error instanceof Error ? error : new Error(formatErrorMessage(error));
     const failedOwners = owners.filter((owner) =>
-      owner.report.issues.some((issue) => !isRetainedSourceIssue(issue)),
+      owner.report.issues.some((issue) => !isSettleableIssue(issue)),
     );
     for (const [index, owner] of owners.entries()) {
       owner.report.issues.push(
@@ -643,8 +644,7 @@ export async function settleRetainedDoctorSessionSources(
       );
       if (failedOwners.length === 0 || failedOwners.includes(owner)) {
         const ownIssue = owner.report.issues.find(
-          (issue) =>
-            !isRetainedSourceIssue(issue) && issue.code !== "plugin_migration_source_retained",
+          (issue) => !isSettleableIssue(issue) && issue.code !== "plugin_migration_source_retained",
         );
         owner.report.issues.push({
           code: "retained_plugin_source_settlement_failed",
