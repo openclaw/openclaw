@@ -193,14 +193,8 @@ export function toWorkerTranscriptMessage(
       message.customType === "openclaw.system-update") &&
     purpose !== "inference"
   ) {
-    const candidate = {
-      role: message.role,
-      customType: message.customType,
-      content: message.content,
-      display: message.display,
-      details: message.details,
-      timestamp: message.timestamp,
-    };
+    const { role, customType, content, display, details, timestamp } = message;
+    const candidate = { role, customType, content, display, details, timestamp };
     if (!Value.Check(WorkerRuntimeContextMessageSchema, candidate)) {
       throw new Error("Invalid worker runtime context");
     }

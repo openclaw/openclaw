@@ -184,8 +184,14 @@ export function emitProviderReplayRejected(
   }
 }
 
-export function windowInitialMessages(messages: AgentMessage[]): WorkerInitialMessagePlan {
-  const windowed = windowWorkerReplayMessages(messages, WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1);
+export function windowInitialMessages(
+  messages: AgentMessage[],
+  promptMessages = 1,
+): WorkerInitialMessagePlan {
+  const windowed = windowWorkerReplayMessages(
+    messages,
+    WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages,
+  );
   if (windowed.kind === "provider-replay-unavailable") {
     return windowed;
   }

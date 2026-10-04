@@ -114,7 +114,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
       convert(normalizeMessagesForLlmBoundary(messages, { inHistorySystemUpdates: true }));
     const requests: Context[] = [];
     streamMocks.streamSimple.mockImplementation((activeModel, context: Context) => {
-      requests.push(structuredClone(context));
+      requests.push({ ...context, messages: structuredClone(context.messages) });
       return createAssistantResultStream(
         createAssistant(activeModel, [{ type: "text", text: "Recovered." }]),
       );
@@ -264,7 +264,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         );
       const requests: Context[] = [];
       streamMocks.streamSimple.mockImplementation((activeModel, context: Context) => {
-        requests.push(structuredClone(context));
+        requests.push({ ...context, messages: structuredClone(context.messages) });
         const useTool = continuation === "tool" && requests.length === 1;
         return createAssistantResultStream(
           createAssistant(
@@ -408,7 +408,7 @@ describe("submitEmbeddedAttemptPrompt foreground dispatch", () => {
         );
       const requests: Context[] = [];
       streamMocks.streamSimple.mockImplementation((activeModel, context: Context) => {
-        requests.push(structuredClone(context));
+        requests.push({ ...context, messages: structuredClone(context.messages) });
         expect(
           sessionManager
             .getBranch()

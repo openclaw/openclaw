@@ -213,7 +213,7 @@ export const WorkerRuntimeContextFragmentsSchema = Type.Array(
 
 const workerRuntimeContextFields = {
   role: Type.Literal("custom"),
-  content: Type.String(),
+  content: Type.Union([Type.String(), transcriptSchemas.userContent]),
   display: Type.Literal(false),
   timestamp: Type.Integer({ minimum: 0 }),
 };
@@ -221,11 +221,14 @@ export const WorkerRuntimeContextMessageSchema = Type.Union([
   closedObject({
     ...workerRuntimeContextFields,
     customType: Type.Literal("openclaw.runtime-context"),
-    details: closedObject({
-      source: Type.Literal("openclaw-runtime-context"),
-      runtimeContextCarrier: Type.Literal(true),
-      fragments: Type.Optional(WorkerRuntimeContextFragmentsSchema),
-    }),
+    details: Type.Partial(
+      closedObject({
+        source: Type.Literal("openclaw-runtime-context"),
+        runtimeContextCarrier: Type.Literal(true),
+        fragments: WorkerRuntimeContextFragmentsSchema,
+      }),
+      { anyOf: [{ required: ["source"] }, { required: ["runtimeContextCarrier"] }] },
+    ),
   }),
   closedObject({
     ...workerRuntimeContextFields,

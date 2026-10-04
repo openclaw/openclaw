@@ -534,7 +534,8 @@ export async function executeWorkerTurn(
         isAuthorized,
       });
     }
-    const initialMessagePlan = windowInitialMessages(media.history);
+    const promptMessages = promptContext.runtimeContext ? 2 : 1;
+    const initialMessagePlan = windowInitialMessages(media.history, promptMessages);
     if (initialMessagePlan.kind === "provider-replay-unavailable") {
       const details = initialMessagePlan.details;
       emitProviderReplayRejected(

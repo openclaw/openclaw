@@ -193,6 +193,49 @@ describe("assertSupportedTurn", () => {
 });
 
 describe("windowInitialMessages", () => {
+  it.each([{ source: "openclaw-runtime-context" }, { runtimeContextCarrier: true }])(
+    "preserves historical carrier details %j and provider-visible bytes",
+    (details) => {
+      for (const content of [
+        "retained context",
+        [{ type: "text" as const, text: "retained context" }],
+      ]) {
+        const history: AgentMessage[] = [
+          userMessage("previous turn", 1),
+          {
+            role: "custom",
+            customType: "openclaw.runtime-context",
+            content,
+            display: false,
+            details,
+            timestamp: 2,
+          },
+          assistantMessage(3, true),
+        ];
+        expect(windowInitialMessages(history)).toEqual({ kind: "complete", messages: history });
+      }
+    },
+  );
+
+  it.each([
+    {},
+    { source: "foreign" },
+    { source: "openclaw-runtime-context", runtimeContextCarrier: false },
+  ])("rejects invalid runtime carrier metadata %j", (details) => {
+    expect(() =>
+      windowInitialMessages([
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "retained context",
+          display: false,
+          details,
+          timestamp: 1,
+        },
+      ]),
+    ).toThrow("Invalid worker runtime context");
+  });
+
   it.each([false, true])(
     "retains hidden runtime context before the provider replay anchor (structured: %s)",
     (structured) => {
@@ -252,21 +295,21 @@ describe("windowInitialMessages", () => {
     });
   });
 
-  it("reserves one context slot for the current prompt", () => {
+  it.each([1, 2])("reserves %i context slots for the complete current prompt", (promptMessages) => {
     const history = Array.from({ length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES }, (_value, index) =>
       userMessage(`history-${index}`, index + 1),
     );
 
-    const result = windowInitialMessages(history);
+    const result = windowInitialMessages(history, promptMessages);
 
     expect(result.kind).toBe("complete");
     if (result.kind !== "complete") {
       throw new Error("expected complete window");
     }
-    expect(result.messages).toHaveLength(WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1);
+    expect(result.messages).toHaveLength(WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages);
     expect(result.messages[0]).toMatchObject({
       role: "user",
-      content: [{ type: "text", text: "history-1" }],
+      content: [{ type: "text", text: `history-${promptMessages}` }],
     });
   });
 
@@ -294,20 +337,21 @@ describe("windowInitialMessages", () => {
     });
   });
 
-  it("returns a typed degraded result instead of slicing past replay", () => {
+  it.each([1, 2])("rejects replay that cannot leave %i current-prompt slots", (promptMessages) => {
     const history = [assistantMessage(1, true)];
     history.push(
-      ...Array.from({ length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1 }, (_value, index) =>
-        userMessage(`suffix-${index}`, index + 2),
+      ...Array.from(
+        { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages },
+        (_value, index) => userMessage(`suffix-${index}`, index + 2),
       ),
     );
 
-    expect(windowInitialMessages(history)).toEqual({
+    expect(windowInitialMessages(history, promptMessages)).toEqual({
       kind: "provider-replay-unavailable",
       details: {
         reason: "provider-replay-message-limit",
-        messageCount: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
-        limitMessages: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1,
+        messageCount: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages + 1,
+        limitMessages: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - promptMessages,
       },
     });
   });

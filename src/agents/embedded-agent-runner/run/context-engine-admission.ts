@@ -1,8 +1,6 @@
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
-import {
-  createContextEngineLogicalTurnLease,
-  beginContextEngineLogicalTurn,
-} from "../../harness/context-engine-logical-turn.js";
+import { createContextEngineLogicalTurnLease } from "../../harness/context-engine-logical-turn.js";
+import { beginContextEngineLogicalTurn } from "../../harness/context-engine-turn-begin.js";
 import type { AgentHarness } from "../../harness/types.js";
 import type { PreparedEmbeddedRunInput } from "./execution-context.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";

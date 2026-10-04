@@ -84,6 +84,10 @@ const prior = [
   { role: "user", text: "previous request" },
   { role: "assistant", text: "previous answer" },
 ];
+const priorAtModelBoundary = [
+  { role: "user", text: "[Thu 1970-01-01 00:00 UTC] previous request" },
+  { role: "assistant", text: "previous answer" },
+];
 
 function recorder() {
   return createUserTurnTranscriptRecorder({
@@ -298,7 +302,7 @@ describe("worker detached model-context branch parity", () => {
               suppressNextUserMessagePersistence: true,
             }),
         );
-        expect(result.launch).toEqual({ baseLeafId: currentId, history: prior });
+        expect(result.launch).toEqual({ baseLeafId: currentId, history: priorAtModelBoundary });
         expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
         if (sideAppend) {
           const after = SessionManager.open(sessionTarget);
@@ -330,7 +334,7 @@ describe("worker detached model-context branch parity", () => {
       expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
       expect(result.launch).toEqual({
         baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-        history: state === "in-flight" ? prior : [],
+        history: state === "in-flight" ? priorAtModelBoundary : [],
       });
       if (state === "first transcript") {
         expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
@@ -385,7 +389,10 @@ describe("worker detached model-context branch parity", () => {
 
         expect(result.launch).toEqual({
           baseLeafId: receipt.entryId,
-          history: [...prior, { role: "user", text: "earlier unanswered input" }],
+          history: [
+            ...priorAtModelBoundary,
+            { role: "user", text: "[Thu 1970-01-01 00:00 UTC] earlier unanswered input" },
+          ],
         });
         expect(appendedRows).toBeDefined();
         expect(appendedRows?.slice(0, originalRows.length)).toEqual(originalRows);
@@ -444,7 +451,7 @@ describe("worker detached model-context branch parity", () => {
         if (change === "current") {
           expect(result.launch).toEqual({
             baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-            history: prior,
+            history: priorAtModelBoundary,
           });
         } else {
           expect(result.credentialCalls).toBe(0);

@@ -1,11 +1,9 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  createContextEngineLogicalTurnLease,
-  beginContextEngineLogicalTurn,
-} from "../agents/harness/context-engine-logical-turn.js";
+import { createContextEngineLogicalTurnLease } from "../agents/harness/context-engine-logical-turn.js";
 import * as turnAdmission from "../agents/harness/context-engine-turn-attempt.js";
+import { beginContextEngineLogicalTurn } from "../agents/harness/context-engine-turn-begin.js";
 import { createAgentCleanupScope } from "../agents/run-cleanup-timeout.js";
 import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
