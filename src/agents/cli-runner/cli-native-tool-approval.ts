@@ -115,22 +115,19 @@ export async function requestCliNativeToolApproval(params: {
         ? sanitizeExecApprovalWarningTextWithStatus(description.text)
         : null;
     // Approvals resolve from summary-only surfaces (channel text, push), which
-    // never carry the reviewer detail. Bash therefore fails closed whenever any
+    // never carry the reviewer detail. Bash therefore never prompts when any
     // resolving surface could see less than the complete command: a truncated
     // description, sanitization-altered display, or post-sanitization overflow.
-    if (
+    const bashPromptIncomplete =
       params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
       (description.truncated ||
         summarySanitization?.truncated === true ||
         summarySanitization?.oversized === true ||
-        (summarySanitization &&
+        (summarySanitization !== null &&
           exceedsApprovalTextLimit(
             summarySanitization.text,
             PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
-          )))
-    ) {
-      return { kind: "deny", reason: "policy-oversized" };
-    }
+          )));
     const bashCommand =
       params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL &&
       typeof params.toolInput.command === "string"
@@ -206,6 +203,11 @@ export async function requestCliNativeToolApproval(params: {
         const reason = sanitizeExecApprovalWarningTextWithStatus(rendered.reason).text;
         description.text += `\nExec allowlist miss: ${truncateUtf16Safe(reason, 100)}`;
       }
+    }
+    // Allowlist auto-allow evaluates the complete command and asks no human, so
+    // the display bound only gates the prompt path.
+    if (!autoAllow && bashPromptIncomplete) {
+      return { kind: "deny", reason: "policy-oversized" };
     }
     let mutableFileBinding: SystemRunMutableFileBinding | undefined;
     if (params.toolName === CLI_NATIVE_TOOL_ARBITRARY_EXECUTION_TOOL) {
