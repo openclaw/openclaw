@@ -259,7 +259,6 @@ export function projectChatTranscript(
       ? (target) => state.transcriptRenderContext.onSetReply?.(target)
       : undefined,
     resolveReplyPreview,
-    onResolveReply: props.replyMessageAccess?.request,
     onOpenReply: (replyToId: string) => state.transcriptRenderContext.onOpenReply?.(replyToId),
     replyNavigationId: props.replyMessageAccess?.navigationId,
     onOpenSidebar: props.onOpenSidebar,

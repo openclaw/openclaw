@@ -154,13 +154,8 @@ export function parseRelayHttpCompleteRequest(
 }
 
 export function parseExtensionRelayResource(rawUrl: string, expectedPath: string): string | null {
-  let url: URL;
-  try {
-    url = new URL(rawUrl, "http://127.0.0.1");
-  } catch {
-    return null;
-  }
-  if (url.pathname !== expectedPath || url.hash) {
+  const url = URL.parse(rawUrl, "http://127.0.0.1");
+  if (!url || url.pathname !== expectedPath || url.hash) {
     return null;
   }
   const entries = [...url.searchParams.entries()];

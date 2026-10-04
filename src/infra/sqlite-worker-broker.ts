@@ -154,6 +154,7 @@ export class SqliteWorkerBroker {
     options: PreparedSqliteWorkerOpen,
     client: object,
   ): Promise<SqliteWorkerStore<Operations> | undefined> {
+    const { maintenanceScope } = options;
     options.assertCurrent?.();
     const { databasePath, inputHash, identity, key } =
       await prepareSqliteWorkerDatabaseAdmission(options);
@@ -283,8 +284,10 @@ export class SqliteWorkerBroker {
     }
     const admittedActor = actor;
     try {
-      retainSqliteWorkerAdmissionCleanup(admittedActor, options.retainCleanup, () =>
-        this.lifecycle.closeActor(admittedActor, options.maintenanceScope),
+      retainSqliteWorkerAdmissionCleanup(
+        admittedActor,
+        options.retainCleanup,
+        this.lifecycle.closeActor.bind(this.lifecycle, admittedActor, maintenanceScope),
       );
       options.onNativeStopped?.(actor.nativeStopped, () => admittedActor.closeReceipt);
       await actor.opened;
@@ -373,7 +376,7 @@ export class SqliteWorkerBroker {
           await owned.slot.exit;
         }
         if (!owned.references) {
-          await this.lifecycle.closeActor(owned, options.maintenanceScope);
+          await this.lifecycle.closeActor(owned, maintenanceScope);
         }
       },
     });

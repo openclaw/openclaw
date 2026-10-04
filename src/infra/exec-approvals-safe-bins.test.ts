@@ -223,7 +223,6 @@ describe("exec approvals safe bins", () => {
         safeBins: resolveSafeBins(["head"]),
         trustedSafeBinDirs: getTrustedSafeBinDirs({
           extraDirs: ["/opt/homebrew/Cellar/coreutils/9.5/bin"],
-          refresh: true,
         }),
       }),
     ).toBe(true);

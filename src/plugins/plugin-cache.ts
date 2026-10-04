@@ -9,11 +9,7 @@ import {
   summarizePluginRetirementResults,
 } from "./host-hook-cleanup-result.js";
 import type { PluginHostCleanupResult } from "./host-hook-cleanup.types.js";
-import {
-  createPluginCacheArtifacts,
-  createPluginRootArtifacts,
-  type PluginSourceCacheRecord,
-} from "./plugin-cache-artifacts.js";
+import type { PluginSourceCacheRecord } from "./plugin-cache-artifacts.js";
 import type { PluginCacheFact } from "./plugin-cache-management.js";
 import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
 import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
@@ -234,7 +230,10 @@ export function createPluginCache(options: { kind?: PluginCache["kind"] } = {}):
     persistedInstalledIndex: new Map(),
     preparedBundledDiscoveryModes: new Map(),
     dependencyStatus: new WeakMap(),
-    ...createPluginCacheArtifacts(),
+    moduleLoaders: new Map(),
+    sources: new Map(),
+    sourceAliases: new Map(),
+    runtimeRecordRoots: new WeakMap(),
   };
 }
 
@@ -543,7 +542,11 @@ export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
       files: new Map(),
       checkedEntries: new Map(),
       paths: new Map(),
-      ...createPluginRootArtifacts(),
+      artifactLoadsInProgress: new Set(),
+      artifacts: new Map(),
+      runtimeArtifacts: new Map(),
+      entryBoundaries: new Map(),
+      entryPaths: new Map(),
     };
     cache.roots.set(key, root);
   }

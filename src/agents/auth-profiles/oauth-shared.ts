@@ -12,11 +12,7 @@ import {
 } from "./oauth-identity.js";
 import type { AuthProfileStore, OAuthCredential, RuntimeAuthProfileStore } from "./types.js";
 
-export {
-  hasOAuthIdentity,
-  normalizeAuthEmailToken,
-  normalizeAuthIdentityToken,
-} from "./oauth-identity.js";
+export { hasOAuthIdentity } from "./oauth-identity.js";
 
 /** OAuth profile imported from a runtime external CLI source. */
 export type RuntimeExternalOAuthProfile = {

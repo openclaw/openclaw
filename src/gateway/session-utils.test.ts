@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from "vitest";
-import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
@@ -890,6 +890,7 @@ describe("gateway session utils", () => {
       },
     } as unknown as InternalSessionEntry;
     const result = projectSessionPatchResult({
+      preparedAcpMeta: null,
       canonicalKey: "agent:main:main",
       cfg: {
         agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
@@ -1523,29 +1524,24 @@ describe("gateway session utils", () => {
     expect(resolveDeletedAgentIdFromSessionKey(cfg, "agent:main:discord:direct:u1")).toBe("main");
   });
 
-  test("resolveDeletedAgentIdFromSessionKey ignores confirmed ACP runtime session keys", () => {
-    const cfg = {
-      agents: { entries: { main: {} } },
-    } as OpenClawConfig;
-    const acpEntry = (agent: string, runtimeSessionName: string) =>
-      ({
-        acp: {
+  test("deleted-agent checks require canonical ACP metadata instead of embedded entries", async () => {
+    await withStateDirEnv("session-utils-acp-canonical-facts-", async () => {
+      const cfg = { agents: { entries: { main: {} } } } satisfies OpenClawConfig;
+      for (const agent of ["claude", "cursor"]) {
+        const key = `agent:${agent}:acp:11111111-1111-4111-8111-111111111111`;
+        const acpMeta: NonNullable<SessionEntry["acp"]> = {
           backend: "acpx",
           agent,
-          runtimeSessionName,
+          runtimeSessionName: key,
           mode: "oneshot",
           state: "idle",
           lastActivityAt: 1,
-        },
-      }) as SessionEntry;
-    const claudeKey = "agent:claude:acp:11111111-1111-4111-8111-111111111111";
-    const cursorKey = "agent:cursor:acp:22222222-2222-4222-8222-222222222222";
-    expect(
-      resolveDeletedAgentIdFromSessionKey(cfg, claudeKey, acpEntry("claude", claudeKey)),
-    ).toBeNull();
-    expect(
-      resolveDeletedAgentIdFromSessionKey(cfg, cursorKey, acpEntry("cursor", cursorKey)),
-    ).toBeNull();
+        };
+        const entry: SessionEntry = { sessionId: `synthetic-${agent}`, updatedAt: 1, acp: acpMeta };
+        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, entry)).toBe(agent);
+        expect(resolveDeletedAgentIdFromSessionKey(cfg, key, entry, { acpMeta })).toBeNull();
+      }
+    });
   });
 
   test("resolveDeletedAgentIdFromSessionKey rejects ACP-shaped bridge keys without ACP metadata", () => {
@@ -1570,7 +1566,7 @@ describe("gateway session utils", () => {
     ).toBe("deleted-agent");
   });
 
-  test("resolveDeletedAgentIdFromSessionKey repairs canonical ACP metadata aliases", async () => {
+  test("resolveDeletedAgentIdFromSessionKey recognizes canonical free ACP metadata", async () => {
     await withStateDirEnv("session-utils-acp-deleted-agent-repair-", async ({ stateDir }) => {
       const storePath = path.join(stateDir, "agents", "claude", "sessions", "sessions.json");
       const acpKey = "agent:claude:acp:55555555-5555-4555-8555-555555555555";
@@ -1582,7 +1578,7 @@ describe("gateway session utils", () => {
       seedSessionEntries(storePath, {
         [acpKey]: entry,
       });
-      writeAcpSessionMetaForMigration({
+      seedCanonicalAcpSessionMeta({
         sessionKey: legacyAcpKey,
         lifecycleRevision: undefined,
         meta: {

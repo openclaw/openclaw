@@ -1,4 +1,3 @@
-import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptAdmissionReceipt,
@@ -42,17 +41,4 @@ export function readPendingUserTurnTranscriptAdmission(
   }
   const receipt = owner.receipt();
   return receipt ? { ...receipt } : undefined;
-}
-
-export function resolveUserTurnTranscriptAdmission(params: {
-  logicalTurnId: string;
-  receipt: TranscriptEntryAnchor | UserTurnTranscriptAdmissionReceipt;
-}): UserTurnTranscriptAdmissionReceipt {
-  return "logicalTurnId" in params.receipt
-    ? params.receipt
-    : {
-        ...params.receipt,
-        logicalTurnId: params.logicalTurnId,
-        role: "user",
-      };
 }

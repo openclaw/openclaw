@@ -840,17 +840,6 @@ export type SessionPatchProjectionResult<TFailure extends SessionPatchProjection
   | { ok: true; entry: SessionEntry }
   | TFailure;
 
-export type SessionPatchProjectionOperation<TFailure extends SessionPatchProjectionFailure> = {
-  /** Revalidates request-scoped authorization after projection and before persistence. */
-  authorize?: () => TFailure | undefined;
-  /** Converts a target-local projection exception without aborting sibling targets. */
-  onError?: (error: unknown) => TFailure;
-  resolveTarget: (snapshot: SessionPatchProjectionSnapshot) => SessionPatchProjectionTarget;
-  project: (
-    context: SessionPatchProjectionContext,
-  ) => Promise<SessionPatchProjectionResult<TFailure>> | SessionPatchProjectionResult<TFailure>;
-};
-
 export type {
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,

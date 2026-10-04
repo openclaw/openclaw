@@ -212,16 +212,6 @@ export async function sendGoogleChatMessage(
   ) {
     return null;
   }
-  const body: Record<string, unknown> = {};
-  if (text) {
-    body.text = text;
-  }
-  if (cardsV2 && cardsV2.length > 0) {
-    body.cardsV2 = cardsV2;
-  }
-  if (usableThread) {
-    body.thread = { name: usableThread };
-  }
   const urlObj = new URL(`${CHAT_API_BASE}/${space}/messages`);
   if (usableThread) {
     urlObj.searchParams.set("messageReplyOption", "REPLY_MESSAGE_FALLBACK_TO_NEW_THREAD");
@@ -230,7 +220,14 @@ export async function sendGoogleChatMessage(
   const result = await fetchJson<{ name?: string; thread?: { name?: string } }>(
     account,
     url,
-    { method: "POST", body: JSON.stringify(body) },
+    {
+      method: "POST",
+      body: JSON.stringify({
+        text: text || undefined,
+        cardsV2: cardsV2?.length ? cardsV2 : undefined,
+        thread: usableThread ? { name: usableThread } : undefined,
+      }),
+    },
     {
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
@@ -254,16 +251,9 @@ export async function updateGoogleChatMessage(params: {
     throw new Error("Google Chat message update requires text or cardsV2.");
   }
   const url = `${CHAT_API_BASE}/${messageName}?updateMask=${updateMask.join(",")}`;
-  const body: Record<string, unknown> = {};
-  if (text !== undefined) {
-    body.text = text;
-  }
-  if (cardsV2 !== undefined) {
-    body.cardsV2 = cardsV2;
-  }
   const result = await fetchJson<{ name?: string }>(account, url, {
     method: "PATCH",
-    body: JSON.stringify(body),
+    body: JSON.stringify({ text, cardsV2 }),
   });
   return { messageName: result.name };
 }

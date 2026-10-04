@@ -68,9 +68,7 @@ export function readRealtimeVoiceConsultQuestion(
 }
 
 /** Normalize consult questions for stable matching across punctuation/casing. */
-export function normalizeRealtimeVoiceConsultQuestion(
-  value: string | undefined,
-): string | undefined {
+function normalizeRealtimeVoiceConsultQuestion(value: string | undefined): string | undefined {
   return (
     value
       ?.toLowerCase()

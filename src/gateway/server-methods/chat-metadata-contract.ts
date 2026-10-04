@@ -8,7 +8,6 @@ export const chatMetadataSessionFields = [
   "sessionId",
   "lifecycleRevision",
   "sessionStartedAt",
-  "acp",
   "agentHarnessId",
   "agentRuntimeOverride",
   "modelSelectionLocked",

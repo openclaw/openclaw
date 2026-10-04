@@ -2,6 +2,7 @@
 cli-root-options.mjs
 config/ci-test-timings.json
 node-compile-cache.mjs
+node-runtime-env.mjs
 node-sqlite.mjs
 node-version.mjs
 package.json
@@ -67,6 +68,8 @@ packages/memory-host-sdk/src/host/memory-schema-storage-migration.ts
 packages/memory-host-sdk/src/host/memory-schema.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-paths.ts
 packages/memory-host-sdk/src/host/openclaw-runtime-sqlite.ts
+packages/memory-host-sdk/src/host/sqlite-vec-platform-variant.ts
+packages/memory-host-sdk/src/host/sqlite-vec.ts
 packages/model-catalog-core/package.json
 packages/model-catalog-core/src/configured-model-refs.ts
 packages/model-catalog-core/src/index.ts
@@ -229,6 +232,7 @@ src/agents/agent-runtime-id.ts
 src/agents/agent-scope-config.ts
 src/agents/agent-scope.ts
 src/agents/auth-profiles/sqlite-json.ts
+src/agents/auth-profiles/store-unreadable-error.ts
 src/agents/auth-profiles/sqlite-read-pool.ts
 src/agents/configured-provider-fallback.ts
 src/agents/configured-provider-model.ts
@@ -291,15 +295,20 @@ src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
+src/agents/worktrees/eviction.runtime.ts
 src/agents/worktrees/filesystem-apfs.native.ts
 src/agents/worktrees/filesystem-backend.ts
 src/agents/worktrees/filesystem-native.ts
 src/agents/worktrees/filesystem-refs.native.ts
+src/agents/worktrees/gc-dependencies.ts
+src/agents/worktrees/gc-fingerprint.runtime.ts
 src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
 src/agents/worktrees/owner.ts
 src/agents/worktrees/provisioned-file-inspection.ts
+src/agents/worktrees/provisioned-snapshot-store.ts
+src/agents/worktrees/provisioned-snapshot.ts
 src/agents/worktrees/registry-read.kernel.ts
 src/agents/worktrees/registry-read.ts
 src/agents/worktrees/registry.ts
@@ -313,6 +322,7 @@ src/agents/worktrees/snapshot-inventory.ts
 src/agents/worktrees/template-cache.ts
 src/agents/worktrees/template-registry-async.ts
 src/agents/worktrees/template-registry.ts
+src/agents/worktrees/template-registry.worker.ts
 src/auto-reply/reply/delivery-hints.ts
 src/auto-reply/reply/display-text-sanitize.ts
 src/auto-reply/reply/history-limit.ts
@@ -320,6 +330,7 @@ src/auto-reply/reply/inbound-context-marker.ts
 src/auto-reply/reply/strip-inbound-meta.ts
 src/auto-reply/thinking.shared.ts
 src/auto-reply/tokens.ts
+src/bootstrap/node-exit-safe-compilers.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
 src/channels/chat-meta-shared.ts
@@ -564,7 +575,13 @@ src/config/sessions/session-entry-codec.ts
 src/config/sessions/session-entry-json.ts
 src/config/sessions/session-entry-snapshots.ts
 src/config/sessions/session-entry-state-format.ts
+src/config/sessions/types.ts
 src/config/sessions/session-history-worker-errors.ts
+src/acp/runtime/session-meta-worker-mutation.ts
+src/acp/runtime/session-control-owner.ts
+src/acp/runtime/session-meta-entry.kernel.ts
+src/acp/runtime/session-meta-keys.ts
+src/acp/runtime/session-meta-readonly.ts
 src/config/sessions/session-incognito-actor.ts
 src/config/sessions/session-incognito-compute-contract.ts
 src/config/sessions/session-incognito-compute.ts
@@ -669,6 +686,7 @@ src/gateway/control-ui-session-prs-landing.ts
 src/gateway/github-publication-base.ts
 src/gateway/github-remote.ts
 src/gateway/github-repository-publication-snapshot.ts
+src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
@@ -799,9 +817,11 @@ src/infra/format-time/format-duration-exact.ts
 src/infra/format-time/format-duration-internal.ts
 src/infra/fs-safe-copy.worker.ts
 src/infra/fs-safe-env.ts
+src/infra/fs-safe-remove.ts
 src/infra/fs-safe.ts
 src/infra/gateway-lock-process.ts
 src/infra/gateway-owner-lease.read.ts
+src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
@@ -818,6 +838,7 @@ src/infra/git-exec.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
+src/infra/git-path-quote.ts
 src/infra/git-read-operations.runtime.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
@@ -840,6 +861,7 @@ src/infra/kysely-sync.ts
 src/infra/lifecycle-write-custody.ts
 src/infra/lru-cache.ts
 src/infra/map-size.ts
+src/infra/mutation-authority.ts
 src/infra/native-error-response-schema.ts
 src/infra/native-error-response.ts
 src/infra/net/configured-local-origin-bypass.ts
@@ -874,10 +896,19 @@ src/infra/openclaw-exec-env.ts
 src/infra/openclaw-process-census.ts
 src/infra/openclaw-root.fs.runtime.ts
 src/infra/openclaw-root.ts
+src/infra/package-json.ts
+src/infra/package-update-activation-custody.ts
 src/infra/package-update-activation-immutable-recovery-schema.ts
 src/infra/package-update-activation-immutable.ts
+src/infra/package-update-activation-journal.ts
+src/infra/package-update-activation-launcher.ts
 src/infra/package-update-activation-paths.ts
 src/infra/package-update-activation-schema.ts
+src/infra/package-update-activation-status.ts
+src/infra/package-update-filesystem.ts
+src/infra/package-update-integrity-hasher.ts
+src/infra/package-update-integrity.ts
+src/infra/package-update-publication-tree.ts
 src/infra/path-case.ts
 src/infra/path-existence.ts
 src/infra/path-guards.ts
@@ -889,6 +920,8 @@ src/infra/private-mode.ts
 src/infra/process-env.ts
 src/infra/prototype-keys.ts
 src/infra/restart-stale-pids.ts
+src/infra/retry-attempt-errors.ts
+src/infra/retry.ts
 src/infra/root-walk.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-url.ts
@@ -896,6 +929,7 @@ src/infra/runtime-worker-generation.ts
 src/infra/runtime-worker-url.ts
 src/infra/safe-cwd.ts
 src/infra/sealed-runtime-registry.ts
+src/infra/secure-random.ts
 src/infra/semver.ts
 src/infra/session-cost-usage-cache-migration.ts
 src/infra/session-cost-usage-rollup-codec.ts
@@ -941,6 +975,8 @@ src/infra/sqlite-readonly-worker-protocol.ts
 src/infra/sqlite-readonly-worker-session.ts
 src/infra/sqlite-readonly-worker.ts
 src/infra/sqlite-recovery-files.ts
+src/infra/sqlite-recovery-snapshot.ts
+src/infra/sqlite-rollback-recovery.ts
 src/infra/sqlite-runtime-version.ts
 src/infra/sqlite-schema-contract-assembly.ts
 src/infra/sqlite-schema-contract.ts
@@ -949,14 +985,17 @@ src/infra/sqlite-schema-facts.ts
 src/infra/sqlite-schema-header.ts
 src/infra/sqlite-schema-issues.ts
 src/infra/sqlite-schema-sql.ts
+src/infra/sqlite-snapshot-file.ts
 src/infra/sqlite-snapshot-policy.ts
 src/infra/sqlite-snapshot-retirement.ts
 src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
+src/infra/sqlite-snapshot-staging-allocation.ts
 src/infra/sqlite-snapshot-staging-error.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
+src/infra/sqlite-snapshot.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-source-revision.ts
 src/infra/sqlite-source-revision.worker.ts
@@ -1005,6 +1044,7 @@ src/infra/update-failure-public-codes.ts
 src/infra/update-failure-public-identifiers.ts
 src/infra/update-immutable-install-schema.ts
 src/infra/update-immutable-protection-schema.ts
+src/infra/update-maintenance.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cancellation.ts
 src/infra/update-managed-service-handoff-children.ts
@@ -1077,6 +1117,7 @@ src/logging/redact-internal-state.ts
 src/logging/redact-internal.ts
 src/logging/redact-json-tokens.ts
 src/logging/redact-json.ts
+src/logging/redact-linear-matchers.ts
 src/logging/redact-pattern-runtime.ts
 src/logging/redact-patterns.ts
 src/logging/redact-pem.ts
@@ -1129,9 +1170,11 @@ src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
+src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
 src/plugins/compat/mention-inbox-record.ts
+src/plugins/compat/model-account-connect-record.ts
 src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
@@ -1154,10 +1197,12 @@ src/plugins/discovery-required-plugins.ts
 src/plugins/discovery.ts
 src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
+src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
 src/plugins/doctor-contract-registry-loader-state.ts
 src/plugins/doctor-contract-registry.ts
 src/plugins/doctor-contract-relevance.ts
+src/plugins/loader-channel-setup.ts
 src/plugins/doctor-session-route-state-owner-types.ts
 src/plugins/enable.ts
 src/plugins/hardlink-policy.ts
@@ -1260,6 +1305,7 @@ src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
 src/plugins/plugin-lifecycle-trace.ts
+src/plugins/plugin-manifest-id-normalizer.ts
 src/plugins/plugin-metadata-contributions.ts
 src/plugins/plugin-metadata-env.ts
 src/plugins/plugin-metadata-lifecycle.ts
@@ -1427,6 +1473,7 @@ src/secrets/unsupported-surface-policy.ts
 src/security/config-regex.ts
 src/security/safe-regex.ts
 src/security/scan-paths.ts
+src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
@@ -1444,6 +1491,7 @@ src/shared/avatar-limits.ts
 src/shared/avatar-policy.ts
 src/shared/dedupe-by-key.ts
 src/shared/deferred.ts
+src/shared/detached-async-context.ts
 src/shared/dot-path.ts
 src/shared/env-var-candidates.ts
 src/shared/freebsd-process-identity-native.ts
@@ -1463,6 +1511,7 @@ src/shared/model-context-message.ts
 src/shared/model-key.ts
 src/shared/node-list-parse.ts
 src/shared/path-array-index.ts
+src/shared/permit-pool.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
 src/shared/sandbox-workspace-paths.ts
@@ -1563,6 +1612,7 @@ src/state/openclaw-state-db-additive-columns.ts
 src/state/openclaw-state-db-async-lifecycle.ts
 src/state/openclaw-state-db-audit-migration.ts
 src/state/openclaw-state-db-borrow.ts
+src/state/openclaw-state-db-cache.admission.ts
 src/state/openclaw-state-db-cache.idle.ts
 src/state/openclaw-state-db-cache.ts
 src/state/openclaw-state-db-content-version.ts
@@ -1586,7 +1636,6 @@ src/state/openclaw-state-db-read-connection.ts
 src/state/openclaw-state-db-readonly-reuse.ts
 src/state/openclaw-state-db-readonly.ts
 src/state/openclaw-state-db-repair.ts
-src/state/openclaw-state-db-runtime-failure.ts
 src/state/openclaw-state-db-schema-additive.ts
 src/state/openclaw-state-db-schema-discovery.ts
 src/state/openclaw-state-db-schema-helpers.ts
@@ -1649,6 +1698,7 @@ src/state/worker-operation-registry.ts
 src/system-agent/agent-id.ts
 src/test-utils/bun-process.ts
 src/utils.ts
+src/utils/absolute-deadline.ts
 src/utils/boolean.ts
 src/utils/delivery-context.read.ts
 src/utils/delivery-context.shared.ts

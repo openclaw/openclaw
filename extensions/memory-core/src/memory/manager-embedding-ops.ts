@@ -33,7 +33,6 @@ import {
 } from "./manager-embedding-cache-ops.js";
 import { createMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
-  isSplittableMemoryEmbeddingBatchError,
   runMemoryEmbeddingBatchRetryWithSplit,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
@@ -357,7 +356,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
         provider,
         async () =>
           await runMemoryEmbeddingBatchRetryWithSplit({
-            profile: "index",
             items: requestItems,
             run: async (batchItems) => {
               const timeoutMs = this.resolveEmbeddingTimeout(
@@ -399,7 +397,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
               }
               await this.persistGeneratedEmbeddings(batchCandidates, batchEmbeddings, generation);
             },
-            isSplittable: isSplittableMemoryEmbeddingBatchError,
             waitForRetry: async (delayMs) => {
               await this.waitForEmbeddingRetry(
                 delayMs,

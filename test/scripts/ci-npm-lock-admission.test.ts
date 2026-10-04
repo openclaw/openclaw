@@ -103,43 +103,45 @@ describe("npm lock setup admission", () => {
       git("clean", "-fd");
     }
   });
-  it("includes staged and unstaged manifest changes", () => {
-    write("extensions/example/package.json", '{"private":true}');
-    expect(skip()).toBe(false);
-    git("add", ".");
+  it.each(["modified", "renamed"])("retains checks for %s manifests", (change) => {
+    if (change === "modified") {
+      write("extensions/example/package.json", '{"private":true}');
+      expect(skip()).toBe(false);
+      git("add", ".");
+    } else {
+      git("mv", "extensions/example/package.json", "extensions/example/old.json");
+      commit();
+    }
     expect(skip()).toBe(false);
   });
-  it("retains checks for deleted and renamed manifests", () => {
-    git("mv", "extensions/example/package.json", "extensions/example/old.json");
-    commit();
-    expect(skip()).toBe(false);
-  });
-  it("retains unknown command and selector contracts", () => {
+  it("retains unknown commands", () => {
     write("package.json", '{"scripts":{"deps:npm-lock:check:changed":"custom"}}');
     expect(skip()).toBe(false);
-    git("checkout", "--", "package.json");
-    write("scripts/changed-lanes.mts", "// different historical implementation\n");
+  });
+  it.each([
+    ["scripts/changed-lanes.mts", "// different historical implementation\n"],
+    ["extensions/example/package.json", "invalid JSON"],
+  ])("retains invalid %s even when comparing a revision to itself", (file, content) => {
+    write(file, content);
     commit();
-    // Even when comparing this revision to itself, contract mismatch must run.
     const head = git("rev-parse", "HEAD");
     git("update-ref", "refs/remotes/origin/ci-ratchet-base", head);
     expect(canSkipNpmLockSetup({ cwd, base: head })).toBe(false);
   });
-  it("retains malformed inventories even when the invalid manifest is unchanged", () => {
-    write("extensions/example/package.json", "invalid JSON");
-    commit();
-    const head = git("rev-parse", "HEAD");
-    git("update-ref", "refs/remotes/origin/ci-ratchet-base", head);
-    expect(canSkipNpmLockSetup({ cwd, base: head })).toBe(false);
-  });
-  it("handles a merge head using the generator's triple-dot scope", () => {
-    git("checkout", "-b", "side", base);
-    write("src/side.ts");
-    commit();
-    git("checkout", "--detach", base);
-    write("src/main.ts");
-    commit();
-    git("-c", "commit.gpgsign=false", "merge", "--no-ff", "-m", "merge", "side");
+
+  it.each(["merge", "disconnected"])("matches the generator's %s diff scope", (graph) => {
+    if (graph === "merge") {
+      git("checkout", "-b", "side", base);
+      write("src/side.ts");
+      commit();
+      git("checkout", "--detach", base);
+      write("src/main.ts");
+      commit();
+      git("-c", "commit.gpgsign=false", "merge", "--no-ff", "-m", "merge", "side");
+    } else {
+      git("checkout", "--orphan", "unrelated");
+      commit();
+    }
     expect(skip()).toBe(true);
   });
   it.each([
@@ -166,11 +168,6 @@ describe("npm lock setup admission", () => {
         encoding: "utf8",
       }),
     ).toBe(`skip=${expected}\n`);
-  });
-  it("matches the generator's fallback for disconnected identical trees", () => {
-    git("checkout", "--orphan", "unrelated");
-    commit();
-    expect(skip()).toBe(true);
   });
   it("wires the dependency-free decision before conditional setup", () => {
     const workflow = readFileSync(path.join(root, ".github/workflows/ci.yml"), "utf8");

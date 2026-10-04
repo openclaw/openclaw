@@ -81,8 +81,8 @@ export function addSessionMember(
   if (!identityId || !addedBy) {
     throw new Error("session member identity and actor are required");
   }
-  const options = toDatabaseOptions(resolveSqliteScope(scope));
-  const { agentId, sessionKey } = resolveSqliteScope(scope);
+  const resolved = resolveSqliteScope(scope);
+  const { agentId, sessionKey } = resolved;
   const addedAt = params.addedAt ?? Date.now();
   const inserted = runOpenClawAgentWriteTransaction(
     (database) => {
@@ -118,7 +118,7 @@ export function addSessionMember(
       }
       return changed;
     },
-    options,
+    toDatabaseOptions(resolved),
     { operationLabel: "session.sharing.add-member" },
   );
   return { member: { identityId, addedBy, addedAt }, inserted };
@@ -135,8 +135,8 @@ export function removeSessionMember(
   if (!normalizedIdentityId) {
     return null;
   }
-  const options = toDatabaseOptions(resolveSqliteScope(scope));
-  const { agentId, sessionKey } = resolveSqliteScope(scope);
+  const resolved = resolveSqliteScope(scope);
+  const { agentId, sessionKey } = resolved;
   return runOpenClawAgentWriteTransaction(
     (database) => {
       const sessionId = assertAuthorizedSessionInstance(
@@ -177,7 +177,7 @@ export function removeSessionMember(
       );
       return { identityId: row.identity_id, addedBy: row.added_by, addedAt: row.added_at };
     },
-    options,
+    toDatabaseOptions(resolved),
     { operationLabel: "session.sharing.remove-member" },
   );
 }

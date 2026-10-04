@@ -8,7 +8,7 @@ import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { BootstrapInjectionStat } from "./bootstrap-budget.types.js";
-import type { AgentTool } from "./runtime/index.js";
+type PromptReportTool = { name: string; parameters: unknown; description?: string; label?: string };
 
 type ToolReportEntry = SessionSystemPromptReport["tools"]["entries"][number];
 
@@ -31,7 +31,7 @@ function parseSkillBlocks(skillsPrompt: string): Array<{ name: string; blockChar
 }
 
 function buildToolSchemaStats(
-  parameters: AgentTool["parameters"],
+  parameters: unknown,
 ): Pick<ToolReportEntry, "propertiesCount" | "schemaChars" | "schemaHash"> {
   if (!parameters || typeof parameters !== "object") {
     return { schemaChars: 0, schemaHash: sha256Hex(""), propertiesCount: null };
@@ -73,7 +73,9 @@ function resolveSummaryHash(summary: string): string {
   return hash;
 }
 
-function buildToolsEntries(tools: AgentTool[]): SessionSystemPromptReport["tools"]["entries"] {
+function buildToolsEntries(
+  tools: PromptReportTool[],
+): SessionSystemPromptReport["tools"]["entries"] {
   return tools.map((tool) => {
     const name = tool.name;
     const summary = tool.description?.trim() || tool.label?.trim() || "";
@@ -137,7 +139,7 @@ export function buildSystemPromptReport(params: {
   systemPrompt: string;
   injectedWorkspaceFiles: BootstrapInjectionStat[];
   skillsPrompt: string;
-  tools: AgentTool[];
+  tools: PromptReportTool[];
   currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;

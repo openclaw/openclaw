@@ -432,8 +432,6 @@ export async function dispatchChatSlashCommand(
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,
       chatModelCatalog: host.chatModelCatalog,
-      sessionsResult: host.sessionsResult,
-      sessionsResultAgentId: host.sessionsResultAgentId,
       defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: target.agentId,
       ownsModelOverride: () => isChatCommandModelCacheOwnerCurrent(host, target),

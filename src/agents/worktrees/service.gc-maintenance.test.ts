@@ -110,7 +110,7 @@ it("warns without changing completed cleanup when the maintenance inventory fail
   );
   const logs = createWarnLogCapture("worktree-gc-inventory");
   try {
-    const result = await new ManagedWorktreeService({ env }).gc({ limits: {} });
+    const result = await new ManagedWorktreeService({ env }).gc();
     expect(result).toMatchObject({ removed: [], outcome: "completed", issues: [], issueCount: 0 });
     expect(await logs.findText("worktree Git maintenance inventory failed")).toContain(
       "maintenance inventory unavailable",

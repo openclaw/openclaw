@@ -35,7 +35,7 @@ export function buildMigrationReportDir(
 }
 
 /** Resolves an explicit migration owner without allowing typo-created agent stores. */
-export function resolveMigrationTargetAgentId(
+function resolveMigrationTargetAgentId(
   config: OpenClawConfig,
   rawAgentId: string | undefined,
 ): string | undefined {

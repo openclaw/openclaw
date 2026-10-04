@@ -17,6 +17,7 @@ import {
   rememberSessionPanelToggle,
   type SessionPanelToggleSlot,
 } from "../../components/session-panel-toggle-buffer.ts";
+import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
   ChatPaneSessionPanelToggleController,
   type PendingSessionPanelToggle,
@@ -295,7 +296,6 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
       return renderSidebarRegion({
         presentationId: "delayed-browser-card",
         availableWidth: 1400,
-        availableSlots: ["browser"],
         callbacks: {
           activatePanel: () => undefined,
           togglePanelExpanded: () => undefined,
@@ -307,17 +307,22 @@ it("delivers a browser card after the pane's scheduled render commits", async ()
         },
         layout: this.state.sidebarLayout,
         narrow: false,
-        panelActions: {},
-        panelTemplates: {
-          browser: html`<openclaw-browser-panel
-            embedded
-            .available=${true}
-            .client=${gateway.client}
-            .sessionKey=${this.state.sessionKey}
-            .presented=${isSidebarSlotVisible(this.state.sidebarLayout, "browser")}
-            .refreshOnPresentation=${!this.pending.has("browser")}
-          ></openclaw-browser-panel>`,
-        },
+        panelDefinitions: sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: definition.slot === "browser",
+            content:
+              definition.slot === "browser"
+                ? html`<openclaw-browser-panel
+                    embedded
+                    .available=${true}
+                    .client=${gateway.client}
+                    .sessionKey=${this.state.sessionKey}
+                    .presented=${isSidebarSlotVisible(this.state.sidebarLayout, "browser")}
+                    .refreshOnPresentation=${!this.pending.has("browser")}
+                  ></openclaw-browser-panel>`
+                : null,
+          }),
+        ),
         primary: html`<main>Conversation</main>`,
         requestUpdate: () => this.requestUpdate(),
       });

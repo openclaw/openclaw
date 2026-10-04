@@ -112,6 +112,8 @@ export const SessionRowSchema = Type.Object(
     /** Detail fields omitted in compact lists must not clear a client's full-row cache. */
     rowMode: Type.Optional(Type.Literal("compact")),
     sessionId: Type.Optional(Type.String()),
+    /** Incarnation revision for invalidating session-scoped client caches after resets. */
+    lifecycleRevision: Type.Optional(NonEmptyString),
     incognito: Type.Optional(Type.Literal(true)),
     kind: Type.Union([
       Type.Literal("direct"),
@@ -127,6 +129,8 @@ export const SessionRowSchema = Type.Object(
     channelAvatarUrl: Type.Optional(NonEmptyString),
     conversationLink: Type.Optional(SessionConversationLinkSchema),
     boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+    /** Prepared dashboard membership fact shared by list and change-event rows. */
+    hasBoard: Type.Optional(Type.Boolean()),
     /** Shared dashboard default; absent means split. */
     boardPresentation: Type.Optional(Type.Union([Type.Literal("split"), Type.Literal("expanded")])),
     displayName: Type.Optional(Type.String()),
@@ -175,6 +179,8 @@ export const SessionRowSchema = Type.Object(
     parentSessionKey: Type.Optional(Type.String()),
     parentSessionId: Type.Optional(Type.String()),
     controlOwnerSessionKey: Type.Optional(Type.String()),
+    /** Retained owners used by spawnedBy filtering at snapshotAt; empty retires child membership. */
+    childOwnerSessionKeys: Type.Optional(Type.Array(NonEmptyString, { maxItems: 2 })),
     childSessions: Type.Optional(Type.Array(Type.String())),
     forkedFromParent: Type.Optional(Type.Boolean()),
     spawnDepth: Type.Optional(Type.Number()),

@@ -17,6 +17,7 @@ import {
   createToolDefinitionFromAgentTool,
   wrapToolDefinition,
 } from "../../sessions/tools/tool-definition-wrapper.js";
+import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import {
   collectReplaySafeToolNames,
   collectSideEffectToolOwners,
@@ -130,6 +131,14 @@ export function prepareEmbeddedAttemptClientTools(params: {
     const codeModeExecToolNames = new Set(
       params.effectiveTools.filter((tool) => isCodeModeExecTool(tool)).map((tool) => tool.name),
     );
+    // Only a tool author can opt a tool into delivering its result as the source reply.
+    // Names are policy-normalized because completion and terminal hooks compare them so.
+    const sourceReplyCapableToolNames = new Set(
+      params.uncompactedEffectiveTools
+        .filter((tool) => "canDeliverSourceReply" in tool && tool.canDeliverSourceReply === true)
+        .map((tool) => normalizeToolPolicyName(tool.name ?? ""))
+        .filter((name) => name.length > 0),
+    );
     const clientConflictToolNames = params.deferredDirectoryToolsCallable
       ? builtinToolNames
       : coreBuiltinToolNames;
@@ -189,6 +198,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
       replaySafeToolNames,
       replaySafeTools,
       codeModeExecToolNames,
+      sourceReplyCapableToolNames,
       sideEffectToolOwners,
       sessionToolAllowlist,
       trustedLocalMediaToolNames,
@@ -211,6 +221,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "coreBuiltinToolNames",
         "replaySafeToolNames",
         "codeModeExecToolNames",
+        "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {
         current[key].clear();

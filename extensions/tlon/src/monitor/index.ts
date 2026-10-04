@@ -105,7 +105,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     account.dangerouslyAllowPrivateNetwork,
   );
 
-  // Store validated values for use in closures (TypeScript narrowing doesn't propagate)
   const accountUrl = account.url;
   const accountCode = account.code;
 
@@ -148,7 +147,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       log: (message) => runtime.log?.(message),
       error: (message) => runtime.error?.(message),
     },
-    // Re-authenticate on reconnect in case the session expired
     onReconnect: async (client) => {
       runtime.log?.("[tlon] Re-authenticating on SSE reconnect...");
       const newCookie = await authenticateWithRetry(5);
@@ -165,7 +163,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     error: (msg) => runtime.error?.(msg),
   });
 
-  // Reactive state that can be updated via settings store
   let effectiveDmAllowlist: string[] = account.dmAllowlist;
   let effectiveShowModelSig: boolean = account.showModelSignature ?? false;
   let effectiveAutoAcceptDmInvites: boolean = account.autoAcceptDmInvites ?? false;
@@ -199,10 +196,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     runtime.log?.(`[tlon] Could not fetch nickname: ${formatErrorMessage(error)}`);
   }
 
-  // Store init foreigns for processing after settings are loaded
   let initForeigns: Foreigns | null = null;
 
-  async function migrateConfigToSettings() {
+  try {
+    currentSettings = await settingsManager.load();
     const migrations = buildTlonSettingsMigrations(account, currentSettings);
 
     for (const { key, fileValue, settingsValue } of migrations) {
@@ -215,12 +212,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
         }
       }
     }
-  }
-
-  try {
-    currentSettings = await settingsManager.load();
-
-    await migrateConfigToSettings();
     ({
       effectiveDmAllowlist,
       effectiveShowModelSig,
@@ -558,14 +549,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       };
     };
 
-    const rememberThreadParticipation = (result: { visibleReplySent?: boolean } | void) => {
-      if (!isGroup || !channelNest || !parentId || result?.visibleReplySent === false) {
-        return;
-      }
-      participatedThreads.add(parentId);
-      runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
-    };
-
     const replyOptions: GetReplyOptions = {
       ...(turnAdoptionLifecycle ? bindIngressLifecycleToReplyOptions(turnAdoptionLifecycle) : {}),
       ...(promptMedia.media.length > 0 ? { media: promptMedia.media } : {}),
@@ -620,7 +603,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           return { visibleReplySent: true };
         },
         onDelivered: (_payload, _info, result) => {
-          rememberThreadParticipation(result);
+          if (isGroup && channelNest && parentId && result?.visibleReplySent !== false) {
+            participatedThreads.add(parentId);
+            runtime.log?.(`[tlon] Now tracking thread for future replies: ${parentId}`);
+          }
         },
         onError: (err, info) => {
           const dispatchDuration = Date.now() - dispatchStartTime;
@@ -654,11 +640,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
     }
     return watchedChannels.size - previousCount;
-  };
-
-  const refreshWatchedChannels = async (): Promise<number> => {
-    const { channels: discoveredChannels } = await fetchInitData(api, runtime);
-    return addWatchedChannels(discoveredChannels);
   };
 
   const { resolveAllCites } = createTlonCitationResolver({
@@ -718,7 +699,10 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             }),
         });
       },
-      refreshWatchedChannels,
+      refreshWatchedChannels: async () => {
+        const { channels: discoveredChannels } = await fetchInitData(api, runtime);
+        return addWatchedChannels(discoveredChannels);
+      },
     });
 
   const handleChannelsFirehose = async (
@@ -802,7 +786,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       }
 
       if (!senderAllowed) {
-        // If owner is configured, queue approval request
         if (effectiveOwnerShip) {
           const approval = createPendingApproval({
             type: "channel",
@@ -866,7 +849,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     }
   };
 
-  // Firehose handler for all DM messages (/v3)
   // Track processed DM invites only while they remain in the active /v3 snapshot.
   const processedDmInvites = createActiveSnapshotTracker();
 
@@ -1065,7 +1047,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       runtime.log?.(`[tlon] Subscribed to ${source} firehose (${path})`);
     }
 
-    // Subscribe to contacts updates to track nickname changes
     await api.subscribe({
       app: "contacts",
       path: "/v1/news",
@@ -1097,7 +1078,6 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     });
     runtime.log?.("[tlon] Subscribed to contacts updates (/v1/news)");
 
-    // Subscribe to settings store for hot-reloading config
     try {
       await settingsManager.startSubscription((newSettings) => {
         currentSettings = newSettings;

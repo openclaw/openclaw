@@ -6,7 +6,10 @@ import type {
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeSortedUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
@@ -420,12 +423,10 @@ function resolveClaudeCliRestrictedExecutionArgs(
       availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
     );
   }
-  const denials = [
-    ...new Set([
-      ...preservedDenials.map((entry) => entry.trim()).filter(Boolean),
-      ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
-    ]),
-  ].toSorted();
+  const denials = normalizeSortedUniqueTrimmedStringList([
+    ...preservedDenials,
+    ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
+  ]);
   if (denials.length > 0) {
     normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, denials.join(","));
   }

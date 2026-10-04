@@ -96,7 +96,6 @@ export function selectSessionColdBatch(input: SessionColdBatchInput) {
                   {
                     databaseOptions: input.databaseOptions,
                     sessionId,
-                    beforeMs: input.beforeMs,
                     snapshot,
                   },
                 ]

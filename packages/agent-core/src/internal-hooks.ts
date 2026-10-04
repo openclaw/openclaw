@@ -11,6 +11,10 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
+export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
+
+const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
+
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
 export type InternalToolBatchLifecycle = {
@@ -90,6 +94,23 @@ export function setInternalBeforeToolBatch(
 
 export function getInternalBeforeToolBatch(agent: object): InternalBeforeToolBatchHook | undefined {
   return beforeToolBatchByAgent.get(agent);
+}
+
+export function setInternalToolTurnCompletion(
+  agent: object,
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnCompletionByAgent.set(agent, hook);
+  } else {
+    toolTurnCompletionByAgent.delete(agent);
+  }
+}
+
+export function getInternalToolTurnCompletion(
+  agent: object,
+): InternalToolTurnCompletionHook | undefined {
+  return toolTurnCompletionByAgent.get(agent);
 }
 
 /** Attach scheduler lifecycle ownership without widening the public admission result. */

@@ -85,17 +85,11 @@ type SynologyHostedFileSendResult =
   | { status: "rejected" }
   | { status: "indeterminate" };
 
-const ChatUserSchema = z
-  .object({
-    user_id: z.number(),
-    username: z.string().optional(),
-    nickname: z.string().optional(),
-  })
-  .transform((user) => ({
-    user_id: user.user_id,
-    username: user.username ?? "",
-    nickname: user.nickname ?? "",
-  }));
+const ChatUserSchema = z.object({
+  user_id: z.number(),
+  username: z.string().default(""),
+  nickname: z.string().default(""),
+});
 
 const ChatUserListResponseSchema = z.object({
   success: z.boolean(),
@@ -202,18 +196,13 @@ async function fetchChatUsers(
   return new Promise((resolve) => {
     let settled = false;
     let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const clearDeadline = () => {
-      if (deadlineTimer !== undefined) {
-        clearTimeout(deadlineTimer);
-        deadlineTimer = undefined;
-      }
-    };
     const finish = (users: ChatUser[]) => {
       if (settled) {
         return;
       }
       settled = true;
-      clearDeadline();
+      clearTimeout(deadlineTimer);
+      deadlineTimer = undefined;
       resolve(users);
     };
     let parsedUrl: URL;

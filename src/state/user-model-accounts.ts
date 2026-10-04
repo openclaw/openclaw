@@ -26,6 +26,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { captureOpenClawStateReadWorkerContext } from "./openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
 import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
@@ -375,25 +376,13 @@ export function connectUserModelAccount(
   params: {
     ownerProfileId: string;
     credential: AuthProfileCredential;
-    assertCurrent: () => void;
-    matchesCredential?: (credential: AuthProfileCredential) => boolean;
+    assertCurrent: (stage: "transaction" | "commit") => void;
+    replacement?: { id: string; credential: AuthProfileCredential };
   },
   options: OpenClawStateDatabaseOptions = {},
 ): { authProfileId: string; links: UserProfileAuthLink[] } {
   const credential = credentialSchema.parse(params.credential);
-  const candidate = withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const record = readLinks(db, params.ownerProfileId);
-    const id = record.links[credential.provider]?.authProfileId;
-    const profile = id ? readProfile(db, params.ownerProfileId, id) : undefined;
-    return id && profile ? { id, credential: profile.credential } : undefined;
-  }, options);
-  // Provider identity comparison runs before BEGIN. The writer below only
-  // replaces the exact credential and selection this comparison inspected.
-  const replacement =
-    candidate?.credential.provider === credential.provider &&
-    params.matchesCredential?.(candidate.credential)
-      ? candidate
-      : undefined;
+  const replacement = params.replacement;
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const owner = requireOwner(db, params.ownerProfileId);
@@ -408,14 +397,32 @@ export function connectUserModelAccount(
           JSON.stringify(replacement.credential);
       const authProfileId = canReplace ? replacement.id : `personal:${owner}:${randomUUID()}`;
       record.links[credential.provider] = { authProfileId, updatedAt: Date.now() };
-      params.assertCurrent();
+      params.assertCurrent("transaction");
       writeProfile(db, owner, authProfileId, { credential });
       writeLinks(db, owner, record);
+      params.assertCurrent("commit");
       return { authProfileId, links: accountLinks(record) };
     },
     options,
     { operationLabel: "users.model-accounts.connect" },
   );
+}
+
+/** Private provider preparation only; control-plane replies never contain this credential. */
+export function readSelectedUserModelAccount(
+  profileId: string,
+  provider: string,
+  options: OpenClawStateDatabaseOptions = {},
+): { id: string; credential: AuthProfileCredential } | undefined {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
+    const owner = requireOwner(db, profileId);
+    const id = readLinks(db, owner).links[provider]?.authProfileId;
+    const profile =
+      id && credentialOwner(db, id) === owner ? readProfile(db, owner, id) : undefined;
+    return id && profile?.credential.provider === provider
+      ? { id, credential: profile.credential }
+      : undefined;
+  }, options);
 }
 
 export function listUserProfileAuthLinks(
@@ -441,14 +448,17 @@ export function listUserProfileAuthLinksInDatabase(
 /** Fresh private account selections are read on the shared-state reader, never the Gateway thread. */
 export async function listUserProfileAuthLinksAsync(
   profileId: string,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> = {},
+  options: Pick<OpenClawStateDatabaseOptions, "path" | "env"> & {
+    context?: OpenClawStateWorkerContext;
+  } = {},
 ): Promise<UserProfileAuthLink[]> {
-  const context = captureOpenClawStateReadWorkerContext(options);
+  const context = options.context ?? captureOpenClawStateReadWorkerContext(options);
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "userModelAccounts.links", profileId },
     { context, current: true, preferIndependentWarmRead: true },
   );
+  context.admission.assertCurrent();
   if (reply && (!reply.ok || reply.type !== "userModelAccounts.links")) {
     throw new Error(reply.ok ? "Unexpected model account links reply" : reply.message);
   }
@@ -544,7 +554,7 @@ export function setUserProfileAuthLink(
     profileId: string;
     provider: string;
     authProfileId: string;
-    assertCurrent?: () => void;
+    assertCurrent?: (stage: "transaction" | "commit") => void;
   },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
@@ -563,8 +573,9 @@ export function setUserProfileAuthLink(
         authProfileId: params.authProfileId,
         updatedAt: Date.now(),
       };
-      params.assertCurrent?.();
+      params.assertCurrent?.("transaction");
       writeLinks(db, owner, record);
+      params.assertCurrent?.("commit");
       return accountLinks(record);
     },
     options,
@@ -573,7 +584,11 @@ export function setUserProfileAuthLink(
 }
 
 export function clearUserProfileAuthLink(
-  params: { profileId: string; provider: string; assertCurrent?: () => void },
+  params: {
+    profileId: string;
+    provider: string;
+    assertCurrent?: (stage: "transaction" | "commit") => void;
+  },
   options: OpenClawStateDatabaseOptions = {},
 ): UserProfileAuthLink[] {
   return runOpenClawStateWriteTransaction(
@@ -583,8 +598,9 @@ export function clearUserProfileAuthLink(
       // Keep an explicit disconnect so a later identity merge cannot resurrect a link.
       // Existing sessions retain their exact credential; new sessions use shared defaults.
       record.links[params.provider] = null;
-      params.assertCurrent?.();
+      params.assertCurrent?.("transaction");
       writeLinks(db, owner, record);
+      params.assertCurrent?.("commit");
       return accountLinks(record);
     },
     options,

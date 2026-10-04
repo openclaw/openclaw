@@ -91,7 +91,8 @@ public final class GatewayDiscoveryModel {
         filterLocalGateways: Bool = true)
     {
         self.filterLocalGateways = filterLocalGateways
-        self.localIdentity = Self.buildLocalIdentityFast(displayName: localDisplayName)
+        self.localIdentity = Self.localIdentity(
+            hostName: ProcessInfo.processInfo.hostName, displayName: localDisplayName)
     }
 
     deinit {
@@ -229,17 +230,10 @@ public final class GatewayDiscoveryModel {
 
     private func recomputeGateways() {
         let primary = self.sortedDeduped(gateways: self.gatewaysByDomain.values.flatMap(\.self))
-        let primaryFiltered = self.filterLocalGateways ? primary.filter { !$0.isLocal } : primary
-
         // Bonjour can return only "local" results for the wide-area domain (or no results at all),
         // and cross-network setups may rely on Tailscale Serve without DNS-SD.
         let fallback = self.wideAreaFallbackGateways + self.tailscaleServeFallbackGateways
-        guard !fallback.isEmpty else {
-            self.gateways = primaryFiltered
-            return
-        }
-
-        let combined = self.sortedDeduped(gateways: primary + fallback)
+        let combined = fallback.isEmpty ? primary : self.sortedDeduped(gateways: primary + fallback)
         self.gateways = self.filterLocalGateways ? combined.filter { !$0.isLocal } : combined
     }
 
@@ -552,34 +546,19 @@ public final class GatewayDiscoveryModel {
         serviceName: String?,
         local: LocalIdentity) -> Bool
     {
-        if let host = normalizeHostToken(lanHost),
-           local.hostTokens.contains(host)
-        {
-            return true
-        }
-        if let host = normalizeHostToken(tailnetDns),
-           local.hostTokens.contains(host)
-        {
-            return true
-        }
-        if let name = normalizeDisplayToken(displayName),
-           local.displayTokens.contains(name)
-        {
-            return true
-        }
-        if let serviceHost = normalizeServiceHostToken(serviceName),
-           local.hostTokens.contains(serviceHost)
-        {
-            return true
-        }
-        return false
+        self.normalizeHostToken(lanHost).map(local.hostTokens.contains) == true ||
+            self.normalizeHostToken(tailnetDns).map(local.hostTokens.contains) == true ||
+            self.normalizeDisplayToken(displayName).map(local.displayTokens.contains) == true ||
+            self.normalizeServiceHostToken(serviceName).map(local.hostTokens.contains) == true
     }
 
     private func refreshLocalIdentity() {
         let fastIdentity = self.localIdentity
         self.localIdentityTask = Task.detached(priority: .utility) { [weak self] in
             guard !Task.isCancelled else { return }
-            let slowIdentity = Self.buildLocalIdentitySlow()
+            let slowIdentity = Self.localIdentity(
+                hostName: Host.current().name,
+                displayName: Host.current().localizedName)
             let merged = LocalIdentity(
                 hostTokens: fastIdentity.hostTokens.union(slowIdentity.hostTokens),
                 displayTokens: fastIdentity.displayTokens.union(slowIdentity.displayTokens))
@@ -591,14 +570,6 @@ public final class GatewayDiscoveryModel {
                 self.recomputeGateways()
             }
         }
-    }
-
-    private nonisolated static func buildLocalIdentityFast(displayName: String?) -> LocalIdentity {
-        self.localIdentity(hostName: ProcessInfo.processInfo.hostName, displayName: displayName)
-    }
-
-    private nonisolated static func buildLocalIdentitySlow() -> LocalIdentity {
-        self.localIdentity(hostName: Host.current().name, displayName: Host.current().localizedName)
     }
 
     private nonisolated static func localIdentity(hostName: String?, displayName: String?) -> LocalIdentity {

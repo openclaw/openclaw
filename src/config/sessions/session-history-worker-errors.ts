@@ -73,6 +73,7 @@ export function encodeSessionTranscriptRequestError(
     request.kind === "history-page" &&
     (request.request.kind === "message-lookup" ||
       request.request.kind === "message-by-id" ||
+      request.request.kind === "rpc-message" ||
       request.request.kind === "message-count" ||
       request.request.kind === "artifacts" ||
       request.request.kind === "message-page" ||

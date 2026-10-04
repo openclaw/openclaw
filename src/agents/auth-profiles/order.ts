@@ -43,20 +43,6 @@ type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
-function isAuthProfileRuntimeSettlementCandidate(params: {
-  credential: AuthProfileCredential | undefined;
-  eligibility: AuthProfileEligibility;
-  includePendingOAuthRefresh?: boolean;
-}): boolean {
-  return (
-    params.eligibility.eligible ||
-    (params.includePendingOAuthRefresh === true &&
-      params.eligibility.reasonCode === "expired" &&
-      params.credential?.type === "oauth" &&
-      isPendingOAuthRefreshFence(params.credential))
-  );
-}
-
 function isProfileProviderCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
   authAliasLookupParams?: ProviderAuthAliasLookupParams;
@@ -87,24 +73,6 @@ export function isStoredCredentialCompatibleWithAuthProvider(params: {
     }),
     provider: params.credential.provider,
   });
-}
-
-function listProfilesCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  authAliasLookupParams?: ProviderAuthAliasLookupParams;
-  store: AuthProfileStore;
-  providerAuthKey: string;
-}): string[] {
-  return Object.entries(params.store.profiles)
-    .filter(([, credential]) =>
-      isProfileProviderCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        authAliasLookupParams: params.authAliasLookupParams,
-        providerAuthKey: params.providerAuthKey,
-        provider: credential.provider,
-      }),
-    )
-    .map(([profileId]) => profileId);
 }
 
 /** Returns true when config declares an aws-sdk auth profile for a provider. */
@@ -202,11 +170,11 @@ export function resolveAuthProfileEligibility(params: {
     now: params.now,
   });
   if (
-    isAuthProfileRuntimeSettlementCandidate({
-      credential: cred,
-      eligibility: credentialEligibility,
-      includePendingOAuthRefresh: params.includePendingOAuthRefresh,
-    })
+    credentialEligibility.eligible ||
+    (params.includePendingOAuthRefresh === true &&
+      credentialEligibility.reasonCode === "expired" &&
+      cred.type === "oauth" &&
+      isPendingOAuthRefreshFence(cred))
   ) {
     return { eligible: true, reasonCode: "ok" };
   }
@@ -287,12 +255,16 @@ export function resolveAuthProfileOrderWithMetadata(
         )
         .map(([profileId]) => profileId)
     : [];
-  const storeProfiles = listProfilesCompatibleWithAuthProvider({
-    cfg,
-    authAliasLookupParams: params.authAliasLookupParams,
-    store,
-    providerAuthKey,
-  });
+  const storeProfiles = Object.entries(store.profiles)
+    .filter(([, credential]) =>
+      isProfileProviderCompatibleWithAuthProvider({
+        cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
+        providerAuthKey,
+        provider: credential.provider,
+      }),
+    )
+    .map(([profileId]) => profileId);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {

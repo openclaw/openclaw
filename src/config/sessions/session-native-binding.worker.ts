@@ -12,6 +12,7 @@ import {
   deletePluginStateNativeBinding,
   restorePluginStateNativeBinding,
 } from "../../plugin-state/plugin-state-store.mutations.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
@@ -20,16 +21,18 @@ import { assertSessionSubagentRunsCurrent } from "./session-accessor.sqlite-desc
 import { collectReclamationChangedSessionKeys } from "./session-accessor.sqlite-reclamation-publication.js";
 import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
 import type {
   SessionNativeBindingCandidate,
   SessionNativeBindingDeletion,
+  SessionNativeBindingParticipants,
   SessionNativeBindingReceipt,
 } from "./session-native-binding.types.js";
 import type { SessionEntry } from "./types.js";
 
 export async function prepareSessionNativeBindingDeletion(
-  input: SessionNativeBindingDeletion,
+  input: SessionNativeBindingParticipants,
   env?: NodeJS.ProcessEnv,
 ): Promise<void> {
   for (const { binding } of input.participants) {
@@ -39,10 +42,74 @@ export async function prepareSessionNativeBindingDeletion(
   }
 }
 
-/** A owns the transaction; its native participants commit and compensate through the captured S. */
 export function deleteSessionWithNativeBindings(
   input: SessionNativeBindingDeletion,
   context: AgentWorkerOperationContext,
+): SessionNativeBindingReceipt {
+  return runSessionNativeBindingTransaction(
+    input,
+    context,
+    "session.reclaim.entry",
+    "Native binding deletion",
+    (current, wrapReceipt) => {
+      const result = reclaimSqliteSessionInTransaction({
+        ...input.plan,
+        databaseOptions: { ...input.plan.databaseOptions, ...context.options },
+      });
+      if (result.kind !== "entry") {
+        throw new Error("Native binding deletion returned another reclamation operation");
+      }
+      const changedKeys = collectReclamationChangedSessionKeys(input.plan, result);
+      const publication = result.value.deleted
+        ? prepareSessionEntryReplacementPublication(
+            {
+              previous: new Map(
+                input.plan.preparedTargetSnapshot.map(({ sessionKey, entry }) => [
+                  sessionKey,
+                  entry,
+                ]),
+              ),
+              current: new Map(),
+              pendingArchiveRecovery: false,
+              membershipInvalidatedKeys: changedKeys,
+              maintenancePlans: [],
+            },
+            current,
+          )
+        : undefined;
+      if (publication) {
+        publication.changedKeys = changedKeys;
+      }
+      const candidate: SessionNativeBindingCandidate = {
+        kind: "session-native-binding-deletion",
+        result,
+        publication,
+      };
+      return transferSessionEntryWorkerCandidate(
+        current,
+        (stage, facts) => {
+          context.admit(stage, facts);
+          if (stage === "commit") {
+            assertSessionSubagentRunsCurrent(input.plan, input.plan.databaseOptions.env);
+          }
+        },
+        candidate,
+        wrapReceipt,
+      );
+    },
+  );
+}
+
+/** The caller's whole A transaction retains the same reversible S veto and settlement owner. */
+export function runSessionNativeBindingTransaction(
+  input: SessionNativeBindingParticipants,
+  context: AgentWorkerOperationContext,
+  operationLabel: string,
+  owner: string,
+  mutate: (
+    database: OpenClawAgentDatabase,
+    wrapReceipt: (receipt: SessionEntryPatchReceipt) => SessionNativeBindingReceipt,
+  ) => SessionNativeBindingReceipt,
 ): SessionNativeBindingReceipt {
   const database = context.open();
   const writeSharedTransaction = context.writeSharedTransaction;
@@ -159,7 +226,7 @@ export function deleteSessionWithNativeBindings(
   };
   try {
     return withSqliteSessionDeletionWorkerParticipant(commitParticipant, () =>
-      context.writeTransaction("session.reclaim.entry", "Native binding deletion", (current) => {
+      context.writeTransaction(operationLabel, owner, (current) => {
         stageSqliteTransactionState(current.db, {
           stage() {},
           commit: () => {
@@ -168,53 +235,10 @@ export function deleteSessionWithNativeBindings(
           },
           rollback() {},
         });
-        const result = reclaimSqliteSessionInTransaction({
-          ...input.plan,
-          databaseOptions: { ...input.plan.databaseOptions, ...context.options },
-        });
-        if (result.kind !== "entry") {
-          throw new Error("Native binding deletion returned another reclamation operation");
-        }
-        const changedKeys = collectReclamationChangedSessionKeys(input.plan, result);
-        const publication = result.value.deleted
-          ? prepareSessionEntryReplacementPublication(
-              {
-                previous: new Map(
-                  input.plan.preparedTargetSnapshot.map(({ sessionKey, entry }) => [
-                    sessionKey,
-                    entry,
-                  ]),
-                ),
-                current: new Map(),
-                pendingArchiveRecovery: false,
-                membershipInvalidatedKeys: changedKeys,
-                maintenancePlans: [],
-              },
-              current,
-            )
-          : undefined;
-        if (publication) {
-          publication.changedKeys = changedKeys;
-        }
-        const candidate: SessionNativeBindingCandidate = {
-          kind: "session-native-binding-deletion",
-          result,
-          publication,
-        };
-        return transferSessionEntryWorkerCandidate(
-          current,
-          (stage, facts) => {
-            context.admit(stage, facts);
-            if (stage === "commit") {
-              assertSessionSubagentRunsCurrent(input.plan, input.plan.databaseOptions.env);
-            }
-          },
-          candidate,
-          (transferred) => ({
-            ...receipt("committed"),
-            receipt: transferred,
-          }),
-        );
+        return mutate(current, (transferred) => ({
+          ...receipt("committed"),
+          receipt: transferred,
+        }));
       }),
     );
   } catch (error) {

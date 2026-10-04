@@ -9,7 +9,7 @@ import {
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
-import { buildEmbeddedSystemPrompt } from "../../../src/agents/embedded-agent-runner/system-prompt.js";
+import { buildConfiguredAgentSystemPrompt } from "../../../src/agents/system-prompt-config.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/agent-tool-stubs.js";
 import {
@@ -196,7 +196,7 @@ function buildToolRichSystemPrompt(params: {
     "x_search",
     "web_fetch",
   ].map((name) => Object.assign({}, createStubTool(name), { description: `${name} tool` }));
-  return buildEmbeddedSystemPrompt({
+  return buildConfiguredAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     reasoningTagHint: false,
     runtimeInfo,

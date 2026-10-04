@@ -17,11 +17,7 @@ export function isConfiguredUiDevGateway(url: string): boolean {
   if (!configured) {
     return false;
   }
-  try {
-    return new URL(url).href.replace(/\/$/u, "") === configured.gatewayUrl;
-  } catch {
-    return false;
-  }
+  return URL.parse(url)?.href.replace(/\/$/u, "") === configured.gatewayUrl;
 }
 
 export function uiDevGatewayResourceBasePath(): string | undefined {
@@ -58,14 +54,8 @@ export function uiDevGatewayResourceUrl(value: string): string {
     return value;
   }
   const gateway = new URL(configured.gatewayUrl.replace(/^ws/u, "http"));
-  let resource: URL;
-  try {
-    resource = new URL(value, gateway);
-  } catch {
-    // The resource owner still rejects malformed metadata; unrelated config remains usable.
-    return value;
-  }
-  return resource.origin === gateway.origin
+  const resource = URL.parse(value, gateway);
+  return resource?.origin === gateway.origin
     ? `${configured.proxyPath}${resource.pathname}${resource.search}${resource.hash}`
     : value;
 }

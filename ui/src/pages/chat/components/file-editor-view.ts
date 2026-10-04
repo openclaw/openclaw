@@ -19,18 +19,7 @@ export type FileEditorDecorations = {
   currentMatch?: number | null;
 };
 
-export type FileEditorViewHandle = {
-  destroy: () => void;
-  setContent: (content: string) => void;
-  contentEquals: (content: string) => boolean;
-  setEditable: (editable: boolean) => void;
-  setLineWrapping: (wrap: boolean) => void;
-  setDecorations: (decorations: FileEditorDecorations) => void;
-  scrollToLine: (line: number, center: boolean) => void;
-  getContent: () => string;
-  onDocChanged: (callback: (content: string) => void) => void;
-  focus: () => void;
-};
+export type FileEditorViewHandle = Awaited<ReturnType<typeof createFileEditorView>>;
 
 const setLineDecorations = StateEffect.define<DecorationSet>();
 const lineDecorations = StateField.define<DecorationSet>({
@@ -53,7 +42,7 @@ export async function createFileEditorView(params: {
   editable?: boolean;
   wrap?: boolean;
   onSave: () => void;
-}): Promise<FileEditorViewHandle> {
+}) {
   const editable = new Compartment();
   const wrapping = new Compartment();
   const language = await loadCodeLanguage(params.name);
@@ -127,7 +116,7 @@ export async function createFileEditorView(params: {
         view.destroy();
       }
     },
-    setContent: (content) => {
+    setContent: (content: string) => {
       if (destroyed) {
         return;
       }
@@ -145,7 +134,7 @@ export async function createFileEditorView(params: {
       view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: content } });
     },
     contentEquals,
-    setEditable: (nextEditable) => {
+    setEditable: (nextEditable: boolean) => {
       if (destroyed) {
         return;
       }
@@ -158,7 +147,7 @@ export async function createFileEditorView(params: {
         ]),
       });
     },
-    setLineWrapping: (wrap) => {
+    setLineWrapping: (wrap: boolean) => {
       if (destroyed || wrap === isWrapped) {
         return;
       }
@@ -166,7 +155,7 @@ export async function createFileEditorView(params: {
       isWrapped = wrap;
       view.dispatch({ effects: wrapping.reconfigure(wrap ? EditorView.lineWrapping : []) });
     },
-    setDecorations: ({ targetLine, matches = [], currentMatch }) => {
+    setDecorations: ({ targetLine, matches = [], currentMatch }: FileEditorDecorations) => {
       if (destroyed) {
         return;
       }
@@ -199,7 +188,7 @@ export async function createFileEditorView(params: {
         });
       view.dispatch({ effects: setLineDecorations.of(Decoration.set(decorations)) });
     },
-    scrollToLine: (line, center) => {
+    scrollToLine: (line: number, center: boolean) => {
       if (destroyed) {
         return;
       }
@@ -212,7 +201,7 @@ export async function createFileEditorView(params: {
     // Preserve exact source bytes before edits and after undo; changed text
     // adopts the loaded file's separator, including pasted multiline input.
     getContent: () => readContent(view.state),
-    onDocChanged: (callback) => {
+    onDocChanged: (callback: (content: string) => void) => {
       docChanged = callback;
     },
     focus: () => view.focus(),

@@ -64,7 +64,6 @@ class NodeWorkerSupervisor {
   private readonly turns: NodeWorkerTurnStore;
   private readonly admissions = new Map<string, NodeWorkerPendingAdmission>();
   private readonly retentions = new Set<Promise<NodeWorkerWorkspaceRetainResult>>();
-  private readonly stoppingEnvironments = new Map<string, number>();
   private readonly workerEnv: NodeJS.ProcessEnv;
   private readonly capacity: NodeWorkerCapacity;
   private readonly workspace: NodeWorkerWorkspaceRuntime;
@@ -146,7 +145,6 @@ class NodeWorkerSupervisor {
       this.recoveries.size > 0 ||
       this.retentions.size > 0 ||
       this.children.active.size > this.children.idleChildren().length ||
-      this.stoppingEnvironments.size > 0 ||
       this.workspace.processes.hasActiveWork() ||
       this.workspace.quiescence.hasActiveWork();
     if (hasLocalWork()) {
@@ -182,9 +180,11 @@ class NodeWorkerSupervisor {
     }
     const binding = nodeWorkerEnvironmentBinding(input);
     const key = nodeWorkerEnvironmentKey(binding);
-    if (this.stoppingEnvironments.has(key)) {
-      throw new Error("node worker environment is stopping");
-    }
+    const assertEnvironmentCurrent = this.workspace.processes.captureAdmission(
+      binding,
+      binding.ownerEpoch,
+    );
+    assertEnvironmentCurrent();
     const admission = this.admissions.get(key);
     if (admission) {
       const { launchId, planHash } = admission.identity;
@@ -209,9 +209,10 @@ class NodeWorkerSupervisor {
       });
       try {
         admissionSignal.throwIfAborted();
-        if (this.closed || this.stoppingEnvironments.has(key)) {
-          throw new Error("node worker environment is stopping");
+        if (this.closed) {
+          throw new Error("node worker supervisor is closed");
         }
+        assertEnvironmentCurrent();
         return await this.launchAdmitted(
           input,
           descriptor,
@@ -479,26 +480,20 @@ class NodeWorkerSupervisor {
 
   observeProcesses(input: NodeWorkerProcessInput, signal?: AbortSignal) {
     signal?.throwIfAborted();
-    if (this.stoppingEnvironments.has(nodeWorkerEnvironmentKey(input))) {
-      throw new Error("Worker environment is stopping");
-    }
+    this.workspace.processes.captureAdmission(input, input.ownerEpoch)();
     return this.children.observeProcesses(input, signal);
   }
 
   async stopEnvironment(expected: NodeWorkerEnvironmentStopInput): Promise<void> {
     const key = nodeWorkerEnvironmentKey(expected);
-    this.stoppingEnvironments.set(key, (this.stoppingEnvironments.get(key) ?? 0) + 1);
-    try {
-      const errors: unknown[] = [];
-      const admission = this.admissions.get(key);
-      const matchingAdmission =
-        admission && nodeWorkerEnvironmentMatches(admission.binding, expected)
-          ? admission
-          : undefined;
-      matchingAdmission?.abort.abort(new Error("node worker environment stopped"));
-      await this.workspace.processes
-        .stopEnvironment(expected)
-        .catch((error: unknown) => errors.push(error));
+    const errors: unknown[] = [];
+    const admission = this.admissions.get(key);
+    const matchingAdmission =
+      admission && nodeWorkerEnvironmentMatches(admission.binding, expected)
+        ? admission
+        : undefined;
+    matchingAdmission?.abort.abort(new Error("node worker environment stopped"));
+    return await this.workspace.processes.stopEnvironment(expected, async () => {
       await this.initialize().catch((error: unknown) => errors.push(error));
       let durableStops: Promise<void>[] = [];
       try {
@@ -556,14 +551,7 @@ class NodeWorkerSupervisor {
           ? errors[0]
           : new AggregateError(errors, "node worker environment cleanup failed");
       }
-    } finally {
-      const remaining = this.stoppingEnvironments.get(key)! - 1;
-      if (remaining === 0) {
-        this.stoppingEnvironments.delete(key);
-      } else {
-        this.stoppingEnvironments.set(key, remaining);
-      }
-    }
+    });
   }
 
   private async cancelTurn(

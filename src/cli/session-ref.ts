@@ -100,10 +100,8 @@ function rejectUrlCredentials(url: URL): void {
 }
 
 function parseSessionUrl(raw: string): SessionTargetInput {
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
+  const url = URL.parse(raw);
+  if (!url) {
     throw new SessionTargetParseError();
   }
   rejectUrlCredentials(url);
@@ -130,10 +128,8 @@ function parseHostShorthand(raw: string): SessionTargetInput | null {
   if (parts.length !== 3 || parts.some((part) => !part)) {
     return null;
   }
-  let host: URL;
-  try {
-    host = new URL(`wss://${parts[0]}`);
-  } catch {
+  const host = URL.parse(`wss://${parts[0]}`);
+  if (!host) {
     throw new SessionTargetParseError();
   }
   rejectUrlCredentials(host);

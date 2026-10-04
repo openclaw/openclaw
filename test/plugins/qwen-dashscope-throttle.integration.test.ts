@@ -300,107 +300,67 @@ function expectOpenRouterState(
 }
 
 describe("Qwen DashScope 429 profile classification", () => {
-  it("keeps registered OpenRouter wrapper errors in the rate-limit lane", async () => {
-    const providerOwner = prepareProviderOwner("openrouter", "openrouter");
+  it.each<
+    [
+      provider: string,
+      code: ErrorFixture["code"],
+      message: string,
+      reason: "rate_limit" | "billing",
+      metadata?: ErrorFixture["metadata"],
+    ]
+  >([
+    ["openrouter", 429, "Provider returned error", "rate_limit"],
+    [
+      "openrouter",
+      429,
+      "Provider returned error",
+      "billing",
+      { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
+    ],
+    ["openrouter", 429, "API key budget limit exceeded", "billing"],
+    [
+      QWEN_TOKEN_PLAN_PROVIDER_ID,
+      "insufficient_quota",
+      "Allocated quota exceeded, please increase your quota limit.",
+      "rate_limit",
+    ],
+    [
+      "qwen",
+      "Throttling.AllocationQuota",
+      "Allocated quota exceeded, please increase your quota limit.",
+      "rate_limit",
+    ],
+    [
+      "bailian-token-plan",
+      "insufficient_quota",
+      "You exceeded your current quota, please check your plan and billing details.",
+      "rate_limit",
+    ],
+    ["qwen", "PrepaidBillOverdue", "The prepaid bill is overdue.", "billing"],
+    ["qwen", "rate_limit_error", "Rate limit exceeded", "rate_limit"],
+    [
+      "openai",
+      "insufficient_quota",
+      "You exceeded your current quota, please check your plan and billing details.",
+      "billing",
+    ],
+    ["qwen", "insufficient_quota", "Free allocated quota exceeded.", "billing"],
+    ["qwen", "insufficient_quota", "Unknown quota condition", "billing"],
+  ])("classifies %s %s (%s) as %s", async (provider, code, message, reason, metadata) => {
     const result = await runThroughFailureRecovery({
-      provider: "openrouter",
-      providerOwner,
-      fixture: { status: 429, code: 429, message: "Provider returned error" },
+      provider,
+      providerOwner:
+        provider === "openai"
+          ? undefined
+          : prepareProviderOwner(provider, provider === "openrouter" ? "openrouter" : "qwen"),
+      fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
     });
-    expectOpenRouterState(result, "rate_limit");
-  });
-
-  it("keeps registered OpenRouter upstream billing inside metadata.raw in the billing lane", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "openrouter",
-      providerOwner: prepareProviderOwner("openrouter", "openrouter"),
-      fixture: {
-        status: 429,
-        code: 429,
-        message: "Provider returned error",
-        metadata: { raw: '{"error":{"code":"insufficient_quota","type":"insufficient_quota"}}' },
-      },
-    });
-    expectOpenRouterState(result, "billing");
-  });
-
-  it("preserves the registered OpenRouter explicit key-budget billing decision", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "openrouter",
-      providerOwner: prepareProviderOwner("openrouter", "openrouter"),
-      fixture: { status: 429, code: 429, message: "API key budget limit exceeded" },
-    });
-    expectOpenRouterState(result, "billing");
-  });
-
-  it.each([
-    {
-      provider: QWEN_TOKEN_PLAN_PROVIDER_ID,
-      code: "insufficient_quota",
-      message: "Allocated quota exceeded, please increase your quota limit.",
-    },
-    {
-      provider: "qwen",
-      code: "Throttling.AllocationQuota",
-      message: "Allocated quota exceeded, please increase your quota limit.",
-    },
-    {
-      provider: "bailian-token-plan",
-      code: "insufficient_quota",
-      message: "You exceeded your current quota, please check your plan and billing details.",
-    },
-  ])("keeps $provider $code in the model-scoped rate-limit lane", async (fixture) => {
-    const result = await runThroughFailureRecovery({
-      provider: fixture.provider,
-      providerOwner: prepareProviderOwner(fixture.provider),
-      fixture: { status: 429, code: fixture.code, message: fixture.message },
-    });
-    expectRateLimitState(result);
-  });
-
-  it("keeps explicit Qwen overdue bills in the billing lane", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "qwen",
-      providerOwner: prepareProviderOwner("qwen"),
-      fixture: {
-        status: 429,
-        code: "PrepaidBillOverdue",
-        message: "The prepaid bill is overdue.",
-      },
-    });
-    expectBillingState(result);
-  });
-
-  it("keeps an ordinary Qwen HTTP 429 in the generic rate-limit lane", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "qwen",
-      providerOwner: prepareProviderOwner("qwen"),
-      fixture: { status: 429, code: "rate_limit_error", message: "Rate limit exceeded" },
-    });
-    expectRateLimitState(result);
-  });
-
-  it("does not reinterpret another provider's insufficient_quota semantics", async () => {
-    const result = await runThroughFailureRecovery({
-      provider: "openai",
-      fixture: {
-        status: 429,
-        code: "insufficient_quota",
-        message: "You exceeded your current quota, please check your plan and billing details.",
-      },
-    });
-    expectBillingState(result);
-  });
-
-  it.each(["Free allocated quota exceeded.", "Unknown quota condition"])(
-    "does not reinterpret non-throttling quota evidence: %s",
-    async (message) => {
-      const result = await runThroughFailureRecovery({
-        provider: "qwen",
-        providerOwner: prepareProviderOwner("qwen"),
-        fixture: { status: 429, code: "insufficient_quota", message },
-      });
+    if (provider === "openrouter") {
+      expectOpenRouterState(result, reason);
+    } else if (reason === "rate_limit") {
+      expectRateLimitState(result);
+    } else {
       expectBillingState(result);
-    },
-  );
+    }
+  });
 });

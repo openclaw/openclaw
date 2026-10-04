@@ -65,6 +65,7 @@ import {
   type EmbeddedAgentRunEntryTerminal,
   type RunEntryTerminalBehavior,
 } from "./run-entry-terminal.js";
+import { forgetPromptBuildDrainCacheForRun } from "./run/attempt-prompt-helpers.js";
 import type { AuthProfileFailurePolicy } from "./run/auth-profile-failure-policy.types.js";
 import type { EmbeddedAgentRunResult } from "./types.js";
 
@@ -682,6 +683,7 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
     };
     return { ...fallbackResult, result, terminal, settleSessionOverride };
   } finally {
+    forgetPromptBuildDrainCacheForRun(params.identity.runId);
     if (unsettledContextEngineTurnAttempt) {
       await discardTurnAttempt(unsettledContextEngineTurnAttempt);
     }
