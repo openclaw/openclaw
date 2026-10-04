@@ -65,6 +65,7 @@ type ReplyRunState = {
   clearOperationByOperation?: WeakMap<ReplyOperation, () => void>;
   executionStartedOperations?: WeakSet<ReplyOperation>;
   lifecycleAdmissionByOperation?: WeakMap<ReplyOperation, ReplyOperationAdmission>;
+  preflightBackendWaiters?: WeakMap<ReplyOperation, Set<() => void>>;
 };
 
 const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
@@ -195,6 +196,33 @@ export function resolveReplyRunWaitKey(sessionId: string): string | undefined {
     replyRunState.activeKeysBySessionId.get(normalizedSessionId) ??
     replyRunState.waitKeysBySessionId.get(normalizedSessionId)
   );
+}
+
+const preflightBackendWaiters = (replyRunState.preflightBackendWaiters ??= new WeakMap<
+  ReplyOperation,
+  Set<() => void>
+>());
+
+/** Wake only waiters retained by the exact preflight owner, never a successor. */
+export function notifyReplyOperationBackendReadiness(operation: ReplyOperation): void {
+  for (const check of preflightBackendWaiters.get(operation) ?? []) {
+    check();
+  }
+}
+
+export function observeReplyOperationBackendReadiness(
+  operation: ReplyOperation,
+  check: () => void,
+): () => void {
+  const waiters = preflightBackendWaiters.get(operation) ?? new Set<() => void>();
+  waiters.add(check);
+  preflightBackendWaiters.set(operation, waiters);
+  return () => {
+    waiters.delete(check);
+    if (waiters.size === 0) {
+      preflightBackendWaiters.delete(operation);
+    }
+  };
 }
 
 export function isReplyRunCompacting(operation: ReplyOperation): boolean {

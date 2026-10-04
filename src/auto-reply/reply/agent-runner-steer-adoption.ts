@@ -25,6 +25,10 @@ import {
   type ReplyOperation,
   replyRunRegistry,
 } from "./reply-run-registry.js";
+import {
+  getAttachedBackend,
+  observeReplyOperationBackendReadiness,
+} from "./reply-run-registry.state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import type { TypingSignaler } from "./typing-mode.js";
@@ -74,6 +78,39 @@ function resolveAcceptedSteerRunId(params: ActiveReplySteerParams): string {
   );
 }
 
+/**
+ * Wait only for this preflight owner's backend, retaining the queue's waiting
+ * reservation. Readiness is not authority; the normal injection checks follow.
+ */
+function waitForReplyOperationPreflightBackend(
+  operation: ReplyOperation,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const key = operation.key;
+  return new Promise((resolve) => {
+    const finish = (ready: boolean) => {
+      stopObserving();
+      signal?.removeEventListener("abort", check);
+      resolve(ready);
+    };
+    const check = () => {
+      if (
+        signal?.aborted ||
+        operation.result ||
+        operation.key !== key ||
+        replyRunRegistry.get(key) !== operation
+      ) {
+        finish(false);
+      } else if (operation.phase === "running" && getAttachedBackend(operation)) {
+        finish(true);
+      }
+    };
+    const stopObserving = observeReplyOperationBackendReadiness(operation, check);
+    signal?.addEventListener("abort", check, { once: true });
+    check();
+  });
+}
+
 export async function runActiveReplySteer(
   params: ActiveReplySteerParams,
 ): Promise<"handled" | ReplyPayload> {
@@ -94,13 +131,19 @@ export async function runActiveReplySteer(
   // carries a source-keyed reservation; steering by its stale sessionId
   // would miss the live target run.
   const activeReplyOperation = params.providedReplyOperation;
-  const steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
+  let steerSessionId = activeReplyOperation?.sessionId ?? followupRun.run.sessionId;
   // Capture exact injection authority before parking or awaiting admission.
   // A same-key successor must never inherit this turn's steer or abort.
-  const injectionTarget =
+  let injectionTarget =
     activeReplyOperation && replyRunRegistry.get(activeReplyOperation.key) === activeReplyOperation
       ? replyRunRegistry.resolveCurrentMessageInjectionTarget(activeReplyOperation.key)
       : undefined;
+  const waitForPreflightBackend =
+    !injectionTarget &&
+    resolvedQueue.mode === "steer" &&
+    activeReplyOperation?.phase === "preflight_compacting" &&
+    replyRunRegistry.get(queueKey) === activeReplyOperation &&
+    !getAttachedBackend(activeReplyOperation);
   const parked = parkSteerCandidate(queueKey, followupRun, resolvedQueue, runFollowup);
   if (!parked) {
     releaseAdmissionTicket();
@@ -140,6 +183,19 @@ export async function runActiveReplySteer(
     return "handled";
   };
   try {
+    // Preserve the waiting reservation and its FIFO acceptance gate during
+    // host preflight. Do not turn a temporary missing backend into a followup
+    // that can only run after this entire (possibly long) turn completes.
+    if (waitForPreflightBackend && activeReplyOperation) {
+      const ready = await waitForReplyOperationPreflightBackend(
+        activeReplyOperation,
+        resolveFollowupAbortSignal(followupRun),
+      );
+      if (ready && replyRunRegistry.get(queueKey) === activeReplyOperation) {
+        steerSessionId = activeReplyOperation.sessionId;
+        injectionTarget = replyRunRegistry.resolveCurrentMessageInjectionTarget(queueKey);
+      }
+    }
     const admission = await parked.admit();
     if (admission === "cancelled") {
       parked.consume();
