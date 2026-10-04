@@ -23,11 +23,8 @@ function isRemotePath(value: string): boolean {
   if (/^[a-z]:[\\/]/i.test(value)) {
     return false;
   }
-  try {
-    return new URL(value).protocol !== "file:";
-  } catch {
-    return false;
-  }
+  const parsed = URL.parse(value);
+  return parsed !== null && parsed.protocol !== "file:";
 }
 
 export function resolveRecentInboundHistoryImages(params: {

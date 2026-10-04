@@ -1,18 +1,7 @@
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
 import { promptYesNo } from "../cli/prompt.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { gatewayProbeResultSawGateway } from "./gateway-health-auth-diagnostic.js";
-
-const daemonStatusModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/status.gather.js"),
-);
-const daemonInstallModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/install.runtime.js"),
-);
-const daemonLifecycleModuleLoader = createLazyImportLoader(
-  () => import("../cli/daemon-cli/lifecycle.js"),
-);
 
 type GatewayReadinessResult =
   | {
@@ -27,20 +16,12 @@ type GatewayReadinessResult =
       recoverable: boolean;
     };
 
-type GatewayReadinessDeps = {
-  gatherStatus?: () => Promise<DaemonStatus>;
-  confirm?: (message: string, defaultYes?: boolean) => Promise<boolean>;
-  installGateway?: () => Promise<void>;
-  startGateway?: () => Promise<void>;
-};
-
 type GatewayReadinessOptions = {
   runtime: RuntimeEnv;
   yes?: boolean;
   allowInstall?: boolean;
   probeUrl?: string;
   interactive?: boolean;
-  deps?: GatewayReadinessDeps;
 };
 
 function activeProbePortStatus(status: DaemonStatus): DaemonStatus["port"] {
@@ -126,30 +107,15 @@ function printGatewayNotReadyHints(
 export async function ensureDashboardGatewayReady(
   options: GatewayReadinessOptions,
 ): Promise<GatewayReadinessResult> {
-  const gatherStatus =
-    options.deps?.gatherStatus ??
-    (async () => {
-      const { gatherDaemonStatus } = await daemonStatusModuleLoader.load();
-      return gatherDaemonStatus({
-        rpc: options.probeUrl ? { url: options.probeUrl } : {},
-        probe: true,
-        requireRpc: false,
-        deep: false,
-      });
+  const gatherStatus = async () => {
+    const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
+    return gatherDaemonStatus({
+      rpc: options.probeUrl ? { url: options.probeUrl } : {},
+      probe: true,
+      requireRpc: false,
+      deep: false,
     });
-  const confirm = options.deps?.confirm ?? promptYesNo;
-  const installGateway =
-    options.deps?.installGateway ??
-    (async () => {
-      const { runDaemonInstall } = await daemonInstallModuleLoader.load();
-      await runDaemonInstall({ json: false });
-    });
-  const startGateway =
-    options.deps?.startGateway ??
-    (async () => {
-      const { runDaemonStart } = await daemonLifecycleModuleLoader.load();
-      await runDaemonStart({ json: false });
-    });
+  };
 
   const initialStatus = await gatherStatus();
   if (gatewayIsReady(initialStatus)) {
@@ -173,16 +139,19 @@ export async function ensureDashboardGatewayReady(
     ? "No background Gateway service was detected for this profile. Install and start one to open the dashboard?"
     : "The background Gateway service is not running. Start it to open the dashboard?";
   const approved =
-    options.yes || ((options.interactive ?? process.stdin.isTTY) && (await confirm(prompt, true)));
+    options.yes ||
+    ((options.interactive ?? process.stdin.isTTY) && (await promptYesNo(prompt, true)));
   if (!approved) {
     printGatewayNotReadyHints(options.runtime, reason);
     return { ready: false, status: initialStatus, reason, recoverable: true };
   }
 
   if (shouldInstall) {
-    await installGateway();
+    const { runDaemonInstall } = await import("../cli/daemon-cli/install.runtime.js");
+    await runDaemonInstall({ json: false });
   } else {
-    await startGateway();
+    const { runDaemonStart } = await import("../cli/daemon-cli/lifecycle.js");
+    await runDaemonStart({ json: false });
   }
 
   let recoveredStatus = await gatherStatus();

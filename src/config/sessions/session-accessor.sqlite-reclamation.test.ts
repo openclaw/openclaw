@@ -41,11 +41,12 @@ import {
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
+import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSqliteSessionPageReclamation } from "./session-accessor.sqlite-page-reclamation.js";
 import { runSqliteSessionReclamation } from "./session-accessor.sqlite-reclamation-run.js";
 import {
-  createHistoryEvictionReclamationPlan,
   createLifecycleArtifactReclamationPlan,
+  resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import {
@@ -179,13 +180,14 @@ function createFixture(alias = false) {
     symlinkSync(database.path, aliasPath);
     openOpenClawAgentDatabase({ ...options, path: aliasPath });
   }
-  const plan = createHistoryEvictionReclamationPlan({
-    databaseOptions,
+  const plan = {
+    kind: "history-eviction",
+    databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
     diskBudget: {},
     materializedPlans: [],
-    protectedSessionIds: new Set(scopes.map((scope) => scope.sessionId)),
+    protectedSessionIds: [...new Set(scopes.map((scope) => scope.sessionId))],
     sessionId: "already-removed-history",
-  });
+  } satisfies SqliteSessionReclamationPlan;
   return {
     database,
     databaseOptions,
@@ -394,13 +396,14 @@ test("captures removal identity when a synchronous writer authorizes a reused re
   const { databaseOptions, scopes } = createFixture();
   await runSqliteSessionReclamation({
     forceInProcess: false,
-    plan: createHistoryEvictionReclamationPlan({
-      databaseOptions,
+    plan: {
+      kind: "history-eviction",
+      databaseOptions: resolveSessionReclamationDatabaseOptions(databaseOptions),
       diskBudget: {},
       materializedPlans: [],
-      protectedSessionIds: new Set(),
+      protectedSessionIds: [],
       sessionId: "previous-victim",
-    }),
+    },
   });
   const removed = scopes[0]!;
   const writer = scopes[1]!;

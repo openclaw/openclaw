@@ -27,6 +27,7 @@ import {
   resolveSqliteTranscriptArchivePath,
 } from "./session-accessor.sqlite-archive-artifact.js";
 import type {
+  SqliteArchiveOneShotWorkerData,
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
   SessionTranscriptMaintenanceSizingInput,
@@ -48,7 +49,6 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import type {
   SessionColdPreparationWorkerData,
@@ -60,105 +60,6 @@ type TranscriptArchiveDatabase = Pick<
   OpenClawAgentKyselyDatabase,
   "session_transcript_archives" | "transcript_events"
 >;
-
-function parsePublishWorkerPlans(value: unknown): TranscriptArchivePublishPlan[] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const plans = value.plans;
-  if (!Array.isArray(plans)) {
-    return undefined;
-  }
-  const parsed: TranscriptArchivePublishPlan[] = [];
-  for (const plan of plans) {
-    if (!isRecord(plan)) {
-      return undefined;
-    }
-    if (
-      typeof plan.agentId !== "string" ||
-      typeof plan.archiveDirectory !== "string" ||
-      typeof plan.databasePath !== "string" ||
-      typeof plan.generation !== "string" ||
-      typeof plan.sessionId !== "string" ||
-      (plan.databaseIdentity !== undefined && typeof plan.databaseIdentity !== "string")
-    ) {
-      return undefined;
-    }
-    parsed.push({
-      ...(typeof plan.databaseIdentity === "string"
-        ? { databaseIdentity: plan.databaseIdentity }
-        : {}),
-      agentId: plan.agentId,
-      archiveDirectory: plan.archiveDirectory,
-      databasePath: plan.databasePath,
-      generation: plan.generation,
-      sessionId: plan.sessionId,
-    });
-  }
-  return parsed;
-}
-
-function parseSessionStateDeleteSnapshot(snapshot: unknown): SessionStateDeleteSnapshot | null {
-  if (!isRecord(snapshot)) {
-    return null;
-  }
-  if (
-    typeof snapshot.acpParentStreamEventCount !== "number" ||
-    (snapshot.generation !== null && typeof snapshot.generation !== "string") ||
-    (snapshot.lastSeq !== null && typeof snapshot.lastSeq !== "number") ||
-    (snapshot.sessionKey !== null && typeof snapshot.sessionKey !== "string") ||
-    (snapshot.sessionUpdatedAt !== null && typeof snapshot.sessionUpdatedAt !== "number") ||
-    (snapshot.trajectoryLastSeq !== null && typeof snapshot.trajectoryLastSeq !== "number") ||
-    (snapshot.transcriptUpdatedAt !== null && typeof snapshot.transcriptUpdatedAt !== "number")
-  ) {
-    return null;
-  }
-  return {
-    acpParentStreamEventCount: snapshot.acpParentStreamEventCount,
-    generation: snapshot.generation,
-    lastSeq: snapshot.lastSeq,
-    sessionKey: snapshot.sessionKey,
-    sessionUpdatedAt: snapshot.sessionUpdatedAt,
-    trajectoryLastSeq: snapshot.trajectoryLastSeq,
-    transcriptUpdatedAt: snapshot.transcriptUpdatedAt,
-  };
-}
-
-function parseWorkerPlans(value: unknown): TranscriptArchiveWorkerPlan[] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const plans = value.plans;
-  if (!Array.isArray(plans)) {
-    return undefined;
-  }
-  const parsed: TranscriptArchiveWorkerPlan[] = [];
-  for (const plan of plans) {
-    if (!isRecord(plan)) {
-      return undefined;
-    }
-    const snapshot = parseSessionStateDeleteSnapshot(plan.snapshot);
-    if (
-      typeof plan.agentId !== "string" ||
-      typeof plan.archiveDirectory !== "string" ||
-      typeof plan.databasePath !== "string" ||
-      (plan.reason !== "deleted" && plan.reason !== "reset") ||
-      typeof plan.sessionId !== "string" ||
-      !snapshot
-    ) {
-      return undefined;
-    }
-    parsed.push({
-      agentId: plan.agentId,
-      archiveDirectory: plan.archiveDirectory,
-      databasePath: plan.databasePath,
-      reason: plan.reason,
-      sessionId: plan.sessionId,
-      snapshot,
-    });
-  }
-  return parsed;
-}
 
 const TRANSCRIPT_ARCHIVE_WRITE_BUFFER_BYTES = 64 * 1024;
 
@@ -447,13 +348,9 @@ async function runArchiveSession(
     }
     let response: SqliteArchiveSessionResponse;
     if (request.operation === "materialize") {
-      const plans = parseWorkerPlans(request);
-      if (!plans) {
-        throw new Error("SQLite transcript archive worker requires valid materialization data");
-      }
       const results: TranscriptArchiveWorkerResult[] = [];
       let bytes = 0;
-      for (const plan of plans) {
+      for (const plan of request.plans) {
         const result = await materializeTranscriptArchiveInWorker(plan, env);
         bytes += result.archive?.bytes.byteLength ?? 0;
         if (bytes > MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES) {
@@ -465,15 +362,11 @@ async function runArchiveSession(
       }
       response = { type: "done", operationId, settled: true, results };
     } else if (request.operation === "publish") {
-      const plans = parsePublishWorkerPlans(request);
-      if (!plans) {
-        throw new Error("SQLite transcript archive worker requires valid publication data");
-      }
       response = {
         type: "published",
         operationId,
         settled: true,
-        results: plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
+        results: request.plans.map((plan) => publishTranscriptArchiveInWorker(plan, env)),
       };
     } else if (request.operation === "read-page") {
       const { readTranscriptArchivePageInWorker } =
@@ -555,17 +448,16 @@ if (isRecord(workerData) && workerData.type === "sqlite-transcript-archive-v2") 
     const data = workerData as { env: NodeJS.ProcessEnv };
     await runArchiveSession(parentPort, data.env);
   } else if (operation === "materialize") {
-    const plans = parseWorkerPlans(workerData);
-    if (!plans) {
-      throw new Error("SQLite transcript archive worker requires valid materialization data");
-    }
-    await runWorkerPort(parentPort, plans);
+    // SAFETY: the paired archive owner constructs this private typed boot payload.
+    const data = workerData as Extract<
+      SqliteArchiveOneShotWorkerData,
+      { operation: "materialize" }
+    >;
+    await runWorkerPort(parentPort, data.plans);
   } else if (operation === "publish") {
-    const plans = parsePublishWorkerPlans(workerData);
-    if (!plans) {
-      throw new Error("SQLite transcript archive worker requires valid publication data");
-    }
-    runPublishWorkerPort(parentPort, plans);
+    // SAFETY: the paired archive owner constructs this private typed boot payload.
+    const data = workerData as Extract<SqliteArchiveOneShotWorkerData, { operation: "publish" }>;
+    runPublishWorkerPort(parentPort, data.plans);
   } else if (operation === "cold-prepare") {
     const { prepareSessionColdBatchInWorker } = await import("./session-cold-storage-worker.js");
     // SAFETY: the paired parent constructs this internal payload with SessionColdPreparationWorkerData.

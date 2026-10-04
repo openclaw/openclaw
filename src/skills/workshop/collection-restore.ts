@@ -45,9 +45,6 @@ export async function restoreLatestSkillCollectionBackup(request: {
   const skillsRoot = resolveWorkshopSkillsDir(params.config, params.agentId, params.env);
   const backupRoot = resolveSkillCollectionBackupRoot(params.config, params.agentId, params.env);
   const commit = await withSkillCollectionLock(async () => {
-    if (!(await pathExists(backupRoot))) {
-      throw new Error("No skill collection backup is available.");
-    }
     const backupId = await latestCommittedBackupId(backupRoot);
     if (!backupId) {
       throw new Error("No skill collection backup is available.");

@@ -50,10 +50,7 @@ serveOwnedWorkerTasks(
         await import("../../gateway/cli-session-history.process-held.js");
       return {
         ok: true,
-        value: {
-          kind: "rpc",
-          page: await readProcessHeldCliHistoryInWorker(request.params, channel),
-        },
+        value: await readProcessHeldCliHistoryInWorker(request.request, channel),
       };
     }
     if (request.kind === "sqlite-target") {

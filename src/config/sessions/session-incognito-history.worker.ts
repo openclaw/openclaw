@@ -1,7 +1,5 @@
-import {
-  selectSessionTranscriptProjection,
-  type SessionTranscriptProjectionSelection,
-} from "../../gateway/session-transcript-read-kernel.js";
+import { selectSessionTranscriptProjection } from "../../gateway/session-transcript-read-kernel.js";
+import type { SessionTranscriptProjectionSelection } from "../../gateway/session-transcript-read.types.js";
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";

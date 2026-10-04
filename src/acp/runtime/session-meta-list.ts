@@ -2,10 +2,7 @@ import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
-import {
-  parseAcpDatabaseSessionKeyCandidates,
-  resolveReadableAcpSessionRow,
-} from "./session-meta-keys.js";
+import { parseAcpDatabaseSessionKey, resolveReadableAcpSessionRow } from "./session-meta-keys.js";
 import { captureAcpSessionReadContext } from "./session-meta-read-context.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { resolveSessionStorePathForAcp, type AcpSessionStoreEntry } from "./session-meta-store.js";
@@ -31,7 +28,8 @@ export async function listAcpSessionEntries(params: {
   }
   const entries: AcpSessionStoreEntry[] = [];
   for (const row of result.rows) {
-    for (const identity of parseAcpDatabaseSessionKeyCandidates(row.session_key)) {
+    const identity = parseAcpDatabaseSessionKey(row.session_key);
+    if (identity) {
       const sessionKey = identity.storeSessionKey;
       const { agentId, storePath } = resolveSessionStorePathForAcp({
         sessionKey,
@@ -67,7 +65,6 @@ export async function listAcpSessionEntries(params: {
       );
       if (joined) {
         entries.push(joined);
-        break;
       }
     }
   }

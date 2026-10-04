@@ -172,7 +172,7 @@ describe("package verification bounds", () => {
       const second = path.join(packageRoot, "dist", "b-second.js");
       for (const file of [first, second]) {
         await fs.writeFile(file, "");
-        await fs.truncate(file, 600 * 1024 * 1024);
+        await fs.truncate(file, 5 * 1024 * 1024 * 1024);
       }
       const secondStat = await fs.lstat(second, { bigint: true });
       const lstat = fs.lstat.bind(fs);
@@ -360,7 +360,7 @@ describe("package verification bounds", () => {
         if (budget === "byte") {
           const payload = path.join(packageRoot, "runtime-payload.bin");
           await fs.writeFile(payload, "");
-          await fs.truncate(payload, 1024 * 1024 * 1024 + 1);
+          await fs.truncate(payload, 8 * 1024 * 1024 * 1024 + 1);
         } else {
           interceptPackageFileHashes(async (file, _stat, next) => {
             if (!entered && file === path.join(packageRoot, "dist", "index.js")) {
@@ -808,9 +808,11 @@ describe("package verification bounds", () => {
   });
 
   it.each([
-    { shape: "single directory", width: 50_000 },
-    { shape: "nested directories", width: 30_000 },
+    { shape: "single directory", width: 500_000 },
+    { shape: "nested directories", width: 300_000 },
   ])("bounds the whole-tree inventory across $shape", async ({ width }) => {
+    // Exercise the entry cap independently of host speed and the elapsed-time budget.
+    vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await withTestDir({ prefix: "openclaw-rollback-entry-bound-" }, async (base) => {
       const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
       const nested = path.join(packageRoot, "dist");
@@ -855,7 +857,7 @@ describe("package verification bounds", () => {
       );
       await expect(fs.readFile(launcher, "utf8")).resolves.toBe("candidate launcher\n");
       // Includes one overflow entry; the root itself consumes the other slot.
-      expect(discovered).toBeLessThanOrEqual(50_000);
+      expect(discovered).toBeLessThanOrEqual(500_000);
       expect(result.step.advisory?.message).toContain("entry limit exceeded");
       expect(hash.mock.calls.some(([file]) => file === path.join(nested, "index.js"))).toBe(false);
     });

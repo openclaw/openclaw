@@ -465,6 +465,34 @@ describe("createTelegramDraftStream", () => {
     }
   });
 
+  it("clears a rotated preview accepted while clear waits for its in-flight send", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveSend!: (message: MockSentMessage) => void;
+      const send = new Promise<MockSentMessage>((resolve) => {
+        resolveSend = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockReturnValueOnce(send);
+      const stream = createDraftStream(api);
+
+      stream.update("Temporary preview");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      stream.rotateToNewMessageDeferringDelete();
+      const clearPromise = stream.clear();
+      resolveSend({ message_id: 17 });
+      await clearPromise;
+
+      await vi.advanceTimersByTimeAsync(3_999);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(api.deleteMessage).toHaveBeenCalledExactlyOnceWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each(["first", "batched"] as const)(
     "keeps an in-flight %s reply target owned when reposition cleanup fails",
     async (replyToMode) => {
@@ -528,6 +556,63 @@ describe("createTelegramDraftStream", () => {
       expect(api.deleteMessage).not.toHaveBeenCalled();
       // At the dwell boundary (~4s after first appearing) the detached delete runs.
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a rotated preview until Telegram accepts its replacement", async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveReplacement!: (message: MockSentMessage) => void;
+      const replacement = new Promise<MockSentMessage>((resolve) => {
+        resolveReplacement = resolve;
+      });
+      const api = createMockDraftApi();
+      api.sendMessage.mockResolvedValueOnce({ message_id: 17 }).mockReturnValueOnce(replacement);
+      const stream = createDraftStream(api);
+
+      stream.update("Answer preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      resolveReplacement({ message_id: 42 });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a rotated preview visible when its replacement send fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const api = createMockDraftApi();
+      api.sendMessage
+        .mockResolvedValueOnce({ message_id: 17 })
+        .mockRejectedValueOnce(new Error("replacement rejected"));
+      const stream = createDraftStream(api, { warn: vi.fn() });
+
+      stream.update("Answer preview");
+      await stream.flush();
+      stream.rotateToNewMessageDeferringDelete();
+      stream.update("Replacement");
+      await stream.flush();
+      await stream.stop();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(api.sendMessage).toHaveBeenCalledTimes(2);
+      expect(api.deleteMessage).not.toHaveBeenCalled();
+
+      await stream.clear();
+      await vi.advanceTimersByTimeAsync(1_500);
       expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
     } finally {
       vi.useRealTimers();

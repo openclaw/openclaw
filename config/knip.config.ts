@@ -21,6 +21,8 @@ const repositoryScriptEntries = [
   "apps/linux/scripts/test-runtime-boundary.mjs!",
   "apps/linux/scripts/stage-runtime.mjs!",
   "apps/linux/scripts/test-stage-runtime.mjs!",
+  // The Python onboarding driver installs this synthetic CLI by path.
+  "apps/linux/tests/fixtures/onboarding-cli.mjs!",
   // apps/linux/README.md invokes this live Windows native-browser proof driver by path.
   "apps/linux/scripts/test-inline-browser.mjs!",
   // Linux App CI executes the injected native-auth bridge tests through Node.

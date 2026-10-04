@@ -235,6 +235,21 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       throw new Error("spawn argv cannot be empty");
     }
     const resolvedArgs = input.mode === "child" ? input.resolveArgs?.() : undefined;
+    const argv =
+      input.mode === "anchored-shell"
+        ? []
+        : resolvedArgs
+          ? [...input.argv, ...resolvedArgs]
+          : input.argv;
+    if (
+      argv.some((argument) => argument.includes("\0")) ||
+      (input.mode === "child" && input.argv0?.includes("\0")) ||
+      (input.mode === "anchored-shell" && input.command.includes("\0"))
+    ) {
+      throw new Error(
+        "Execution command and arguments must not contain NUL bytes. Remove them and retry.",
+      );
+    }
     if (owner.terminationReason) {
       return settleConstructionResult(owner.terminationReason);
     }
@@ -375,8 +390,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         input.mode === "pty"
           ? createPtyAdapter({
               ...construction,
-              shell: expectDefined(input.argv[0], "spawn executable"),
-              args: input.argv.slice(1),
+              shell: expectDefined(argv[0], "spawn executable"),
+              args: argv.slice(1),
             }).then((adapter) => ({ adapter, ready: Promise.resolve() }))
           : input.mode === "anchored-shell"
             ? createChildAdapter({
@@ -386,7 +401,7 @@ export function createProcessSupervisor(): ProcessSupervisor & {
             : createChildAdapter({
                 ...construction,
                 ...(requireProcessTree && !external ? { ownProcessTree: true as const } : {}),
-                argv: resolvedArgs ? [...input.argv, ...resolvedArgs] : input.argv,
+                argv,
                 argv0: input.argv0,
                 exactEnv: input.exactEnv,
                 windowsVerbatimArguments: input.windowsVerbatimArguments,

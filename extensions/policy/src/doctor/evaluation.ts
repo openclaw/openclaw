@@ -9,16 +9,14 @@ import {
   type PolicyEvidence,
 } from "../policy-state.js";
 import {
-  authProfileMetadataRequirementFindings,
   invalidChannelDenyRuleFindings,
+  metadataRequirementShapeFindings,
 } from "./access-findings.js";
 import { agentWorkspaceFindings } from "./agent-workspace-findings.js";
 import { CHECK_IDS } from "./check-ids.js";
 import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-findings.js";
 import { execApprovalsFindings } from "./exec-approval-findings.js";
 import { ingressFindings } from "./ingress-findings.js";
-import { createOrderedPolicyShape } from "./ordered-shape.js";
-import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import {
   parsePolicyFile,
@@ -133,15 +131,17 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     };
   }
 
-  const metadataRequirementFindings = toolMetadataRequirementFindings(
+  const metadataRequirementFindings = metadataRequirementShapeFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
+    "tools.requireMetadata",
   );
-  const authMetadataRequirementFindings = authProfileMetadataRequirementFindings(
+  const authMetadataRequirementFindings = metadataRequirementShapeFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
+    "auth.profiles.requireMetadata",
   );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
@@ -366,25 +366,4 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
     ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
   };
-}
-
-function toolMetadataRequirementFindings(
-  policy: unknown,
-  policyPath: string,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
-  const finding = shape.list("tools.requireMetadata", {
-    allowed: SUPPORTED_TOOL_METADATA,
-    normalize: "lower",
-    array: {
-      message: "{policy} {property} must be an array of metadata keys.",
-      hint: "Use supported metadata keys: {allowed}.",
-    },
-    entry: {
-      message: "{policy} {property}[{index}] must be a supported metadata key.",
-      hint: "Use supported metadata keys: {allowed}.",
-    },
-  });
-  return finding === undefined ? [] : [finding];
 }

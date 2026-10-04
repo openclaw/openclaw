@@ -56,26 +56,11 @@ const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
 
-const EMPTY_STATE: MemoryWikiImportedSourceState = {
-  version: 1,
-  entries: {},
-};
-
 let configuredSourceSyncStore: MemoryWikiSourceSyncStateStore | undefined;
-const memorySourceSyncStateByVault = new Map<string, MemoryWikiImportedSourceState>();
 const sourceSyncStateChanges = new WeakMap<
   MemoryWikiImportedSourceState,
   MemoryWikiSourceSyncStateChanges
 >();
-
-function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiImportedSourceState {
-  return {
-    version: 1,
-    entries: Object.fromEntries(
-      Object.entries(state.entries).map(([key, value]) => [key, { ...value }]),
-    ),
-  };
-}
 
 function normalizeSourceSyncEntry(value: unknown): MemoryWikiImportedSourceStateEntry | null {
   const entry = asNullableRecord(value);
@@ -106,20 +91,6 @@ function resolveVaultRootKey(vaultRoot: string): string {
 
 function resolveStateEntryKey(vaultRootKey: string, syncKey: string): string {
   return createHash("sha256").update(`${vaultRootKey}\0${syncKey}`, "utf8").digest("hex");
-}
-
-function createMemoryFallbackStateStore(): MemoryWikiSourceSyncStateStore {
-  return {
-    async read(vaultRoot) {
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      return cloneSourceSyncState(memorySourceSyncStateByVault.get(vaultRootKey) ?? EMPTY_STATE);
-    },
-    async write(vaultRoot, state) {
-      assertSourceSyncStateWithinLimit(Object.keys(state.entries).length);
-      const vaultRootKey = resolveVaultRootKey(vaultRoot);
-      memorySourceSyncStateByVault.set(vaultRootKey, cloneSourceSyncState(state));
-    },
-  };
 }
 
 function assertSourceSyncStateWithinLimit(count: number): void {
@@ -206,10 +177,11 @@ export function configureMemoryWikiSourceSyncStateStore(
   configuredSourceSyncStore = store;
 }
 
-function resolveSourceSyncStore(
-  store?: MemoryWikiSourceSyncStateStore,
-): MemoryWikiSourceSyncStateStore {
-  return store ?? configuredSourceSyncStore ?? createMemoryFallbackStateStore();
+function resolveSourceSyncStore(store = configuredSourceSyncStore): MemoryWikiSourceSyncStateStore {
+  if (!store) {
+    throw new Error("Memory Wiki source sync state store is not configured.");
+  }
+  return store;
 }
 
 export async function readMemoryWikiSourceSyncState(

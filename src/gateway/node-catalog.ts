@@ -1,6 +1,7 @@
 // Gateway node catalog builder.
 // Merges paired devices, approved node records, and live websocket sessions.
 import {
+  hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -26,26 +27,9 @@ function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): s
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
-// Catalog scalars come from blind-cast pairing records, so coerce every formatter-facing optional
-// string scalar to a trimmed string or undefined: a non-string would crash `nodes status`/`nodes
-// list` formatters (.trim(), sanitizeTerminalText/stripAnsi). Scalar analog of uniqueSortedStrings.
+// Persisted pairing metadata may be malformed; let valid lower-priority strings win.
 function firstNormalizedString(...values: unknown[]): string | undefined {
-  // Treat a non-string (or empty) higher-priority value as ABSENT and fall through, instead of
-  // letting `find` pick the first non-null value and normalize it to undefined — which would
-  // suppress a valid lower-priority string. Return the first value that yields a trimmed string.
-  for (const value of values) {
-    const normalized = normalizeOptionalString(value);
-    if (normalized !== undefined) {
-      return normalized;
-    }
-  }
-  return undefined;
-}
-
-// Blind-cast pairing records can carry a non-string id; a node with no addressable string
-// id is unusable and would crash the id-based catalog sort/format, so drop it entirely.
-function hasAddressableId(value: unknown): boolean {
-  return normalizeOptionalString(value) !== undefined;
+  return normalizeOptionalString(values.find(hasNonEmptyString));
 }
 
 function buildPendingNodeSource(entry: NodePairingPendingRequest): KnownNodePendingSource {
@@ -268,7 +252,7 @@ export function createKnownNodeCatalog(params: {
   const devicePairingById = new Map(
     params.pairedDevices
       .filter(
-        (entry) => hasAddressableId(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
+        (entry) => hasNonEmptyString(entry.deviceId) && hasEffectivePairedDeviceRole(entry, "node"),
       )
       .map((entry) => [entry.deviceId, entry]),
   );
@@ -276,7 +260,7 @@ export function createKnownNodeCatalog(params: {
   // session supplies the effective commands. The remaining metadata needs no copy.
   const nodePairingById = new Map(
     (params.pairedNodes ?? [])
-      .filter((entry) => hasAddressableId(entry.nodeId))
+      .filter((entry) => hasNonEmptyString(entry.nodeId))
       .map((entry) => [
         entry.nodeId,
         { node: entry, commands: filterPublicNodeCommands(entry.commands ?? []) },
@@ -285,7 +269,7 @@ export function createKnownNodeCatalog(params: {
   const pendingNodePairingById = new Map<string, KnownNodePendingSource>();
   // listNodePairing returns newest requests first; keep the current approval action per node.
   for (const entry of params.pendingNodes ?? []) {
-    if (!hasAddressableId(entry.nodeId)) {
+    if (!hasNonEmptyString(entry.nodeId)) {
       continue;
     }
     if (!pendingNodePairingById.has(entry.nodeId)) {

@@ -51,17 +51,13 @@ export async function fetchGatewayContextResource(
 }
 
 function toHttpOrigin(url: string | null | undefined): string | null {
-  if (!url) {
+  const parsed = url ? URL.parse(url) : null;
+  if (!parsed) {
     return null;
   }
-  try {
-    const parsed = new URL(url);
-    const scheme =
-      parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
-    return `${scheme}//${parsed.host}`;
-  } catch {
-    return null;
-  }
+  const scheme =
+    parsed.protocol === "wss:" ? "https:" : parsed.protocol === "ws:" ? "http:" : parsed.protocol;
+  return `${scheme}//${parsed.host}`;
 }
 
 /** Keeps avatar routes, credentials, and cached images scoped to the current gateway. */

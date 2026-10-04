@@ -136,25 +136,9 @@ internal class MicCaptureManager(
   private var ttsPauseDepth = 0
   private var resumeMicAfterTts = false
 
-  private fun enqueueMessage(message: String) {
-    synchronized(messageQueueLock) {
-      messageQueue.addLast(message)
-    }
-  }
-
   private fun hasQueuedMessages(): Boolean =
     synchronized(messageQueueLock) {
       messageQueue.isNotEmpty()
-    }
-
-  private fun firstQueuedMessage(): String? =
-    synchronized(messageQueueLock) {
-      messageQueue.firstOrNull()
-    }
-
-  private fun removeFirstQueuedMessage(): String? =
-    synchronized(messageQueueLock) {
-      if (messageQueue.isEmpty()) null else messageQueue.removeFirst()
     }
 
   private fun queuedMessageCount(): Int =
@@ -508,7 +492,7 @@ internal class MicCaptureManager(
       role = VoiceConversationRole.User,
       text = message,
     )
-    enqueueMessage(message)
+    synchronized(messageQueueLock) { messageQueue.addLast(message) }
   }
 
   private fun scheduleTranscriptFlush(expectedText: String) {
@@ -540,7 +524,7 @@ internal class MicCaptureManager(
       return
     }
 
-    val next = firstQueuedMessage() ?: return
+    val next = synchronized(messageQueueLock) { messageQueue.firstOrNull() } ?: return
     _isSending.value = true
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
@@ -626,7 +610,7 @@ internal class MicCaptureManager(
   private fun completePendingTurn() {
     pendingRunTimeoutJob?.cancel()
     pendingRunTimeoutJob = null
-    removeFirstQueuedMessage()
+    synchronized(messageQueueLock) { messageQueue.removeFirstOrNull() }
     pendingRunId = null
     pendingAssistantEntryId = null
     _isSending.value = false

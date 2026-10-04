@@ -8,6 +8,7 @@ import { getCliSessionBinding } from "../config/sessions/cli-session-binding.js"
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
+  ChatHistoryMessageParams,
 } from "../config/sessions/session-history-types.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
@@ -16,7 +17,10 @@ import {
   resolveTranscriptPageEnd,
 } from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
-import { dropPreSessionStartAnnouncePairs } from "./chat-display-projection.history.js";
+import {
+  dropPreSessionStartAnnouncePairs,
+  isPreSessionStartAssistantMessage,
+} from "./chat-display-projection.history.js";
 import { CliSessionHistoryIndex } from "./cli-session-history-index.worker.js";
 import {
   resolveClaudeCliHistorySource,
@@ -28,8 +32,12 @@ import {
   readChatHistoryPaginationKey,
   readIncrementalChatHistoryTail,
 } from "./session-history-tail.js";
-import type { SessionTranscriptPageReader } from "./session-transcript-read-kernel.js";
-import type { SessionTranscriptPageOptions } from "./session-transcript-read.types.js";
+import { filterSessionMessageHistoryVisibility } from "./session-transcript-read-kernel.js";
+import type {
+  ReadSessionMessageByIdResult,
+  SessionTranscriptPageOptions,
+  SessionTranscriptPageReader,
+} from "./session-transcript-read.types.js";
 
 export type CliHistoryRevision = {
   database: DatabaseSync;
@@ -336,7 +344,38 @@ export async function prepareCliSessionHistoryReader(
       readWindow: { source: key, latestResetRawSeq: null },
     };
   };
-  return {
+  const readIndexedMessage: Readers["readSessionMessageByIdAsync"] = async (
+    readScope,
+    messageId,
+    options,
+  ) => {
+    const ordinal = index.ordinal(messageId);
+    if (ordinal === undefined) {
+      return { found: false, oversized: false };
+    }
+    const [message] = await readRange(ordinal, ordinal + 1, options?.maxBytes);
+    const precedingMessage =
+      options?.historyVisibility &&
+      ordinal > 0 &&
+      isPreSessionStartAssistantMessage(message, options.historyVisibility.sessionStartedAt)
+        ? (await readRange(ordinal - 1, ordinal))[0]
+        : undefined;
+    return filterSessionMessageHistoryVisibility(
+      {
+        found: message !== undefined,
+        oversized: false,
+        message,
+        seq: ordinal + 1,
+        historyContext: { displaySource: key, precedingMessage },
+      },
+      readScope,
+      messageId,
+      options?.historyVisibility,
+      prepared.readers,
+    );
+  };
+  const prepared = {
+    readIndexedMessage,
     dispose: () => {
       if (!cached.database) {
         index.close();
@@ -386,4 +425,46 @@ export async function prepareCliSessionHistoryReader(
       },
     },
   };
+  prepared.readers.readSessionMessageByIdAsync = (...args) =>
+    readCanonicalOrImportedMessage(readers, args, () => readIndexedMessage(...args));
+  return prepared;
+}
+
+async function readCanonicalOrImportedMessage(
+  readers: Readers,
+  args: Parameters<Readers["readSessionMessageByIdAsync"]>,
+  readImported: (missing: ReadSessionMessageByIdResult) => Promise<ReadSessionMessageByIdResult>,
+): Promise<ReadSessionMessageByIdResult> {
+  const local = await readers.readSessionMessageByIdAsync(...args);
+  return local.found || local.historyHidden ? local : readImported(local);
+}
+
+/** Canonical IDs retain archive access; imported-only IDs use the page owner's admitted index. */
+export async function readChatHistoryMessageFromReaders(
+  params: ChatHistoryMessageParams,
+  readers: CliHistoryReaders,
+): Promise<ReadSessionMessageByIdResult> {
+  const scope = {
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.canonicalKey,
+    storePath: params.storePath,
+    sessionEntry: params.entry,
+  };
+  const options = {
+    allowResetArchiveFallback: true,
+    historyVisibility: { sessionStartedAt: params.entry?.sessionStartedAt },
+  };
+  return readCanonicalOrImportedMessage(
+    readers,
+    [scope, params.messageId, options],
+    async (missing) => {
+      const cli = await prepareCliSessionHistoryReader(params, readers);
+      try {
+        return cli ? await cli.readIndexedMessage(scope, params.messageId, options) : missing;
+      } finally {
+        cli?.dispose();
+      }
+    },
+  );
 }

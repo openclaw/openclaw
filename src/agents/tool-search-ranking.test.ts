@@ -306,21 +306,28 @@ describe("ToolSearchRuntime.search", () => {
     expect(build).toHaveBeenCalledTimes(4);
   });
 
-  it("does not retain oversized source text through cached token slices", async () => {
-    const catalog = [
-      entry({
-        name: "oversized_revision",
-        description: `Retention ${" ".repeat(4 * 1024 * 1024)}`,
-      }),
-    ];
-    const build = vi.spyOn(ranking, "buildLexicalIndex");
-    for (let turn = 0; turn < 2; turn++) {
-      expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
-        "oversized_revision",
-      ]);
-    }
-    expect(build).toHaveBeenCalledTimes(2);
-  });
+  it.each([
+    { encoding: "ASCII", padding: " ", suffix: "" },
+    { encoding: "Unicode", padding: " ", suffix: "価格 𐐀 \ud800" },
+    { encoding: "Unicode word", padding: "λ", suffix: "" },
+  ])(
+    "does not retain oversized $encoding source text through cached token slices",
+    async ({ padding, suffix }) => {
+      const catalog = [
+        entry({
+          name: "oversized_revision",
+          description: `Retention ${padding.repeat(4 * 1024 * 1024)}${suffix}`,
+        }),
+      ];
+      const build = vi.spyOn(ranking, "buildLexicalIndex");
+      for (let turn = 0; turn < 2; turn++) {
+        expect((await runtime(catalog).search("retention")).map(({ name }) => name)).toEqual([
+          "oversized_revision",
+        ]);
+      }
+      expect(build).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("projects shared index hits from the current catalog without retaining another run's metadata", async () => {
     const first = entry({ name: "shared_revision", description: "Measure quasars" });

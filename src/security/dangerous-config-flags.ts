@@ -39,31 +39,22 @@ export function collectEnabledInsecureOrDangerousFlags(
     workspaceDirs.add(resolveAgentWorkspaceDir(cfg, defaultAgentId));
   } else {
     const roster = listAgentEntries(cfg);
-    if (roster.length === 0) {
-      const configuredWorkspace = cfg.agents?.defaults?.workspace?.trim();
+    let hasInheritedWorkspace = roster.length === 0;
+    for (const entry of roster) {
+      const workspace = resolveAgentConfig(cfg, entry.id)?.workspace?.trim();
+      if (workspace) {
+        workspaceDirs.add(resolveUserPath(workspace, process.env));
+      } else {
+        hasInheritedWorkspace = true;
+      }
+    }
+    if (hasInheritedWorkspace) {
+      const inheritedWorkspace = cfg.agents?.defaults?.workspace?.trim();
       workspaceDirs.add(
-        configuredWorkspace
-          ? resolveUserPath(configuredWorkspace, process.env)
+        inheritedWorkspace
+          ? resolveUserPath(inheritedWorkspace, process.env)
           : resolveDefaultAgentWorkspaceDir(process.env),
       );
-    } else {
-      let hasInheritedWorkspace = false;
-      for (const entry of roster) {
-        const workspace = resolveAgentConfig(cfg, entry.id)?.workspace?.trim();
-        if (workspace) {
-          workspaceDirs.add(resolveUserPath(workspace, process.env));
-        } else {
-          hasInheritedWorkspace = true;
-        }
-      }
-      if (hasInheritedWorkspace) {
-        const inheritedWorkspace = cfg.agents?.defaults?.workspace?.trim();
-        workspaceDirs.add(
-          inheritedWorkspace
-            ? resolveUserPath(inheritedWorkspace, process.env)
-            : resolveDefaultAgentWorkspaceDir(process.env),
-        );
-      }
     }
   }
 

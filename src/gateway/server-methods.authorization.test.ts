@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
+import * as acpMetadata from "../acp/runtime/session-meta-readonly.js";
 import {
   loadSessionEntry,
   patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { applySessionEntryCanonicalReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
+import { assignSessionOwnerInWorker } from "../config/sessions/session-metadata-write.async.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -286,7 +289,11 @@ describe("gateway method authorization", () => {
     ).toHaveBeenCalledWith(true, { profile });
   });
 
-  it("rejects a mutation when its authorized session instance is replaced before commit", async () => {
+  it.each([
+    { phase: "before commit", change: "replacement" },
+    { phase: "before response", change: "replacement" },
+    { phase: "before response", change: "reassignment" },
+  ] as const)("rejects a session $change $phase", async ({ phase, change }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:commit-bound-authorization";
       await upsertSessionEntryCore(
@@ -304,6 +311,23 @@ describe("gateway method authorization", () => {
       if (!patchHandler) {
         throw new Error("sessions.patch handler is not registered");
       }
+      const readMetadata = acpMetadata.readAcpSessionMetaForEntries;
+      const metadataRead =
+        phase === "before response"
+          ? vi
+              .spyOn(acpMetadata, "readAcpSessionMetaForEntries")
+              .mockImplementation(async (params) => {
+                const result = await readMetadata(params);
+                if (
+                  params.entries.some((entry) => entry.sessionKey === sessionKey) &&
+                  loadSessionEntry({ agentId: "main", sessionKey })?.label === "stale mutation"
+                ) {
+                  handlerStarted.resolve();
+                  await handlerCanContinue.promise;
+                }
+                return result;
+              })
+          : undefined;
       const respond = vi.fn();
       const request = handleGatewayRequest({
         req: {
@@ -341,42 +365,87 @@ describe("gateway method authorization", () => {
         } as unknown as Parameters<typeof handleGatewayRequest>[0]["context"],
         extraHandlers: {
           "sessions.patch": async (options) => {
-            handlerStarted.resolve();
-            await handlerCanContinue.promise;
+            if (phase === "before commit") {
+              handlerStarted.resolve();
+              await handlerCanContinue.promise;
+            }
             await patchHandler(options);
           },
         },
       });
 
-      await handlerStarted.promise;
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-draft-replacement",
-          updatedAt: 2,
+      try {
+        await awaitGateBeforeSettlement(
+          handlerStarted.promise,
+          request,
+          `Session patch settled before ${phase} barrier`,
+        );
+        expect(respond).not.toHaveBeenCalled();
+        const before = loadSessionEntry({ agentId: "main", sessionKey });
+        if (phase === "before response") {
+          expect(before?.label).toBe("stale mutation");
+        } else {
+          expect(before).not.toHaveProperty("label");
+        }
+        const sessionId = change === "replacement" ? "session-draft-replacement" : "session-shared";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId,
+            updatedAt: 2,
+            ...(phase === "before response" ? { label: "current owner label" } : {}),
+            visibility: "draft",
+            createdVia: "operator",
+            createdActor: { type: "human", source: "profile", id: "owner" },
+          },
+        );
+        await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
           visibility: "draft",
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: "owner" },
-        },
-      );
-      await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
-        visibility: "draft",
-      }));
-      handlerCanContinue.resolve();
-      await request;
+        }));
+        if (change === "reassignment") {
+          await assignSessionOwnerInWorker(
+            { agentId: "main", sessionKey },
+            {
+              owner: { type: "human", id: "owner" },
+              assignedBy: { type: "system", id: "fixture" },
+              assignedAt: 2,
+              expectedSessionId: sessionId,
+            },
+          );
+        }
+        handlerCanContinue.resolve();
+        await request;
 
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
-        }),
-      );
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        sessionId: "session-draft-replacement",
-        visibility: "draft",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty("label");
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: expect.objectContaining({
+              code:
+                change === "reassignment"
+                  ? "SESSION_PARTICIPATION_REQUIRED"
+                  : "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+            }),
+          }),
+        );
+        expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+          sessionId,
+          visibility: "draft",
+        });
+        const current = loadSessionEntry({ agentId: "main", sessionKey });
+        if (phase === "before response") {
+          expect(current?.label).toBe("current owner label");
+          if (change === "reassignment") {
+            expect(current?.owner?.actor).toEqual({ type: "human", id: "owner" });
+          }
+        } else {
+          expect(current).not.toHaveProperty("label");
+        }
+      } finally {
+        handlerCanContinue.resolve();
+        await Promise.allSettled([request]);
+        metadataRead?.mockRestore();
+      }
     });
   });
 

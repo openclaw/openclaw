@@ -4,6 +4,7 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 
 const MIN_ECHO_CHARS = 80;
+const ECHO_WINDOW_LENGTHS = [MIN_ECHO_CHARS, MIN_ECHO_CHARS + 1];
 
 function sliceEchoWindow(input: string, start: number, length: number): string | undefined {
   const window = sliceUtf16Safe(input, start, start + length);
@@ -16,30 +17,27 @@ type BootEchoContext = {
 };
 
 const bootContextBySessionKey = new Map<string, BootEchoContext>();
-const bootChunksByNormalizedPrompt = new Map<string, Map<number, Set<string>>>();
+const bootChunksByNormalizedPrompt = new Map<string, Set<string>>();
 
 function normalizeEchoComparisonText(text: string): string {
   return text.replace(/\s+/gu, " ").trim();
 }
 
-function getBootPromptChunks(normalizedBootPrompt: string, minLen: number): Set<string> {
-  let chunksByLength = bootChunksByNormalizedPrompt.get(normalizedBootPrompt);
-  if (!chunksByLength) {
-    chunksByLength = new Map();
-    bootChunksByNormalizedPrompt.set(normalizedBootPrompt, chunksByLength);
-  }
-  const cached = chunksByLength.get(minLen);
+function getBootPromptChunks(normalizedBootPrompt: string): Set<string> {
+  const cached = bootChunksByNormalizedPrompt.get(normalizedBootPrompt);
   if (cached) {
     return cached;
   }
   const chunks = new Set<string>();
-  for (let i = 0; i <= normalizedBootPrompt.length - minLen; i += 1) {
-    const chunk = sliceEchoWindow(normalizedBootPrompt, i, minLen);
-    if (chunk) {
-      chunks.add(chunk);
+  for (let i = 0; i <= normalizedBootPrompt.length - MIN_ECHO_CHARS; i += 1) {
+    for (const length of ECHO_WINDOW_LENGTHS) {
+      const chunk = sliceEchoWindow(normalizedBootPrompt, i, length);
+      if (chunk) {
+        chunks.add(chunk);
+      }
     }
   }
-  chunksByLength.set(minLen, chunks);
+  bootChunksByNormalizedPrompt.set(normalizedBootPrompt, chunks);
   return chunks;
 }
 
@@ -70,26 +68,22 @@ export function getBootEchoContextForSession(sessionKey: string | undefined): st
 }
 
 // Short prompts never suppress legitimate BOOT.md-directed sends such as "good morning".
-function containsSubstantialBootEcho(
-  outboundText: string,
-  bootPrompt: string,
-  minLen: number = MIN_ECHO_CHARS,
-): boolean {
-  const haystack = normalizeEchoComparisonText(outboundText ?? "");
-  if (haystack.length < minLen) {
+function containsSubstantialBootEcho(outboundText: string, bootPrompt: string): boolean {
+  const haystack = normalizeEchoComparisonText(outboundText);
+  if (haystack.length < MIN_ECHO_CHARS) {
     return false;
   }
-  const needle = normalizeEchoComparisonText(bootPrompt ?? "");
-  if (needle.length < minLen) {
+  const needle = normalizeEchoComparisonText(bootPrompt);
+  if (needle.length < MIN_ECHO_CHARS) {
     return false;
   }
-  const bootChunks = getBootPromptChunks(needle, minLen);
-  const nextBootChunks = getBootPromptChunks(needle, minLen + 1);
-  for (let i = 0; i <= haystack.length - minLen; i += 1) {
-    const chunk = sliceEchoWindow(haystack, i, minLen);
-    const nextChunk = sliceEchoWindow(haystack, i, minLen + 1);
-    if ((chunk && bootChunks.has(chunk)) || (nextChunk && nextBootChunks.has(nextChunk))) {
-      return true;
+  const bootChunks = getBootPromptChunks(needle);
+  for (let i = 0; i <= haystack.length - MIN_ECHO_CHARS; i += 1) {
+    for (const length of ECHO_WINDOW_LENGTHS) {
+      const chunk = sliceEchoWindow(haystack, i, length);
+      if (chunk && bootChunks.has(chunk)) {
+        return true;
+      }
     }
   }
   return false;

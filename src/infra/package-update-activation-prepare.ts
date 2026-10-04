@@ -34,6 +34,7 @@ import {
 } from "./package-update-activation-sqlite.js";
 import {
   createPackageIntegrityReader,
+  isPackageIntegrityResourceError,
   type PackageIntegrityFingerprint,
 } from "./package-update-integrity.js";
 import type { PackageActivationOptions } from "./package-update-swap-contract.js";
@@ -158,8 +159,24 @@ export async function preparePackageActivationJournal(
   }
   assertCurrent();
   assertRuntime();
+  let candidate: PackageActivationDescriptor["candidate"];
+  try {
+    candidate = await createPackageIntegrityReader().tree(stageRoot);
+  } catch (error) {
+    if (!isPackageIntegrityResourceError(error)) {
+      throw error;
+    }
+    const identity = await createPackageIntegrityReader().directoryIdentity(stageRoot);
+    if (!identity) {
+      throw error;
+    }
+    candidate = identity;
+    params.options.onWarning?.(
+      "candidate package fingerprint incomplete; activation requires the directory identity, package version and launchers; full package contents are unverified",
+    );
+  }
+  // Optional content verification must not consume the launcher reader's deadline.
   const reader = createPackageIntegrityReader();
-  const candidate = await reader.tree(stageRoot);
   const launchers = [];
   for (const entry of params.launchers) {
     const source = path.join(launcherRoot, entry.name);
