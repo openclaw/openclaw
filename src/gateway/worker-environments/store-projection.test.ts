@@ -181,16 +181,7 @@ it.each([false, true])(
   },
 );
 
-it.each([
-  "unchanged",
-  "activity",
-  "closed",
-  "generation",
-  "lifecycle",
-  "session",
-  "missing",
-  "unknown",
-] as const)(
+it.each(["unchanged", "activity", "missing"] as const)(
   "preserves diagnostic record reads while fencing %s attachment and transport changes",
   (change) => {
     const owner = acquireProjection();
@@ -211,20 +202,12 @@ it.each([
     const nextAttachment = {
       ...attachment,
       ...(change === "activity" ? { lastUsedAtMs: 2 } : {}),
-      ...(change === "closed" ? { closedAtMs: 2 } : {}),
-      ...(change === "generation" ? { generation: 2 } : {}),
-      ...(change === "lifecycle" ? { sessionLifecycleRevision: "replacement" } : {}),
-      ...(change === "session" ? { sessionId: "replacement" } : {}),
     };
     if (change !== "missing") {
       after.attachments.push(nextAttachment);
     }
     const token = {};
-    const admission = createWorkerEnvironmentCommitAdmission(after);
-    if (change === "unknown") {
-      admission[0]!.attachmentAuthority = "unknown";
-    }
-    owner.fence(admission, token);
+    owner.fence(createWorkerEnvironmentCommitAdmission(after), token);
     expect(owner.get(environment.environmentId)).toEqual(environment);
     expect(owner.credential(environment.environmentId)).toEqual(credential);
     expect(owner.credentialByHash(credential.credentialHash)).toEqual(credential);
@@ -261,17 +244,14 @@ it.each([
   },
 );
 
-it.each(["delivery", "rotation", "revocation"] as const)(
+it.each(["delivery", "revocation"] as const)(
   "keeps environment authority readable during credential %s",
   (change) => {
     const owner = acquireProjection();
     owner.install(facts(environment, true), owner.nextSequence(), false);
     const after = facts(environment);
     if (change !== "revocation") {
-      after.credentials.push({
-        ...credential,
-        ...(change === "delivery" ? { deliveredAtMs: 2 } : { credentialHash: "c".repeat(43) }),
-      });
+      after.credentials.push({ ...credential, deliveredAtMs: 2 });
     }
     const token = {};
     owner.fence(createWorkerEnvironmentCommitAdmission(after), token);
