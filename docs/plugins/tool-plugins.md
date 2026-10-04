@@ -374,6 +374,7 @@ api.registerTool({
   description: "Report the status of one order.",
   parameters: Type.Object({ orderId: Type.String() }),
   canDeliverSourceReply: true,
+  catalogMode: "direct-only",
   async execute(_toolCallId, params) {
     const report = await buildOrderStatusReport(params.orderId);
     return {
@@ -390,8 +391,9 @@ api.registerTool({
 });
 ```
 
-OpenClaw delivers the reply to the conversation the turn came from and stops the
-tool batch, so no further model turn restates the result. After a successful
+OpenClaw delivers the reply to the conversation the turn came from and ends the
+turn, so no further model turn restates the result. Other tool calls from the
+same model step still run to completion and are recorded. After a successful
 send, delivery records the reply as the assistant turn in the session
 transcript, with the same session checks as any other delivered reply. A reply
 needs `text`, `mediaUrl`, or `mediaUrls`; `attachments` ride along with them.
@@ -401,9 +403,11 @@ false` are ignored, and the model continues as usual with `content`.
 OpenClaw reads the reply after tool hooks and result middleware run, so
 middleware can rewrite or withdraw it. Only the tool author can grant the
 capability: `canDeliverSourceReply` lives on the tool definition, never in a
-result. A call made from inside a Code Mode `exec` program returns to that
-program and is never delivered as a reply; keep such tools model-visible with
-`catalogMode: "direct-only"`.
+result. A call made from inside a Code Mode program returns to that program and
+is never delivered as a reply. On the Codex harness, only calls the model makes
+directly in the `direct-only` catalog can deliver, so declare
+`catalogMode: "direct-only"` as in the example; otherwise the model restates the
+result as usual.
 
 ## Configuration
 

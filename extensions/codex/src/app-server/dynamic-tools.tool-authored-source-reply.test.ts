@@ -8,6 +8,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it } from "vitest";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 
 function createBridge(params: {
   canDeliverSourceReply?: boolean;
@@ -31,12 +32,17 @@ function createBridge(params: {
   });
 }
 
-function callOrderStatus(bridge: ReturnType<typeof createCodexDynamicToolBridge>) {
+// Codex keeps the model-only namespace out of Code Mode programs, so a call in it
+// comes straight from the model.
+function callOrderStatus(
+  bridge: ReturnType<typeof createCodexDynamicToolBridge>,
+  namespace: string | null = CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+) {
   return bridge.handleToolCall({
     threadId: "thread-1",
     turnId: "turn-1",
     callId: "call-1",
-    namespace: null,
+    namespace,
     tool: "order_status",
     arguments: {},
   });
@@ -142,4 +148,20 @@ describe("Codex tool-authored source replies", () => {
     expect(result.terminate).toBeUndefined();
     expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
   });
+
+  it.each([
+    { label: "the searchable namespace", namespace: "openclaw" },
+    { label: "the dynamic-tool root", namespace: null },
+  ])(
+    "ignores a reply from a call in $label, which Code Mode programs can reach",
+    async ({ namespace }) => {
+      const bridge = createBridge({ canDeliverSourceReply: true, details: replyDetails });
+
+      const result = await callOrderStatus(bridge, namespace);
+
+      expect(result.success).toBe(true);
+      expect(result.terminate).toBeUndefined();
+      expect(bridge.telemetry.messagingToolSourceReplyPayloads).toEqual([]);
+    },
+  );
 });

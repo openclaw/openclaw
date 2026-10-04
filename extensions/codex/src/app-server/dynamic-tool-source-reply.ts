@@ -9,6 +9,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE } from "./protocol.js";
 
 type ToolAuthoredSourceReplyPayload = NonNullable<
   ReturnType<typeof captureToolAuthoredSourceReply>
@@ -27,13 +28,15 @@ export type CodexToolResultSourceReply = {
  * Resolves the source-reply facts of one Codex dynamic tool result. A final reply
  * authored by a `canDeliverSourceReply` tool, read from the result after middleware and
  * extensions, is appended to `payloads`; the host delivers it and writes its transcript
- * row after the send.
+ * row after the send. Only calls in the model-only namespace qualify: Codex never
+ * exposes that namespace to Code Mode programs, so a program's intermediate call
+ * cannot end the turn or reach the conversation.
  */
 export function resolveCodexToolResultSourceReply(params: {
   sourceReplyDeliveryMode: EmbeddedRunAttemptParams["sourceReplyDeliveryMode"];
   canDeliverSourceReply: boolean | undefined;
   toolName: string;
-  call: { callId: string; turnId: string };
+  call: { callId: string; turnId: string; namespace?: string | null };
   resultIsError: boolean;
   rawResult: AgentToolResult<unknown>;
   result: AgentToolResult<unknown>;
@@ -68,7 +71,11 @@ export function resolveCodexToolResultSourceReply(params: {
 function captureCodexToolAuthoredSourceReply(
   params: Parameters<typeof resolveCodexToolResultSourceReply>[0],
 ): boolean | undefined {
-  if (params.canDeliverSourceReply !== true || params.resultIsError) {
+  if (
+    params.canDeliverSourceReply !== true ||
+    params.resultIsError ||
+    params.call.namespace !== CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE
+  ) {
     return undefined;
   }
   // Middleware and extensions may withdraw or rewrite the reply, so read the
