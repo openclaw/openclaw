@@ -135,6 +135,18 @@ describe("markdownToStory inline formatting", () => {
     ]);
   });
 
+  it("keeps punctuation before a stray paren out of a bare URL", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("see https://example.com/a:( sad")).toEqual([
+      { inline: ["see ", link, ":( sad"] },
+    ]);
+  });
+
+  it("keeps an unmatched closing paren inside a bare URL", () => {
+    const url = "https://example.com/?q=a)b";
+    expect(markdownToStory(url)).toEqual([{ inline: [{ link: { href: url, content: url } }] }]);
+  });
+
   const chart = {
     block: { image: { src: "https://example.com/chart.png", alt: "chart", height: 0, width: 0 } },
   };
