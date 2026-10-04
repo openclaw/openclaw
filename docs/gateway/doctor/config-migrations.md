@@ -481,6 +481,19 @@ owners remain independent: choosing a different system agent does not change
 which agent owns existing legacy data. Keep the original markers until Doctor
 has completed both the config and state repairs.
 
+An already converged explicit roster can leave the system agent
+(`agents.defaults.systemAgent.agentId`) without `workspace`: its Gateway turns
+then run in the shared workspace root while its persona, bootstrap, and memory
+files resolve to `<root>/<agentId>`. `openclaw doctor --fix` records
+`agents.entries.<agentId>.workspace` for that agent: the root when only the
+root holds a customized `SOUL.md`, `IDENTITY.md`, or `USER.md`, `memory/`,
+`MEMORY.md`, or workspace skills, otherwise the agent directory. Seeded
+templates do not count. When both
+directories hold such files, Doctor changes nothing and warns; set the entry's
+`workspace` to the directory to keep. Doctor never assigns the root when
+another agent's workspace already resolves to it, and only warns when the
+roster lives in an included file. No files are moved or deleted.
+
 Doctor follows the existing [include write constraints](/gateway/config-secrets-env).
 A root-level `$include`, or a repair spanning an included roster and root-owned
 roles, can require manual preparation; repeating `doctor --fix` alone does not

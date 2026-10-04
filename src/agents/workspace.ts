@@ -268,7 +268,7 @@ async function hasSkipBootstrapWorkspaceContentEvidence(dir: string): Promise<bo
   return false;
 }
 
-async function workspaceProfileLooksConfigured(params: {
+export async function workspaceProfileLooksConfigured(params: {
   dir: string;
   includeGitEvidence?: boolean;
 }): Promise<boolean> {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { readAgentRosterProperty } from "../agents/agent-roster.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
@@ -355,6 +356,39 @@ describe("Doctor workspace persistence", () => {
         expect(snapshot.valid).toBe(true);
         expect(snapshot.config.agents?.ownership).toBe("explicit");
         expect(snapshot.config.agents?.entries?.main?.workspace).toBe(workspace);
+      });
+    });
+  });
+
+  it("pins a converged system agent to the shared workspace that holds its files", async () => {
+    await withDoctorConfigPreflightHome(async (home) => {
+      await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
+        const workspace = path.join(home, "shared-workspace");
+        await fs.mkdir(path.join(workspace, "memory"), { recursive: true });
+        await fs.writeFile(path.join(workspace, "SOUL.md"), "root persona");
+        const configPath = await writeOpenClawConfig(home, {
+          agents: {
+            ownership: "explicit",
+            defaults: { workspace, systemAgent: { agentId: "main" } },
+            entries: { main: {}, dev: {} },
+          },
+          gateway: { mode: "local" },
+          plugins: { enabled: false },
+        });
+        const before = (await readConfigFileSnapshot()).config;
+        expect(resolveAgentWorkspaceDir(before, "main")).toBe(path.join(workspace, "main"));
+
+        await runInitialConfigWriteHealth(await prepareDoctorContext(configPath));
+
+        const after = (await readConfigFileSnapshot()).config;
+        expect(after.agents?.entries?.main?.workspace).toBe(workspace);
+        expect(resolveAgentWorkspaceDir(after, "main")).toBe(workspace);
+        const launch = listConfiguredOwnerInputs(after, workspace).find(
+          (input) => input.agentId === "main",
+        );
+        expect(launch?.workspaceDir).toBe(workspace);
+        expect(resolveAgentWorkspaceDir(after, "dev")).toBe(path.join(workspace, "dev"));
+        expect(await fs.readFile(path.join(workspace, "SOUL.md"), "utf8")).toBe("root persona");
       });
     });
   });
