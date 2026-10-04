@@ -5,17 +5,13 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
-import { attributeWorkerToPool, markWorkerRetirement } from "./worker-cpu.js";
-import {
-  captureRetainedNativeWorkerSource,
-  type RetainedNativeWorkerSource,
-} from "./worker-native-lifecycle.js";
-import type { WorkerLifecycle } from "./worker-native-lifecycle.types.js";
+import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
-  getWorkerComputeCapacity,
+  type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
+import type { WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import {
   createWorkerTaskCompletion,
@@ -31,14 +27,9 @@ import {
   retainWorkerTask,
   type OwnedWorkerTaskSettlement,
 } from "./worker-task-pool-owned.js";
-import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
 import { startCloseWorkerPoolResources } from "./worker-task-pool-resources.js";
 import { createWorkerTaskPoolRetirement } from "./worker-task-pool-retirement.js";
-import {
-  createWorkerTaskPoolWorker,
-  postWorkerTaskInput,
-  prepareWorkerTaskResources,
-} from "./worker-task-pool-worker.js";
+import { createWorkerTaskPoolWorker, postWorkerTaskInput } from "./worker-task-pool-worker.js";
 import type {
   OwnedWorkerTask,
   OwnedWorkerTaskOptions,
@@ -113,12 +104,11 @@ export class WorkerTaskPoolCore<Input, Output> {
   private workers = 0;
   private workersCreated = 0;
   private activeTasks = 0;
-  private readonly computeCapacity: ReturnType<typeof getWorkerComputeCapacity> | undefined;
+  private readonly computeCapacity: WorkerComputeCapacity | undefined;
   private readonly resumeCompute = () => this.dispatch();
   private closedError?: Error;
   private nextTaskId = 0;
   private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
-  private readonly nativeSource?: RetainedNativeWorkerSource;
   private readonly expireTasks = () =>
     expireWorkerTasks(this.queue, this.slots, (task) =>
       this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
@@ -126,6 +116,7 @@ export class WorkerTaskPoolCore<Input, Output> {
 
   constructor(
     private readonly options: WorkerTaskPoolOptions<Output>,
+    private readonly host: WorkerTaskHost,
     private readonly publicDispatch?: WorkerTaskPoolDispatch,
     private readonly ownerOptions: WorkerTaskPoolOwnerOptions = {},
   ) {
@@ -141,20 +132,16 @@ export class WorkerTaskPoolCore<Input, Output> {
         throw new RangeError(`${name} must be a positive safe integer`);
       }
     }
-    this.computeCapacity = options.sharedCompute ? getWorkerComputeCapacity() : undefined;
+    this.computeCapacity = options.sharedCompute ? host.computeCapacity : undefined;
     this.retirement = createWorkerTaskPoolRetirement({
       slots: this.slots,
       options,
       runInContext: runInWorkerPoolContext,
       dispatch: () => this.dispatch(),
       serviceDeadlines: this.expireTasks,
+      markWorkerRetirement: (worker, reason) => host.workerRetiring(worker, reason),
     });
-    if (ownerOptions.retainedTransport) {
-      this.nativeSource =
-        ownerOptions.nativeSource ??
-        captureRetainedNativeWorkerSource({ runtimeGeneration: undefined });
-    }
-    liveWorkerTaskPools.register(this);
+    host.pools.register(this);
   }
 
   run(input: WorkerTaskInput<Input>, options: WorkerTaskOptions<Input>): Promise<Output> {
@@ -239,6 +226,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       inputBytes,
       enqueuedAt: performance.now(),
       transferMs: 0,
+      hostWaitMs: 0,
     };
     if (owned) {
       this.ownedTasks.add(task);
@@ -321,7 +309,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     for (const slot of this.slots) {
       if (slot.worker) {
-        markWorkerRetirement(slot.worker, "closed");
+        this.host.workerRetiring(slot.worker, "closed");
       }
       if (slot.task && !slot.task.owner) {
         this.finish(slot.task, this.closedError, undefined, true);
@@ -335,7 +323,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     // A failed owned stop must be observed before that task permits its next retry.
     const unowned = [...this.slots].filter((slot) => !ownedSlots.has(slot));
     const closures = [...owned, ...unowned.map((slot) => this.retirement.retire(slot))];
-    return liveWorkerTaskPools.close(this, closures, () =>
+    return this.host.pools.close(this, closures, () =>
       joinWorkerTaskPreparationCleanups(this.completion, this.retirement.joinArtifacts()),
     );
   }
@@ -372,7 +360,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       const nextTask = this.queue[0]!;
       if (this.computeCapacity) {
         const permit = this.computeCapacity.acquire(this.resumeCompute, () => {
-          if (nextTask.exchange && !nextTask.exchange.sent) {
+          if (
+            nextTask.exchange &&
+            !nextTask.exchange.sent &&
+            !nextTask.exchange.pressure.signal.aborted
+          ) {
             nextTask.runInContext(() => nextTask.exchange?.pressure.abort());
             return true;
           }
@@ -405,7 +397,7 @@ export class WorkerTaskPoolCore<Input, Output> {
           (input) => this.sendInput(slot, task, input),
           (error) => this.finish(task, toErrorObject(error, "worker task preparation failed")),
           !slot.worker && this.options.prepareWorker
-            ? () => runInWorkerPoolContext(prepareWorkerTaskResources)
+            ? () => runInWorkerPoolContext(() => this.host.prepareResources())
             : undefined,
         );
       });
@@ -422,15 +414,13 @@ export class WorkerTaskPoolCore<Input, Output> {
     return createWorkerTaskPoolWorker({
       slot,
       options: this.options,
-      retainedTransport: this.ownerOptions.retainedTransport,
-      nativeSource: this.nativeSource,
-      nativeResource: this.ownerOptions.nativeResource,
+      host: this.host,
       runInContext: runInWorkerPoolContext,
       unavailableError: (message) => new WorkerTaskError(message, "unavailable"),
       onStarted: (worker) => {
         this.workers++;
         this.workersCreated++;
-        attributeWorkerToPool(worker, this);
+        this.host.workerStarted(worker, this);
       },
       onMessage: (message) => this.receive(slot, message),
       onFailure: (error) => this.fail(slot, error),
@@ -461,7 +451,14 @@ export class WorkerTaskPoolCore<Input, Output> {
       }
       const transferList = task.options.transferList?.(input);
       if (!task.done) {
-        postWorkerTaskInput(worker, slot, task, input, transferList);
+        postWorkerTaskInput(
+          worker,
+          slot,
+          task,
+          input,
+          transferList,
+          this.host.captureTaskContext(),
+        );
       }
     } catch (error) {
       this.fail(slot, new WorkerTaskError(String(error), "unavailable"));
@@ -575,6 +572,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       onConsumed: undefined,
     };
     task.exchange = exchange;
+    task.hostWaitStartedAt = performance.now();
     this.dispatch();
     this.computeCapacity?.requestCheckpoints();
     const accept = (response: WorkerTaskResponse) => {
@@ -594,6 +592,7 @@ export class WorkerTaskPoolCore<Input, Output> {
         }
         return;
       }
+      this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
       this.armTimeout(task, response.timeoutMs);
@@ -629,7 +628,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     if (task.slot) {
       if (task.slot.worker) {
-        markWorkerRetirement(task.slot.worker, "cancelled");
+        this.host.workerRetiring(task.slot.worker, "cancelled");
       }
       if (task.owner) {
         this.finish(task, error, undefined, true);
@@ -648,7 +647,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     if (slot.worker) {
-      markWorkerRetirement(slot.worker, "failure");
+      this.host.workerRetiring(slot.worker, "failure");
     }
     if (slot.task?.owner) {
       if (slot.task.done) {
@@ -668,10 +667,19 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
   }
 
+  private finishHostWait(task: Task<Input, Output>): void {
+    const startedAt = task.hostWaitStartedAt;
+    if (startedAt !== undefined) {
+      task.hostWaitStartedAt = undefined;
+      task.hostWaitMs += performance.now() - startedAt;
+    }
+  }
+
   private finish(task: Task<Input, Output>, error?: Error, value?: Output, retire = false): void {
     if (task.done) {
       return;
     }
+    this.finishHostWait(task);
     task.done = true;
     task.runInContext(() => task.controller.abort());
     clearTimeout(task.timer);

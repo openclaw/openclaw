@@ -1,10 +1,10 @@
-import { expect, it } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createRetainedOperation,
   flatMapRetainedOperation,
   mapRetainedOperation,
-} from "./retained-operation.js";
+} from "@openclaw/worker-runtime/lifecycle";
+import { expect, it } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type {
   PreparedSqliteReadOnlyLocation,
   RetainedPreparedSqliteReadOnlyLocation,

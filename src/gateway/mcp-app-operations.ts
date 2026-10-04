@@ -491,7 +491,9 @@ export async function executeMcpAppOperation(
         const [listed, catalog] = await Promise.all([
           runtime.listTools(
             view.serverName,
-            operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+            operation.params?.cursor !== undefined
+              ? { cursor: operation.params.cursor }
+              : undefined,
           ),
           getRequestCatalog(runtime),
         ]);
@@ -522,7 +524,7 @@ export async function executeMcpAppOperation(
         }
         return await runtime.listResourceTemplates(
           view.serverName,
-          operation.params?.cursor ? { cursor: operation.params.cursor } : undefined,
+          operation.params?.cursor !== undefined ? { cursor: operation.params.cursor } : undefined,
         );
       case "resources/read":
         if (!runtime.readResource) {

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { resolveConfigPath, resolveStateDir } from "openclaw/plugin-sdk/state-paths";
-import type { ChromeProduct, ExtensionInstallDeps } from "./extension-install-layout.js";
+import type { ChromeProduct } from "./extension-install-layout.js";
 
 export type NativeHostLaunchContext = { stateDir: string; configPath?: string };
 
@@ -17,12 +17,12 @@ export type NativeHostRegistrationStatus = {
   launchContext?: NativeHostLaunchContext;
 };
 
-export function resolveInstallStateDir(deps: ExtensionInstallDeps): string {
-  return path.resolve(deps.stateDir ?? resolveStateDir(deps.env));
+export function resolveInstallStateDir(): string {
+  return path.resolve(resolveStateDir());
 }
 
-export function resolveInstallConfigPath(deps: ExtensionInstallDeps): string | undefined {
-  const env = deps.env ?? process.env;
+export function resolveInstallConfigPath(): string | undefined {
+  const env = process.env;
   const explicit = env.OPENCLAW_CONFIG_PATH?.trim();
   return explicit ? resolveStateDir({ ...env, OPENCLAW_STATE_DIR: explicit }) : undefined;
 }
@@ -52,20 +52,19 @@ export function assertExpectedNativeHostProfile(
 
 export function assertCurrentNativeHostLaunchContext(
   registration: NativeHostRegistrationStatus,
-  deps: ExtensionInstallDeps,
 ): void {
   if (registration.state !== "owned") {
     return;
   }
   const saved = registration.launchContext;
   const current = {
-    stateDir: resolveInstallStateDir(deps),
-    configPath: resolveInstallConfigPath(deps),
+    stateDir: resolveInstallStateDir(),
+    configPath: resolveInstallConfigPath(),
   };
   const configPath = (context: NativeHostLaunchContext) =>
     resolveConfigPath(
       {
-        ...(deps.env ?? process.env),
+        ...process.env,
         OPENCLAW_STATE_DIR: context.stateDir,
         OPENCLAW_CONFIG_PATH: context.configPath,
       },

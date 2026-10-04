@@ -58,7 +58,10 @@ export async function resolveWorktreeBase(
     const gitOperand = baseRef !== "-" && baseRef.startsWith("-") ? commit : baseRef;
     return { commit, gitOperand, recordRef: baseRef, remote: false };
   }
-  const fetched = await runGit(repoRoot, ["fetch", "origin"], { signal, beforeRun: assertCurrent });
+  const fetched = await runGit(repoRoot, ["fetch", "--no-auto-maintenance", "origin"], {
+    signal,
+    beforeRun: assertCurrent,
+  });
   signal?.throwIfAborted();
   if (fetched.termination === "exit" && fetched.code === 0) {
     const remoteHead = await runGit(

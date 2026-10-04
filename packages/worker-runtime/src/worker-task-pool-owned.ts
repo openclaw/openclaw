@@ -1,5 +1,4 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { createDeferredCore } from "../shared/deferred.js";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type {
   Slot,
@@ -228,7 +227,7 @@ export function prepareWorkerTaskInput<Input, Output>(
   // Execution owns the input now; retaining it on task duplicates the worker's clone.
   const taskInput = task.input!;
   delete task.input;
-  const preparation = createDeferredCore();
+  const preparation = Promise.withResolvers<void>();
   task.preparation = preparation;
   const finishPreparation = () => {
     preparation.resolve();

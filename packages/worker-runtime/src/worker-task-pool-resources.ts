@@ -3,7 +3,7 @@ import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
-import type { WorkerLifecycle } from "./worker-native-lifecycle.types.js";
+import type { WorkerLifecycle } from "./worker-lifecycle.js";
 import type { Slot, WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
 
 export type WorkerResourceClosures = {

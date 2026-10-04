@@ -227,12 +227,10 @@ function normalizeOllamaGreedySamplingOptions(options: Record<string, unknown>):
   }
 }
 
-function resolveOllamaTopLevelParams(
-  model: ProviderRuntimeModel,
-): Record<string, unknown> | undefined {
+function resolveOllamaTopLevelParams(model: ProviderRuntimeModel, baseUrl: string) {
   const params = model.params;
   const requestParams = pickOllamaParams(params, OLLAMA_TOP_LEVEL_PARAM_KEYS);
-  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model));
+  const think = resolveOllamaConfiguredThink(model, supportsNativeOllamaMax(model, baseUrl));
   if (think !== undefined) {
     requestParams.think = think;
   }
@@ -868,7 +866,7 @@ function createRawOllamaStreamFn(
           !isOllamaCloudOrigin(baseUrl)
             ? { truncate: false, shift: false }
             : {}),
-          ...resolveOllamaTopLevelParams(model),
+          ...resolveOllamaTopLevelParams(model, baseUrl),
           ...(responseFormat !== undefined ? { format: responseFormat } : {}),
         };
 

@@ -263,7 +263,9 @@ describe("tsdown config", () => {
       const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
         (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
       );
-      expect(inlinePlugins).toHaveLength(executableGraphs.has(config) ? 1 : 0);
+      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(
+        executableGraphs.has(config) ? 1 : 0,
+      );
     }
   });
 
