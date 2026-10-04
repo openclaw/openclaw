@@ -111,10 +111,11 @@ export async function writeCheckpointProvenance(
   record: LobsterCheckpointProvenance,
 ): Promise<void> {
   const files = recordPaths(env, handle);
-  if (files.length === 0) {
+  const primary = files[0];
+  if (primary === undefined) {
     return;
   }
-  await fs.mkdir(path.dirname(files[0]), { recursive: true, mode: 0o700 });
+  await fs.mkdir(path.dirname(primary), { recursive: true, mode: 0o700 });
   const text = JSON.stringify(record);
   for (const file of files) {
     const temp = `${file}.${randomUUID()}.tmp`;

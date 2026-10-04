@@ -16,11 +16,16 @@ import { createLobsterTool } from "./lobster-tool.js";
 afterEach(() => vi.unstubAllEnvs());
 
 // A real request always carries the gateway request scope, which the host binds.
-// Stub the guard here so these adapter tests stay about the adapter, and cover the
-// real guard in lobster-gateway-scope.test.ts.
+// Stub the scope-bound guards here so these tool tests stay about the tool's
+// envelopes and the adapter, and cover the real guards in
+// lobster-gateway-scope.test.ts: with no scope bound in a unit test, a resume's
+// re-authorization would preempt the tool's own error (Lobster's not-found for a
+// consumed token) with a scope error.
 const gatewayScopeSpy = vi
   .spyOn(lobsterGatewayScope, "assertEmbeddedRouteRunsInGateway")
   .mockImplementation(() => {});
+vi.spyOn(lobsterGatewayScope, "authorizeCheckpointForCaller").mockResolvedValue();
+vi.spyOn(lobsterGatewayScope, "authorizeSavedAnswerForCaller").mockResolvedValue();
 
 function fakeApi(overrides: Partial<OpenClawPluginApi> = {}): OpenClawPluginApi {
   return createTestPluginApi({

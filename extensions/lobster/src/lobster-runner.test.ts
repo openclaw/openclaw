@@ -101,6 +101,8 @@ describe("createEmbeddedLobsterRunner", () => {
       loadRuntime: vi.fn().mockResolvedValue(runtime),
       llmAdapters,
       authorizeReplay: async () => {},
+      authorizeCheckpoint: async () => {},
+      describeCaller: () => ({ authority: [] }),
     });
 
     await runner.run(runParams());
@@ -298,7 +300,12 @@ describe("createEmbeddedLobsterRunner", () => {
         }),
       },
     };
-    const runner = createEmbeddedLobsterRunner({ llmAdapters, authorizeReplay: async () => {} });
+    const runner = createEmbeddedLobsterRunner({
+      llmAdapters,
+      authorizeReplay: async () => {},
+      authorizeCheckpoint: async () => {},
+      describeCaller: () => ({ authority: [] }),
+    });
     const schema = JSON.stringify({
       type: "object",
       properties: { category: { type: "string" } },
@@ -337,6 +344,8 @@ describe("createEmbeddedLobsterRunner", () => {
     const runner = createEmbeddedLobsterRunner({
       llmAdapters: { embedded: { source: "openclaw-embedded", invoke } },
       authorizeReplay: async () => {},
+      authorizeCheckpoint: async () => {},
+      describeCaller: () => ({ authority: [] }),
     });
     const schema = JSON.stringify({ type: "object", additionalProperties: true });
     const pipeline =
@@ -364,6 +373,8 @@ describe("createEmbeddedLobsterRunner", () => {
     const runner = createEmbeddedLobsterRunner({
       llmAdapters: { embedded: { source: "openclaw-embedded", invoke } },
       authorizeReplay: async () => {},
+      authorizeCheckpoint: async () => {},
+      describeCaller: () => ({ authority: [] }),
     });
 
     // Lobster selects a sole direct adapter before OPENCLAW_URL, so without the
