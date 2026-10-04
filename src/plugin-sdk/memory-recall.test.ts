@@ -32,7 +32,7 @@ describe("interactive recall run accounting", () => {
       configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateImpl,
       recordMemoryRecall: async (
         input: ReturnType<typeof params>,
-        claim: (hit: typeof hit) => boolean,
+        claim: (candidate: typeof hit) => boolean,
       ) => {
         recorded.push(...input.results.filter(claim));
       },
@@ -59,7 +59,7 @@ describe("interactive recall run accounting", () => {
       configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateImpl,
       recordMemoryRecall: async (
         input: ReturnType<typeof params>,
-        claim: (hit: typeof hit) => boolean,
+        claim: (candidate: typeof hit) => boolean,
       ) => {
         selected.push(input.results.filter(claim).length);
         if (fail) {
@@ -83,7 +83,7 @@ describe("interactive recall run accounting", () => {
       configureMemoryCoreDreamingState: configureMemoryCoreDreamingStateImpl,
       recordMemoryRecall: async (
         input: ReturnType<typeof params>,
-        claim: (hit: typeof hit) => boolean,
+        claim: (candidate: typeof hit) => boolean,
       ) => {
         selected.push(...input.results.filter(claim));
       },
