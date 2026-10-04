@@ -339,52 +339,46 @@ describe("authenticated plugin-frame session navigation", () => {
     expect(fixture.setSessionKey).not.toHaveBeenCalled();
   });
 
-  it("retires the old window across a coalesced reconnect and after unmount", async () => {
-    const fixture = await mount();
-    const staleWindow = fixture.frame.contentWindow;
-    fixture.snapshot.phase = "reconnecting";
-    fixture.notify();
-    fixture.snapshot.phase = "connected";
-    fixture.notify();
-    dispatch(staleWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    await expect
-      .poll(() => {
-        const frame = fixture.view.querySelector("iframe");
-        return frame !== null && frame !== fixture.frame;
-      })
-      .toBe(true);
-    await fixture.view.updateComplete;
-    const currentFrame = fixture.view.querySelector("iframe")!;
-    expect(currentFrame).not.toBe(fixture.frame);
-    dispatch(staleWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    dispatch(currentFrame.contentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-    const currentWindow = currentFrame.contentWindow;
-    fixture.view.remove();
-    dispatch(currentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-  });
-
-  it("retires a frame when its descriptor changes and cannot revive it by switching back", async () => {
-    const fixture = await mount();
-    const staleWindow = fixture.frame.contentWindow;
-    fixture.descriptor.path = "/plugins/example/other";
-    fixture.view.requestUpdate();
-    await expect
-      .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
-      .toBe("/plugins/example/other");
-    fixture.descriptor.path = "/plugins/example/panel";
-    fixture.view.requestUpdate();
-    await expect
-      .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
-      .toBe("/plugins/example/panel");
-    dispatch(staleWindow);
-    expect(fixture.navigate).not.toHaveBeenCalled();
-    dispatch(fixture.view.querySelector("iframe")!.contentWindow);
-    expect(fixture.navigate).toHaveBeenCalledOnce();
-  });
+  it.each(["reconnect", "descriptor"] as const)(
+    "retires a frame across %s replacement and unmount",
+    async (change) => {
+      const fixture = await mount();
+      const staleWindow = fixture.frame.contentWindow;
+      if (change === "reconnect") {
+        fixture.snapshot.phase = "reconnecting";
+        fixture.notify();
+        fixture.snapshot.phase = "connected";
+        fixture.notify();
+        dispatch(staleWindow);
+        expect(fixture.navigate).not.toHaveBeenCalled();
+        await expect
+          .poll(() => {
+            const frame = fixture.view.querySelector("iframe");
+            return frame !== null && frame !== fixture.frame;
+          })
+          .toBe(true);
+      } else {
+        for (const path of ["/plugins/example/other", pluginPath]) {
+          fixture.descriptor.path = path;
+          fixture.view.requestUpdate();
+          await expect
+            .poll(() => fixture.view.querySelector("iframe")?.getAttribute("src"))
+            .toBe(path);
+        }
+      }
+      await fixture.view.updateComplete;
+      const currentFrame = fixture.view.querySelector("iframe")!;
+      expect(currentFrame).not.toBe(fixture.frame);
+      dispatch(staleWindow);
+      expect(fixture.navigate).not.toHaveBeenCalled();
+      dispatch(currentFrame.contentWindow);
+      expect(fixture.navigate).toHaveBeenCalledOnce();
+      const currentWindow = currentFrame.contentWindow;
+      fixture.view.remove();
+      dispatch(currentWindow);
+      expect(fixture.navigate).toHaveBeenCalledOnce();
+    },
+  );
 
   it("never lends navigation to an unauthenticated or external descriptor", async () => {
     const local = await mount({ requiresGatewayAuth: false });
