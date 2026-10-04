@@ -618,9 +618,36 @@ Secret answer fields mask typed or pasted values and request password input with
 
 ## Assistant entrypoints
 
-Android supports launching OpenClaw from the system assistant trigger (Google Assistant). Holding the home button (or another `ACTION_ASSIST` trigger) opens the app; saying "Hey Google, ask OpenClaw `<prompt>`" matches the app's declared App Actions query pattern and hands the prompt into the chat composer without auto-sending it.
+Set OpenClaw as the default digital assistant in Android **Settings → Apps →
+Default apps → Digital assistant app** (the path varies by device). Invoking the
+standard assistant gesture or a hardware/headset assistant button with no prompt
+opens OpenClaw's current Chat and starts **Talk**, using the same microphone,
+Gateway, and voice-provider flow as the Talk button. Invoking it again leaves an
+active Talk conversation running.
 
-This uses Android **App Actions** (`shortcuts.xml` capability) declared in the app manifest. No gateway-side configuration is needed — the assistant intent is handled entirely by the Android app.
+Prompt-bearing App Actions such as "Hey Google, ask OpenClaw `<prompt>`" continue
+to place the prompt in the chat composer without auto-sending it. An ordinary
+app launch does not start Talk.
+
+OpenClaw handles both Android `ACTION_ASSIST` (system assist) and
+`ACTION_VOICE_COMMAND` (native voice commands, including compatible Bluetooth
+headset assistant buttons). Both open the same current Chat and start Talk.
+Headset voice-command resolution is separate from the phone's assistant gesture;
+if Android offers a voice-command chooser, select OpenClaw there as well. OEM
+button settings can still determine which assistant receives the invocation.
+Prompt-bearing actions use the manifest-declared **App Actions** capability in
+`shortcuts.xml`. No additional Gateway configuration is needed for intent routing.
+
+Talk uses its existing Bluetooth microphone and playback routing and releases the
+communication route when capture ends. This entrypoint does not handle ordinary
+media controls.
+
+Talk still requires completed app setup, a reachable paired Gateway, a configured
+Talk provider, and microphone permission. Android's foreground and device-unlock
+requirements apply. Setup or connection failures consume the launch request;
+finish setup and invoke the assistant again. Leaving the foreground cancels an
+unfinished launch, and a cold launch waits briefly for the Gateway rather than
+keeping a microphone request queued indefinitely.
 
 <Note>
 App Actions availability depends on the device, Google Play Services version, and whether the user has set OpenClaw as the default assistant app.
