@@ -53,6 +53,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-personal-publication.test.ts",
   "src/gateway/github-publication-admission.test.ts",
   "src/gateway/github-publication-attribution.test.ts",
+  "src/gateway/github-publication-availability.worker.test.ts",
   "src/gateway/github-publication-boundaries.test.ts",
   "src/gateway/github-publication-history.test.ts",
   "src/gateway/github-publication-legacy-options.test.ts",

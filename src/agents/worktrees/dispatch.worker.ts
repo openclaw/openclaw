@@ -3,6 +3,7 @@ import type {
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
 import {
+  findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedChunkInDatabase,
   getRegistryWorktreeProvisionedPathsInDatabase,
@@ -31,8 +32,13 @@ import {
   touchTemplate,
 } from "./template-registry.js";
 import { worktreeTemplateMutation } from "./template-registry.worker.js";
+import type { ManagedWorktreeOwnerKind } from "./types.js";
 
 export const worktreeOperations = {
+  "worktrees.findLiveByOwner": (
+    { ownerKind, ownerId }: { ownerKind: ManagedWorktreeOwnerKind; ownerId: string },
+    { open },
+  ) => findLiveRegistryWorktreeByOwnerInDatabase(open().db, ownerKind, ownerId),
   "worktrees.get": ({ id }: { id: string }, { open }) =>
     getRegistryWorktreeInDatabase(open().db, id),
   "worktrees.list": (input: WorktreeRegistryListOptions, { open }) =>
