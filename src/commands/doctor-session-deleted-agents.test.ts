@@ -20,10 +20,16 @@ import {
   readAgentDeletionJournal,
 } from "../state/agent-deletion-journal.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
+vi.mock("../../packages/terminal-core/src/note.js", async () => ({
+  ...(await vi.importActual<typeof import("../../packages/terminal-core/src/note.js")>(
+    "../../packages/terminal-core/src/note.js",
+  )),
+  note: vi.fn(),
+}));
 
 it.each([
   { deletionState: "complete", deleteFiles: true, restores: false },
@@ -33,7 +39,9 @@ it.each([
   "respects $deletionState delete-files tombstone during automatic archive import",
   async ({ deletionState, deleteFiles, restores }) => {
     await withOpenClawTestState({ label: "doctor-deleted-archive" }, async (state) => {
-      const cfg = { agents: { entries: { main: { default: true } } } };
+      const cfg = createCanonicalAgentConfigFixture({
+        agents: { entries: { main: { default: true } } },
+      }).config;
       const agentId = "second_coder";
       const archive = state.statePath("agents", agentId, "session-sqlite-import-archive");
       fs.mkdirSync(archive, { recursive: true });
@@ -126,7 +134,7 @@ it.each([
         expect(fs.existsSync(state.sessionsDir(agentId))).toBe(false);
       }
       expect(readAgentDeletionJournal(agentId, { env: state.env })).toEqual(deletion);
-      expect(Object.keys(cfg.agents.entries)).toEqual(["main"]);
+      expect(Object.keys(cfg.agents?.entries ?? {})).toEqual(["main"]);
     });
   },
 );
