@@ -245,6 +245,9 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   // CJS namespace: const proc = require("child_process")
   const cjsNamespace =
     /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)/g;
+  // CJS extracted method: const launch = require("child_process").spawn
+  const cjsExtractedMethod =
+    /\b(?:const|let|var)\s+(\w+)\s*=\s*require\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\.\s*(\w+)/g;
 
   const collectSpecifiers = (specText: string): void => {
     for (const rawSpec of specText.split(",")) {
@@ -275,6 +278,26 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
   for (const pattern of [esmDefault, esmNamespace, cjsNamespace, dynamicEsmNamespace]) {
     for (const match of source.matchAll(pattern)) {
       namespaceAliases.add(expectDefined(match[1], "child_process namespace"));
+    }
+  }
+  for (const match of source.matchAll(cjsExtractedMethod)) {
+    const alias = expectDefined(match[1], "child_process extracted method alias");
+    const method = expectDefined(match[2], "child_process extracted method");
+    if (CHILD_PROCESS_EXEC_METHODS.has(method)) {
+      methodAliases.add(alias);
+    }
+  }
+  for (const namespaceAlias of namespaceAliases) {
+    const extractedNamespaceMethod = new RegExp(
+      String.raw`\b(?:const|let|var)\s+(\w+)\s*=\s*${escapeRegExp(namespaceAlias)}\s*\.\s*(\w+)`,
+      "g",
+    );
+    for (const match of source.matchAll(extractedNamespaceMethod)) {
+      const alias = expectDefined(match[1], "child_process namespace method alias");
+      const method = expectDefined(match[2], "child_process namespace method");
+      if (CHILD_PROCESS_EXEC_METHODS.has(method)) {
+        methodAliases.add(alias);
+      }
     }
   }
 
@@ -315,6 +338,7 @@ function isBenignDangerousExecMatch(
     String.raw`(?:\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)|(?:\(\s*)?(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\)?)\s*(?:\.\s*|\[\s*)$`,
   ).test(prefix);
   const memberReceiver = prefix.match(/(\w+)\s*\.\s*$/)?.[1];
+  const hasMemberSeparator = /(?:\?\.|\.)\s*$/.test(prefix);
   if (inlineChildProcessReceiver) {
     return false;
   }
@@ -327,8 +351,8 @@ function isBenignDangerousExecMatch(
       !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
     );
   }
-  if (!memberReceiver) {
-    return !methodAliases.has(command);
+  if (!hasMemberSeparator) {
+    return command === "exec" && !methodAliases.has(command);
   }
   return (
     command === "exec" &&

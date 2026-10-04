@@ -337,6 +337,38 @@ proc. spawn("node", ["server.js"]);
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects an extracted child_process method",
+      source: `
+const spawn = require("node:child_process").spawn;
+spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects a parenthesized child_process member call",
+      source: `
+const proc = require("node:child_process");
+(proc).spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects an optional-chain child_process member call",
+      source: `
+const proc = require("node:child_process");
+proc?.spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects an extracted aliased child_process exec method",
+      source: `
+const run = require("node:child_process").exec;
+run("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects child_process call through a computed member",
       source: `
 import cp from "node:child_process";
