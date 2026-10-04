@@ -25,6 +25,7 @@ import { readTranscriptLibraryStatus } from "./status.js";
 import {
   cursorScope,
   encodeCursor,
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readTranscriptEntry,
   readTranscriptLibraryEntry,
@@ -67,6 +68,13 @@ function observeArchiveReads(
 ) {
   // SQL allocation assertions use the same kernels locally; the worker fixture
   // separately proves the real facade's transport and absence of parent SQL.
+  vi.spyOn(store, "listReadEntries").mockImplementation(
+    new Proxy(store.listReadEntries.bind(store), {
+      async apply(_target, _receiver, [options]) {
+        return queryTranscriptReadEntries(database, options);
+      },
+    }),
+  );
   vi.spyOn(store, "readEntry").mockImplementation(async (selector, purpose) =>
     readTranscriptEntry(database, selector, purpose),
   );
@@ -396,6 +404,40 @@ describe("transcript library SQLite query budgets", () => {
       }
     },
   );
+
+  it("budgets public previews after projection while retaining raw tool bounds", async () => {
+    const { store, database } = fixture();
+    for (const id of ["a", "b", "c"]) {
+      const target = session(id, {
+        source: { providerId: "manual-transcript", private: "synthetic-private" },
+        metadata: { private: "synthetic-metadata", agentId: "main" },
+      });
+      await store.writeSession(target);
+      await store.writeSummary(
+        {
+          ...summarizeTranscripts({ session: target, utterances: [] }),
+          overview: "x".repeat(600_000),
+        },
+        target,
+      );
+    }
+    const reads = observeArchiveReads(store, database());
+    const page = await listTranscriptLibrary(store, { limit: 2 });
+    expect(page.sessions.map(({ overview }) => overview)).toEqual([
+      "x".repeat(280),
+      "x".repeat(280),
+    ]);
+    expect(page.nextCursor).not.toBeNull();
+    expect(JSON.stringify(page)).not.toContain("synthetic-");
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({ executions: 1, rows: 3, closed: true });
+    await expect(store.listReadEntries({ limit: 2 })).rejects.toThrow(
+      expect.objectContaining({ type: "transcript_result_too_large" }),
+    );
+    await expect(
+      listTranscriptLibrary(store, { limit: 1 }, () => "x".repeat(TRANSCRIPTS_RESULT_MAX_BYTES)),
+    ).rejects.toThrow(expect.objectContaining({ type: "transcript_result_too_large" }));
+  });
 
   it("bounds summary transfer after omitting duplicated history and keeps the larger export budget", async () => {
     const { store, database } = fixture();

@@ -446,14 +446,26 @@ describe("workboard gateway methods", () => {
       }
       const updated = await invoke("workboard.sessionsBoard.update", {
         boardId: "sessions",
-        patch: { scope: { includeArchived: true } },
+        patch: { scope: { includeArchived: true, includeAutomation: true, includeHome: true } },
       });
       expect(updated.mock.calls[0]?.[1]).toMatchObject({
-        board: { sessions: { scope: { includeArchived: true } } },
+        board: {
+          sessions: {
+            scope: { includeArchived: true, includeAutomation: true, includeHome: true },
+          },
+        },
       });
       const beforeInvalid = await store.getSessionsBoard("sessions");
       const invalidRequests = [
         ["workboard.sessionsBoard.read", {}, /boardId required/],
+        ...["includeAutomation", "includeHome"].map(
+          (field) =>
+            [
+              "workboard.sessionsBoard.update",
+              { boardId: "sessions", patch: { scope: { [field]: "true" } } },
+              new RegExp(`scope.${field} must be a boolean`),
+            ] as const,
+        ),
         [
           "workboard.sessionsBoard.read",
           { boardId: "sessions", junk: true },

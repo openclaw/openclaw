@@ -3,7 +3,7 @@ import {
   dedupeProfileIds,
   ensureAuthProfileStore,
   ensureAuthProfileStoreWithoutExternalProfiles,
-  hasAnyAuthProfileStoreSource,
+  hasAnyAuthProfileStoreSourceAsync,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
@@ -407,7 +407,7 @@ export async function resolveProviderAuths(params: {
   const hasAuthProfileStoreSource =
     params.store !== undefined ||
     params.getStore !== undefined ||
-    hasAnyAuthProfileStoreSource(params.agentDir);
+    (await hasAnyAuthProfileStoreSourceAsync(params.agentDir));
   const auths: ProviderAuth[] = [];
 
   for (const provider of params.providers) {

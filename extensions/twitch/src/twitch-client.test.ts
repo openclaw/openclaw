@@ -610,51 +610,73 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
     });
 
-    it("prepares every chunk before Twurple handoff and stops when the next use is refused", async () => {
+    it("admits every chunk before handing the complete batch to Twurple", async () => {
       const preparing = createDeferred<void>();
       const prepared = createDeferred<void>();
       const handedOff = createDeferred<void>();
       const acknowledgment = createDeferred<void>();
       const authority = fetchRuntime.captureEffectAuthority();
-      const refusal = new Error("Twitch message authority ended");
-      let preparations = 0;
       const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
         ...authority,
         async initiate(effect) {
-          if (++preparations > 1) {
-            throw refusal;
-          }
           preparing.resolve();
           await prepared.promise;
-          return authority.initiate(effect);
+          const result = authority.initiate(effect);
+          handedOff.resolve();
+          return result;
         },
       });
-      mockSay.mockImplementationOnce(() => {
-        handedOff.resolve();
-        return acknowledgment.promise;
-      });
+      mockSay.mockReturnValue(acknowledgment.promise);
       const sending = manager.sendMessage(testAccount, "testchannel", "a".repeat(501));
       try {
-        await Promise.race([
-          preparing.promise,
-          handedOff.promise.then(() => {
-            throw new Error("Twurple call bypassed preparation");
-          }),
-        ]);
+        await preparing.promise;
         expect(mockSay).not.toHaveBeenCalled();
         prepared.resolve();
         await handedOff.promise;
-        expect(preparations).toBe(1);
+        expect(mockSay.mock.calls).toEqual([
+          ["testchannel", "a".repeat(500)],
+          ["testchannel", "a"],
+        ]);
         acknowledgment.resolve();
-        await expect(sending).rejects.toBe(refusal);
-        expect(mockSay.mock.calls).toEqual([["testchannel", "a".repeat(500)]]);
-        expect(preparations).toBe(2);
+        await expect(sending).resolves.toMatchObject({ ok: true });
       } finally {
         prepared.resolve();
         acknowledgment.resolve();
         await sending.catch(() => {});
         capture.mockRestore();
       }
+    });
+
+    it("preserves preparation refusal without sending any chunk", async () => {
+      const authority = fetchRuntime.captureEffectAuthority();
+      const refusal = new Error("Twitch message authority ended");
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        initiate: async () => {
+          throw refusal;
+        },
+      });
+      try {
+        await expect(manager.sendMessage(testAccount, "testchannel", "a".repeat(501))).rejects.toBe(
+          refusal,
+        );
+        expect(mockSay).not.toHaveBeenCalled();
+      } finally {
+        capture.mockRestore();
+      }
+    });
+
+    it("reports accepted chunks when a later transport send fails", async () => {
+      const failure = new Error("connection lost");
+      mockSay.mockResolvedValueOnce(undefined).mockRejectedValueOnce(failure);
+      await expect(
+        manager.sendMessage(testAccount, "testchannel", "a".repeat(501)),
+      ).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        cause: failure,
+        deliveryResult: { visibleReplySent: true, messageIds: [expect.any(String)] },
+      });
+      expect(mockSay).toHaveBeenCalledTimes(2);
     });
 
     it("should send message successfully", async () => {

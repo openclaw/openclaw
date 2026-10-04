@@ -83,6 +83,9 @@ async function listSessions(
         configuredAgentsOnly: true,
         includeGlobal: false,
         includeUnknown: false,
+        ...(board.sessions.scope?.includeAutomation
+          ? {}
+          : { excludeCron: true, excludeSystem: true }),
         archived: board.sessions.scope?.includeArchived ? "all" : false,
         sortBy: "activity",
         activeMinutes: Math.max(1, Math.ceil((board.sessions.scope?.maxAgeHours ?? 72) * 60)),
@@ -106,6 +109,7 @@ async function listSessions(
         typeof session.sessionId === "string" &&
         session.visibility !== "draft" &&
         session.incognito !== true &&
+        (board.sessions.scope?.includeHome === true || session.isMain !== true) &&
         !isIncognitoSessionKey(session.key)
       ) {
         sessions.set(session.key, {

@@ -34,7 +34,6 @@ import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js"
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
-import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
 import { scheduleGatewayHandlerPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
@@ -49,10 +48,7 @@ import {
   type GatewayStartupOutcomeRecorder,
 } from "./server-startup-outcomes.js";
 import { logGatewayReady, logGatewaySidecarsReady } from "./server-startup-readiness.js";
-import {
-  refreshLatestUpdateRestartSentinelIfPresent,
-  scheduleRestartSentinelWakeAfterReady,
-} from "./server-startup-restart-sentinel.js";
+import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   schedulePostReadySidecarTask,
@@ -61,6 +57,7 @@ import {
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 import { scheduleTranscriptsSidecar } from "./server-startup-transcripts.js";
 import { createDeferredGatewayUpdateCheck } from "./server-startup-update-check.js";
+import type { prepareLatestUpdateRestartSentinel } from "./server-update-sentinel.js";
 import type { ReadinessChecker } from "./server/readiness.js";
 import {
   beginMacOSSystemCaWarmupOnce,
@@ -571,7 +568,7 @@ type GatewayPostAttachRuntimeDeps = {
   logGatewayStartup: (params: Parameters<typeof logGatewayStartup>[0]) => Awaitable<void>;
   refreshLatestUpdateRestartSentinel: (
     env?: NodeJS.ProcessEnv,
-  ) => Awaitable<ReturnType<typeof refreshLatestUpdateRestartSentinel>>;
+  ) => Awaitable<ReturnType<typeof prepareLatestUpdateRestartSentinel>>;
   createGatewayUpdateCheck: (
     ...args: Parameters<typeof createGatewayUpdateCheck>
   ) => Awaitable<ReturnType<typeof createGatewayUpdateCheck>>;
@@ -587,7 +584,8 @@ const defaultGatewayPostAttachRuntimeDeps: GatewayPostAttachRuntimeDeps = {
     (await import("../plugins/hooks.js")).createHookRunner(...args),
   logGatewayStartup: async (params) =>
     (await import("./server-startup-log.js")).logGatewayStartup(params),
-  refreshLatestUpdateRestartSentinel: refreshLatestUpdateRestartSentinelIfPresent,
+  refreshLatestUpdateRestartSentinel: async (env) =>
+    (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel(env),
   createGatewayUpdateCheck: async (...args) =>
     (await import("../infra/update-startup.js")).createGatewayUpdateCheck(...args),
   startGatewaySidecars,

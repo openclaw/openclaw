@@ -33,6 +33,8 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  /** Queued by work a conversation turn started, not heartbeat or automation work. */
+  fromConversationTurn?: true;
   sessionStorePath?: string | null;
 };
 
@@ -65,6 +67,7 @@ type SystemEventOptions = {
   sessionStorePath?: string | null;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  fromConversationTurn?: boolean;
   /** Replace the pending event for this context and delivery route. Requires contextKey. */
   replace?: boolean;
 };
@@ -178,6 +181,7 @@ function enqueueOwnedSystemEventEntry(
     ...(sessionStorePath === undefined ? {} : { sessionStorePath }),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ...(options.fromConversationTurn ? { fromConversationTurn: true as const } : {}),
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {

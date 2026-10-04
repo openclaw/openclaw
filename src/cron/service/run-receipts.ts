@@ -148,6 +148,29 @@ export function markServiceCronJobActive(
         },
       }),
   });
+  if (marker) {
+    marker.standingGrantAuthority = {
+      context,
+      handle: { ...runReceipt },
+      assertCurrent() {
+        context.admission.assertCurrent();
+        if (
+          resolveCronRunReceiptAgentId(state, job) !== runReceipt.agentId ||
+          state.deps.isAgentAvailable?.(runReceipt.agentId, undefined, {
+            deletionBlocked: false,
+          }) === false
+        ) {
+          throw new CronRunReceiptRevisionError(runReceipt.receiptId, "cron owner changed");
+        }
+      },
+      acquireUse: (assertCurrent, signal) =>
+        observation.acquireUse({
+          permission: "execution",
+          assertCurrent,
+          signal,
+        }),
+    };
+  }
   onCronJobInactive(marker, () => observation.release());
   return marker;
 }

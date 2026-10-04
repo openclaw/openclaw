@@ -49,7 +49,6 @@ import {
   readTranscriptRawDeltaFromProjection,
 } from "./session-accessor.sqlite-raw-delta-read.js";
 import {
-  assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
@@ -569,7 +568,7 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   ])[0];
 }
 
-/** Select ID candidates and projected-history presence from one validated snapshot. */
+/** Select ID candidates and projected-history presence from one admitted snapshot. */
 export function readSessionTranscriptHistoryEventLookupFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
@@ -588,7 +587,6 @@ export function readSessionTranscriptHistoryEventLookupFromProjection(
       hasDisplayMessages: events.some((row) => isVisibleTranscriptRecord(row.event)),
     };
   }
-  assertVisibleMessageRangeJson(projection, range.messageStart, range.messageEnd);
   const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
   let first: SessionTranscriptMessageEvent | undefined;
   let hasDisplayMessages = false;

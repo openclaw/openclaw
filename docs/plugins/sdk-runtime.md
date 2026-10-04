@@ -160,8 +160,10 @@ resumption acquires a new lease through the original owner and scope. A retained
 iterator cannot acquire fresh authority after its owner closes.
 
 Native plugins execute in the Gateway process and are not sandboxed. Provenance
-diagnostics and capability-specific trust requirements still apply;
-`plugins.allow` permits loading without verifying source provenance. These
+diagnostics and capability-specific trust requirements, such as hook agent turns
+and Gateway scope elevation, still apply. Every loaded plugin can
+use its own [state and ingress queues](/plugins/sdk-runtime/state-and-system#api-runtime-state),
+regardless of provenance. `plugins.allow` permits loading without verifying source provenance. These
 load-time facts belong to the instance until the plugin owner replaces it through
 restart or an explicit reload or installation operation.
 
@@ -196,6 +198,13 @@ Inspection release reports settled disposal failures without marking the managed
 resources as still retained. Prepared-model shutdown records those failures and
 can finish after cleanup settles. Unfinished disposal and failed host cleanup
 prerequisites still prevent shutdown from reporting a completed resource release.
+
+Stopping or restarting the Gateway preserves persistent plugin session state and
+runs host cleanup hooks with reason `restart`. Disabling or removing a plugin owns
+deleting that state. After admitted cleanup settles, plugin callback failures are
+reported with the plugin and hook name as shutdown warnings; they do not turn a
+normal stop into a failed process exit. Failed session-state cleanup and unfinished
+write-capable work still prevent a clean shutdown.
 
 Cleanup is best effort. Plugins must explicitly release their own timers,
 listeners, sockets, watchers, and child processes in `onDispose` or their
@@ -248,6 +257,14 @@ unambiguous admitting Gateway owner, turns keep their discovery registrations.
 SDK helpers that return bare results retain their resources until the owning
 host closes. Callers do not need to dispose those results; see
 [Prepared simple completions](/plugins/sdk-runtime/models#prepared-simple-completions).
+
+For a bounded, accepted persistence sequence,
+`openOpenClawAgentSqliteWorkerStore` from `openclaw/plugin-sdk/sqlite-runtime`
+accepts `retainExecutionUntilClose: true` in its worker options. The caller must
+close that store when the sequence settles, including on failure. This retains
+the existing executor between commands without holding a writer turn across
+preparation. Each command keeps its own live authority checks. Omit the option
+for cached stores whose lifetime can outlast accepted work.
 
 ### Memory runtime replacement
 

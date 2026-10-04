@@ -289,15 +289,6 @@ async function resolveFallbackSentMessageGuid(params: {
   );
 }
 
-function resolveOutboundEchoMedia(
-  mediaContentType: string | undefined,
-): MediaPlaceholderTextFact | undefined {
-  if (!mediaContentType) {
-    return undefined;
-  }
-  return { contentType: mediaContentType, kind: kindFromMime(mediaContentType) ?? "unknown" };
-}
-
 function createIMessageSendReceipt(params: {
   messageId: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -348,11 +339,6 @@ async function withOriginalIMessageAttachmentPath<T>(
   );
 }
 
-function canSynthesizeAttachmentChatHandle(raw: string): boolean {
-  const trimmed = raw.trim();
-  return trimmed.includes("@") || trimmed.startsWith("+");
-}
-
 function resolveOutboundEchoScope(params: {
   accountId: string;
   target: ReturnType<typeof parseIMessageTarget>;
@@ -388,13 +374,6 @@ function resultService(value: unknown): Exclude<IMessageService, "auto"> | undef
   return normalized === "imessage" || normalized === "sms" ? normalized : undefined;
 }
 
-function resolvePendingPersistedEchoTtlMs(timeoutMs: number): number {
-  return Math.max(
-    MIN_PENDING_PERSISTED_ECHO_TTL_MS,
-    Math.max(0, timeoutMs) + PENDING_PERSISTED_ECHO_GRACE_MS,
-  );
-}
-
 function isAttachmentCommandFallbackError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /(?:unknown|unrecognized|invalid|unsupported)\s+(?:command|subcommand)|not a recognized command|send-attachment.*(?:not found|unsupported|unavailable)|private api bridge.*unavailable|requires the imsg private api bridge|run imsg launch/iu.test(
@@ -408,228 +387,6 @@ function isThreadedReplyUnsupportedError(error: unknown): boolean {
   return /reply_to requires bridge transport|cannot send threaded repl|threaded repl(?:y|ies)\b.*(?:unsupported|not supported|requires|unavailable)|requires bridge transport/iu.test(
     message,
   );
-}
-
-async function resolveAttachmentChatTarget(params: {
-  target: ReturnType<typeof parseIMessageTarget>;
-  service?: IMessageService;
-  runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
-}): Promise<string | null> {
-  if (params.target.kind === "chat_guid") {
-    return params.target.chatGuid;
-  }
-  if (params.target.kind === "handle") {
-    if (!canSynthesizeAttachmentChatHandle(params.target.to)) {
-      return null;
-    }
-    const normalizedHandle = normalizeIMessageHandle(params.target.to);
-    if (!normalizedHandle) {
-      return null;
-    }
-    const service = params.target.service !== "auto" ? params.target.service : params.service;
-    if (service === "sms") {
-      return `SMS;-;${normalizedHandle}`;
-    }
-    if (service === "imessage") {
-      return `iMessage;-;${normalizedHandle}`;
-    }
-    return `any;-;${normalizedHandle}`;
-  }
-  if (params.target.kind !== "chat_id") {
-    return null;
-  }
-  const result = await params.runCliJson(["group", "--chat-id", String(params.target.chatId)]);
-  return stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
-}
-
-async function trySendAttachmentForTarget(params: {
-  accountId: string;
-  dbPath?: string;
-  target: ReturnType<typeof parseIMessageTarget>;
-  service?: IMessageService;
-  sendTransport: IMessageSendTransport;
-  filePath: string;
-  audioAsVoice?: boolean;
-  replyToId?: string;
-  echoText?: string;
-  echoMedia?: MediaPlaceholderTextFact;
-  pendingEchoTtlMs: number;
-  timeoutMs?: number;
-  remoteHost?: string;
-  runCliJson: (args: readonly string[]) => Promise<Record<string, unknown>>;
-  requestRpc: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  withRemoteFile: typeof withIMessageRemoteFile;
-  resolveMessageGuidImpl?: IMessageSendOpts["resolveMessageGuidImpl"];
-  assertDirectAdapterHandoff?: () => void;
-  onPlatformSendDispatch?: () => Promise<void>;
-}): Promise<IMessageSendResult | null> {
-  if (params.audioAsVoice && params.sendTransport === "applescript") {
-    throw new Error(
-      "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
-    );
-  }
-  // Service-qualified handles are not existing chat GUIDs. Let imsg's canonical
-  // send RPC resolve them; explicit bridge and native voice retain bridge semantics.
-  if (
-    params.target.kind === "handle" &&
-    !params.audioAsVoice &&
-    params.sendTransport !== "bridge" &&
-    (params.service === "sms" || params.service === "imessage")
-  ) {
-    return null;
-  }
-  if (params.remoteHost && params.sendTransport === "applescript") {
-    return null;
-  }
-  let attachmentChatTarget: string | null = null;
-  if (params.remoteHost) {
-    if (params.target.kind === "chat_guid") {
-      attachmentChatTarget = params.target.chatGuid;
-    } else if (params.target.kind === "chat_identifier") {
-      attachmentChatTarget = params.target.chatIdentifier;
-    } else if (params.target.kind === "handle") {
-      const normalizedHandle = normalizeIMessageHandle(params.target.to);
-      if (normalizedHandle) {
-        const service = params.target.service !== "auto" ? params.target.service : params.service;
-        attachmentChatTarget = `${service === "sms" ? "SMS" : service === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
-      }
-    } else {
-      attachmentChatTarget = formatIMessageChatTarget(params.target.chatId);
-    }
-  } else {
-    try {
-      attachmentChatTarget = await resolveAttachmentChatTarget({
-        target: params.target,
-        service: params.service,
-        runCliJson: params.runCliJson,
-      });
-    } catch (error) {
-      if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
-        return null;
-      }
-      throw error;
-    }
-  }
-  if (!attachmentChatTarget) {
-    if (params.audioAsVoice) {
-      throw new Error("iMessage voice messages require an existing chat and bridge transport.");
-    }
-    return null;
-  }
-  params.assertDirectAdapterHandoff?.();
-
-  const echoScope = resolveOutboundEchoScope({
-    accountId: params.accountId,
-    target: params.target,
-  });
-  let result: Record<string, unknown>;
-  let pendingEchoKey: string | undefined;
-  try {
-    pendingEchoKey = await rememberPersistedIMessageEcho({
-      scope: echoScope,
-      text: params.echoText,
-      media: params.echoMedia,
-      ttlMs: params.pendingEchoTtlMs,
-      pending: true,
-    });
-    result = await withOriginalIMessageAttachmentPath(params.filePath, async (attachmentPath) => {
-      if (params.remoteHost) {
-        return await params.withRemoteFile({
-          remoteHost: params.remoteHost,
-          localPath: attachmentPath,
-          timeoutMs: params.timeoutMs,
-          assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
-          use: async (remotePath) => {
-            const rpcParams: Record<string, unknown> = {
-              file: remotePath,
-              ...(params.audioAsVoice ? { audio: true } : {}),
-              ...(params.replyToId ? { reply_to: params.replyToId } : {}),
-            };
-            if (params.target.kind === "chat_id") {
-              rpcParams.chat_id = params.target.chatId;
-            } else if (params.target.kind === "chat_guid") {
-              rpcParams.chat_guid = params.target.chatGuid;
-            } else {
-              rpcParams.chat_identifier = attachmentChatTarget;
-            }
-            return await params.requestRpc("send.attachment", rpcParams);
-          },
-        });
-      }
-      params.assertDirectAdapterHandoff?.();
-      await params.onPlatformSendDispatch?.();
-      params.assertDirectAdapterHandoff?.();
-      return await params.runCliJson([
-        "send-attachment",
-        "--chat",
-        attachmentChatTarget,
-        "--file",
-        attachmentPath,
-        ...(params.audioAsVoice ? ["--audio"] : []),
-        ...(params.replyToId ? ["--reply-to", params.replyToId] : []),
-        "--transport",
-        // One-shot imsg names its private-API transport dylib; JSON-RPC calls it bridge.
-        params.sendTransport === "bridge" ? "dylib" : params.sendTransport,
-      ]);
-    });
-    const failure = resolveIMessageSendFailure(result);
-    if (failure) {
-      throw new Error(failure);
-    }
-  } catch (error) {
-    await forgetPersistedIMessageEchoKey(pendingEchoKey);
-    if (!params.audioAsVoice && isAttachmentCommandFallbackError(error)) {
-      return null;
-    }
-    throw error;
-  }
-
-  const resolvedId = resolveMessageId(result);
-  const approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
-    dbPath: params.dbPath,
-    messageId: resolvedId,
-    result,
-    resolveMessageGuidImpl: params.resolveMessageGuidImpl,
-  });
-  const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
-  await rememberPersistedIMessageEcho({
-    scope: echoScope,
-    text: params.echoText,
-    media: params.echoMedia,
-    messageId: resolvedId ?? undefined,
-  });
-  if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
-    await rememberIMessageReplyCache({
-      accountId: params.accountId,
-      messageId: resolvedId,
-      chatGuid:
-        params.target.kind === "chat_guid"
-          ? params.target.chatGuid
-          : params.target.kind === "chat_id"
-            ? attachmentChatTarget
-            : undefined,
-      chatIdentifier:
-        params.target.kind === "chat_identifier" || params.target.kind === "handle"
-          ? attachmentChatTarget
-          : undefined,
-      chatId: params.target.kind === "chat_id" ? params.target.chatId : undefined,
-      timestamp: Date.now(),
-      isFromMe: true,
-    });
-  }
-  return {
-    messageId,
-    ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
-    sentText: "",
-    ...(params.echoText ? { echoText: params.echoText } : {}),
-    ...(params.echoMedia ? { echoMedia: params.echoMedia } : {}),
-    receipt: createIMessageSendReceipt({
-      messageId,
-      target: params.target,
-      kind: params.audioAsVoice ? "voice" : "media",
-      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    }),
-  };
 }
 
 export async function sendMessageIMessage(
@@ -687,7 +444,10 @@ export async function sendMessageIMessage(
   const timeoutMs =
     opts.timeoutMs ??
     Math.max(account.config.probeTimeoutMs ?? 0, DEFAULT_IMESSAGE_SEND_TIMEOUT_MS);
-  const pendingEchoTtlMs = resolvePendingPersistedEchoTtlMs(timeoutMs);
+  const pendingEchoTtlMs = Math.max(
+    MIN_PENDING_PERSISTED_ECHO_TTL_MS,
+    Math.max(0, timeoutMs) + PENDING_PERSISTED_ECHO_GRACE_MS,
+  );
   const region = opts.region?.trim() || account.config.region?.trim() || "US";
   const maxBytes =
     typeof opts.maxBytes === "number"
@@ -747,7 +507,10 @@ export async function sendMessageIMessage(
     throw new Error("iMessage send requires text or media");
   }
   const echoText = message.trim() || undefined;
-  const echoMedia = filePath ? resolveOutboundEchoMedia(mediaContentType) : undefined;
+  const echoMedia: MediaPlaceholderTextFact | undefined =
+    filePath && mediaContentType
+      ? { contentType: mediaContentType, kind: kindFromMime(mediaContentType) ?? "unknown" }
+      : undefined;
   // Unthreaded fallback must also clear reply metadata from receipts and bindings.
   let effectiveReplyToId = resolvedReplyToId;
   const runCliJson = bindIMessageCliSend(opts, { cliPath, dbPath, timeoutMs });
@@ -766,27 +529,195 @@ export async function sendMessageIMessage(
   };
   const withRemoteFile = opts.withRemoteFile ?? withIMessageRemoteFile;
 
-  if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
-    const attachmentResult = await trySendAttachmentForTarget({
-      accountId: account.accountId,
-      dbPath: chatDbLookupPath,
+  async function trySendAttachment(attachmentFilePath: string): Promise<IMessageSendResult | null> {
+    const {
+      audioAsVoice,
+      resolveMessageGuidImpl,
+      assertDirectAdapterHandoff,
+      onPlatformSendDispatch,
+    } = opts;
+    const accountId = account.accountId;
+    if (audioAsVoice && sendTransport === "applescript") {
+      throw new Error(
+        "iMessage voice messages require bridge transport; AppleScript cannot send native voice notes. Set sendTransport to bridge or auto.",
+      );
+    }
+    // Service-qualified handles are not existing chat GUIDs. Let imsg's canonical
+    // send RPC resolve them; explicit bridge and native voice retain bridge semantics.
+    if (
+      target.kind === "handle" &&
+      !audioAsVoice &&
+      sendTransport !== "bridge" &&
+      (service === "sms" || service === "imessage")
+    ) {
+      return null;
+    }
+    if (remoteHost && sendTransport === "applescript") {
+      return null;
+    }
+    let attachmentChatTarget: string | null = null;
+    if (remoteHost) {
+      if (target.kind === "chat_guid") {
+        attachmentChatTarget = target.chatGuid;
+      } else if (target.kind === "chat_identifier") {
+        attachmentChatTarget = target.chatIdentifier;
+      } else if (target.kind === "handle") {
+        const normalizedHandle = normalizeIMessageHandle(target.to);
+        if (normalizedHandle) {
+          const attachmentService = target.service !== "auto" ? target.service : service;
+          attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
+        }
+      } else {
+        attachmentChatTarget = formatIMessageChatTarget(target.chatId);
+      }
+    } else {
+      try {
+        if (target.kind === "chat_guid") {
+          attachmentChatTarget = target.chatGuid;
+        } else if (target.kind === "handle") {
+          const rawHandle = target.to.trim();
+          if (rawHandle.includes("@") || rawHandle.startsWith("+")) {
+            const normalizedHandle = normalizeIMessageHandle(target.to);
+            if (normalizedHandle) {
+              const attachmentService = target.service !== "auto" ? target.service : service;
+              attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
+            }
+          }
+        } else if (target.kind === "chat_id") {
+          const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
+          attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
+        }
+      } catch (error) {
+        if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
+          return null;
+        }
+        throw error;
+      }
+    }
+    if (!attachmentChatTarget) {
+      if (audioAsVoice) {
+        throw new Error("iMessage voice messages require an existing chat and bridge transport.");
+      }
+      return null;
+    }
+    assertDirectAdapterHandoff?.();
+
+    const echoScope = resolveOutboundEchoScope({
+      accountId,
       target,
-      service,
-      sendTransport,
-      filePath,
-      audioAsVoice: opts.audioAsVoice,
-      ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
-      echoMedia,
-      pendingEchoTtlMs,
-      timeoutMs,
-      remoteHost,
-      runCliJson,
-      requestRpc: requestOwnedRpc,
-      withRemoteFile,
-      resolveMessageGuidImpl: opts.resolveMessageGuidImpl,
-      assertDirectAdapterHandoff: opts.assertDirectAdapterHandoff,
-      onPlatformSendDispatch: opts.onPlatformSendDispatch,
     });
+    let result: Record<string, unknown>;
+    let pendingEchoKey: string | undefined;
+    try {
+      pendingEchoKey = await rememberPersistedIMessageEcho({
+        scope: echoScope,
+        media: echoMedia,
+        ttlMs: pendingEchoTtlMs,
+        pending: true,
+      });
+      result = await withOriginalIMessageAttachmentPath(
+        attachmentFilePath,
+        async (attachmentPath) => {
+          if (remoteHost) {
+            return await withRemoteFile({
+              remoteHost,
+              localPath: attachmentPath,
+              timeoutMs,
+              assertDirectAdapterHandoff,
+              use: async (remotePath) => {
+                const rpcParams: Record<string, unknown> = {
+                  file: remotePath,
+                  ...(audioAsVoice ? { audio: true } : {}),
+                  ...(resolvedReplyToId ? { reply_to: resolvedReplyToId } : {}),
+                };
+                if (target.kind === "chat_id") {
+                  rpcParams.chat_id = target.chatId;
+                } else if (target.kind === "chat_guid") {
+                  rpcParams.chat_guid = target.chatGuid;
+                } else {
+                  rpcParams.chat_identifier = attachmentChatTarget;
+                }
+                return await requestOwnedRpc("send.attachment", rpcParams);
+              },
+            });
+          }
+          assertDirectAdapterHandoff?.();
+          await onPlatformSendDispatch?.();
+          assertDirectAdapterHandoff?.();
+          return await runCliJson([
+            "send-attachment",
+            "--chat",
+            attachmentChatTarget,
+            "--file",
+            attachmentPath,
+            ...(audioAsVoice ? ["--audio"] : []),
+            ...(resolvedReplyToId ? ["--reply-to", resolvedReplyToId] : []),
+            "--transport",
+            // One-shot imsg names its private-API transport dylib; JSON-RPC calls it bridge.
+            sendTransport === "bridge" ? "dylib" : sendTransport,
+          ]);
+        },
+      );
+      const failure = resolveIMessageSendFailure(result);
+      if (failure) {
+        throw new Error(failure);
+      }
+    } catch (error) {
+      await forgetPersistedIMessageEchoKey(pendingEchoKey);
+      if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
+        return null;
+      }
+      throw error;
+    }
+
+    const resolvedId = resolveMessageId(result);
+    const approvalBindingMessageId = await resolveApprovalBindingMessageGuid({
+      dbPath: chatDbLookupPath,
+      messageId: resolvedId,
+      result,
+      resolveMessageGuidImpl,
+    });
+    const messageId = resolvedId ?? (result.ok || result.success ? "ok" : "unknown");
+    await rememberPersistedIMessageEcho({
+      scope: echoScope,
+      media: echoMedia,
+      messageId: resolvedId ?? undefined,
+    });
+    if (resolvedId && normalizeIMessageMessageId(resolvedId)) {
+      await rememberIMessageReplyCache({
+        accountId,
+        messageId: resolvedId,
+        chatGuid:
+          target.kind === "chat_guid"
+            ? target.chatGuid
+            : target.kind === "chat_id"
+              ? attachmentChatTarget
+              : undefined,
+        chatIdentifier:
+          target.kind === "chat_identifier" || target.kind === "handle"
+            ? attachmentChatTarget
+            : undefined,
+        chatId: target.kind === "chat_id" ? target.chatId : undefined,
+        timestamp: Date.now(),
+        isFromMe: true,
+      });
+    }
+    return {
+      messageId,
+      ...(approvalBindingMessageId ? { guid: approvalBindingMessageId } : {}),
+      sentText: "",
+      ...(echoMedia ? { echoMedia } : {}),
+      receipt: createIMessageSendReceipt({
+        messageId,
+        target,
+        kind: audioAsVoice ? "voice" : "media",
+        ...(resolvedReplyToId ? { replyToId: resolvedReplyToId } : {}),
+      }),
+    };
+  }
+
+  if (filePath && (!resolvedReplyToId || opts.audioAsVoice)) {
+    const attachmentResult = await trySendAttachment(filePath);
     if (attachmentResult) {
       if (!message.trim()) {
         return attachmentResult;

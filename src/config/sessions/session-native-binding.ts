@@ -19,7 +19,13 @@ import {
 } from "../../state/openclaw-state-worker-error.js";
 import type { captureNativeSessionWorkerDeletion } from "./session-accessor.sqlite-deletion.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
+import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
+import {
+  collectReclamationDeletionEntries,
+  prepareReclamationPublication,
+} from "./session-accessor.sqlite-reclamation-publication.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
+import { publishSessionLifecycleWorkerEffects } from "./session-lifecycle-worker-publication.js";
 import type {
   SessionNativeBindingCandidate,
   SessionNativeBindingDeletion,
@@ -54,19 +60,40 @@ export function deleteSessionWithNativeBindingsInWorker(
   >({
     database: plan.databaseOptions,
     agentId: plan.databaseOptions.agentId,
-    entries: plan.preparedTargetSnapshot,
+    entries: collectReclamationDeletionEntries(plan),
     captured,
     assertCurrent,
     candidateKind: "session-native-binding-deletion",
     execute: (worker, participants) =>
       worker.execute({ type: "session.nativeBindings.delete", input: { ...participants, plan } }),
     onAcknowledged(candidate) {
-      if (candidate.result.value.deleted) {
-        captured.committed();
-      }
+      captured.committed(
+        new Set(
+          collectReclamationDeletionEntries(plan, candidate.result).map(
+            ({ sessionKey }) => sessionKey,
+          ),
+        ),
+      );
     },
-    onCommitted(candidate, _published, identity) {
-      onResult?.(candidate.result, identity);
+    onCommitted(candidate, published, identity) {
+      try {
+        onResult?.(candidate.result, identity);
+        publishSessionLifecycleWorkerEffects(plan, candidate.result);
+      } finally {
+        if (plan.kind === "lifecycle-projection-commit") {
+          if (published) {
+            publishCommittedSessionIdentity(
+              plan.agentId,
+              identity,
+              published.previous,
+              published.current,
+              published.prepared,
+            );
+          }
+        } else {
+          prepareReclamationPublication(plan, identity, candidate.result)?.();
+        }
+      }
       return candidate.result;
     },
   });

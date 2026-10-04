@@ -118,6 +118,8 @@ export type ProjectedLifecycleCommitResult = {
   maintenancePlans: SessionEntryMaintenancePlan[];
   removedSessionKeys: string[];
   pendingArchives: boolean;
+  progressCardResetKeys?: string[];
+  projectionReconcileSessionIds?: string[];
 };
 
 export type ProjectedLifecycleCommitInput = {
@@ -351,7 +353,6 @@ type SessionEntryMaintenanceCounts = {
 export type SessionEntryMaintenancePlan = SessionEntryMaintenanceCounts & {
   /** Exact rows written by planning; parent publication must not rescan the store. */
   archivedSessionKeys: string[];
-  archivedWorktrees?: Array<{ entry: SessionEntry; sessionKey: string; storePath: string }>;
   entryRemovals: SessionEntryRemovalPlan[];
   stateDeletePlans: SessionStateDeletePlan[];
 };

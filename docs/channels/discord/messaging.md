@@ -24,6 +24,8 @@ How inbound and outbound Discord messages are routed, formatted, acknowledged, a
 - Text-only cron/heartbeat announce delivery to Discord collapses to the final assistant-visible answer, sent once. Media and structured component payloads remain multi-message when the agent emits multiple deliverable payloads.
 - A send response without a Discord message ID stays unconfirmed. Queued delivery records the missing identity for recovery instead of reporting success or immediately sending a duplicate; inspect delivery warnings with `openclaw health --verbose`.
 
+Messages in the same channel continue reaching the [reply queue](/concepts/queue) while an earlier message waits for its turn. The queue mode decides whether to steer the active run, collect messages, or schedule a follow-up. Deferring a message preserves its durable recovery state.
+
 ## Message behavior
 
 <AccordionGroup>

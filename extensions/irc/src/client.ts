@@ -237,29 +237,33 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
     // Encode the original text with the reference so escapes are not decoded twice.
     let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
-    let sent = false;
+    const chunks: string[] = [];
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
-      await effect
-        .initiate(() => {
+      chunks.push(chunk);
+      remaining = remaining.slice(chunk.length).trimStart();
+    }
+    let sent = false;
+    await effect
+      .initiate(() => {
+        for (const chunk of chunks) {
           options.abortSignal?.throwIfAborted();
           if (!ready || closed) {
             throw new Error("IRC connection closed before send");
           }
           sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);
-        })
-        .catch((error: unknown) => {
-          if (sent) {
-            throw createChannelPartialDeliveryError(error, {
-              messageIds: [],
-              visibleReplySent: true,
-            });
-          }
-          throw error;
-        });
-      sent = true;
-      remaining = remaining.slice(chunk.length).trimStart();
-    }
+          sent = true;
+        }
+      })
+      .catch((error: unknown) => {
+        if (sent) {
+          throw createChannelPartialDeliveryError(error, {
+            messageIds: [],
+            visibleReplySent: true,
+          });
+        }
+        throw error;
+      });
   };
 
   const quit = (reason?: string) => {

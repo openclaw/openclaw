@@ -134,12 +134,115 @@ describe("zalouser send helpers", () => {
         textChunkLimit: 2000,
         onDeliveryResult,
       }),
-    ).rejects.toThrow("second chunk failed");
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      message: "second chunk failed",
+      deliveryResult: { messageIds: ["mid-progress-1"], visibleReplySent: true },
+    });
 
     expect(mockSendText).toHaveBeenCalledTimes(2);
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledWith(firstResult);
     expect(requireSendTextOptions(0)).not.toHaveProperty("onDeliveryResult");
+  });
+
+  it.each([false, true])(
+    "preserves earlier receipts after a later authority refusal (progress callback=%s)",
+    async (reportProgress) => {
+      const cause = new Error("Zalouser send authority ended");
+      mockSendText
+        .mockResolvedValueOnce(sendResult("mid-1"))
+        .mockResolvedValueOnce(sendResult("mid-2"))
+        .mockRejectedValueOnce(cause);
+      const onDeliveryResult = reportProgress ? vi.fn() : undefined;
+
+      await expect(
+        sendMessageZalouser("thread", "a".repeat(4001), { onDeliveryResult }),
+      ).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        cause,
+        deliveryResult: {
+          messageIds: ["mid-1", "mid-2"],
+          receipt: {
+            platformMessageIds: ["mid-1", "mid-2"],
+            parts: [
+              expect.objectContaining({ platformMessageId: "mid-1" }),
+              expect.objectContaining({ platformMessageId: "mid-2" }),
+            ],
+          },
+          visibleReplySent: true,
+        },
+      });
+      expect(mockSendText).toHaveBeenCalledTimes(3);
+      if (onDeliveryResult) {
+        expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+      }
+    },
+  );
+
+  it("combines earlier chunks with a failed chunk's partial receipt without duplicate parts", async () => {
+    mockSendText
+      .mockResolvedValueOnce(sendResult("mid-first"))
+      .mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
+        const accepted = sendResult("mid-caption");
+        await onDeliveryResult?.(accepted);
+        return { ...accepted, ok: false, error: "voice send failed" };
+      });
+
+    await expect(sendMessageZalouser("thread", "a".repeat(2001))).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      message: "voice send failed",
+      deliveryResult: {
+        messageIds: ["mid-first", "mid-caption"],
+        receipt: {
+          parts: [
+            expect.objectContaining({ platformMessageId: "mid-first" }),
+            expect.objectContaining({ platformMessageId: "mid-caption" }),
+          ],
+        },
+        visibleReplySent: true,
+      },
+    });
+  });
+
+  it("retains nested progress when the transport throws without a progress subscriber", async () => {
+    const cause = new Error("voice authority ended");
+    mockSendText.mockImplementationOnce(async (_threadId, _text, _options, onDeliveryResult) => {
+      await onDeliveryResult?.(sendResult("mid-caption"));
+      throw cause;
+    });
+
+    await expect(sendMessageZalouser("thread", "caption")).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause,
+      deliveryResult: { messageIds: ["mid-caption"], visibleReplySent: true },
+    });
+  });
+
+  it("retains provider acceptance when the delivery callback fails", async () => {
+    const cause = new Error("receipt persistence failed");
+    mockSendText.mockResolvedValueOnce(sendResult("mid-accepted"));
+
+    await expect(
+      sendMessageZalouser("thread", "a".repeat(2001), {
+        onDeliveryResult: () => {
+          throw cause;
+        },
+      }),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause,
+      deliveryResult: { messageIds: ["mid-accepted"], visibleReplySent: true },
+    });
+    expect(mockSendText).toHaveBeenCalledOnce();
+  });
+
+  it("preserves a refusal before any chunk was accepted", async () => {
+    const cause = new Error("Zalouser send authority ended");
+    mockSendText.mockRejectedValueOnce(cause);
+
+    await expect(sendMessageZalouser("thread", "a".repeat(2001))).rejects.toBe(cause);
+    expect(mockSendText).toHaveBeenCalledOnce();
   });
 
   it("preserves text styles when splitting long formatted markdown", async () => {

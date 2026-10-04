@@ -1,5 +1,6 @@
 import * as http from "node:http";
 import * as https from "node:https";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
@@ -122,16 +123,16 @@ export async function sendMessage(
 ): Promise<boolean> {
   const effect = captureEffectAuthority();
   const chunks = chunkTextForOutbound(text, SYNOLOGY_CHAT_TEXT_CHUNK_LIMIT);
+  const acceptedChunks: string[] = [];
   for (const chunk of chunks.length > 0 ? chunks : [text]) {
-    // Synology Chat API requires numeric user_ids to specify the recipient.
-    const body = buildWebhookBody({ text: chunk }, userId);
-    // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
-    await waitForSendSlot();
-    await onPlatformSendDispatch?.();
-    let result: SynologyHostedFileSendResult["status"];
     let initiated = false;
     try {
-      result = await retryAsync(
+      // Synology Chat API requires numeric user_ids to specify the recipient.
+      const body = buildWebhookBody({ text: chunk }, userId);
+      // Retry only proven pre-connect failures; ambiguous webhook replays can duplicate messages.
+      await waitForSendSlot();
+      await onPlatformSendDispatch?.();
+      const result = await retryAsync(
         () => {
           initiated = false;
           return effect.initiate(() => {
@@ -152,13 +153,20 @@ export async function sendMessage(
           },
         },
       );
+      if (result !== "accepted") {
+        throw new Error(`Failed to send message to Synology Chat (${result})`);
+      }
+      acceptedChunks.push(chunk);
     } catch (error) {
+      if (acceptedChunks.length > 0) {
+        throw createChannelPartialDeliveryError(error, {
+          visibleReplySent: true,
+          content: acceptedChunks.join(""),
+        });
+      }
       if (!initiated) {
         throw error;
       }
-      return false;
-    }
-    if (result !== "accepted") {
       return false;
     }
   }

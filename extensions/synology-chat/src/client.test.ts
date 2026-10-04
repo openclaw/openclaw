@@ -239,6 +239,77 @@ describe("Synology Chat TLS verification defaults", () => {
 describe("sendMessage", () => {
   installFakeTimerHarness();
 
+  it.each(["authority", "dispatch", "transport", "rejection"] as const)(
+    "preserves acknowledged chunks when a later chunk fails at %s",
+    async (failurePoint) => {
+      const cause = new Error(`Synology ${failurePoint} failure`);
+      const authority = fetchRuntime.captureEffectAuthority();
+      let preparations = 0;
+      const capture = vi.spyOn(fetchRuntime, "captureEffectAuthority").mockReturnValue({
+        ...authority,
+        async initiate(effect) {
+          preparations += 1;
+          if (failurePoint === "authority" && preparations === 3) {
+            throw cause;
+          }
+          return authority.initiate(effect);
+        },
+      });
+      let requests = 0;
+      vi.mocked(https.request).mockImplementation(((_url, _options, callback) => {
+        requests += 1;
+        const lastChunk = requests === 3;
+        const req = createMockRequestEmitter();
+        process.nextTick(() => {
+          if (lastChunk && failurePoint === "transport") {
+            req.emit("error", cause);
+            return;
+          }
+          const res = createMockResponseEmitter(200);
+          callback?.(res);
+          res.end(JSON.stringify({ success: !(lastChunk && failurePoint === "rejection") }));
+        });
+        return req;
+      }) as MockRequestHandler);
+      let dispatches = 0;
+      const onPlatformSendDispatch = async () => {
+        dispatches += 1;
+        if (failurePoint === "dispatch" && dispatches === 3) {
+          throw cause;
+        }
+      };
+      try {
+        const sending = sendMessage(
+          "https://nas.example.com/incoming",
+          "a".repeat(4001),
+          "42",
+          false,
+          onPlatformSendDispatch,
+        );
+        const outcome = await settleTimers(
+          sending.then(
+            (result) => ({ result }),
+            (error: unknown) => ({ error }),
+          ),
+        );
+        expect(outcome).toMatchObject({
+          error: {
+            code: "CHANNEL_PARTIAL_DELIVERY",
+            ...(failurePoint === "rejection"
+              ? { message: "Failed to send message to Synology Chat (rejected)" }
+              : { cause }),
+            deliveryResult: { visibleReplySent: true, content: "a".repeat(4000) },
+          },
+        });
+        expect(https.request).toHaveBeenCalledTimes(
+          failurePoint === "authority" || failurePoint === "dispatch" ? 2 : 3,
+        );
+      } finally {
+        capture.mockRestore();
+      }
+    },
+  );
+
   it("returns false on server error without replaying", async () => {
     mockFailureResponse(500);
     const result = await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello"));

@@ -12,6 +12,7 @@ export function resolveModelCatalogServiceTiers(params: {
   evaluation: ModelAuthAvailabilityEvaluation;
   runtimeId?: string;
   accountCatalog?: PreparedAccountCatalogAccess;
+  modelServiceTiers?: readonly string[];
   isCurrent: () => boolean;
 }): string[] | undefined {
   const { snapshot, entry, evaluation, runtimeId } = params;
@@ -36,15 +37,16 @@ export function resolveModelCatalogServiceTiers(params: {
     route.api === "openai-responses" &&
     supportsOpenAIResponsesFastMode({ provider: "openai", ...route })
   ) {
-    return [
-      ...(params.accountCatalog?.readServiceTiers({
-        identityKey: credential.identityKey,
-        modelId: entry.id,
-        runtimeId,
-        api: route.api,
-        baseUrl: route.baseUrl,
-      }) ?? ["priority", "ultrafast"]),
-    ];
+    const observed = params.accountCatalog?.readServiceTiers({
+      identityKey: credential.identityKey,
+      modelId: entry.id,
+      runtimeId,
+      api: route.api,
+      baseUrl: route.baseUrl,
+    }) ?? ["priority", "ultrafast"];
+    return params.modelServiceTiers
+      ? params.modelServiceTiers.filter((tier) => tier === "default" || observed.includes(tier))
+      : [...observed];
   }
   if (
     credential.source !== "profile" ||

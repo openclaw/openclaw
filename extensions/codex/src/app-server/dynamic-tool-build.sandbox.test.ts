@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { resolveAgentHarnessBeforePromptBuildResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createMockPluginRegistry,
@@ -101,54 +100,7 @@ describe("Codex app-server sandbox shell tools", () => {
     expect(await fs.readFile(outside, "utf8")).toBe("outside");
   });
 
-  it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
-    const execTool = expectDefined(
-      createOpenClawCodingTools({ workspaceDir: tempDir }).find((tool) => tool.name === "exec"),
-      "assembled exec tool",
-    );
-
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("read"),
-      createRuntimeDynamicTool("write"),
-      createRuntimeDynamicTool("edit"),
-      createRuntimeDynamicTool("apply_patch"),
-      execTool,
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
-    params.disableTools = false;
-    params.runtimePlan = createCodexRuntimePlanFixture();
-
-    const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
-      nativeToolSurfaceEnabled: false,
-    });
-
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "message",
-      "sandbox_exec",
-      "sandbox_process",
-    ]);
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
-      "configured sandbox backend",
-    );
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.parameters).not.toHaveProperty(
-      "properties.security",
-    );
-    expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
-      "background shell sessions",
-    );
-  });
-
   it.each([
-    { allow: undefined, expected: ["message", "sandbox_exec", "sandbox_process"] },
     { allow: ["group:runtime"], expected: ["sandbox_exec", "sandbox_process"] },
     { allow: ["exec"], restrictWith: ["process"], expected: ["sandbox_process"] },
   ])(

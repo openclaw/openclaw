@@ -548,7 +548,7 @@ const reviewedOperations = new Map([
         operations: [
           "ensureSkillLibrarySchema",
           "requireSelectedSkillLibraryUpload",
-          "selectSkillLibraryRow",
+          "selectSkillLibraryEntries",
           "selectSkillLibraryRevision",
           "selectSkillLibraryRevisionMetadata",
           "assertSkillLibraryNameAvailable",
@@ -927,6 +927,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
+        operations: ["lookupCronStandingGrantInDatabase", "consumeCronStandingGrantInDatabase"],
+        evidence:
+          "Only openclaw-state-read.worker.ts validates and operator-approval-store.operations.ts consumes through the existing workers; bash-tools.exec-cron-grant.ts awaits operator-approval-store.ts while retaining the Gateway authority interval. No native lookup/consume facade remains.",
+      },
+      {
+        tier: "W",
         operations: ["listCronStandingGrantsInDatabase"],
         evidence:
           "Only state/openclaw-state-read.worker.ts:495; server-methods/exec-approval.ts:462 -> operator-approval-store.ts:273 uses readApprovalStore -> executeExistingOpenClawStateRead at :248 even when a guard exists.",
@@ -1033,14 +1039,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: [
-          "conflictingSubagentRunVersions",
-          "upsertSubagentRunRowInDatabase",
-          "deleteSubagentRunRowInDatabase",
-          "writeSubagentRunValuesInDatabase",
-        ],
+        operations: ["conflictingSubagentRunVersions", "writeSubagentRunValuesInDatabase"],
         evidence:
-          "Only subagent-registry.store.worker.ts:46,62 and completion/subagent-completion-admission.worker.ts:90,126,182 invoke the conflict/upsert/write kernels. Delete/upsert in completion/subagent-completion-mutation.kernel.ts:235,237 is reached only by admission.worker.ts:188; no native writer caller remains.",
+          "Registry persistence and completion admission workers invoke the conflict and batch write kernels. Completion mutation writes are reached only through the admission worker; no native writer caller remains.",
       },
     ],
   ],

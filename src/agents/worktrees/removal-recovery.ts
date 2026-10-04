@@ -5,8 +5,7 @@ import path from "node:path";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { runOutsideCommandProcessScope } from "../../process/exec-spawn.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
-import { withWorktreeAllocationLease } from "./allocation.js";
-import { requireWorktreeDiskSpace } from "./capacity.js";
+import { withWorktreeAllocationLease, type WorktreeAllocationGuard } from "./allocation.js";
 import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { lockState } from "./git-lock.js";
 import { rawPathStat, splitNullBuffer } from "./git-path-inventory.js";
@@ -53,6 +52,7 @@ async function recoverRemovalWithAllocation(params: {
   signal?: AbortSignal;
   commitGuard?: () => void;
   workerAuthority?: WorktreeWorkerAuthority;
+  requireDiskSpace: WorktreeAllocationGuard["requireDiskSpace"];
 }) {
   if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(params.snapshot)) {
     throw preserved("Expected a full snapshot commit id");
@@ -213,7 +213,7 @@ async function recoverRemovalWithAllocation(params: {
     // A projection can retain ignored guest data outside the ordinary Git capture.
     const { localWorkspaceStore } =
       await import("../../gateway/worker-environments/local-workspace-store.js");
-    if (localWorkspaceStore(params.env).get(record.id)) {
+    if (localWorkspaceStore(params.env).revision(record.id) !== undefined) {
       throw preserved("Projected worktree recovery requires its original archive owner");
     }
     const head = await requireGit(record.repoRoot, ["rev-parse", `${params.snapshot}^`], options);
@@ -417,7 +417,7 @@ async function recoverRemovalWithAllocation(params: {
       });
       const missing = await inventory.verify();
       await assertRefs();
-      requireWorktreeDiskSpace(
+      await params.requireDiskSpace(
         [
           {
             path: record.path,

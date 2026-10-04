@@ -4,6 +4,7 @@ import {
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
+  createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   listMessageReceiptPlatformIds,
   type ChannelMessageSendResult,
@@ -91,7 +92,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       assertDirectAdapterHandoff,
     };
 
-    let lastResult: LineSendResult | null = null;
+    const acceptedResults: LineSendResult[] = [];
     const recordResult = async (
       resultPromise: Promise<LineSendResult>,
     ): Promise<LineSendResult> => {
@@ -99,11 +100,27 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       try {
         result = await resultPromise;
       } catch (error) {
+        if (acceptedResults.length > 0) {
+          const partial = isChannelPartialDeliveryError(error) ? error : undefined;
+          const receipt = createMessageReceiptFromOutboundResults({
+            results: [
+              ...acceptedResults,
+              ...(partial?.deliveryResult.receipt
+                ? [{ receipt: partial.deliveryResult.receipt }]
+                : (partial?.deliveryResult.messageIds ?? []).map((messageId) => ({ messageId }))),
+            ],
+          });
+          throw createChannelPartialDeliveryError(partial?.cause ?? error, {
+            ...partial?.deliveryResult,
+            messageIds: listMessageReceiptPlatformIds(receipt),
+            receipt,
+            visibleReplySent: true,
+          });
+        }
         // Accepted payload parts keep their receipt and must not wait for quota diagnosis.
-        const refusal =
-          lastResult !== null || isChannelPartialDeliveryError(error)
-            ? undefined
-            : await explainLineRefusal({ error, cfg, accountId });
+        const refusal = isChannelPartialDeliveryError(error)
+          ? undefined
+          : await explainLineRefusal({ error, cfg, accountId });
         throw refusal?.retryable !== undefined
           ? new PlatformMessageNotDispatchedError(refusal.reason, {
               cause: error,
@@ -111,14 +128,15 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
             })
           : error;
       }
-      lastResult = result;
+      acceptedResults.push(result);
       try {
         await onDeliveryResult?.(createEmptyChannelResult("line", { ...result }));
       } catch (error) {
         // Observers run after provider acceptance; losing this receipt invites duplicate delivery.
+        const receipt = createMessageReceiptFromOutboundResults({ results: acceptedResults });
         throw createChannelPartialDeliveryError(error, {
-          messageIds: listMessageReceiptPlatformIds(result.receipt),
-          receipt: result.receipt,
+          messageIds: listMessageReceiptPlatformIds(receipt),
+          receipt,
           visibleReplySent: true,
         });
       }
@@ -305,7 +323,7 @@ export const lineOutboundAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>
       await sendMediaMessages();
     }
 
-    const completedResult = lastResult as LineSendResult | null;
+    const completedResult = acceptedResults.at(-1);
     if (!completedResult) {
       throw new Error("Message must be non-empty for LINE sends");
     }

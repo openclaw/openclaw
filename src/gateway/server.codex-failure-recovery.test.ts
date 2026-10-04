@@ -375,9 +375,7 @@ it.each(cases)(
     const settled = await wait(first.runId);
     expect(settled).toMatchObject({ status: failFirst ? "error" : "ok" });
     if (failFirst) {
-      expect(settled.error).toBe(
-        "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
-      );
+      expect(settled.error).toBe("LLM request rejected: controlled settled failure");
     }
     const previous = await ready(first.runId);
     expect(previous.action).toBe("started");

@@ -13,6 +13,7 @@ import type {
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
+import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import {
   snapshotFromExecApprovalsDatabase,
   assertExecApprovalsMutationAllowed,
@@ -36,6 +37,7 @@ function applyAuthorizationBatch(
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
     if (next !== null) {
+      assertExecApprovalsHostPolicyUnchanged(current.file, next);
       try {
         assertExecApprovalsMutationAllowed({ db, current: current.file, next });
       } catch (error) {

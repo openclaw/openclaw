@@ -34,6 +34,10 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { OpenClawStateWorkerOperationOptions } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type {
+  CronStandingGrantLookupInput,
+  ConsumeCronStandingGrantResult,
+} from "./operator-approval-standing-grants.types.js";
 import type { OperatorApprovalCommitReceipt } from "./operator-approval-store.operations.js";
 import { decodeOperatorApprovalHistoryCursor } from "./operator-approval-store.rows.js";
 import type {
@@ -320,4 +324,60 @@ export function listCronStandingGrants(params: { limit?: number } & Options = {}
 
 export function revokeCronStandingGrant(params: Input<"operatorApprovals.revokeCronGrant">) {
   return execute("operatorApprovals.revokeCronGrant", params);
+}
+
+export function validateCronStandingGrant(params: CronStandingGrantLookupInput & Options) {
+  const { databaseOptions, assertCurrent, guard, ...input } = params;
+  return readApprovalStore(
+    { type: "operatorApprovals.validateCronGrant", input },
+    { databaseOptions, assertCurrent, guard },
+    (result) => (result.type === "operatorApprovals.validateCronGrant" ? result.result : undefined),
+  );
+}
+
+/** The approval FIFO precedes acquisition of the caller's exact cron authority interval. */
+export function consumeCronStandingGrant(
+  context: OpenClawStateWorkerContext,
+  input: CronStandingGrantLookupInput & { recordUse: boolean },
+  assertCurrent: () => void,
+  withAuthority: (
+    run: (mutation: CronReceiptAuthorityMutation) => Promise<ConsumeCronStandingGrantResult>,
+  ) => Promise<ConsumeCronStandingGrantResult>,
+): Promise<ConsumeCronStandingGrantResult> {
+  const captured = structuredClone(input);
+  let authority: CronReceiptAuthorityMutation | undefined;
+  const assertUseCurrent = () => {
+    context.admission.assertCurrent();
+    authority?.assertCurrent();
+    assertCurrent();
+  };
+  return runApprovalStoreOperation(
+    context,
+    captured,
+    (scope, preparation) =>
+      preparation.handoff(() =>
+        scope.execute({ type: "operatorApprovals.consumeCronGrant", input: captured }),
+      ),
+    {
+      assertCurrent: assertUseCurrent,
+      createAdmission(retained) {
+        const mutation = expectDefined(authority, "Cron standing-grant receipt authority");
+        const admission = createSqliteWorkerWriteAdmission(
+          assertUseCurrent,
+          [context.admission.databasePath],
+          mutation.attachment,
+        )(retained);
+        mutation.observe(admission.admission, retained);
+        return admission;
+      },
+    },
+    assertUseCurrent,
+    (run) =>
+      withAuthority(async (mutation) => {
+        authority = mutation;
+        const result = await run(mutation.context);
+        assertUseCurrent();
+        return result;
+      }),
+  );
 }

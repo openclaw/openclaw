@@ -289,8 +289,11 @@ src/agents/workspace-dirs.ts
 src/agents/workspace-state-identity.ts
 src/agents/worktrees/allocation.ts
 src/agents/worktrees/branches.runtime.ts
+src/agents/worktrees/capacity-contract.ts
+src/agents/worktrees/capacity-store.ts
 src/agents/worktrees/capacity.runtime.ts
 src/agents/worktrees/capacity.ts
+src/agents/worktrees/capacity.worker.ts
 src/agents/worktrees/checkout-apfs.ts
 src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout.ts
@@ -302,6 +305,7 @@ src/agents/worktrees/filesystem-native.ts
 src/agents/worktrees/filesystem-refs.native.ts
 src/agents/worktrees/gc-dependencies.ts
 src/agents/worktrees/gc-fingerprint.runtime.ts
+src/agents/worktrees/git-lock.ts
 src/agents/worktrees/git-path-inventory.ts
 src/agents/worktrees/git-worktree-operations.runtime.ts
 src/agents/worktrees/git.ts
@@ -318,6 +322,8 @@ src/agents/worktrees/repository-paths.ts
 src/agents/worktrees/run-end-lifecycle.ts
 src/agents/worktrees/run-lease-owner.ts
 src/agents/worktrees/run-lease-store.kernel.ts
+src/agents/worktrees/run-lease-store.ts
+src/agents/worktrees/run-lease.ts
 src/agents/worktrees/service-preparation.ts
 src/agents/worktrees/snapshot-exact-state.ts
 src/agents/worktrees/snapshot-index-objects.ts
@@ -599,6 +605,7 @@ src/state/incognito-session-error.ts
 src/config/sessions/session-model-context-projection.ts
 src/config/sessions/session-mutation-conflict-error.ts
 src/config/sessions/session-pending-input-custody-error.ts
+src/config/sessions/session-transcript-writer-claim-error.ts
 src/config/sessions/session-sqlite-target-paths.ts
 src/config/sessions/session-sqlite-target.ts
 src/config/sessions/session-store-config.ts
@@ -965,6 +972,7 @@ src/infra/sqlite-lifecycle-errors.ts
 src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-pinned-read-snapshot.ts
+src/infra/sqlite-planner-statistics.ts
 src/infra/sqlite-post-commit.ts
 src/infra/sqlite-private-directory.ts
 src/infra/sqlite-read-cache.ts
@@ -1175,6 +1183,7 @@ src/plugins/channel-presence-policy.ts
 src/plugins/channel-startup-policy.ts
 src/plugins/clawhub-error-codes.ts
 src/plugins/command-execution-lock.ts
+src/plugins/compat/agent-harness-records.ts
 src/plugins/compat/agent-list-runtime-projection-records.ts
 src/plugins/compat/channel-pairing-record.ts
 src/plugins/compat/deprecation-marking.ts
@@ -1206,7 +1215,6 @@ src/plugins/doctor-compatibility-migration.ts
 src/plugins/doctor-contract-artifact.ts
 src/plugins/doctor-contract-legacy-setup.ts
 src/plugins/doctor-contract-module.ts
-src/plugins/doctor-contract-registry-loader-state.ts
 src/plugins/doctor-contract-registry.ts
 src/plugins/doctor-contract-relevance.ts
 src/plugins/loader-channel-setup.ts
@@ -1675,6 +1683,7 @@ src/state/openclaw-state-lease-options.ts
 src/state/openclaw-state-lease-process-exit.ts
 src/state/openclaw-state-lease-storage.ts
 src/state/openclaw-state-lease-store.ts
+src/state/openclaw-state-lease-worker-operation.ts
 src/state/openclaw-state-lease-worker-owner.ts
 src/state/openclaw-state-lease-worker-storage.ts
 src/state/openclaw-state-lease-worker.ts

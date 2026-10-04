@@ -492,6 +492,8 @@ export type ProviderPlugin = {
   ) => ProviderThinkingProfile | null | undefined;
   /** Whether Fast can affect this selected request; undefined retains existing unknown behavior. */
   resolveFastModeSupport?: (ctx: ProviderFastModePolicyContext) => boolean | undefined;
+  /** Known model/route service tiers; undefined retains account discovery and route defaults. */
+  resolveServiceTiers?: (ctx: ProviderFastModePolicyContext) => readonly string[] | undefined;
   /**
    * Provider-owned system-prompt contribution.
    *

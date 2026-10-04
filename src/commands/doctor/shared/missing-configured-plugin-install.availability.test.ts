@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
+import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import type { PluginInstallRecord } from "../../../config/types.plugins.js";
 import { createPluginMetadataSnapshotFixture } from "../../../plugins/plugin-metadata.test-support.js";
@@ -186,13 +187,14 @@ describe("configured plugin cohort availability", () => {
     });
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        update: { channel: "stable" },
-        agents: {
-          defaults: { model: "openai/gpt-5.5", agentRuntime: { id: "codex" } },
-        },
+    const cfg: OpenClawConfigWithLegacyRoster = {
+      update: { channel: "stable" },
+      agents: {
+        defaults: { model: "openai/gpt-5.5", agentRuntime: { id: "codex" } },
       },
+    };
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg,
       env: testEnv,
     });
 

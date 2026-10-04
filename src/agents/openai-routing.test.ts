@@ -294,7 +294,7 @@ describe("OpenAI runtime routing policy", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies OpenClawConfigWithLegacyRoster;
 
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(true);
   });
@@ -309,7 +309,7 @@ describe("OpenAI runtime routing policy", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies OpenClawConfigWithLegacyRoster;
 
     expect(modelSelectionShouldEnsureCodexPlugin({ model: "openai/gpt-5.5", config })).toBe(true);
   });

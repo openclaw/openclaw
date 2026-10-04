@@ -1,9 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
+import type { IncognitoSessionAuthority } from "../../config/sessions/session-incognito-contract.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerCommand, SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { recordContextEngineTurnOutboxSchemaCommitted } from "../../state/openclaw-agent-context-engine-turn-outbox-schema.js";
 import {
   runOpenClawAgentWriteTransaction,
@@ -13,6 +14,7 @@ import {
   isIncognitoOpenClawAgentSqlitePath,
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
+import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -121,14 +123,111 @@ export type ContextEngineTurnOutboxWorkerStore = ContextEngineTurnOutboxStore &
 export function openContextEngineTurnOutboxWorkerStore(target: {
   agentId: string;
   path: string;
+  incognito?: {
+    actor: IncognitoAgentDatabaseExecution;
+    authority: IncognitoSessionAuthority;
+    sessionKey: string;
+    sessionId: string;
+  };
 }): ContextEngineTurnOutboxWorkerStore {
+  const captured = { ...target, incognito: target.incognito ? { ...target.incognito } : undefined };
+  const incognito = captured.incognito;
+  if (
+    incognito &&
+    (incognito.actor.agentId !== captured.agentId || incognito.actor.path !== captured.path)
+  ) {
+    throw new Error("Outbox target differs from its captured incognito actor");
+  }
+  const executeActor =
+    incognito &&
+    (() => {
+      const { actor, authority, sessionKey, sessionId } = incognito;
+      const scoped = <Input extends object>(input: Input) => ({ ...input, sessionKey, sessionId });
+      const commands: {
+        [Key in keyof ContextEngineTurnOutboxWorkerOperations]: (
+          input: ContextEngineTurnOutboxWorkerOperations[Key]["input"],
+        ) => Promise<ContextEngineTurnOutboxWorkerOperations[Key]["output"]>;
+      } = {
+        prepareRun: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.prepareRun",
+            input: scoped(input),
+          }),
+        listPendingSessions: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.listPendingSessions",
+            input: scoped(input),
+          }),
+        readNextPending: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.readNextPending",
+            input: scoped(input),
+          }),
+        complete: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.complete",
+            input: scoped(input),
+          }),
+        recordFailure: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.recordFailure",
+            input: scoped(input),
+          }),
+        hasPending: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.hasPending",
+            input: scoped(input),
+          }),
+        enqueueIntent: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.enqueueIntent",
+            input: scoped(input),
+          }),
+        acceptIntent: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.acceptIntent",
+            input: scoped(input),
+          }),
+        publishClosedTurn: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.publishClosedTurn",
+            input: scoped(input),
+          }),
+        discardIntent: (input) =>
+          actor.sessions.outbox(authority, {
+            type: "session.outbox.discardIntent",
+            input: scoped(input),
+          }),
+      };
+      const execute: SqliteWorkerStore<ContextEngineTurnOutboxWorkerOperations>["execute"] = ({
+        type,
+        input,
+      }) => {
+        if (
+          ("sessionId" in input &&
+            input.sessionId !== undefined &&
+            input.sessionId !== sessionId) ||
+          ("sessionKey" in input &&
+            input.sessionKey !== undefined &&
+            input.sessionKey !== sessionKey)
+        ) {
+          throw new Error("Outbox command differs from its captured incognito session");
+        }
+        return commands[type](input);
+      };
+      return execute;
+    })();
   const run = <Type extends OutboxCommand["type"]>(
     command: Extract<OutboxCommand, { type: Type }>,
-  ) =>
+  ) => {
+    if (executeActor) {
+      return executeActor<Type>(command);
+    }
     // SAFETY: executeContextEngineTurnOutboxCommand returns each command type's declared output.
-    runContextEngineTurnOutboxCommand(target, command) as Promise<
+    return runContextEngineTurnOutboxCommand(captured, command) as Promise<
       ContextEngineTurnOutboxWorkerOperations[Type]["output"]
     >;
+  };
   return {
     prepareRun: (input) => run({ type: "prepareRun", input }),
     listPendingSessions: (input) => run({ type: "listPendingSessions", input }),

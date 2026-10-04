@@ -764,10 +764,18 @@ Use its `run` method to restore that captured scope in a queued continuation.
 After asynchronous preparation, call `effect.initiate(() => provider.send(...))`
 and run the existing synchronous assertion inside that callback. The owner
 releases the interval when the provider call is issued, before its response.
-Every retry or chunk calls `initiate` again to prepare a fresh use. Library work
-after the SDK handoff belongs to the already initiated operation.
-Preserve errors from authority preparation unchanged. Apply provider-specific
-failure normalization only after entering the SDK or transport call.
+Every retry or separately submitted chunk calls `initiate` again to prepare a
+fresh use. A fully prepared synchronous batch, such as Twitch's SDK calls or
+IRC's raw lines, acquires one use before its first handoff and submits all parts
+inside that callback. Never acquire multiple held uses upfront: the owner's
+FIFO waits for the preceding use to release. Library work after the SDK handoff
+belongs to the already initiated operation.
+Preserve preparation refusals unchanged when nothing was sent. Once a part is
+accepted, later refusals, transport failures, and delivery-observer failures
+must preserve all accepted receipts in a partial-delivery error, including when
+the caller omits its progress callback. Wait for an initiated batch to settle
+before reporting its outcome. Apply provider-specific failure normalization only
+after entering the SDK or transport call.
 
 The initiation boundary is the call into the provider SDK, CLI runner, or native
 transport. OpenClaw finishes its asynchronous preparation before that call and
@@ -785,7 +793,7 @@ and separately submitted chunks each acquire a new use.
 | Feishu                                                                        | HTTP client method after proxy and dispatch preparation                            | Axios transforms, interceptors, redirects, and networking         |
 | iMessage local CLI                                                            | CLI runner call after media/target preparation                                     | Spawn broker, CLI execution, bridge, and Messages delivery        |
 | iMessage RPC                                                                  | Write to the selected process's stdin                                              | Pipe buffering, local/SSH CLI, bridge, and Messages delivery      |
-| IRC                                                                           | Each raw PRIVMSG write; explicit outbound JOIN                                     | Socket buffering and networking                                   |
+| IRC                                                                           | Precomputed raw PRIVMSG batch; explicit outbound JOIN                              | Socket buffering and networking                                   |
 | LINE                                                                          | Each message fetch after authorization                                             | Undici and networking                                             |
 | Matrix                                                                        | Fetch after DNS, crypto, and dispatch preparation; each redirect reacquires        | Fetch implementation and networking                               |
 | Mattermost and SMS                                                            | Shared guarded fetch, or the injected fetch callback                               | Fetch implementation and networking                               |
@@ -796,7 +804,7 @@ and separately submitted chunks each acquire a new use.
 | Signal Unix socket                                                            | Socket write after connecting                                                      | Socket buffering and signal-cli processing                        |
 | Slack                                                                         | SDK fetch callback after queue waits                                               | Fetch implementation and networking                               |
 | Telegram                                                                      | Each Undici dispatcher submission; injected fetch callback                         | Undici or injected implementation                                 |
-| Twitch                                                                        | Each prechunked `ChatClient.say` call                                              | Twurple rate-limit queue, IRC client, and networking              |
+| Twitch                                                                        | Precomputed batch of synchronous `ChatClient.say` calls                            | Twurple rate-limit queue, IRC client, and networking              |
 | WhatsApp                                                                      | Baileys `sendMessage` after FIFO, or `sendPresenceUpdate`; both recheck the socket | Baileys media/session preparation, encryption, and networking     |
 
 Matrix's client-owned crypto maintenance uses its client lifecycle rather than

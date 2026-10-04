@@ -44,6 +44,7 @@ import {
   type SessionStoreRegistryRead,
 } from "./session-sqlite-target.js";
 import {
+  isConfiguredAgentDatabaseTarget,
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
 } from "./targets.js";
@@ -271,13 +272,20 @@ export async function runSessionStartupMigration(params: {
           "database",
           "runtime",
         )(databasePath, options.agentId);
-        if (typeof retained !== "object") {
-          return operation().then(() => true);
+        if (typeof retained === "object") {
+          params.log.info(
+            `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
+          );
+          return false;
         }
-        params.log.info(
-          `session: skipping deleted agent database for ${options.agentId} at ${databasePath} (cleanup complete); run "${formatCliCommand("openclaw doctor --fix", env)}" for explicit restoration guidance`,
-        );
-        return false;
+        // Missing registry entries still need recovery before runtime can discover their lineage.
+        if (
+          registeredDatabases.has(`${options.agentId}\0${databasePath}`) &&
+          !isConfiguredAgentDatabaseTarget(params.cfg, options.agentId, databasePath, env)
+        ) {
+          return false;
+        }
+        return operation().then(() => true);
       });
     const deletion = await readAgentDeletionJournalStatusInWorker(options.agentId, { env });
     params.assertCurrent?.();

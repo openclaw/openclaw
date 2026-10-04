@@ -92,15 +92,16 @@ function splitPathForDisplay(path: string): { base: string; dir?: string } {
   return { base: normalized.slice(slash + 1), dir: normalized.slice(0, slash) };
 }
 
-type EditPair = { oldText: string; newText: string };
-
 type ResolvedEditDiff = { diff: DiffLine[]; stat?: DiffStat };
 
 const MAX_LOCAL_DIFF_PAIRS = 8;
 const MAX_LOCAL_DIFF_INPUT_CHARS = 120_000;
 
-function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; truncated: boolean } {
-  const pairs: EditPair[] = [];
+function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
+  if (!args) {
+    return null;
+  }
+  const pairs: { oldText: string; newText: string }[] = [];
   let inputChars = 0;
   let truncated = false;
   const edits = Array.isArray(args.edits) ? args.edits : [args];
@@ -125,7 +126,18 @@ function readEditPairs(args: Record<string, unknown>): { pairs: EditPair[]; trun
       pairs.push({ oldText, newText });
     }
   }
-  return { pairs, truncated };
+  if (pairs.length === 0) {
+    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
+  }
+  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
+  const result = joinDiffSections(sections, { truncated });
+  if (result.lines.length === 0) {
+    return null;
+  }
+  return {
+    diff: result.lines,
+    ...(result.kind === "complete" ? { stat: result.stat } : {}),
+  };
 }
 
 function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
@@ -141,25 +153,6 @@ function readDetailsDiff(details: unknown): ResolvedEditDiff | null {
   return {
     diff: lines.lines,
     ...(lines.kind === "complete" ? { stat: lines.stat } : {}),
-  };
-}
-
-function resolveEditDiff(args: Record<string, unknown> | null): ResolvedEditDiff | null {
-  if (!args) {
-    return null;
-  }
-  const { pairs, truncated } = readEditPairs(args);
-  if (pairs.length === 0) {
-    return truncated ? { diff: [{ kind: "skip", text: "" }] } : null;
-  }
-  const sections = pairs.map((pair) => computeLineDiff(pair.oldText, pair.newText));
-  const result = joinDiffSections(sections, { truncated });
-  if (result.lines.length === 0) {
-    return null;
-  }
-  return {
-    diff: result.lines,
-    ...(result.kind === "complete" ? { stat: result.stat } : {}),
   };
 }
 
@@ -263,17 +256,6 @@ export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
   return view;
 }
 
-/**
- * Strip the `sh -lc '<command>'` wrapper harnesses add around agent commands
- * so rows show the command the model actually wrote. Display-only.
- */
-function unwrapShellWrapperCommand(command: string): string {
-  const match = command.match(
-    /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
-  );
-  return match?.[2] ?? command;
-}
-
 function buildToolCallView(
   source: ToolCallViewSource,
   args: Record<string, unknown> | null,
@@ -286,10 +268,14 @@ function buildToolCallView(
 
   if (kind === "command") {
     const command = args ? readNonBlankString(args.command) : undefined;
+    // Display the inner command from a harness's sh -lc wrapper.
+    const shellWrapper = command?.match(
+      /^\s*(?:\/(?:usr\/)?bin\/)?(?:ba|z|da)?sh\s+-l?c\s+(['"])([\s\S]+)\1\s*$/,
+    );
     return {
       kind,
       title: COMMAND_TOOL_NAMES.has(key) ? resolveExecTitle(args) : undefined,
-      command: command ? unwrapShellWrapperCommand(command) : command,
+      command: shellWrapper?.[2] ?? command,
       code: resolveExecCode(args),
     };
   }

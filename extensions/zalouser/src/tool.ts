@@ -1,5 +1,6 @@
 import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
+import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { jsonResult as json, type AgentToolResult } from "openclaw/plugin-sdk/tool-results";
@@ -192,6 +193,14 @@ async function executeZalouserTool(
   } catch (err) {
     return json({
       error: formatErrorMessage(err),
+      ...(isChannelPartialDeliveryError(err)
+        ? {
+            ok: false,
+            deliveryStatus: "partial_failed",
+            sentBeforeError: true,
+            result: err.deliveryResult,
+          }
+        : {}),
     });
   }
 }

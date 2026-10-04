@@ -10,7 +10,6 @@ import {
   supportsClaudeNativeXhighEffort,
   type ModelApi,
   type ModelDefinitionConfig,
-  type ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeOptionalLowercaseString,
@@ -95,11 +94,6 @@ type FoundryModelCapabilities = {
   contextWindow: number;
   maxTokens: number;
   compat?: FoundryModelCompat;
-};
-
-type FoundryProviderConfigPatch = Omit<ModelProviderConfig, "apiKey" | "headers"> & {
-  apiKey?: SecretInput | undefined;
-  headers?: Record<string, SecretInput> | undefined;
 };
 
 function normalizeModelInput(input?: unknown): Array<"text" | "image"> {
@@ -375,29 +369,6 @@ export function extractFoundryEndpoint(baseUrl: string | null | undefined): stri
   return normalizeFoundryEndpoint(trimmed) || undefined;
 }
 
-function buildFoundryModelCompat(
-  modelId: string,
-  modelNameHint?: string | null,
-  configuredApi?: ModelApi | null,
-): FoundryModelCompat | undefined {
-  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, configuredApi);
-  if (resolvedApi === ANTHROPIC_MESSAGES_API) {
-    return undefined;
-  }
-  const configuredModelName = resolveConfiguredModelNameHint(modelId, modelNameHint);
-  const needsMaxCompletionTokens = requiresFoundryMaxCompletionTokens(configuredModelName);
-  const supportsReasoningEffort = supportsFoundryReasoningEffort(configuredModelName);
-  const supportedReasoningEfforts = resolveFoundryReasoningEfforts(configuredModelName);
-  return {
-    ...(resolvedApi === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
-    ...(resolvedApi !== DEFAULT_GPT5_API || supportsReasoningEffort
-      ? { supportsReasoningEffort }
-      : {}),
-    ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
-    maxTokensField: needsMaxCompletionTokens ? "max_completion_tokens" : "max_tokens",
-  };
-}
-
 export function resolveFoundryModelCapabilities(
   modelId: string,
   modelNameHint?: string | null,
@@ -408,6 +379,7 @@ export function resolveFoundryModelCapabilities(
   const api = resolveFoundryApi(modelId, modelName, configuredApi);
   const normalizedInput = normalizeModelInput(existingInput);
   const supportedReasoningEfforts = resolveFoundryReasoningEfforts(modelName);
+  const supportsReasoningEffort = supportsFoundryReasoningEffort(modelName);
   const isAnthropic = api === ANTHROPIC_MESSAGES_API || isAnthropicFoundryDeployment(modelName);
   const supportsClaudeThinking =
     isAnthropic &&
@@ -422,7 +394,7 @@ export function resolveFoundryModelCapabilities(
     api,
     reasoning:
       supportsClaudeThinking ||
-      supportsFoundryReasoningEffort(modelName) ||
+      supportsReasoningEffort ||
       supportsFoundryReasoningContent(modelName),
     ...(supportsClaudeXhighThinking
       ? { thinkingLevelMap: { xhigh: "xhigh", max: "max" } }
@@ -435,7 +407,19 @@ export function resolveFoundryModelCapabilities(
         : normalizedInput,
     contextWindow: tokenLimits.contextWindow,
     maxTokens: tokenLimits.maxTokens,
-    compat: buildFoundryModelCompat(modelId, modelName, api),
+    compat:
+      api === ANTHROPIC_MESSAGES_API
+        ? undefined
+        : {
+            ...(api === DEFAULT_GPT5_API ? { supportsStore: false } : {}),
+            ...(api !== DEFAULT_GPT5_API || supportsReasoningEffort
+              ? { supportsReasoningEffort }
+              : {}),
+            ...(supportedReasoningEfforts ? { supportedReasoningEfforts } : {}),
+            maxTokensField: requiresFoundryMaxCompletionTokens(modelName)
+              ? "max_completion_tokens"
+              : "max_tokens",
+          },
   };
 }
 
@@ -472,81 +456,6 @@ export function buildFoundryModelConfig(
   };
 }
 
-function buildFoundryProviderConfig(
-  endpoint: string,
-  modelId: string,
-  modelNameHint?: string | null,
-  options?: {
-    api?: FoundryProviderApi;
-    deployments?: FoundryDeploymentConfigInput[];
-  },
-): FoundryProviderConfigPatch {
-  const resolvedApi = resolveFoundryApi(modelId, modelNameHint, options?.api);
-  const deployments = options?.deployments?.length
-    ? options.deployments
-    : [{ name: modelId, modelName: modelNameHint ?? undefined, api: resolvedApi }];
-  return {
-    baseUrl: buildFoundryProviderBaseUrl(endpoint, modelId, modelNameHint, resolvedApi),
-    api: resolvedApi,
-    authHeader: undefined,
-    apiKey: undefined,
-    headers: undefined,
-    models: deployments.map((deployment) => {
-      const capabilities = resolveFoundryModelCapabilities(
-        deployment.name,
-        deployment.modelName,
-        deployment.api ?? resolvedApi,
-      );
-      return buildFoundryModelConfig(endpoint, deployment.name, capabilities);
-    }),
-  };
-}
-
-function buildFoundryCredentialMetadata(params: {
-  authMethod: "api-key" | "entra-id";
-  endpoint: string;
-  modelId: string;
-  modelNameHint?: string | null;
-  api?: FoundryProviderApi;
-  subscriptionId?: string;
-  subscriptionName?: string;
-  tenantId?: string;
-}): Record<string, string> {
-  const resolvedApi = resolveFoundryApi(params.modelId, params.modelNameHint, params.api);
-  const metadata: Record<string, string> = {
-    authMethod: params.authMethod,
-    endpoint: params.endpoint,
-    modelId: params.modelId,
-    api: resolvedApi,
-  };
-  const modelName = resolveConfiguredModelNameHint(params.modelId, params.modelNameHint);
-  if (modelName) {
-    metadata.modelName = modelName;
-  }
-  if (params.subscriptionId) {
-    metadata.subscriptionId = params.subscriptionId;
-  }
-  if (params.subscriptionName) {
-    metadata.subscriptionName = params.subscriptionName;
-  }
-  if (params.tenantId) {
-    metadata.tenantId = params.tenantId;
-  }
-  return metadata;
-}
-
-function buildPluginsAllowPatch(
-  currentAllow: string[] | undefined,
-): { plugins: { allow: string[] } } | Record<string, never> {
-  if (!Array.isArray(currentAllow) || currentAllow.length === 0) {
-    return {};
-  }
-  if (currentAllow.includes(PROVIDER_ID)) {
-    return {};
-  }
-  return { plugins: { allow: [...currentAllow, PROVIDER_ID] } };
-}
-
 export function listConfiguredFoundryProfileIds(config: FoundryConfigShape): string[] {
   return Object.entries(config.auth?.profiles ?? {})
     .filter(([, profile]) => profile.provider === PROVIDER_ID)
@@ -578,6 +487,21 @@ export function buildFoundryAuthResult(params: {
       selectedDeployment?.modelName ?? params.modelNameHint,
     ),
   );
+  const resolvedApi = resolveFoundryApi(params.modelId, params.modelNameHint, params.api);
+  const deployments = params.deployments?.length
+    ? params.deployments
+    : [{ name: params.modelId, modelName: params.modelNameHint ?? undefined, api: resolvedApi }];
+  const modelName = resolveConfiguredModelNameHint(params.modelId, params.modelNameHint);
+  const metadata = {
+    authMethod: params.authMethod,
+    endpoint: params.endpoint,
+    modelId: params.modelId,
+    api: resolvedApi,
+    ...(modelName ? { modelName } : {}),
+    ...(params.subscriptionId ? { subscriptionId: params.subscriptionId } : {}),
+    ...(params.subscriptionName ? { subscriptionName: params.subscriptionName } : {}),
+    ...(params.tenantId ? { tenantId: params.tenantId } : {}),
+  };
   const modelRef = `${PROVIDER_ID}/${params.modelId}`;
   return {
     profiles: [
@@ -586,7 +510,7 @@ export function buildFoundryAuthResult(params: {
         credential: buildApiKeyCredential(
           PROVIDER_ID,
           params.apiKey,
-          buildFoundryCredentialMetadata(params),
+          metadata,
           params.secretInputMode ? { secretInputMode: params.secretInputMode } : undefined,
         ),
       },
@@ -607,18 +531,36 @@ export function buildFoundryAuthResult(params: {
         : {}),
       models: {
         providers: {
-          [PROVIDER_ID]: buildFoundryProviderConfig(
-            params.endpoint,
-            params.modelId,
-            params.modelNameHint,
-            {
-              api: params.api,
-              deployments: params.deployments,
-            },
-          ),
+          [PROVIDER_ID]: {
+            baseUrl: buildFoundryProviderBaseUrl(
+              params.endpoint,
+              params.modelId,
+              params.modelNameHint,
+              resolvedApi,
+            ),
+            api: resolvedApi,
+            authHeader: undefined,
+            apiKey: undefined,
+            headers: undefined,
+            models: deployments.map((deployment) =>
+              buildFoundryModelConfig(
+                params.endpoint,
+                deployment.name,
+                resolveFoundryModelCapabilities(
+                  deployment.name,
+                  deployment.modelName,
+                  deployment.api ?? resolvedApi,
+                ),
+              ),
+            ),
+          },
         },
       },
-      ...buildPluginsAllowPatch(params.currentPluginsAllow),
+      ...(Array.isArray(params.currentPluginsAllow) &&
+      params.currentPluginsAllow.length > 0 &&
+      !params.currentPluginsAllow.includes(PROVIDER_ID)
+        ? { plugins: { allow: [...params.currentPluginsAllow, PROVIDER_ID] } }
+        : {}),
     },
     ...(!imageDeployment ? { defaultModel: modelRef } : {}),
     notes: params.notes,

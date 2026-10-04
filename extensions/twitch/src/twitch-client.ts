@@ -1,6 +1,10 @@
 import { RefreshingAuthProvider, StaticAuthProvider } from "@twurple/auth";
 import { ChatClient, LogLevel } from "@twurple/chat";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-resolution";
+import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
@@ -391,18 +395,29 @@ export class TwitchClientManager {
       // Twurple say() does not return a provider message ID.
       const messageId = crypto.randomUUID();
 
-      // Pre-chunk so Twurple's raw UTF-16 fallback cannot split surrogate pairs.
-      for (const chunk of chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT)) {
-        preparingUse = true;
-        await effect.initiate(() => {
-          preparingUse = false;
-          return client.say(channel, chunk);
-        });
+      // Prechunk before Twurple's raw UTF-16 fallback can split surrogate pairs.
+      const chunks = chunkTextForOutbound(message, TWITCH_CHAT_MESSAGE_LIMIT);
+      preparingUse = true;
+      const results = await effect.initiate(() => {
+        preparingUse = false;
+        // Admit the whole prechunked message before any SDK call. Twurple owns
+        // rate limiting after these synchronous handoffs; responses do not hold authority.
+        return Promise.allSettled(chunks.map(async (chunk) => client.say(channel, chunk)));
+      });
+      const failure = results.find((result) => result.status === "rejected");
+      if (failure) {
+        if (results.some((result) => result.status === "fulfilled")) {
+          throw createChannelPartialDeliveryError(failure.reason, {
+            messageIds: [messageId],
+            visibleReplySent: true,
+          });
+        }
+        throw failure.reason;
       }
 
       return { ok: true, messageId };
     } catch (error) {
-      if (preparingUse) {
+      if (preparingUse || isChannelPartialDeliveryError(error)) {
         throw error;
       }
       const errorMessage = formatErrorMessage(error);

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  createChannelPartialDeliveryError,
+  isChannelPartialDeliveryError,
+} from "openclaw/plugin-sdk/channel-inbound";
+import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -111,12 +115,6 @@ export async function sendIrcMessages(
         throw new Error("IRC connection closed before send");
       }
       await client.sendPrivmsg(target, message.text, message.replyTo);
-      getOptionalIrcRuntime()?.channel.activity.record({
-        channel: "irc",
-        accountId: account.accountId,
-        direction: "outbound",
-      });
-
       const messageId = randomUUID();
       const result = {
         messageId,
@@ -134,9 +132,35 @@ export async function sendIrcMessages(
         }),
       };
       results.push(result);
+      getOptionalIrcRuntime()?.channel.activity.record({
+        channel: "irc",
+        accountId: account.accountId,
+        direction: "outbound",
+      });
       await onDeliveryResult?.(result);
     }
     return results;
+  } catch (error) {
+    if (results.length === 0) {
+      throw error;
+    }
+    const partial = isChannelPartialDeliveryError(error) ? error.deliveryResult : undefined;
+    const receipt = createMessageReceiptFromOutboundResults({
+      results: [
+        ...results.map(({ receipt }) => ({ receipt })),
+        ...(partial?.receipt ? [{ receipt: partial.receipt }] : []),
+        ...(partial?.messageIds ?? [])
+          .filter((messageId) => !partial?.receipt?.platformMessageIds.includes(messageId))
+          .map((messageId) => ({ channel: "irc", messageId, conversationId: target })),
+      ],
+      kind: "text",
+    });
+    throw createChannelPartialDeliveryError(error, {
+      ...partial,
+      messageIds: receipt.platformMessageIds,
+      receipt,
+      visibleReplySent: true,
+    });
   } finally {
     transient?.quit("sent");
   }

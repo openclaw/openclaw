@@ -1,5 +1,8 @@
 // Msteams tests cover outbound plugin behavior.
 import assert from "node:assert/strict";
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -340,6 +343,128 @@ describe("msteamsOutbound cfg threading", () => {
       messageId: "msg-text-2",
       target: { kind: "conversation", id: "conv-text" },
     });
+  });
+
+  it.each([
+    { kind: "text", observed: false },
+    { kind: "text", observed: true },
+    { kind: "media", observed: false },
+    { kind: "media", observed: true },
+  ])(
+    "retains accepted $kind payload receipts after refusal (observer=$observed)",
+    async ({ kind, observed }) => {
+      const refusal = new PlatformMessageNotDispatchedError("caller retired", {
+        cause: new Error("caller retired"),
+      });
+      const onDeliveryResult = observed ? vi.fn() : undefined;
+      mocks.sendMessageMSTeams
+        .mockResolvedValueOnce({ messageId: "msg-first", conversationId: "conv-1" })
+        .mockRejectedValueOnce(refusal);
+      const text = kind === "text" ? "x".repeat(8001) : "album";
+      await expect(
+        sendPayload({
+          cfg,
+          to: "conversation:abc",
+          text,
+          payload: {
+            text,
+            ...(kind === "media" ? { mediaUrls: ["one.png", "two.png", "three.png"] } : {}),
+          },
+          onDeliveryResult,
+        }),
+      ).rejects.toMatchObject({
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        cause: refusal,
+        deliveryResult: {
+          messageIds: ["msg-first"],
+          receipt: { platformMessageIds: ["msg-first"] },
+          visibleReplySent: true,
+        },
+      });
+      expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
+      if (onDeliveryResult) {
+        expect(onDeliveryResult).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it("retains every accepted payload receipt when its observer fails", async () => {
+    const failure = new Error("delivery observer unavailable");
+    const onDeliveryResult = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(failure);
+    mocks.sendMessageMSTeams
+      .mockResolvedValueOnce({ messageId: "msg-first", conversationId: "conv-1" })
+      .mockResolvedValueOnce({ messageId: "msg-second", conversationId: "conv-1" });
+    const text = "x".repeat(8001);
+    await expect(
+      sendPayload({ cfg, to: "conversation:abc", text, payload: { text }, onDeliveryResult }),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: failure,
+      deliveryResult: {
+        messageIds: ["msg-first", "msg-second"],
+        receipt: { platformMessageIds: ["msg-first", "msg-second"] },
+        visibleReplySent: true,
+      },
+    });
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledTimes(2);
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+  });
+
+  it("combines earlier payload receipts with a native partial delivery once", async () => {
+    const failure = new Error("second activity failed");
+    const child = {
+      messageId: "msg-child",
+      conversationId: "conv-1",
+      receipt: createMessageReceiptFromOutboundResults({
+        results: [{ channel: "msteams", messageId: "msg-child", conversationId: "conv-1" }],
+        kind: "media",
+      }),
+    };
+    const partial = createChannelPartialDeliveryError(failure, {
+      messageIds: [child.messageId],
+      receipt: child.receipt,
+      visibleReplySent: true,
+    });
+    mocks.sendMessageMSTeams
+      .mockResolvedValueOnce({ messageId: "msg-first", conversationId: "conv-1" })
+      .mockImplementationOnce(async ({ onDeliveryResult }) => {
+        await onDeliveryResult?.(child);
+        throw partial;
+      });
+    const onDeliveryResult = vi.fn();
+    const text = "x".repeat(4001);
+    await expect(
+      sendPayload({ cfg, to: "conversation:abc", text, payload: { text }, onDeliveryResult }),
+    ).rejects.toMatchObject({
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      cause: failure,
+      deliveryResult: {
+        messageIds: ["msg-first", "msg-child"],
+        receipt: {
+          platformMessageIds: ["msg-first", "msg-child"],
+          parts: [
+            expect.objectContaining({ platformMessageId: "msg-first" }),
+            expect.objectContaining({ platformMessageId: "msg-child", kind: "media" }),
+          ],
+        },
+        visibleReplySent: true,
+      },
+    });
+    expect(onDeliveryResult).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves a refusal before any payload activity is accepted", async () => {
+    const refusal = new PlatformMessageNotDispatchedError("caller retired", {
+      cause: new Error("caller retired"),
+    });
+    mocks.sendMessageMSTeams.mockRejectedValueOnce(refusal);
+    await expect(
+      sendPayload({ cfg, to: "conversation:abc", text: "hello", payload: { text: "hello" } }),
+    ).rejects.toBe(refusal);
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledOnce();
   });
 
   it.each([

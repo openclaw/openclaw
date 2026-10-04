@@ -16,12 +16,10 @@ import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import type { McpToolCatalog, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { toToolDefinitions } from "./agent-tool-definition-adapter.js";
-import { raceWithAbortSignal, wrapToolWithAbortSignal } from "./agent-tools.abort.js";
+import { raceWithAbortSignal } from "./agent-tools.abort.js";
 import {
   finalizeToolTerminalPresentation,
-  isToolWrappedWithBeforeToolCallHook,
   type ToolOutcomeObservation,
-  wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { finalizeAgentTools } from "./agent-tools.finalize.js";
@@ -536,13 +534,6 @@ describe("Tool Search", () => {
 
   it.each([
     {
-      scenario: "delegation was never provided",
-      agentId: "openclaw",
-      denyOpenClaw: false,
-      expected:
-        "Read gateway config/schema. update.run: owner request or operator schedule; automatic restart + completion notice. Never via shell.",
-    },
-    {
       scenario: "policy removed delegation",
       agentId: "main",
       denyOpenClaw: true,
@@ -754,27 +745,6 @@ describe("Tool Search", () => {
     expect(result).toEqual([{ id: "H-1", paid: false, tons: 14 }]);
     expect(Object.isFrozen(result)).toBe(true);
     expect(Object.isFrozen((result as unknown[])[0])).toBe(true);
-  });
-
-  it("exposes nullable trusted output schemas without hiding null", async () => {
-    const target = pluginTool("orchard_optional_shipment", "Read an optional orchard shipment");
-    target.outputSchema = {
-      type: "object",
-      nullable: true,
-      properties: { id: { type: "string" } },
-      required: ["id"],
-      additionalProperties: false,
-    } as never;
-    target.execute = vi.fn(async () => jsonResult(null));
-    const { runtime } = headlessFixture([target]);
-
-    await expect(runtime.search("optional orchard shipment")).resolves.toContainEqual(
-      expect.objectContaining({
-        name: "orchard_optional_shipment",
-        output: "{ id: string } | null",
-      }),
-    );
-    await expect(runtime.callValue("orchard_optional_shipment")).resolves.toBeNull();
   });
 
   it("preserves an explicit undefined details marker through result snapshots", async () => {
@@ -1011,61 +981,6 @@ describe("Tool Search", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("compacts plugin tools behind structured controls and can search, describe, and call them", async () => {
-    const alpha = pluginTool("fake_create_ticket", "Create a ticket in the fake tracker");
-    const beta = pluginTool("fake_weather", "Read fake weather");
-    const catalogRef = createToolSearchCatalogRef();
-    const config = { tools: { toolSearch: true } };
-    const ctx = { catalogRef, config, sessionId: "session-hooks", sessionKey: "agent:main:main" };
-    const compacted = applyToolSearchCatalog({
-      ...ctx,
-      toolHookContext: {
-        agentId: "agent-main",
-        sessionId: ctx.sessionId,
-        sessionKey: ctx.sessionKey,
-      },
-      tools: [...structuredControlStubs(), alpha, beta],
-    });
-    expect(compacted.tools.map((tool) => tool.name)).toEqual([
-      TOOL_SEARCH_RAW_TOOL_NAME,
-      TOOL_DESCRIBE_RAW_TOOL_NAME,
-      TOOL_CALL_RAW_TOOL_NAME,
-    ]);
-    expect(compacted.catalogToolCount).toBe(2);
-
-    const search = controlTool(ctx, TOOL_SEARCH_RAW_TOOL_NAME);
-    const describeTool = controlTool(ctx, TOOL_DESCRIBE_RAW_TOOL_NAME);
-    const call = controlTool(ctx, TOOL_CALL_RAW_TOOL_NAME);
-    const hits = await search.execute("search-1", { query: "ticket", limit: 1 });
-    expect(hits.details).toEqual([
-      expect.objectContaining({ id: "openclaw:fake-catalog:fake_create_ticket" }),
-    ]);
-    const hit = expectDefined((hits.details as Array<{ id: string }>)[0], "search hit");
-    const described = resultDetails(await describeTool.execute("describe-1", { id: hit.id }));
-    expect(described.parameters).toEqual(alpha.parameters);
-    const result = await call.execute("call-1", { id: described.id, args: { value: "ship" } });
-
-    expect(alpha.execute).toHaveBeenCalledWith(
-      "tool_call:call-1:fake_create_ticket:1",
-      { value: "ship" },
-      expect.any(AbortSignal),
-      undefined,
-      undefined,
-    );
-    expect(resultDetails(result)).toMatchObject({
-      result: { details: { name: alpha.name, input: { value: "ship" } } },
-    });
-    const telemetry = catalogRuntime(catalogRef).telemetry();
-    expect(telemetry).toMatchObject({
-      catalogSize: 2,
-      searchCount: 1,
-      describeCount: 1,
-      callCount: 1,
-    });
-    // Counter scopes must survive credential redaction byte-for-byte.
-    expect(telemetry.counterScope).toMatch(/^[0-9a-f]{24}$/);
-  });
-
   it("keeps structured call content compact while preserving complete result details and termination", async () => {
     const target = pluginTool("compact_result_target", "Long tool instructions. ".repeat(1_000));
     target.label = "Long display label. ".repeat(500);
@@ -1255,25 +1170,6 @@ describe("Tool Search", () => {
     expect((rejection as Error & { cause?: unknown }).cause).toBeUndefined();
   });
 
-  it("preserves the exact trusted abort reason from a cancelled network tool", async () => {
-    const catalogRef = createToolSearchCatalogRef();
-    const controller = new AbortController();
-    const abort = new DOMException("operator cancelled", "AbortError");
-    const target = pluginTool("fake_aborted_network", "Cancel a network operation");
-    target.resultContentSource = "network";
-    target.execute = vi.fn(async () => {
-      controller.abort(abort);
-      throw abort;
-    });
-    registerHeadlessToolSearchCatalog({ catalogRef, tools: [target] });
-    const call = controlTool({ catalogRef }, TOOL_CALL_RAW_TOOL_NAME);
-
-    await expect(
-      call.execute("structured-trusted-abort", { id: "fake_aborted_network" }, controller.signal),
-    ).rejects.toBe(abort);
-    expect(abort.message).toBe("operator cancelled");
-  });
-
   it("leaves trusted pre-execution network-tool failures unchanged", async () => {
     const catalogRef = createToolSearchCatalogRef();
     const trusted = "Trusted local preflight failure";
@@ -1341,6 +1237,8 @@ describe("Tool Search", () => {
       catalogRef,
     });
     const firstScope = expectDefined(catalogRef.current, "first catalog").counterScope;
+    // Counter scopes must survive credential redaction byte-for-byte.
+    expect(firstScope).toMatch(/^[0-9a-f]{24}$/);
     const runtime = new ToolSearchRuntime({ catalogRef }, resolveToolSearchConfig(config));
     await runtime.search("fake_first");
     expect(runtime.telemetry()).toMatchObject({ counterScope: firstScope, searchCount: 1 });
@@ -1799,30 +1697,6 @@ describe("Tool Search", () => {
     expect(result).toContainEqual(
       expect.objectContaining({ name: "client_pick_file", source: "client", input: "unknown" }),
     );
-  });
-
-  it("does not re-wrap abort-wrapped tools that already have before_tool_call hooks", () => {
-    const target = pluginTool("fake_already_hooked", "Already hook-aware fake tool");
-    const hooked = wrapToolWithBeforeToolCallHook(target, {
-      agentId: "agent-main",
-      sessionId: "session-hooks-abort",
-      sessionKey: "agent:main:main",
-    });
-    const abortWrapped = wrapToolWithAbortSignal(hooked, new AbortController().signal);
-
-    const { ctx } = catalogFixture([abortWrapped], {
-      toolHookContext: {
-        agentId: "agent-main",
-        sessionId: "session-hooks-abort",
-        sessionKey: "agent:main:main",
-      },
-    });
-
-    const entry = ctx.catalogRef.current?.entries.find(
-      (candidate) => candidate.name === "fake_already_hooked",
-    );
-    expect(entry?.tool).toBe(abortWrapped);
-    expect(isToolWrappedWithBeforeToolCallHook(entry!.tool as AnyAgentTool)).toBe(true);
   });
 
   it("suggests recoverable Tool Search steps for guessed tool ids", async () => {

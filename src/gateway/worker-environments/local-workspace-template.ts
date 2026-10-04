@@ -9,10 +9,7 @@ import {
 } from "../../agents/sandbox/dependency-template.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
-import {
-  requireWorktreeDiskSpace,
-  WORKTREE_SETUP_HEADROOM_BYTES,
-} from "../../agents/worktrees/capacity.js";
+import { WORKTREE_SETUP_HEADROOM_BYTES } from "../../agents/worktrees/capacity.js";
 import { withWorktreeGitConfig } from "../../agents/worktrees/checkout-git-config.js";
 import { detectWorktreeFilesystemBackend } from "../../agents/worktrees/filesystem-backend.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
@@ -51,7 +48,7 @@ async function hasContainedVirtualStore(directory: string, workdir: string): Pro
 async function validateTemplate(
   directory: string,
   commit: string,
-  guard: WorktreeAllocationGuard,
+  guard: Pick<WorktreeAllocationGuard, "signal" | "commitGuard">,
   trim = false,
 ) {
   return await withWorktreeGitConfig(
@@ -137,7 +134,9 @@ export async function cloneLocalWorkspaceTemplate(params: {
   templateRoot: string;
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
-  guard: WorktreeAllocationGuard & { signal: AbortSignal };
+  guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
+    signal: AbortSignal;
+  };
 }): Promise<boolean> {
   const { guard } = params;
   const backend = await detectWorktreeFilesystemBackend(path.dirname(params.destination), guard);
@@ -169,7 +168,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
     await requireGit(params.source, ["rev-parse", "--git-common-dir"], gitOptions),
   );
   const prepareSource = async (directory: string) => {
-    requireWorktreeDiskSpace(
+    await guard.requireDiskSpace(
       [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
       "sandbox dependency template",
     );
@@ -196,7 +195,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
     sourceCommit: params.baseCommit,
     backend: `sandbox-${backend.id}`,
     requireSpace: () =>
-      requireWorktreeDiskSpace(
+      guard.requireDiskSpace(
         [{ path: params.templateRoot, bytes: WORKTREE_SETUP_HEADROOM_BYTES }],
         "sandbox dependency template",
       ),
@@ -234,7 +233,7 @@ export async function cloneLocalWorkspaceTemplate(params: {
     return false;
   }
   guard.commitGuard();
-  requireWorktreeDiskSpace(
+  await guard.requireDiskSpace(
     [
       {
         path: params.destination,

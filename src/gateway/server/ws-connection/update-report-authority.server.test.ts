@@ -39,9 +39,9 @@ vi.mock("../../../infra/github-issue.js", async () => {
   };
 });
 
-vi.mock("../../server-restart-sentinel.js", async () => {
-  const actual = await vi.importActual<typeof import("../../server-restart-sentinel.js")>(
-    "../../server-restart-sentinel.js",
+vi.mock("../../server-update-sentinel.js", async () => {
+  const actual = await vi.importActual<typeof import("../../server-update-sentinel.js")>(
+    "../../server-update-sentinel.js",
   );
   return {
     ...actual,

@@ -1,4 +1,5 @@
 // Irc tests cover client plugin behavior.
+import net from "node:net";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -276,20 +277,36 @@ function maxLineBytes(bodies: string[]): number {
 }
 
 describe("irc client PRIVMSG chunking on the wire", () => {
-  it("preserves partial delivery when authority refuses a later raw chunk", async () => {
+  it("admits all raw chunks before sending the message", async () => {
     const server = await startLoopbackIrcServer();
-    const nextChunk = createDeferred<void>();
-    const refuse = createDeferred<void>();
     const refusal = new PlatformMessageNotDispatchedError("authority ended", {
       cause: new Error("scheduled sender retired"),
     });
     let attempts = 0;
     effectGate.beforeInitiate = async () => {
-      if (++attempts === 2) {
-        nextChunk.resolve();
-        await refuse.promise;
+      if (++attempts > 1) {
         throw refusal;
       }
+    };
+    try {
+      await expect(collectPrivmsgBodies(server, "abcdefghi", 3)).resolves.toEqual([
+        "abc",
+        "def",
+        "ghi",
+      ]);
+    } finally {
+      effectGate.beforeInitiate = undefined;
+      await server.close();
+    }
+  });
+
+  it("preserves an admission refusal without sending any raw chunks", async () => {
+    const server = await startLoopbackIrcServer();
+    const refusal = new PlatformMessageNotDispatchedError("authority ended", {
+      cause: new Error("scheduled sender retired"),
+    });
+    effectGate.beforeInitiate = async () => {
+      throw refusal;
     };
     const client = await connectIrcClient({
       host: "127.0.0.1",
@@ -301,13 +318,49 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       messageChunkMaxChars: 3,
     });
     try {
-      const sending = client.sendPrivmsg("#general", "abcdefghi").catch((error: unknown) => error);
-      await nextChunk.promise;
-      refuse.resolve();
-      const error = await sending;
+      await expect(client.sendPrivmsg("#general", "abcdefghi")).rejects.toBe(refusal);
+      client.quit("refusal test complete");
+      await server.quitReceived;
+      expect(server.lines.some((line) => line.startsWith("PRIVMSG #general :"))).toBe(false);
+    } finally {
+      effectGate.beforeInitiate = undefined;
+      client.close();
+      await server.close();
+    }
+  });
+
+  it("retains partial delivery when a later raw socket write fails", async () => {
+    const server = await startLoopbackIrcServer();
+    const client = await connectIrcClient({
+      host: "127.0.0.1",
+      port: server.port,
+      tls: false,
+      nick: "bot",
+      username: "bot",
+      realname: "OpenClaw Bot",
+      messageChunkMaxChars: 3,
+    });
+    const failure = new Error("socket write failed");
+    const originalWrite = net.Socket.prototype.write;
+    let sends = 0;
+    const write = vi.spyOn(net.Socket.prototype, "write").mockImplementation(function (
+      this: net.Socket,
+      ...args
+    ) {
+      if (typeof args[0] === "string" && args[0].startsWith("PRIVMSG #general :")) {
+        if (++sends === 2) {
+          throw failure;
+        }
+      }
+      return originalWrite.apply(this, args);
+    });
+    try {
+      const error = await client
+        .sendPrivmsg("#general", "abcdefghi")
+        .catch((error: unknown) => error);
       expect(isChannelPartialDeliveryError(error)).toBe(true);
       expect(error).toMatchObject({
-        cause: refusal,
+        cause: failure,
         deliveryResult: { messageIds: [], visibleReplySent: true },
       });
       client.quit("partial test complete");
@@ -315,10 +368,8 @@ describe("irc client PRIVMSG chunking on the wire", () => {
       expect(server.lines.filter((line) => line.startsWith("PRIVMSG #general :"))).toEqual([
         "PRIVMSG #general :abc",
       ]);
-      expect(attempts).toBe(2);
     } finally {
-      effectGate.beforeInitiate = undefined;
-      refuse.resolve();
+      write.mockRestore();
       client.close();
       await server.close();
     }

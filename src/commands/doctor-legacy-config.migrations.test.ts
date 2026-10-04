@@ -987,7 +987,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "anthropic/claude-opus-4-7",
       fallbacks: ["anthropic/claude-sonnet-4-6"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(res.config.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(res.config.agents?.defaults?.models).toEqual({
       "anthropic/claude-opus-4-7": {
         alias: "Anthropic Opus",
@@ -1163,7 +1163,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.4-mini"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(res.config.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(res.config.agents?.defaults?.models).toEqual({
       "openai/gpt-5.5": { alias: "OpenAI GPT", agentRuntime: { id: "codex" } },
       "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
@@ -1336,7 +1336,7 @@ describe("normalizeCompatibilityConfigValues", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3-flash-preview"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
+    expect(res.config.agents?.defaults).not.toHaveProperty("agentRuntime");
     expect(res.config.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini API",

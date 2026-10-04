@@ -1,5 +1,4 @@
 import { toUSVString } from "node:util";
-import { isMainThread } from "node:worker_threads";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import {
@@ -13,7 +12,6 @@ import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { persistSessionTranscriptArchive } from "./session-accessor.sqlite-archive-store-kernel.js";
 import type {
   MaterializedSessionStateDeletePlan,
@@ -28,7 +26,6 @@ import {
   readSessionStateDeleteSnapshot,
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
-import { hasPreparedNativeSessionDeletion } from "./session-accessor.sqlite-deletion.js";
 import { sqliteSessionEntriesEqual } from "./session-accessor.sqlite-entry-equality.js";
 import {
   deleteSessionEntryRows,
@@ -57,7 +54,6 @@ import {
   readSessionColdTranscript,
 } from "./session-cold-storage-state.js";
 import { deleteSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
-import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionEntry } from "./types.js";
 
 // Transcript-state reclamation owner. Planning stays async-free; transactions revalidate before delete.
@@ -365,7 +361,7 @@ export function assertRawSessionEntryRemovalUnchanged(
   }
 }
 
-function selectProjectedLifecycleRemovals(
+export function selectProjectedLifecycleRemovals(
   database: OpenClawAgentDatabase,
   store: Record<string, SessionEntry>,
   removals: readonly SessionEntryLifecycleRemoval[],
@@ -413,7 +409,7 @@ function selectProjectedLifecycleRemovals(
   return { removedKeysToArchive, changedSessionKeys, projectedRemovals };
 }
 
-function finishProjectedLifecycleRemovalPlans(
+export function finishProjectedLifecycleRemovalPlans(
   database: OpenClawAgentDatabase,
   archiveDirectory: string,
   store: Record<string, SessionEntry>,
@@ -521,82 +517,18 @@ export async function projectSessionEntryLifecycleMutation(
       ),
       ...params.upserts.map((upsert) => upsert.sessionKey.trim()),
     ];
-    const snapshot =
-      isMainThread &&
-      !params.allowCanonicalRepair &&
-      !hasPreparedNativeSessionDeletion() &&
-      params.removals.length === 0 &&
-      supportsOpenClawAgentDatabaseExecution(databaseOptions)
-        ? await withSessionHistoryWorkerDatabase(databaseOptions, (reader) =>
-            reader.readExactEntries({
-              projection: "lifecycle",
-              includeAuthorization: true,
-              sessionKeys,
-              env: { ...(databaseOptions.env ?? process.env) },
-            }),
-          )
-        : undefined;
-    const store = snapshot
-      ? Object.fromEntries(snapshot.entries.map(({ sessionKey, entry }) => [sessionKey, entry]))
-      : readSessionEntryStore(removalDatabase, {
-          allowCanonicalRepair: params.allowCanonicalRepair === true,
-          sessionKeys,
-        });
+    const store = readSessionEntryStore(removalDatabase, {
+      allowCanonicalRepair: params.allowCanonicalRepair === true,
+      sessionKeys,
+    });
     const selected = selectProjectedLifecycleRemovals(removalDatabase, store, params.removals);
-    const { projectedRemovals, changedSessionKeys } = selected;
-    const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
-    for (const upsert of params.upserts) {
-      const sessionKey = upsert.sessionKey.trim();
-      if (!sessionKey) {
-        continue;
-      }
-      if (
-        upsert.requiresRemovalSessionKey &&
-        !projectedRemovals.some(
-          (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
-        )
-      ) {
-        continue;
-      }
-      const expectedEntry = store[sessionKey] ? structuredClone(store[sessionKey]) : undefined;
-      if (upsert.resetBoundary && !expectedEntry) {
-        throw new Error(
-          `Cannot append reset boundary without an existing session row: ${sessionKey}`,
-        );
-      }
-      const entry =
-        upsert.buildEntry === undefined
-          ? upsert.entry
-          : await upsert.buildEntry({
-              currentEntry: expectedEntry ? structuredClone(expectedEntry) : undefined,
-              sessionKey,
-            });
-      if (!entry) {
-        continue;
-      }
-      const cloned = structuredClone(entry);
-      store[sessionKey] = cloned;
-      changedSessionKeys.add(sessionKey);
-      upsertedEntries.push({
-        expectedEntry,
-        sessionKey,
-        entry: cloned,
-        ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
-        ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
-      });
-    }
+    const { projectedRemovals } = selected;
+    const upsertedEntries = await buildProjectedLifecycleUpserts(store, selected, params.upserts);
     if (projectedRemovals.length === 0) {
       return {
         deletePlans: [],
         removals: projectedRemovals,
         upsertedEntries,
-        archiveRecovery:
-          snapshot?.databaseIdentity && snapshot.pendingArchives !== undefined
-            ? {
-                pending: snapshot.pendingArchives,
-                databaseIdentity: snapshot.databaseIdentity.identity,
-              }
-            : undefined,
       };
     }
     // Builders can close the original handle; admit the reference snapshot again.
@@ -610,6 +542,57 @@ export async function projectSessionEntryLifecycleMutation(
       );
     });
   });
+}
+
+/** Builders run once outside SQL; commit rereads their exact prepared rows. */
+export async function buildProjectedLifecycleUpserts(
+  store: Record<string, SessionEntry>,
+  selected: ReturnType<typeof selectProjectedLifecycleRemovals>,
+  upserts: readonly SessionEntryLifecycleUpsert[],
+): Promise<ProjectedLifecycleMutation["upsertedEntries"]> {
+  const { projectedRemovals, changedSessionKeys } = selected;
+  const upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"] = [];
+  for (const upsert of upserts) {
+    const sessionKey = upsert.sessionKey.trim();
+    if (!sessionKey) {
+      continue;
+    }
+    if (
+      upsert.requiresRemovalSessionKey &&
+      !projectedRemovals.some(
+        (removal) => removal.sessionKey === upsert.requiresRemovalSessionKey?.trim(),
+      )
+    ) {
+      continue;
+    }
+    const expectedEntry = store[sessionKey] ? structuredClone(store[sessionKey]) : undefined;
+    if (upsert.resetBoundary && !expectedEntry) {
+      throw new Error(
+        `Cannot append reset boundary without an existing session row: ${sessionKey}`,
+      );
+    }
+    const entry =
+      upsert.buildEntry === undefined
+        ? upsert.entry
+        : await upsert.buildEntry({
+            currentEntry: expectedEntry ? structuredClone(expectedEntry) : undefined,
+            sessionKey,
+          });
+    if (!entry) {
+      continue;
+    }
+    const cloned = structuredClone(entry);
+    store[sessionKey] = cloned;
+    changedSessionKeys.add(sessionKey);
+    upsertedEntries.push({
+      expectedEntry,
+      sessionKey,
+      entry: cloned,
+      ...(upsert.routeContext !== undefined ? { routeContext: upsert.routeContext } : {}),
+      ...(upsert.resetBoundary ? { resetBoundary: upsert.resetBoundary } : {}),
+    });
+  }
+  return upsertedEntries;
 }
 
 // Projected deletes must preserve raw session_nodes.current_session_id references for

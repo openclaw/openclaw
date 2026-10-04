@@ -1310,7 +1310,13 @@ struct GatewayProcessManagerTests {
         outcome: String) async throws
     {
         let port = AppProfile.current.defaultGatewayPort
-        try await self.withLaunchAgentEnvironment(port: port) {
+        try await self.withLaunchAgentEnvironment(port: port, statusPayload: """
+        {"ok":true,"service":{"runtimeIntent":{"status":"known","revision":"before-restore"}}}
+        """, commandHook: { args in
+            if args.first == "status", outcome == "install-failure" {
+                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"message":"install failed"}"#)
+            }
+        }) {
             let manager = self.manager
             let appState = AppStateStore.shared
             let previousPause = appState.isPaused
@@ -1327,18 +1333,17 @@ struct GatewayProcessManagerTests {
                 try FileManager.default.createDirectory(
                     at: authority.plist.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try Data("operator-owned replacement".utf8).write(to: authority.plist)
-            } else if outcome == "install-failure" {
-                GatewayLaunchAgentManager.setTestingDaemonStatusPayload(#"{"ok":false,"message":"install failed"}"#)
             }
             let bun = "/fixture/runtime/previous-build/bin/bun"
             let entrypoint = "/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js"
             let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
                 prefix: [bun, entrypoint], sqliteLibrary: "/fixture/runtime/previous-build/lib/libsqlite3.dylib",
                 environment: ["CHANNEL_FIXTURE": "synthetic"])
+            let installer = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
             var checked = false
             let result = await manager.enableLaunchAgentIfNeeded(
                 port: port,
-                serviceForRestoration: cli,
+                serviceForRestoration: .init(retained: cli, installer: installer),
                 expectedServiceAuthority: authority,
                 mutationCheck: { checked = true })
             let recoveryFailure = result.installed ? nil : "Child failed. Previous Gateway recovery: " +
@@ -1354,16 +1359,22 @@ struct GatewayProcessManagerTests {
             #expect(checked)
             let commands = GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
             if outcome == "operator-replacement" {
-                #expect(commands.isEmpty)
+                #expect(commands.count == 1)
+                #expect(commands.allSatisfy { $0.contains("status") })
                 #expect(try Data(contentsOf: authority.plist) == Data("operator-owned replacement".utf8))
                 return
             }
             let install = try #require(commands.first { $0.contains("install") })
-            #expect(Array(install.prefix(2)) == [bun, entrypoint])
+            #expect(commands.allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
             let runtimeIndex = try #require(install.firstIndex(of: "--runtime"))
             let pathIndex = try #require(install.firstIndex(of: "--runtime-path"))
             #expect(install[runtimeIndex + 1] == "bun")
             #expect(install[pathIndex + 1] == bun)
+            #expect(Array(install.suffix(5)) == [
+                "--restore-service-cli",
+                #"{"entrypoint":"/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js","executable":"/fixture/runtime/previous-build/bin/bun","sqliteLibrary":"/fixture/runtime/previous-build/lib/libsqlite3.dylib"}"#,
+                "--expected-runtime-pin", #"{"definition":null,"revision":"before-restore"}"#, "--json",
+            ])
         }
     }
 
@@ -1429,6 +1440,95 @@ struct GatewayProcessManagerTests {
         }
     }
 
+    @Test func `operator repin before prior-build restoration dispatch is preserved, not overwritten`() async throws {
+        try await self.withLaunchAgentEnvironment {
+            let state = AppProfile.current.stateDirectoryURL()
+            let databaseURL = state.appendingPathComponent("state/openclaw.sqlite")
+            try #require(!FileManager.default.fileExists(atPath: databaseURL.path))
+            defer {
+                for path in [databaseURL.path, databaseURL.path + "-wal", databaseURL.path + "-shm"] {
+                    try? FileManager.default.removeItem(atPath: path)
+                }
+            }
+            let key = try GatewayLaunchAgentManager.runtimePinKey(
+                profile: .current, configPath: state.appendingPathComponent("openclaw.json").path)
+            let refusal = GatewayLaunchAgentManager.runtimePinSelectionChanged
+            GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+            {"ok":true,"service":{"loaded":false,
+            "runtimeIntent":{"status":"known","revision":"before-restore","definition":"failed-service"}}}
+            """)
+            GatewayLaunchAgentManager.setTestingInterceptDaemonCommands(true) { args in
+                if args.first == "status" {
+                    GatewayLaunchAgentManager.setTestingDaemonStatusPayload("""
+                    {"ok":false,"error":"\(refusal)"}
+                    """)
+                } else if args.first == "install" {
+                    do {
+                        try await Self.writeRuntimePinFixture(
+                            databaseURL: databaseURL, key: key, executable: "/operator/bin/node")
+                        if !args.contains("--expected-runtime-pin") {
+                            let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
+                            try database.execute("DELETE FROM config_machine_state")
+                        }
+                    } catch { Issue.record(error) }
+                }
+            }
+            let previous = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/previous-build"))
+            let cli = GatewayLaunchAgentManager.InstalledServiceCLI(
+                prefix: [previous.bun.path, previous.packageRoot.appendingPathComponent("dist/index.js").path],
+                sqliteLibrary: previous.sqliteLibrary.path,
+                environment: ["CHANNEL_FIXTURE": "synthetic"])
+            let installer = BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current-build"))
+            let manager = self.manager
+            manager.desiredActive = true
+            let authority = try GatewayLaunchAgentManager.gatewayServiceAuthority()
+            var healthChecks = 0
+            do {
+                try await GatewayProcessManager.changeHosting(operations: .init(
+                    prepare: {},
+                    isAuthorized: { true },
+                    replace: { admit in
+                        try admit()
+                        throw GatewayHostingError(message: "replacement child failed")
+                    },
+                    recover: {
+                        let result = await manager.enableLaunchAgentIfNeeded(
+                            port: 29871,
+                            serviceForRestoration: .init(retained: cli, installer: installer),
+                            expectedServiceAuthority: authority)
+                        if let failure = result.error { throw GatewayHostingError(message: failure) }
+                    },
+                    verifyHealth: { healthChecks += 1 }))
+                Issue.record("Expected the prior-build restoration custody refusal")
+            } catch {
+                #expect(error.localizedDescription.contains("Previous Gateway recovery: " + refusal))
+            }
+            #expect(healthChecks == 0)
+            #expect(try await GatewayLaunchAgentManager
+                .runtimePinRecord(stateDirectory: state, profile: .current) != nil)
+            let calls = GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot()
+            #expect(calls == [
+                ["status", "--deep", "--json", "--no-probe"],
+                [
+                    "install",
+                    "--force",
+                    "--port",
+                    "29871",
+                    "--runtime",
+                    "bun",
+                    "--runtime-path",
+                    previous.bun.path,
+                    "--restore-service-cli",
+                    #"{"entrypoint":"/fixture/runtime/previous-build/lib/node_modules/openclaw/dist/index.js","executable":"/fixture/runtime/previous-build/bin/bun","sqliteLibrary":"/fixture/runtime/previous-build/lib/libsqlite3.dylib"}"#,
+                    "--expected-runtime-pin",
+                    #"{"definition":"failed-service","revision":"before-restore"}"#,
+                ],
+            ])
+            #expect(GatewayLaunchAgentManager.testingResolvedDaemonCommandsSnapshot()
+                .allSatisfy { Array($0.prefix(2)) == installer.cliCommand })
+        }
+    }
+
     @Test func `hosting rollback rechecks custody inside the serialized install drain`() async throws {
         try await self.withLaunchAgentEnvironment {
             let manager = self.manager
@@ -1437,7 +1537,8 @@ struct GatewayProcessManagerTests {
                 prefix: ["/fixture/runtime/previous/bin/bun", "/fixture/openclaw.mjs"], sqliteLibrary: nil)
             let result = await manager.enableLaunchAgentIfNeeded(
                 port: 29871,
-                serviceForRestoration: cli,
+                serviceForRestoration: .init(
+                    retained: cli, installer: BundledRuntime(root: URL(fileURLWithPath: "/fixture/runtime/current"))),
                 mutationCheck: { throw GatewayHostingError(message: "operator changed the runtime pin") })
             #expect(result.error == "operator changed the runtime pin")
             #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)

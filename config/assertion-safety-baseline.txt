@@ -1123,7 +1123,7 @@ packages/ai/src/transports/openai-completions-replay.ts	6
 packages/ai/src/transports/openai-completions-stream.ts	8
 packages/ai/src/transports/openai-completions-string-content.ts	5
 packages/ai/src/transports/openai-completions-transport.ts	9
-packages/ai/src/transports/openai-responses-client.ts	11
+packages/ai/src/transports/openai-responses-client.ts	10
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
@@ -1730,7 +1730,7 @@ src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
 src/cli/capability-cli/audio.ts	3
-src/cli/capability-cli/embedding.ts	3
+src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/tts.ts	6
@@ -2111,7 +2111,6 @@ src/gateway/server-methods/chat-abort-authorization.ts	3
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-send-attachments.ts	1
-src/gateway/server-methods/chat-send-reply-dispatch.ts	2
 src/gateway/server-methods/chat-send-request.ts	1
 src/gateway/server-methods/chat-server-timing.ts	1
 src/gateway/server-methods/chat-transcript-inject.ts	1
@@ -2519,7 +2518,6 @@ src/plugins/dashboard-capabilities.ts	1
 src/plugins/dev-source-root.ts	1
 src/plugins/discovery.ts	1
 src/plugins/doctor-contract-module.ts	3
-src/plugins/doctor-contract-registry-loader-state.ts	1
 src/plugins/doctor-contract-registry.ts	1
 src/plugins/gateway-events.ts	1
 src/plugins/gateway-startup-plugin-activation.ts	1

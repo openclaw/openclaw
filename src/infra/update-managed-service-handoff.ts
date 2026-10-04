@@ -26,6 +26,7 @@ import { readActiveGatewayLockIdentity } from "./gateway-lock.js";
 import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { resolveInstallationTarget } from "./installation-target-context.js";
 import { resolveNodeSqliteLocation } from "./node-sqlite.js";
+import { resolveOpenClawCliEntryPath } from "./openclaw-cli-invocation.js";
 import { probePortUsage } from "./ports-probe.js";
 import type { GatewayRestartIntent } from "./restart-intent.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
@@ -1322,7 +1323,7 @@ async function spawnManagedServiceUpdateHandoff(
   };
   const commandRuntime = {
     execPath: handoffNodeExecutable,
-    argv1: params.argv1 ?? process.argv[1],
+    argv1: resolveOpenClawCliEntryPath(params.argv1 ?? process.argv[1]),
   };
   const commandArgv = params.action
     ? [
@@ -1384,7 +1385,6 @@ async function spawnManagedServiceUpdateHandoff(
     spawnCommand = systemdRun;
   }
   const stateDatabasePath = resolveOpenClawStateSqlitePath(serviceEnv);
-  const parentExitTimeoutMs = owner.parentExitTimeoutMs;
   const preparedEnv = resolveManagedHandoffCommandEnv(serviceEnv, metaPath, metaFile.meta.runId);
   const { nodeExecArgv, readyEnv } = prepareManagedHandoffCliRuntime(
     commandArgv,
@@ -1407,9 +1407,9 @@ async function spawnManagedServiceUpdateHandoff(
     systemdRun: systemdRunPath,
     parentPid,
     parentStartIdentity,
-    parentExitTimeoutMs,
+    parentExitTimeoutMs: owner.parentExitTimeoutMs,
     restartDelayMs: Math.max(0, Math.min(60_000, params.restartDelayMs ?? 0)),
-    parentExitDeadlineAt: Date.now() + parentExitTimeoutMs,
+    parentExitDeadlineAt: Date.now() + owner.parentExitTimeoutMs,
     cwd: dir,
     invocationCwd: params.invocationCwd,
     commandArgv,

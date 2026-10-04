@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { mutateAcpSessionEntryInWorker } from "../../acp/runtime/session-meta-entry.worker.js";
+import type { BoardWriteOperations } from "../../boards/sqlite-board-operations.js";
+import {
+  readBoardSnapshotWithHtmlViewMetadata,
+  readBoardWidgetDocument,
+} from "../../boards/sqlite-board-store.kernel.js";
 import type { HeartbeatOutcomeWorkerOperations } from "../../infra/heartbeat-outcome-store.worker.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -21,7 +26,9 @@ import { listSessionReactionsInDatabase } from "./session-reaction-store.read.js
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import type { SessionSharingWorkerOperations } from "./session-sharing-store.types.js";
 
-type DomainOperations = SessionSharingWorkerOperations & HeartbeatOutcomeWorkerOperations;
+type DomainOperations = SessionSharingWorkerOperations &
+  HeartbeatOutcomeWorkerOperations &
+  BoardWriteOperations;
 type Command = SqliteWorkerCommand<IncognitoSideDataOperations>;
 
 /** Adapters borrow the actor connection; domain kernels still own their transactions. */
@@ -73,7 +80,11 @@ export function createIncognitoSideDataWorker(
           ? runtimeProcessEntrypoints.sessionSharingStore
           : command.type.startsWith("session.heartbeat.")
             ? runtimeProcessEntrypoints.heartbeatOutcomeStore
-            : undefined;
+            : command.type === "session.boards.applyOps" ||
+                command.type === "session.boards.putWidget" ||
+                command.type === "session.boards.grant"
+              ? runtimeProcessEntrypoints.boardStore
+              : undefined;
       if (module) {
         binding = {
           id: randomUUID(),
@@ -105,6 +116,21 @@ export function createIncognitoSideDataWorker(
         }
         const value = withSqlitePostCommitPublications(database.db, () => {
           switch (command.type) {
+            case "session.boards.applyOps":
+              return executeDomain({ type: "boards.applyOps", input: command.input });
+            case "session.boards.putWidget":
+              return executeDomain({ type: "boards.putWidget", input: command.input });
+            case "session.boards.grant":
+              return executeDomain({ type: "boards.grant", input: command.input });
+            case "session.boards.readSnapshot":
+              return readBoardSnapshotWithHtmlViewMetadata(database, command.input.sessionKey);
+            case "session.boards.readWidgetDocument":
+              return readBoardWidgetDocument(
+                database,
+                command.input.sessionKey,
+                command.input.name,
+                command.input.contentKind,
+              );
             case "session.acp.source":
               return readLegacyAcpMigrationContextInDatabase(database, command.input.sessionKey);
             case "session.acp.entry": {

@@ -430,8 +430,8 @@ describe("ManagedWorktreeService provisioned state", () => {
                   getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
                     .updateTable("state_leases")
                     .set({ owner: "successor" })
-                    .where("scope", "=", "core:managed-worktrees:create")
-                    .where("lease_key", "=", "capacity"),
+                    .where("scope", "=", "core:managed-worktrees:mutation")
+                    .where("lease_key", "=", created.id),
                 );
                 expect(changed.numAffectedRows).toBe(1n);
               },
@@ -506,6 +506,7 @@ describe("ManagedWorktreeService provisioned state", () => {
             reason: "unknown-settlement",
             provisionedPaths: ["settings.local"],
             git: gitPolicy,
+            requireDiskSpace: async () => {},
           }),
         ),
       ).rejects.toMatchObject({ code: "outcome-unknown" });
