@@ -257,16 +257,13 @@ describe("browser config", () => {
       label: "existing-session",
       pinned: { driver: "existing-session" as const, cdpUrl: "http://127.0.0.1:18799" },
     },
-  ])(
-    "does not assign an implicit extension relay a $label profile's cdpUrl port",
-    ({ pinned }) => {
-      const resolved = resolveBrowserConfig({
-        profiles: { pinned: { ...pinned, color: "#00AA00" } },
-      });
+  ])("does not assign an implicit extension relay a $label profile's cdpUrl port", ({ pinned }) => {
+    const resolved = resolveBrowserConfig({
+      profiles: { pinned: { ...pinned, color: "#00AA00" } },
+    });
 
-      expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
-    },
-  );
+    expect(resolveProfile(resolved, "chrome")?.cdpPort).toBe(18798);
+  });
 
   it("rejects implicit extension relays that exhaust the reserved port band", () => {
     const profiles: NonNullable<BrowserConfig["profiles"]> = Object.fromEntries(
