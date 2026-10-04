@@ -7,6 +7,7 @@ import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
@@ -23,6 +24,7 @@ const WS_LOG_REDACT_OPTIONS = {
 
 let wsLastCompactConnId: string | undefined;
 const wsInflightSince = new Map<string, number>();
+const MAX_WS_INFLIGHT_TIMINGS = 2000;
 const wsLog = createSubsystemLogger("gateway/ws");
 
 const WS_META_SKIP_KEYS = new Set(["connId", "id", "method", "ok", "event"]);
@@ -265,9 +267,7 @@ export function logWs(
   if (direction === "in" && kind === "req" && inflightKey) {
     wsInflightSince.set(inflightKey, Date.now());
     // Unanswered requests must stay bounded in every log style.
-    if (wsInflightSince.size > 2000) {
-      wsInflightSince.clear();
-    }
+    pruneMapToMaxSize(wsInflightSince, MAX_WS_INFLIGHT_TIMINGS);
   } else if (direction === "out" && kind === "res" && inflightKey) {
     const startedAt = wsInflightSince.get(inflightKey);
     wsInflightSince.delete(inflightKey);
