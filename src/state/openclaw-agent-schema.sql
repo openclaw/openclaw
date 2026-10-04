@@ -144,14 +144,8 @@ BEGIN
   UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
 END;
 
-CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_entry_update
-AFTER UPDATE OF entry_json ON session_nodes
-BEGIN
-  UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
-END;
-
-CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_identity_update
-AFTER UPDATE OF current_session_id, updated_at ON session_nodes
+CREATE TRIGGER IF NOT EXISTS session_nodes_entry_valid_after_update
+AFTER UPDATE OF entry_json, current_session_id, updated_at ON session_nodes
 BEGIN
   UPDATE session_nodes SET entry_valid = 0 WHERE session_key = NEW.session_key;
 END;

@@ -145,6 +145,15 @@ During the v17 upgrade, Doctor completes the legacy data migrations before
 repairing canonical indexes and validating the target schema in the same transaction.
 See the [storage design](/reference/database-schemas/storage-changes#trajectory-retention-covering-index).
 
+Agent schema 25 merges the session-node validity UPDATE triggers. This requires
+a bump because older schema inspectors reject the changed trigger shape on the
+canonical `session_nodes` table, as with schema 21. The migration replaces both
+old triggers and publishes both version markers in one immediate transaction;
+no same-version upgrade is used. Older builds refuse the upgraded database with
+the newer-schema error (Gateway startup exits 78), and `openclaw update` refuses
+older targets. Rollback requires the verified pre-migration backup and matching
+build. See [validity trigger consolidation](/reference/database-schemas/agent-schema-history#session-node-validity-trigger-consolidation).
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing

@@ -66,6 +66,7 @@ import {
   assertSupportedAgentMigrationSchemas,
   ensureSessionAdditiveColumns,
   ensureSessionEntryValidityProjection,
+  ensureSessionEntryValidityTriggers,
   migrateConversationDeliveryTargetColumn,
   migrateSessionCreatorNamespaces,
   migrateSessionTranscriptActiveProjection,
@@ -337,7 +338,7 @@ function ensureAgentSchema(
       if (
         previousVersion < targetVersion &&
         previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION - 1 &&
-        previousVersion < SESSION_ENTRY_SNAPSHOTS_SCHEMA_VERSION &&
+        previousVersion < OPENCLAW_AGENT_SCHEMA_VERSION &&
         targetVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
       ) {
         if (previousVersion >= CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION) {
@@ -350,6 +351,8 @@ function ensureAgentSchema(
           if (hasPendingMemoryChunkMetadataMigration(db)) {
             migrateMemoryChunkMetadataSchema(db);
           }
+        } else {
+          ensureSessionEntryValidityTriggers(db);
         }
         const previousSchema =
           previousVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
