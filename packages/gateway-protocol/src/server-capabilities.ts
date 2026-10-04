@@ -23,6 +23,7 @@ export const GATEWAY_SERVER_CAPS = {
   NODE_WORKER_HOST_DIAGNOSTICS: "node-worker-host-diagnostics-v1",
   NODE_WORKER_IDLE_RETENTION: "node-worker-idle-retention-v1",
   NODE_WORKER_LAUNCH_TOOL_NAMES: "node-worker-launch-tool-names-v1",
+  NODE_WORKER_NATIVE_INFERENCE: "node-worker-native-inference-v1",
   NODE_WORKER_PORTAL_STREAM: "node-worker-portal-stream-v1",
   NODE_WORKER_STATUS_WAIT: "node-worker-status-wait-v1",
   PUBLISHED_MODEL_CATALOG: "published-model-catalog",
