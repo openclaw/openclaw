@@ -114,60 +114,69 @@ describe("appendExactAssistantMessageToSessionTranscript - redaction", () => {
     expect(internalUpdates[0]?.message).toHaveProperty("providerReplay.data", OPAQUE_COMPACTION);
   });
 
-  it("always redacts exact assistant transcript appends", async () => {
-    const sessionsDir = fixture.sessionsDir();
-    const storePath = path.join(sessionsDir, "sessions.json");
-    const sessionId = "test-session-redact-off";
-    const sessionKey = "test-channel:test-user";
-    await seedSessionEntry({ sessionId, sessionKey, storePath });
+  it.each([
+    ["plain", "openai-responses", "github-copilot"],
+    ["dotted", "openai-responses", "openrouter"],
+    ["dotted", "openclaw-openai-responses-transport", "openrouter"],
+  ] as const)(
+    "redacts exact appends while retaining %s reasoning on %s",
+    async (shape, api, provider) => {
+      const sessionsDir = fixture.sessionsDir();
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionId = "test-session-redact-off";
+      const sessionKey = "test-channel:test-user";
+      await seedSessionEntry({ sessionId, sessionKey, storePath });
 
-    const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
-    const config: OpenClawConfig = {};
-    const signature = JSON.stringify({
-      id: "A".repeat(416),
-      type: "reasoning",
-      summary: [],
-      encrypted_content: "Q".repeat(32) + "/LTAI" + "B".repeat(20) + "/" + "C".repeat(6),
-    });
+      const fakeApiKey = "sk-proj-FAKEKEYFORTESTINGONLY1234567890";
+      const config: OpenClawConfig = {};
+      const ciphertext = "Q".repeat(32) + "/LTAI" + "B".repeat(20) + "/" + "C".repeat(6);
+      const signature = JSON.stringify({
+        id: "A".repeat(416),
+        type: "reasoning",
+        summary: [],
+        encrypted_content:
+          shape === "dotted" ? `${ciphertext}.c3ludGhldGljLXJvdXRpbmc` : ciphertext,
+      });
 
-    const result = await appendExactAssistantMessageToSessionTranscript({
-      sessionKey,
-      storePath,
-      config,
-      message: {
-        role: "assistant",
-        content: [
-          { type: "text", text: `Here is your key: ${fakeApiKey}` },
-          { type: "thinking", thinking: "", thinkingSignature: signature },
-        ],
-        api: "openai-responses",
-        provider: "github-copilot",
-        model: "test-model",
-        usage: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 0,
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      const result = await appendExactAssistantMessageToSessionTranscript({
+        sessionKey,
+        storePath,
+        config,
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: `Here is your key: ${fakeApiKey}` },
+            { type: "thinking", thinking: "", thinkingSignature: signature },
+          ],
+          api,
+          provider,
+          model: "test-model",
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+          },
+          stopReason: "stop",
+          timestamp: Date.now(),
         },
-        stopReason: "stop",
-        timestamp: Date.now(),
-      },
-    });
+      });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
 
-    const stored = await readStoredMessages({ sessionId, sessionKey, storePath });
-    expect(stored).toMatchObject([
-      { content: [{ type: "text" }, { thinkingSignature: signature }] },
-    ]);
-    const raw = JSON.stringify(stored);
-    expect(raw).not.toContain(fakeApiKey);
-  });
+      const stored = await readStoredMessages({ sessionId, sessionKey, storePath });
+      expect(stored).toMatchObject([
+        { content: [{ type: "text" }, { thinkingSignature: signature }] },
+      ]);
+      const raw = JSON.stringify(stored);
+      expect(raw).not.toContain(fakeApiKey);
+    },
+  );
 
   it("emits the redacted assistant message for inline transcript updates", async () => {
     const sessionsDir = fixture.sessionsDir();
