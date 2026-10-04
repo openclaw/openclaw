@@ -160,7 +160,12 @@ test.each(["custom/model", "middle"])(
             allowPluginNormalization: false,
           }),
         )
-        .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+        .toEqual({
+          provider: "custom",
+          model,
+          storedOverrideSource: "session",
+          selectionSource: "override",
+        });
       expect(entry).toEqual(original);
     });
   },
@@ -192,7 +197,12 @@ test.each([false, true])(
               allowPluginNormalization: false,
             }),
           )
-          .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+          .toEqual({
+            provider: "custom",
+            model,
+            storedOverrideSource: "session",
+            selectionSource: "override",
+          });
       }
     });
   },

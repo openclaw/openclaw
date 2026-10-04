@@ -586,6 +586,7 @@ export function materializeSessionRow(input: ReturnType<typeof readSessionRowInp
     }).mode,
     modelProvider: input.rowModelIdentity.provider,
     model: input.rowModelIdentity.model,
+    modelSelectionSource: input.selectedModel.selectionSource,
     activeModelProvider: undefined,
     activeModel: undefined,
     modelOverrideSource:
