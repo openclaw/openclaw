@@ -1,12 +1,22 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { collectMcpAppStyleVariables } from "../components/mcp-app-theme.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
 const disposals: Array<() => void> = [];
+beforeEach((testContext) => {
+  const existingFontLinks = new Set(document.querySelectorAll('link[id^="openclaw-typeface-"]'));
+  testContext.onTestFinished(() => {
+    for (const link of document.querySelectorAll('link[id^="openclaw-typeface-"]')) {
+      if (!existingFontLinks.has(link)) {
+        link.remove();
+      }
+    }
+  });
+});
 afterEach(() => {
   for (const dispose of disposals.splice(0).toReversed()) {
     dispose();
