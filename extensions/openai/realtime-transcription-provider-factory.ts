@@ -59,8 +59,8 @@ const OPENAI_REALTIME_TRANSCRIPTION_TEXT_OVERFLOW_MESSAGE =
   "OpenAI realtime transcription exceeded the 256 KiB retained transcript limit";
 const OPENAI_REALTIME_TRANSCRIPTION_SETTLED_OVERFLOW_MESSAGE =
   "OpenAI realtime transcription exceeded the terminal item history limit";
-const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED =
-  "OpenAI Realtime transcription requires an OpenAI Platform API key";
+const OPENAI_REALTIME_TRANSCRIPTION_AUTH_REQUIRED =
+  "OpenAI Realtime transcription requires an OpenAI Platform API key or ChatGPT OAuth profile";
 const OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REJECTED =
   "OpenAI Realtime transcription rejected the selected API key. Update or remove the active OpenAI API-key source";
 
@@ -152,7 +152,17 @@ async function resolveOpenAIRealtimeTranscriptionAuthorization(
   if (envApiKey) {
     return envApiKey;
   }
-  throw new Error(OPENAI_REALTIME_TRANSCRIPTION_API_KEY_REQUIRED);
+  const oauthToken = await runtime.resolveProviderAuthProfileApiKey({
+    provider: "openai",
+    capability: "audio-transcription",
+    cfg: config.cfg,
+    profileTypes: ["oauth"],
+    includeExternalCliAuth: false,
+  });
+  if (oauthToken) {
+    return oauthToken;
+  }
+  throw new Error(OPENAI_REALTIME_TRANSCRIPTION_AUTH_REQUIRED);
 }
 
 function createOpenAIRealtimeTranscriptionSession(
@@ -565,6 +575,13 @@ export function buildOpenAIRealtimeTranscriptionProvider(
           provider: "openai",
           cfg,
           profileTypes: ["api_key"],
+        }) ||
+        runtime.isProviderAuthProfileConfigured({
+          provider: "openai",
+          capability: "audio-transcription",
+          cfg,
+          profileTypes: ["oauth"],
+          includeExternalCliAuth: false,
         }),
       ),
     createSession: (req) => {
