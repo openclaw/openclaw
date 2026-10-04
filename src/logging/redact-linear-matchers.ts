@@ -71,12 +71,24 @@ function isBase64UrlChar(char: string | undefined): boolean {
   return isAlnumChar(char) || char === "+" || char === "/" || char === "=";
 }
 
-/** Case-insensitive prefix occurrence scan; each rule compiles its own stateful regex per call. */
+const prefixRegexPools = new Map<string, RegExp[]>();
+
+/** Reuse compiled prefixes without sharing mutable lastIndex with a reentrant scan. */
 function* scanPrefixOccurrences(text: string, prefix: string): Generator<number> {
-  const re = new RegExp(prefix, "gi");
-  re.lastIndex = 0;
-  for (let match = re.exec(text); match; match = re.exec(text)) {
-    yield match.index;
+  let pool = prefixRegexPools.get(prefix);
+  if (!pool) {
+    pool = [];
+    prefixRegexPools.set(prefix, pool);
+  }
+  const re = pool.pop() ?? new RegExp(prefix, "gi");
+  try {
+    re.lastIndex = 0;
+    for (let match = re.exec(text); match; match = re.exec(text)) {
+      yield match.index;
+    }
+  } finally {
+    re.lastIndex = 0;
+    pool.push(re);
   }
 }
 
@@ -517,49 +529,55 @@ const CONFIG_QUOTED_PREFIX_SOURCE = String.raw`(^|[\s,{])(?:(?:${CONFIG_QUOTED_A
  * memoized per quote character because later candidates share their tail regions.
  */
 function makeQuotedAssignmentMatcher(source: string, prefixSource: string, flags: string) {
+  const prefixRegexPool: RegExp[] = [];
   function* exec(text: string): Iterable<RedactMatch> {
-    const prefixRe = new RegExp(prefixSource, flags);
+    const prefixRe = prefixRegexPool.pop() ?? new RegExp(prefixSource, flags);
     const failedScans = new Map<string, { start: number; end: number }>();
     let searchFrom = 0;
-    for (;;) {
-      prefixRe.lastIndex = searchFrom;
-      const prefix = prefixRe.exec(text);
-      if (!prefix) {
-        return;
-      }
-      const start = prefix.index;
-      const quote = prefix[2]!;
-      const valueStart = start + prefix[0].length;
-      const memo = failedScans.get(quote);
-      let closing = -1;
-      // A failed scan proved its region holds no closing quote for this character; later
-      // candidates inside that region fail without rescanning it.
-      const covered = memo !== undefined && valueStart >= memo.start && valueStart < memo.end;
-      if (!covered) {
-        closing = valueStart;
-        while (closing < text.length) {
-          const char = text[closing];
-          if (char === quote || char === "\r" || char === "\n") {
-            break;
+    try {
+      for (;;) {
+        prefixRe.lastIndex = searchFrom;
+        const prefix = prefixRe.exec(text);
+        if (!prefix) {
+          return;
+        }
+        const start = prefix.index;
+        const quote = prefix[2]!;
+        const valueStart = start + prefix[0].length;
+        const memo = failedScans.get(quote);
+        let closing = -1;
+        // A failed scan proved its region holds no closing quote for this character; later
+        // candidates inside that region fail without rescanning it.
+        const covered = memo !== undefined && valueStart >= memo.start && valueStart < memo.end;
+        if (!covered) {
+          closing = valueStart;
+          while (closing < text.length) {
+            const char = text[closing];
+            if (char === quote || char === "\r" || char === "\n") {
+              break;
+            }
+            closing += 1;
           }
-          closing += 1;
+        }
+        if (closing > valueStart && text[closing] === quote) {
+          const end = closing + 1;
+          yield {
+            match: text.slice(start, end),
+            groups: [prefix[1] ?? "", quote, text.slice(valueStart, closing)],
+            input: text,
+            offset: start,
+          };
+          searchFrom = end;
+        } else {
+          if (closing !== -1) {
+            failedScans.set(quote, { start: valueStart, end: closing });
+          }
+          searchFrom = start + 1;
         }
       }
-      if (closing > valueStart && text[closing] === quote) {
-        const end = closing + 1;
-        yield {
-          match: text.slice(start, end),
-          groups: [prefix[1] ?? "", quote, text.slice(valueStart, closing)],
-          input: text,
-          offset: start,
-        };
-        searchFrom = end;
-      } else {
-        if (closing !== -1) {
-          failedScans.set(quote, { start: valueStart, end: closing });
-        }
-        searchFrom = start + 1;
-      }
+    } finally {
+      prefixRe.lastIndex = 0;
+      prefixRegexPool.push(prefixRe);
     }
   }
   return Object.freeze({ source, exec });
