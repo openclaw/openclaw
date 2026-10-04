@@ -40,7 +40,7 @@ describe("update-cli child-owned deferred completion", () => {
       })),
     ]
       .filter(({ command }) => command === "doctor" || command === "config")
-      .sort((left, right) => left.order - right.order)
+      .toSorted((left, right) => left.order - right.order)
       .map(({ command }) => command);
 
   const {
