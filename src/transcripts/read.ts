@@ -8,8 +8,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import type { TranscriptSourceLocator } from "./provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "./source-locator.js";
 import { normalizeExportText } from "./store-artifacts.js";
-import type { TranscriptReadEntry } from "./store-read.js";
-import type { TranscriptsStore } from "./store.js";
+import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
 
 /** Only public locator fields cross the Gateway; provider-private keys stay in the archive. */
 export function projectTranscriptSource(
@@ -66,7 +65,7 @@ export function projectTranscriptMarkdown(markdown: string): string {
 }
 
 export function projectTranscriptNotes(
-  stored: Awaited<ReturnType<TranscriptsStore["readNotes"]>>,
+  stored: TranscriptReadNotes,
 ): TranscriptsGetResult["summary"] {
   if (stored.markdown === undefined) {
     return undefined;

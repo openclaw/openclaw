@@ -26,6 +26,7 @@ import {
   meetingTranscriptUtteranceQuery,
   sessionFromRow,
 } from "./store-sqlite.js";
+import type { TranscriptReadEntry, TranscriptReadNotes } from "./store-types.js";
 import type { TranscriptsSummary } from "./summary.js";
 
 export class TranscriptLibraryError extends Error {
@@ -261,7 +262,7 @@ type TranscriptReadRow = Awaited<
 function transcriptReadEntryFromRow(
   row: TranscriptReadRow,
   purpose: TranscriptReadPurpose = "page",
-) {
+): TranscriptReadEntry {
   assertReadBytes(row.payload_bytes, purpose);
   const session = sessionFromRow(row);
   const summarySource: TranscriptsSummary["source"] | undefined =
@@ -283,7 +284,6 @@ function transcriptReadEntryFromRow(
   };
 }
 
-export type TranscriptReadEntry = ReturnType<typeof transcriptReadEntryFromRow>;
 export type TranscriptReadOptions = Omit<TranscriptsListParams, "cursor"> & {
   after?: { startedAt: string; sessionId: string };
   offset?: number;
@@ -630,7 +630,7 @@ export function readStoredTranscriptNotes(
   database: DatabaseSync,
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
-): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
+): TranscriptReadNotes {
   const row = executeSqliteQueryTakeFirstSync(
     database,
     meetingTranscriptDb(database)

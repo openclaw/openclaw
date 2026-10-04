@@ -316,7 +316,7 @@ export class TranscriptsStore {
   ): Promise<read.TranscriptLibraryPage>;
   listReadEntries(
     options: read.TranscriptReadOptions,
-  ): Promise<read.TranscriptReadPage<read.TranscriptReadEntry>>;
+  ): Promise<read.TranscriptReadPage<StoreTypes.TranscriptReadEntry>>;
   async listReadEntries(options: read.TranscriptReadOptions & { projection?: "public" }) {
     return this.readWorker("transcripts.readEntries", { params: options });
   }
