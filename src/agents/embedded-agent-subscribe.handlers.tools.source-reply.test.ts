@@ -71,6 +71,14 @@ describe("tool-authored source replies at tool completion", () => {
     expect(ctx.state.sourceReplyDeliveryState).not.toBe("delivered");
   });
 
+  it("queues the reply for a capable tool registered with a mixed-case name", async () => {
+    const ctx = createContext(new Set(["order_status"]));
+
+    await completeTool(ctx, { toolName: "Order_Status", details: replyDetails });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(1);
+  });
+
   it.each([
     {
       label: "the tool lacks the capability",

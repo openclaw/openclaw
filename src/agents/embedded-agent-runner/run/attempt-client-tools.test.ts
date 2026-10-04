@@ -284,6 +284,24 @@ describe("prepareEmbeddedAttemptClientTools", () => {
     expect(result.sourceReplyCapableToolNames).toEqual(new Set(["order_status"]));
   });
 
+  it("stores capable tool names policy-normalized, as completion compares them", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const capable = Object.assign(createStubTool("Order_Status"), {
+      canDeliverSourceReply: true,
+    });
+
+    const result = prepare({
+      codeModeControlsEnabledForRun: false,
+      attemptConfig: CATALOGS_DISABLED_CONFIG,
+      toolSearchRuntimeConfig: CATALOGS_DISABLED_CONFIG,
+      catalogRef,
+      effectiveTools: [capable],
+      uncompactedEffectiveTools: [capable],
+    });
+
+    expect(result.sourceReplyCapableToolNames).toEqual(new Set(["order_status"]));
+  });
+
   it("collects exact local-media trust from core policy and plugin metadata", () => {
     const catalogRef = createToolSearchCatalogRef();
     const trustedPluginTool = createStubTool("plugin_media");

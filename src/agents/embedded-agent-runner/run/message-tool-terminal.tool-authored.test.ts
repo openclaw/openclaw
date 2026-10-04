@@ -114,6 +114,15 @@ describe("tool-authored source reply terminal hook", () => {
     expect(hookResult).toBeUndefined();
   });
 
+  it("matches a capable tool by its policy-normalized name", async () => {
+    const { hookResult } = await runHook({
+      capableToolNames: new Set(["order_status"]),
+      context: createContext({ toolName: "Order_Status", result: finalReply }),
+    });
+
+    expect(hookResult).toEqual({ terminate: true });
+  });
+
   it("installs nothing when no tool is capable", () => {
     const agent = {} as unknown as Agent;
     installToolAuthoredSourceReplyTerminalHook({ agent, sourceReplyCapableToolNames: new Set() });

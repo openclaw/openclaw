@@ -12,6 +12,7 @@ import {
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../../embedded-agent-messaging-extraction.js";
 import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../runtime/index.js";
+import { normalizeToolPolicyName } from "../../tool-policy-shared.js";
 import { readToolResultDetails } from "../../tool-result-error.js";
 
 type MessageToolTerminalRoute = Omit<
@@ -89,7 +90,7 @@ export function installToolAuthoredSourceReplyTerminalHook(params: {
   params.agent.afterToolCall = async (context, signal) => {
     const hookResult = await previousAfterToolCall?.(context, signal);
     const isError = hookResult?.isError ?? context.isError;
-    if (isError || !capableToolNames.has(context.toolCall.name)) {
+    if (isError || !capableToolNames.has(normalizeToolPolicyName(context.toolCall.name))) {
       return hookResult;
     }
     // An earlier hook returns a partial override: only the fields it supplies
