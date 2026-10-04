@@ -125,6 +125,15 @@ Queued events follow the same rolling byte limit while the database writer is bu
 Exporting a trajectory materializes a redacted JSONL support bundle;
 the live runtime capture is not a session-adjacent JSONL sidecar.
 
+Each session keeps a rolling 10 MiB runtime window. Global retention removes
+complete runs older than 14 days, then the oldest remaining runs to target a
+512 MiB total. The session triggering cleanup is protected by its own rolling
+window. Global cleanup begins on first use and hourly thereafter, separately
+from appends. It selects bounded batches without holding the database writer
+and rechecks the selection before each deletion. Cleanup continues through
+bounded batches; concurrent changes defer a stale selection until a later
+append.
+
 Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
 `.trajectory-path.json` sidecars are no longer read or followed. Existing files
 can be removed after retaining any needed diagnostic data.
