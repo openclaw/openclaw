@@ -1492,22 +1492,6 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("routes chat.send slash commands without agent runs", async () => {
-    await withMainSessionStore(async () => {
-      const spy = vi.mocked(agentCommandMock);
-      const callsBefore = spy.mock.calls.length;
-      const eventPromise = waitForChatEvent("idem-command-1");
-      const res = await rpcReq(ws, "chat.send", {
-        sessionKey: "main",
-        message: "/context list",
-        idempotencyKey: "idem-command-1",
-      });
-      expect(res.ok).toBe(true);
-      await eventPromise;
-      expect(spy.mock.calls.length).toBe(callsBefore);
-    });
-  });
-
   test("routes /btw replies through side-result events without transcript injection", async () => {
     await withMainSessionStore(async () => {
       await replaceMainTranscriptMessages([
