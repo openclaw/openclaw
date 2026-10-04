@@ -330,7 +330,7 @@ function prepareStream(
     session: activeSession,
     onModelUsage: input.onModelUsage,
     runId: attempt.runId,
-    operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
+    operationalRunInstance: attempt.admittedRunContext?.operationalRunInstance,
     lifecycleGeneration: attempt.lifecycleGeneration,
     messageChannel: input.runtimeChannel,
     initialReplayState: attempt.initialReplayState,
