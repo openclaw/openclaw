@@ -43,7 +43,7 @@ export async function completeTerminalEffects(
   let entry = args.entry;
   let { sessionSuperseded, suppressSessionEffects } = args;
   const isCurrentTerminalCallback = () => {
-    if (!context.isTerminalCallbackCurrent(completeParams.runId, entry, terminalGeneration)) {
+    if (!context.isTerminalCallbackCurrent(entry, terminalGeneration)) {
       return false;
     }
     args.assertCurrent();

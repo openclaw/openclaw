@@ -62,7 +62,7 @@ export interface SubagentLifecycleCompletionContext extends SubagentLifecycleCom
   bindTerminalSessionEffects(entry: SubagentRunRecord, effects?: SubagentSessionEffects): void;
   bumpCleanupGeneration(entry: SubagentRunRecord): number;
   bumpTerminalGeneration(entry: SubagentRunRecord, bindingChanged?: boolean): number;
-  isTerminalCallbackCurrent(runId: string, entry: SubagentRunRecord, generation: number): boolean;
+  isTerminalCallbackCurrent(entry: SubagentRunRecord, generation: number): boolean;
   startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecord): boolean;
 }
 

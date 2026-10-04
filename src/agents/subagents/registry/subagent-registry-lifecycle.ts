@@ -401,11 +401,7 @@ export class SubagentLifecycleController {
     return generation;
   }
 
-  isTerminalCallbackCurrent = (
-    _runId: string,
-    entry: SubagentRunRecord,
-    generation: number,
-  ): boolean => {
+  isTerminalCallbackCurrent = (entry: SubagentRunRecord, generation: number): boolean => {
     const current = getCurrentSubagentRunOwner(this.options.runs, entry);
     return (
       current !== undefined &&
