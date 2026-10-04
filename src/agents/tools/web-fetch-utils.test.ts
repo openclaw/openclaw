@@ -459,7 +459,7 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     ["[```label```](https://example.com)", "label"],
     ["```text\ncode\n```# heading", "code\nheading"],
     ["\0```text\n$&\n```", "\0$&"],
-    ["\0![](u)\0" + "0" + "\0![](u)\0", "\0\0" + "0" + "\0\0"],
+    ["\0![](u)\x000\0![](u)\0", "\0\x000\0\0"],
     ["```js\n# heading", "```js\nheading"],
     [
       "before\n```text\n  # literal \r\n\r\n\r\n  body\n```\nafter",
