@@ -396,6 +396,7 @@ export function runCiManifestFixture(options: {
           "check:assertion-safety": "true",
           "check:max-lines-ratchet": "true",
           "check:test-timeout-race-ratchet": "true",
+          "check:test-mock-exports": "true",
         }
       : {};
     writeFileSync(

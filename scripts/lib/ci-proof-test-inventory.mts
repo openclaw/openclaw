@@ -3872,6 +3872,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/check-session-accessor-boundary.test.ts",
   "test/scripts/check-session-transcript-reader-boundary.test.ts",
   "test/scripts/check-sqlite-transaction-boundary.test.ts",
+  "test/scripts/check-test-mock-exports.test.ts",
   "test/scripts/check-test-timeout-race-ratchet.test.ts",
   "test/scripts/check-workflows.test.ts",
   "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
