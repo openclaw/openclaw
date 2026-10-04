@@ -804,7 +804,7 @@ and return focus to the tile you opened.
 Inline audio players support five-second seeking with the arrow keys, including
 when the seek slider has focus. The slider announces the current time and duration.
 
-Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
+Images attached to assistant progress messages appear inline while the task continues and remain visible after reloading the conversation. Progress attachments are preserved for runs started by any Gateway owner, including chat sends, restart recovery, and internal dispatch. Remote attachment URLs do not need a filename extension: the Gateway detects the media type and serves the preview through the same authenticated media path used for final replies. Documents keep their file cards.
 
 Computer screenshots retained in the session transcript also load as image previews,
 including after a reload. Opening a preview shows the saved screenshot in the image

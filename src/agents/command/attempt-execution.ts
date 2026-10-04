@@ -274,7 +274,6 @@ export function runAgentAttempt(
   const bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.sessionEntry?.systemPromptReport,
   );
-  const bootstrapPromptWarningSignature = bootstrapPromptWarningSignaturesSeen.at(-1);
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
   const pinnedHarnessId = isRawModelRun
@@ -459,6 +458,7 @@ export function runAgentAttempt(
       cleanupBundleMcpOnRunEnd: params.opts.cleanupBundleMcpOnRunEnd,
       oneShotCliRun: params.opts.oneShotCliRun,
       userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+      prepareAssistantTranscriptMessage: params.opts.prepareAssistantTranscriptMessage,
       contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
       onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
       suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
@@ -466,7 +466,7 @@ export function runAgentAttempt(
       terminalReplyExpectation: replyExpectation,
       silentReplyPromptMode: replyExpectation === "required" ? "none" : undefined,
       bootstrapPromptWarningSignaturesSeen,
-      bootstrapPromptWarningSignature,
+      bootstrapPromptWarningSignature: bootstrapPromptWarningSignaturesSeen.at(-1),
     }) satisfies Partial<RunEmbeddedAgentInternalParams>;
   if (!isRawModelRun && isCliExecutionProvider) {
     const expectedLifecycleRevision = params.sessionEntry?.lifecycleRevision;
