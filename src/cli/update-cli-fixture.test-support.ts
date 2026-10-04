@@ -53,7 +53,6 @@ import {
   resolveUpdateInstallIdentity,
   resolveUpdateInstallKind,
   runCommandWithTimeout,
-  runExec,
   runUtf8CommandWithTimeout,
   updateCommand,
   updateGitCheckout,

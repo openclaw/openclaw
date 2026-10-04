@@ -158,7 +158,7 @@ describe("update-cli", () => {
       await updateFinalizeCommand({ json: true, yes: true, timeout: "9" });
 
       const maintenance = finalizationProcessCalls(FRESH_POST_UPDATE_ENTRYPOINT);
-      expect(maintenance.map(({ runner, commandArgs }) => [runner, ...commandArgs])).toEqual([
+      expect(maintenance.map(({ runner, commandArgs }) => [runner].concat(commandArgs))).toEqual([
         [expectedRunner, "doctor", "--repair", "--non-interactive", "--yes"],
         [
           expectedRunner,
