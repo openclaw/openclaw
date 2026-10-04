@@ -28,8 +28,8 @@ export async function collectGarbageForTest(): Promise<void> {
           // A promise continuation can leave stale JavaScriptCore stack roots.
           bun.gc(true);
           resolve();
-        } catch (error) {
-          reject(error);
+        } catch (gcError) {
+          reject(gcError instanceof Error ? gcError : new Error(String(gcError)));
         }
       });
     });

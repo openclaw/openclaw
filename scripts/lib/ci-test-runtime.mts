@@ -81,6 +81,19 @@ const bunCompatibleGatewayFiles = ["src/gateway/worker-environments/workspace-ha
 // Whole-file qualification keeps mixed and broad scoped-owner envelopes on Node.
 const bunCompatibleScopedOwners = new Map([
   [
+    "test/vitest/vitest.extension-slack.config.ts",
+    {
+      dir: "extensions",
+      files: [
+        "extensions/slack/src/monitor/ingress.auth-retry.test.ts",
+        "extensions/slack/src/monitor/ingress.deferred-stop.test.ts",
+        "extensions/slack/src/monitor/ingress.relay.test.ts",
+        "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
+        "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
+      ],
+    },
+  ],
+  [
     agentVitestProjectOwners.support.config,
     {
       dir: agentVitestProjectOwners.support.dir,
@@ -109,6 +122,9 @@ const bunCompatibleScopedOwners = new Map([
         "test/helpers/managed-handoff-isolation.test.ts",
         "test/scripts-update-gateway-legacy.test.ts",
         "test/scripts/bench-gateway-installed.test.ts",
+        "test/scripts/clawhub-bootstrap-artifact.test.ts",
+        "test/scripts/clawhub-fixture-server.test.ts",
+        "test/scripts/crabbox-untrusted-bootstrap.test.ts",
         "test/scripts/oxlint-config.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-state.test.ts",
@@ -197,6 +213,7 @@ const bunCompatibleScopedOwners = new Map([
 const embeddedRunOwner = agentVitestProjectOwners.embeddedRun;
 const bunCompatibleUnitFiles = new Set([
   "src/library.test.ts",
+  "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts",
   "src/worker/worker-connection-closing-window.test.ts",
 ]);
 // src/state/openclaw-state-lease.retention.test.ts stays with its default Node owner:

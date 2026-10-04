@@ -74,6 +74,7 @@ const bunConfig = "test/vitest/vitest.unit-fast.config.ts";
 const unitConfig = "test/vitest/vitest.unit.config.ts";
 const unitSrcConfig = "test/vitest/vitest.unit-src.config.ts";
 const libraryTarget = "src/library.test.ts";
+const workerQuiescenceTarget = "src/node-host/node-worker-workspace-quiescence.acceptance.test.ts";
 const workerClosingWindowTarget = "src/worker/worker-connection-closing-window.test.ts";
 const bunTarget = nativeQualificationFixtures.first;
 const vitestBunTarget = "src/agents/sandbox/docker.execDockerRaw.enoent.test.ts";
@@ -971,7 +972,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
   ] as const)(
     "admits qualified unit coverage while preserving $config siblings under $policy",
     async ({ policy, config, nodeFile }) => {
-      const bunFiles = [libraryTarget, workerClosingWindowTarget];
+      const bunFiles = [libraryTarget, workerQuiescenceTarget, workerClosingWindowTarget];
       const includePatterns = [...bunFiles, nodeFile];
       const seen: Array<{ runtime: string | undefined; includes: string[] }> = [];
       await expect(
@@ -1136,6 +1137,19 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      config: "test/vitest/vitest.extension-slack.config.ts",
+      dir: "extensions",
+      targets: [
+        "extensions/slack/src/monitor/ingress.auth-retry.test.ts",
+        "extensions/slack/src/monitor/ingress.deferred-stop.test.ts",
+        "extensions/slack/src/monitor/ingress.relay.test.ts",
+        "extensions/slack/src/monitor/message-handler.debounce-policy.test.ts",
+        "extensions/slack/src/monitor/provider.transport-credentials.test.ts",
+      ],
+      sibling: "extensions/slack/src/monitor/relay-source.test.ts",
+      glob: "slack/src/monitor/*.test.ts",
+    },
+    {
       config: "test/vitest/vitest.extension-provider-openai.config.ts",
       dir: "extensions",
       targets: ["extensions/openai/realtime-quicksilver-peer-worker.test.ts"],
@@ -1156,6 +1170,9 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         "test/helpers/managed-handoff-isolation.test.ts",
         "test/scripts-update-gateway-legacy.test.ts",
         "test/scripts/bench-gateway-installed.test.ts",
+        "test/scripts/clawhub-bootstrap-artifact.test.ts",
+        "test/scripts/clawhub-fixture-server.test.ts",
+        "test/scripts/crabbox-untrusted-bootstrap.test.ts",
         "test/scripts/oxlint-config.test.ts",
         "test/scripts/pr-worktree-interruption.test.ts",
         "test/scripts/pr-worktree-state.test.ts",
