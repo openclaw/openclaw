@@ -30,6 +30,7 @@ import {
   type InternalRealtimeVoiceBrowserSessionCreateRequest,
 } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
@@ -67,6 +68,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
   respond,
   context,
   client,
+  hasCurrentClientAuthority,
   sessionMutationAuthorization,
   sessionMutationCommitGuard,
 }) => {
@@ -75,6 +77,8 @@ export const createTalkClient: GatewayRequestHandler = async ({
   }
   const rejectRequest = (code: Parameters<typeof errorShape>[0], message: string): void =>
     respond(false, undefined, errorShape(code, message));
+  let capturedOperator: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+  let operatorAuthorityOwnedByCall = false;
   try {
     sessionMutationAuthorization?.assertCurrent();
     if (params.voiceChangeId && params.voiceSessionId) {
@@ -222,6 +226,15 @@ export const createTalkClient: GatewayRequestHandler = async ({
           "Gateway-owned realtime sessions require a connected client",
         );
       }
+      if (ownsProvider) {
+        // Provider callbacks run after setup releases its request-local authority.
+        // The call holds the original principal; each admitted run retains its own hold.
+        capturedOperator = await captureGatewayOperatorRunAuthority({
+          client,
+          context,
+          hasCurrentClientAuthority,
+        });
+      }
       const closeLogicalSession = async () => {
         unregisterVoiceSession?.();
         if (!logicalSessionCreated) {
@@ -247,6 +260,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
         sessionTarget: target,
         ...(ownerConnId ? { ownerConnId } : {}),
         authority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+        operatorAuthority: capturedOperator?.authority,
         getVoiceSessionId: () => activeVoiceSessionId,
         initialItems,
       });
@@ -291,6 +305,14 @@ export const createTalkClient: GatewayRequestHandler = async ({
             closeLogicalSession,
           })
         : undefined;
+      if (gatewayControlOwner && capturedOperator) {
+        gatewayControlOwner.signal.addEventListener("abort", capturedOperator.release, {
+          once: true,
+        });
+        if (gatewayControlOwner.signal.aborted) {
+          capturedOperator.release();
+        }
+      }
       const gatewayControl = gatewayControlOwner
         ? {
             ...gatewayControlOwner.control,
@@ -465,6 +487,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
             undefined,
           );
           delivered = true;
+          operatorAuthorityOwnedByCall = gatewayControlOwner !== undefined;
           return;
         }
         if (transport) {
@@ -515,5 +538,9 @@ export const createTalkClient: GatewayRequestHandler = async ({
         formatForLog(err),
       ),
     );
+  } finally {
+    if (!operatorAuthorityOwnedByCall) {
+      capturedOperator?.release();
+    }
   }
 };

@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
 import { formatErrorMessage as formatError } from "../../../infra/errors.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../../../talk/agent-run-control-shared.js";
@@ -60,13 +61,17 @@ export function adoptTalkRealtimeRelaySession(
     Parameters<typeof registerTalkVoiceSession>[0],
     "voiceSessionId" | "connId" | "sessionTarget"
   >,
+  operatorAuthority?: AdmittedRunOperatorAuthority,
 ): void {
-  session.cleanupTimer.unref?.();
-  relaySessions.set(session.id, session);
-  registerTalkConnectionCleanup(session.connId, "realtime-relay", () =>
-    closeTalkRealtimeRelaySessionsForConnection(session.connId),
-  );
   try {
+    // Publish the call only after it owns the original principal. Provider
+    // callbacks cannot admit a consult until this exact relay is registered.
+    session.releaseOperatorAuthority = operatorAuthority?.retain?.();
+    session.cleanupTimer.unref?.();
+    relaySessions.set(session.id, session);
+    registerTalkConnectionCleanup(session.connId, "realtime-relay", () =>
+      closeTalkRealtimeRelaySessionsForConnection(session.connId),
+    );
     registerTalkVoiceSession({
       ...voice,
       voiceSessionId: session.id,
@@ -153,6 +158,9 @@ export function closeRelaySession(
     session,
     disposition === "detach" ? undefined : reason === "error" ? "relay-error" : "relay-closed",
   );
+  // Each admitted consult retains its own hold. Detaching audio releases only
+  // the call's custody; accepted work keeps the original revocable principal.
+  session.releaseOperatorAuthority?.();
   const finish = () => {
     const voiceClose = closeRelayVoiceSession(session);
     void voiceClose.then(
@@ -235,6 +243,7 @@ export function sendTalkRealtimeRelayAudio(params: {
   if (typeof params.timestamp === "number" && Number.isFinite(params.timestamp)) {
     session.bridge.setMediaTimestamp(params.timestamp);
   }
+  session.noteClientAudioAdmitted?.();
 }
 
 export function acknowledgeTalkRealtimeRelayMark(params: {

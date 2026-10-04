@@ -37,6 +37,26 @@ Mobile apps enable switching when the connected Gateway advertises voice
 selection support. Calls still start on older Gateways, but switching remains
 unavailable until the Gateway is updated.
 
+## Resuming an accepted relay call
+
+A reconnecting client can include `recovery: { interruptedForMs }` in
+`talk.session.create`. The duration is an integer from 0 through 30,000 milliseconds,
+measured from the first interruption across retry attempts. It is valid only for a
+new realtime Gateway-relay session, without `greeting` or `voiceChangeId`.
+
+Once the provider and accepted client's audio are ready, the Gateway adds its
+elapsed setup time. If the interruption exceeded ten seconds, it sends one
+connection notice to the voice agent with an approximate duration and requests a
+brief acknowledgment. The notice is connection context, not a user utterance or
+authorization. It does not restart the initial greeting or request automatic
+replay of speech the caller may have missed. Short gaps remain silent.
+
+Older Gateways can reject the new field during parameter validation. A client may
+retry without `recovery` only after an explicit unsupported-field validation
+response, not after a timeout or an uncertain session-creation outcome.
+
+## Realtime session behavior
+
 For Talk TTS playback, after setting `talk.provider` and the matching `talk.providers.<provider>` configuration, use `/voice status` to inspect the active provider and voice, `/voice list [limit]` to list its available voices, and `/voice set <voiceId|name>` to save a provider-scoped selection. Discord exposes the same command natively as `/talkvoice`.
 
 Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.

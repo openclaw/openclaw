@@ -28,6 +28,7 @@ internal class AndroidAudioInputSession private constructor(
   private val audioManager: AudioManager,
   private val audioRecord: AudioRecord,
   private val communicationAudio: RealtimeCommunicationAudio?,
+  private val telecomOwned: Boolean,
   private val isCurrent: () -> Boolean,
   private val preferredInputKey: String?,
   private val onAppliedPreferredDeviceChanged: (String?) -> Unit,
@@ -45,6 +46,7 @@ internal class AndroidAudioInputSession private constructor(
       onAppliedPreferredDeviceChanged: (String?) -> Unit = {},
       setPreferredDevice: ((AudioDeviceInfo?) -> Boolean)? = null,
       communication: Boolean = false,
+      telecomOwned: Boolean = false,
       isCurrent: () -> Boolean = { true },
       onFocusLost: () -> Unit = {},
     ): AndroidAudioInputSession {
@@ -58,7 +60,7 @@ internal class AndroidAudioInputSession private constructor(
         throw IllegalStateException("AudioRecord buffer unavailable")
       }
       val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-      val communicationAudio = if (communication) RealtimeCommunicationAudio.open(audioManager, isCurrent, onFocusLost) else null
+      val communicationAudio = if (communication && !telecomOwned) RealtimeCommunicationAudio.open(audioManager, isCurrent, onFocusLost) else null
       val audioRecord =
         try {
           AudioRecord
@@ -81,6 +83,7 @@ internal class AndroidAudioInputSession private constructor(
         audioManager = audioManager,
         audioRecord = audioRecord,
         communicationAudio = communicationAudio,
+        telecomOwned = telecomOwned,
         isCurrent = isCurrent,
         preferredInputKey = preferredDeviceKey,
         onAppliedPreferredDeviceChanged = onAppliedPreferredDeviceChanged,
@@ -145,7 +148,7 @@ internal class AndroidAudioInputSession private constructor(
   @Volatile private var echoCancellationEnabled = false
 
   val canCaptureDuringPlayback: Boolean
-    get() = echoCancellationEnabled && communicationAudio?.eligible == true
+    get() = echoCancellationEnabled && (communicationAudio?.eligible == true || (telecomOwned && audioManager.mode == AudioManager.MODE_IN_COMMUNICATION))
 
   private val deviceCallback =
     object : AudioDeviceCallback() {
@@ -173,7 +176,7 @@ internal class AndroidAudioInputSession private constructor(
       if (!isCurrent()) throw CancellationException("audio capture replaced")
       audioRecord.addOnRoutingChangedListener(routingChangedListener, callbackHandler)
       routingListenerRegistered = true
-      if (communicationAudio != null) {
+      if (communicationAudio != null || telecomOwned) {
         echoCanceler =
           runCatching {
             if (AcousticEchoCanceler.isAvailable()) AcousticEchoCanceler.create(audioRecord.audioSessionId) else null
@@ -203,6 +206,9 @@ internal class AndroidAudioInputSession private constructor(
   ): Int = checkAudioRecordReadResult(audioRecord.read(buffer, offset, size))
 
   private fun openRoute() {
+    // Telecom owns focus and both ends of the communication route for self-managed calls.
+    // Do not displace its Bluetooth/earpiece selection with ordinary Talk's loudspeaker default.
+    if (telecomOwned) return
     if (!bluetoothCommunicationRoute.begin(communicationRouteOwner, isCurrent)) {
       throw CancellationException("audio capture replaced")
     }
@@ -289,6 +295,10 @@ internal class AndroidAudioInputSession private constructor(
   private fun refreshActualRoute() {
     synchronized(lock) {
       if (closed || !isCurrent()) return
+      if (telecomOwned) {
+        setAppliedPreferredInputKey(null)
+        return
+      }
       val inputs = audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS).toList()
       val expectedInput = resolvePreferredAudioInput(inputs, preferredInputKey)
       if (expectedInput == null) {
@@ -331,7 +341,7 @@ internal class AndroidAudioInputSession private constructor(
         runCatching { audioRecord.stop() }
       }
       runCatching { audioRecord.release() }
-      bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
+      if (!telecomOwned) bluetoothCommunicationRoute.close(audioManager, communicationRouteOwner)
       communicationAudio?.close()
       requestedCommunicationDevice = null
     }

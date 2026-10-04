@@ -19,6 +19,7 @@ import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-contr
 import { ensureClientVoiceAgentSessionEntry } from "../../../talk/client-voice-session.js";
 import { projectInternalRealtimeVoicePublicConfig } from "../../../talk/provider-internal.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../../talk/provider-resolver.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
 import { ADMIN_SCOPE, hasGatewayAdminScope } from "../../operator-scopes.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/types.js";
@@ -108,10 +109,13 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       client,
       sessionMutationAuthorization,
       sessionMutationCommitGuard,
+      hasCurrentClientAuthority,
     }) => {
+      const receivedAt = performance.now();
       const mode = normalizeTalkSessionMode(params);
       const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
       const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
+      let operatorCapture: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
 
       if (transport === "webrtc" || transport === "provider-websocket") {
         respondInvalidRequest(
@@ -122,6 +126,29 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       }
       try {
         sessionMutationAuthorization?.assertCurrent();
+        if (params.recovery !== undefined) {
+          if (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId) {
+            respondInvalidRequest(
+              respond,
+              "A recovery notice requires a new realtime relay session",
+            );
+            return;
+          }
+          if (params.greeting !== undefined) {
+            respondInvalidRequest(respond, "A recovery notice cannot include an opening greeting");
+            return;
+          }
+        }
+        if (
+          params.greeting !== undefined &&
+          (mode !== "realtime" || transport !== "gateway-relay" || params.voiceChangeId)
+        ) {
+          respondInvalidRequest(
+            respond,
+            "An opening greeting requires a new realtime relay session",
+          );
+          return;
+        }
         if (params.voiceChangeId && (mode !== "realtime" || transport !== "gateway-relay")) {
           respondInvalidRequest(respond, "A voice replacement requires a realtime relay session");
           return;
@@ -306,9 +333,10 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             });
             replacement?.assertCurrent(target);
           };
-          const initialItems = replacement
-            ? await readTalkRealtimeInitialItems(target, assertEnsuredTargetCurrent)
-            : [];
+          const initialItems = await readTalkRealtimeInitialItems(
+            target,
+            assertEnsuredTargetCurrent,
+          );
           assertEnsuredTargetCurrent();
           const model =
             normalizeOptionalString(relayLaunch.providerConfig.model) ??
@@ -319,11 +347,18 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
               resolution.provider.voices ??
               []),
           ];
+          operatorCapture = await captureGatewayOperatorRunAuthority({
+            client,
+            context,
+            hasCurrentClientAuthority,
+          });
+          assertEnsuredTargetCurrent();
           const session = createTalkRealtimeRelaySession({
             context,
             connId,
             cfg: runtimeConfig,
             consultAuthority: resolveTalkAgentConsultAuthority(client?.connect?.scopes, client),
+            operatorAuthority: operatorCapture?.authority,
             provider: resolution.provider,
             providerConfig: relayLaunch.providerConfig,
             controlSource,
@@ -331,6 +366,25 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
             clientCapabilities: params.capabilities,
             voiceChangeId: params.voiceChangeId,
             initialItems,
+            ...(params.greeting !== undefined || params.recovery !== undefined
+              ? {
+                  ...(params.greeting !== undefined ? { greeting: params.greeting.trim() } : {}),
+                  ...(params.recovery !== undefined
+                    ? {
+                        recovery: {
+                          interruptedForMs: params.recovery.interruptedForMs,
+                          receivedAt,
+                        },
+                      }
+                    : {}),
+                  assertGreetingAllowed: () => {
+                    if (hasCurrentClientAuthority && !hasCurrentClientAuthority()) {
+                      throw new Error("Talk greeting connection is no longer authorized");
+                    }
+                    assertEnsuredTargetCurrent();
+                  },
+                }
+              : {}),
             voiceSelectionVoices: voices,
             instructions:
               (controlSource === "delegation"
@@ -413,6 +467,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         );
       } catch (err) {
         respond(false, undefined, talkSessionError(err));
+      } finally {
+        operatorCapture?.release();
       }
     },
   ),
