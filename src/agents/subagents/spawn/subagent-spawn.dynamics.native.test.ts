@@ -24,7 +24,7 @@ import { testing as swarmSchedulerTesting } from "../swarm/swarm-scheduler.test-
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as subagentSpawnTesting } from "./subagent-spawn.test-support.js";
 
-vi.mock("../../runtime-plugins.js", () => ({
+// mock-isolation: Keep runtime plugin discovery outside the native spawn fixture while injecting an in-memory registry.\nvi.mock("../../runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
     vi.fn<typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));

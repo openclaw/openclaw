@@ -33,7 +33,7 @@ import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
-vi.mock("./runtime-plugins.js", () => ({
+// mock-isolation: Keep runtime plugin discovery outside the replay fixture while injecting an in-memory registry.\nvi.mock("./runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle:
     vi.fn<typeof import("./runtime-plugins.js").loadAgentRuntimePluginRegistryHandle>(),
 }));

@@ -15,10 +15,10 @@ const state = vi.hoisted(() => ({
       },
 }));
 
-vi.mock("../sessions/session-lifecycle-events.js", () => ({
+// mock-isolation: Keep session lifecycle side effects outside the launch-bridge unit fixture.\nvi.mock("../sessions/session-lifecycle-events.js", () => ({
   emitSessionLifecycleEvent: vi.fn(),
 }));
-vi.mock("./agent-tool-source-execution-guard.js", () => ({
+// mock-isolation: Drive source revocation deterministically without loading ambient guard state.\nvi.mock("./agent-tool-source-execution-guard.js", () => ({
   captureAgentToolSourceExecutionGuard: (signal?: AbortSignal) => () => signal?.throwIfAborted(),
   runAgentToolSourceExecutionGuard: () => {
     if (state.blocked) {
@@ -26,11 +26,11 @@ vi.mock("./agent-tool-source-execution-guard.js", () => ({
     }
   },
 }));
-vi.mock("./subagents/registry/subagent-registry.js", () => ({
+// mock-isolation: Keep persistent collector registry state outside the launch-bridge unit fixture.\nvi.mock("./subagents/registry/subagent-registry.js", () => ({
   getSwarmRunByLaunchReplayKey: () => state.existing,
   initSubagentRegistry: vi.fn(),
 }));
-vi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
+// mock-isolation: Exercise joined-collector behavior without admitting scheduler or registry state.\nvi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
   isCollectorSpawnTool: () => true,
   runWithJoinedCollectorSpawn: async (
     _tool: unknown,
@@ -41,19 +41,19 @@ vi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
     return await run();
   },
 }));
-vi.mock("./subagents/swarm/swarm-config.js", () => ({
+// mock-isolation: Use deterministic swarm enablement and concurrency without ambient config resolution.\nvi.mock("./subagents/swarm/swarm-config.js", () => ({
   resolveSwarmConfig: () => ({ enabled: state.enabled, maxConcurrent: 4 }),
 }));
-vi.mock("./tool-policy-shared.js", () => ({
+// mock-isolation: Control allow/deny behavior locally without process-wide tool policy state.\nvi.mock("./tool-policy-shared.js", () => ({
   isToolExecutionAllowed: (allow: readonly string[], name: string) => allow.includes(name),
 }));
-vi.mock("./tools/agents-wait-tool.js", () => ({
+// mock-isolation: Collector completion is outside these launch-only bridge cases.\nvi.mock("./tools/agents-wait-tool.js", () => ({
   waitForCollectorCompletion: vi.fn(),
 }));
-vi.mock("./tools/common.js", () => ({
+// mock-isolation: Use a local input-error type without loading unrelated tool runtime state.\nvi.mock("./tools/common.js", () => ({
   ToolInputError: class ToolInputError extends Error {},
 }));
-vi.mock("./tools/sessions-resolution.js", () => ({
+// mock-isolation: Resolve synthetic session keys without opening session-store state.\nvi.mock("./tools/sessions-resolution.js", () => ({
   resolveMainSessionAlias: () => ({ mainKey: "main", alias: "main" }),
   resolveInternalSessionKey: ({ key }: { key: string }) => key,
 }));
