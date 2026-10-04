@@ -170,16 +170,16 @@ permission plane.
 For example, an independent-verification recipe can choose
 `boundary: "artifact-only"` and require `sandbox: "require"`, a candidate
 digest, and artifact references. If that sandbox cannot be provided, the launch
-fails rather than retrying unsandboxed. Handoff filtering controls only the
-explicit `boundedLaunch.handoff` payload; it is not a security boundary for the
-original task, workspace, memory, or tool visibility.
+fails rather than retrying unsandboxed. The selected boundary governs the
+explicit `boundedLaunch.handoff` payload and `candidateBinding`; it is not a
+security boundary for the original task, workspace, memory, or tool visibility.
 
 See [Swarm bounded launches](/tools/swarm-bounded-launches) for the exact contract and
 ownership boundaries.
 
 When `boundedLaunch.candidateBinding` is present, OpenClaw validates the complete
 candidate/source/recipe/policy binding, computes a stable candidate identity,
-and binds both manifest and identity into the native launch bytes before the
+and binds both binding and identity into the native launch bytes before the
 existing replay fingerprint is computed. A conflicting
 `handoff.candidateDigest` is rejected. This binding proves which exact
 candidate a verifier received; it does not prove that verification succeeded
