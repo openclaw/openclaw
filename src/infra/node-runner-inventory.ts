@@ -18,6 +18,7 @@ export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
 export const NODE_WORKER_STATUS_WAIT_VERSION = 1;
 export const NODE_WORKER_PREPARED_WORKSPACE_VERSION = 1;
+export const NODE_WORKER_NATIVE_INFERENCE_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
 export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
@@ -85,6 +86,7 @@ const WorkerHost = z
       workspaceQuiescence: z.literal(NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION).optional(),
       launchToolNames: LaunchToolNames.optional(),
       idleRetention: z.literal(true).optional(),
+      nativeInference: z.literal(NODE_WORKER_NATIVE_INFERENCE_VERSION).optional(),
     }).refine(
       (host) =>
         (host.bundleStatus === undefined || host.bundleRetention !== undefined) &&

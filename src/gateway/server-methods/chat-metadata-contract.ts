@@ -32,6 +32,8 @@ export type ChatMetadataReadParams = {
   storePath?: string;
   requesterProfileId?: string;
   sessionEntry?: ChatMetadataSessionEntry;
+  /** Exact active placement fact prepared by the worker placement owner. */
+  workerInference?: "worker";
   /** Saved reads retain their selected row and physical store until response settlement. */
   isCurrent?: () => boolean;
   assertCurrent?: () => void;

@@ -5006,5 +5006,9 @@
   {
     "source": "Deploy a team server",
     "target": "部署团队服务器"
+  },
+  {
+    "source": "Worker-local inference",
+    "target": "工作器本地推理"
   }
 ]

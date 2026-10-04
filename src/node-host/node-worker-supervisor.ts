@@ -31,6 +31,7 @@ import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import type { NodeWorkerLaunchClaim } from "./node-worker-journal.types.js";
 import { NodeWorkerLaunchStore, type NodeWorkerLaunchReceipt } from "./node-worker-launch-store.js";
 import { sendNodeWorkerInput } from "./node-worker-launch-transport.js";
+import { snapshotNodeWorkerNativeInference } from "./node-worker-native-inference.js";
 import {
   requireNodeWorkerProcessIdentity,
   type NodeWorkerProcessIdentity,
@@ -76,14 +77,23 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
+    // Native credentials are captured before any general environment projection reads getters.
+    const nativeInferenceStartup = snapshotNodeWorkerNativeInference(
+      options.nativeInferenceConfig,
+      env,
+    );
+    const startup = {
+      nativeInferenceStartup,
+      workerEnv: snapshotNodeWorkerEnv(env),
+      engineEnv: { ...process.env, ...env },
+    };
     const bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
     this.journal = new NodeWorkerJournalWorker({ env });
     this.store = new NodeWorkerLaunchStore(this.journal);
     this.turns = new NodeWorkerTurnStore(this.journal);
-    this.workerEnv = snapshotNodeWorkerEnv(env);
-    const engineEnv = { ...process.env, ...env };
+    this.workerEnv = startup.workerEnv;
     const containerEngine = options.containerEngine;
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
@@ -102,7 +112,7 @@ class NodeWorkerSupervisor {
     });
     this.children = new NodeWorkerChildLifecycle({
       bundleRoot,
-      engineEnv,
+      ...startup,
       store: this.store,
       turns: this.turns,
       capacity: this.capacity,

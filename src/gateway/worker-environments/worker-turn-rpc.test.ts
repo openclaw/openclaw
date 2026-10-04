@@ -18,6 +18,7 @@ import { publishWorkerEnvironmentFixture } from "./placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import * as support from "./service.test-support.js";
+import { registerWorkerNativeInferenceRpcTests } from "./worker-turn-rpc.native-inference.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
 type WorkerEnvironmentServiceOptions = support.WorkerEnvironmentServiceOptions;
@@ -798,6 +799,8 @@ describe("worker environment service", () => {
       payload: { outcome: { reason: "session-not-attached" } },
     });
   });
+
+  registerWorkerNativeInferenceRpcTests();
 
   it("fences and rotates live credentials", async () => {
     const environmentId = "worker-live";
