@@ -66,7 +66,12 @@ export type ModelsProviderData = {
   refreshWarning?: string;
   runtimeChoicesByProvider?: Map<string, ModelsRuntimeChoice[]>;
   runtimeChoicesByModel?: Map<string, ModelsRuntimeChoice[]>;
-  /** Configured default runtime per provider/model where the route is known. */
+  /**
+   * Configured default runtime per provider/model, for models that offer more
+   * than one runtime. Resolved from config and the current auth route for any
+   * provider, without the session's runtime pin, so it names the runtime the
+   * model uses when no override is set.
+   */
   modelRuntimeIds?: Map<string, string>;
   isCurrent?: () => boolean;
 };
@@ -186,11 +191,14 @@ export async function loadModelsProviderData(
     runtimeOverride: options.sessionEntry?.agentRuntimeOverride,
   };
   const decisions = createModelCatalogDecisions(decisionParams);
+  // Configured runtimes ignore the session's runtime pin.
+  const configuredDecisions = decisionParams.runtimeOverride
+    ? createModelCatalogDecisions({ ...decisionParams, runtimeOverride: undefined })
+    : decisions;
   // Selecting the default clears the session runtime pin; other model callbacks retain it.
-  const defaultDecisions =
-    decisionParams.runtimeOverride && resolveModelRuntimeRoute(resolvedDefault.provider)
-      ? createModelCatalogDecisions({ ...decisionParams, runtimeOverride: undefined })
-      : decisions;
+  const defaultDecisions = resolveModelRuntimeRoute(resolvedDefault.provider)
+    ? configuredDecisions
+    : decisions;
   const decisionsForEntry = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
     normalizeProviderId(entry.provider) === resolvedDefault.provider &&
     entry.id === resolvedDefault.model
@@ -417,6 +425,7 @@ export async function loadModelsProviderData(
 
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeChoicesByModel = new Map<string, ModelsRuntimeChoice[]>();
+  const modelRuntimeIds = new Map<string, string>();
   for (const [provider, models] of byProvider) {
     const providerChoices = new Map<string, ModelsRuntimeChoice>();
     for (const model of models) {
@@ -450,6 +459,22 @@ export async function loadModelsProviderData(
       }
       const choices = runtimes.map((runtime) => buildRuntimeChoice({ cfg, runtime }));
       runtimeChoicesByModel.set(`${provider}/${model}`, choices);
+      if (choices.length > 1) {
+        const configuredEvaluation = configuredDecisions.evaluateNative(
+          entry,
+          await configuredDecisions.evaluateEntry(entry, variants.length ? variants : [entry]),
+        );
+        const configuredRuntime = resolveCatalogDecisionRuntime({
+          cfg,
+          agentId: owner.agentId ?? agentId ?? "main",
+          entry,
+          evaluation: configuredEvaluation,
+          pluginRegistry: owner.pluginRegistry,
+        })?.id;
+        if (configuredRuntime) {
+          modelRuntimeIds.set(`${provider}/${model}`, normalizeRuntimeChoiceId(configuredRuntime));
+        }
+      }
       for (const choice of choices) {
         providerChoices.set(choice.id, choice);
       }
@@ -483,11 +508,7 @@ export async function loadModelsProviderData(
     modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
     runtimeChoicesByProvider,
     runtimeChoicesByModel,
-    modelRuntimeIds: new Map(
-      [...modelAvailability].flatMap(([key, readiness]) =>
-        readiness.runtimeId ? [[key, readiness.runtimeId] as const] : [],
-      ),
-    ),
+    modelRuntimeIds,
     isCurrent: decisions.isCurrent,
   };
 }

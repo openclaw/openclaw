@@ -3,9 +3,12 @@ import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
   buildProviderKeyboard,
+  calculateTotalPages,
+  expandModelEntries,
   type ProviderInfo,
   type ModelsKeyboardParams,
 } from "./model-buttons.js";
+import { buildTelegramRuntimeVariants } from "./model-runtime-variants.js";
 import { buildTelegramNativeCommandCallbackData } from "./native-command-callback-data.js";
 
 export function buildCommandsPaginationKeyboard(
@@ -90,11 +93,39 @@ export function buildTelegramModelsAddProviderChannelData(params: {
 }
 
 export function buildTelegramModelsListChannelData(
-  params: ModelsKeyboardParams,
+  params: ModelsKeyboardParams & {
+    requestedPage?: number;
+    runtimeChoicesByModel?: ReadonlyMap<string, readonly { id: string; label: string }[]>;
+    modelRuntimeIds?: ReadonlyMap<string, string>;
+  },
 ): ReplyPayload["channelData"] | null {
+  const { requestedPage, runtimeChoicesByModel, modelRuntimeIds, ...keyboardParams } = params;
+  const runtimeVariants = buildTelegramRuntimeVariants({
+    byProvider: new Map([[params.provider, new Set(params.models)]]),
+    runtimeChoicesByModel,
+    modelRuntimeIds,
+  });
+  if (runtimeVariants.size === 0) {
+    return { telegram: { buttons: buildModelsKeyboard(keyboardParams) } };
+  }
+  // Same rows and page offsets as the picker callbacks, which page over
+  // runtime rows rather than models.
+  const totalPages = Math.max(
+    1,
+    calculateTotalPages(
+      expandModelEntries(params.provider, params.models, runtimeVariants).length,
+      params.pageSize,
+    ),
+  );
+  const currentPage = Math.max(1, Math.min(requestedPage ?? params.currentPage, totalPages));
   return {
     telegram: {
-      buttons: buildModelsKeyboard(params),
+      buttons: buildModelsKeyboard({
+        ...keyboardParams,
+        runtimeVariants,
+        currentPage,
+        totalPages,
+      }),
     },
   };
 }

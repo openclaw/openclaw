@@ -329,6 +329,11 @@ function buildModelsCommandReply(
     totalPages: interactiveTotalPages,
     pageSize: interactivePageSize,
     modelNames,
+    requestedPage: page,
+    runtimeChoicesByModel: data.runtimeChoicesByModel,
+    modelRuntimeIds: data.modelRuntimeIds,
+    baseModelNames: data.modelNames,
+    currentRuntime: params.sessionEntry?.agentRuntimeOverride?.trim() || undefined,
   });
   if (interactiveChannelData) {
     return {

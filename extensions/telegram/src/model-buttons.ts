@@ -71,6 +71,7 @@ export type ModelListEntry = {
 
 const MODELS_PAGE_SIZE = 8;
 const MODEL_BUTTON_LABEL_MAX_LENGTH = 38;
+const MIN_VARIANT_MODEL_LABEL_LENGTH = 12;
 const LEGACY_PROVIDER_PATTERN = /^[a-z0-9_.-]+$/i;
 const CALLBACK_PREFIX = {
   providers: "mdl_prov",
@@ -156,7 +157,7 @@ export function buildModelSelectionCallbackData(params: {
 }
 
 /** Callback data selecting a model on an explicit runtime. */
-export function buildModelRuntimeSelectionCallbackData(params: {
+function buildModelRuntimeSelectionCallbackData(params: {
   provider: string;
   model: string;
   runtime: string;
@@ -316,10 +317,15 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
         variant.runtime ===
           (params.currentRuntime ?? params.runtimeVariants?.get(key)?.[0]?.runtime));
     const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
-    const displayLabel = variant
-      ? `${variant.label} · ${params.baseModelNames?.get(key) ?? fallbackLabel}`
-      : (modelNames?.get(key) ?? fallbackLabel);
-    const displayText = truncateModelLabel(displayLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
+    // Runtime variants truncate only the model part, so "API · …" and
+    // "Claude CLI · …" stay distinguishable for long model names.
+    const displayText = variant
+      ? truncateRuntimeVariantLabel(
+          variant.label,
+          params.baseModelNames?.get(key) ?? fallbackLabel,
+          MODEL_BUTTON_LABEL_MAX_LENGTH,
+        )
+      : truncateModelLabel(modelNames?.get(key) ?? fallbackLabel, MODEL_BUTTON_LABEL_MAX_LENGTH);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 
     rows.push([
@@ -369,6 +375,15 @@ function truncateModelLabel(modelLabel: string, maxLen: number): string {
     return modelLabel;
   }
   return `…${sliceUtf16Safe(modelLabel, -(maxLen - 1))}`;
+}
+
+function truncateRuntimeVariantLabel(
+  runtimeLabel: string,
+  modelLabel: string,
+  maxLen: number,
+): string {
+  const prefix = `${runtimeLabel} · `;
+  return `${prefix}${truncateModelLabel(modelLabel, Math.max(MIN_VARIANT_MODEL_LABEL_LENGTH, maxLen - prefix.length))}`;
 }
 
 export function getModelsPageSize(): number {

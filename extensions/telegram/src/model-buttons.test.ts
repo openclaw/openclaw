@@ -1,7 +1,6 @@
 // Telegram tests cover model buttons plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  buildModelRuntimeSelectionCallbackData,
   buildModelSelectionCallbackData,
   buildModelsKeyboard,
   expandModelEntries,
@@ -176,12 +175,27 @@ describe("runtime variants", () => {
     ["anthropic", new Set(["claude-haiku-4-5", "claude-opus-4-8", "claude-opus-5-5"])],
   ]);
 
-  it("round-trips runtime selection callbacks", () => {
-    const data = buildModelRuntimeSelectionCallbackData({
+  const runtimeCallbackData = (
+    model: string,
+    runtime: string,
+    variants: ReadonlyMap<string, readonly { runtime: string; label: string }[]>,
+  ) =>
+    buildModelsKeyboard({
       provider: "anthropic",
-      model: "claude-opus-5-5",
-      runtime: "claude-cli",
-    });
+      models: [model],
+      currentPage: 1,
+      totalPages: 1,
+      runtimeVariants: variants,
+    })
+      .flat()
+      .find((button) =>
+        (variants.get(`anthropic/${model}`) ?? []).some(
+          (variant) => variant.runtime === runtime && button.text.startsWith(`${variant.label} · `),
+        ),
+      )?.callback_data ?? "";
+
+  it("round-trips runtime selection callbacks", () => {
+    const data = runtimeCallbackData("claude-opus-5-5", "claude-cli", runtimeVariants);
     expect(data).toBe("mdl_rt_claude-cli_anthropic/claude-opus-5-5");
     expect(parseModelCallbackData(data)).toEqual({
       type: "select-runtime",
@@ -202,11 +216,7 @@ describe("runtime variants", () => {
         ],
       ],
     ]);
-    const data = buildModelRuntimeSelectionCallbackData({
-      provider: "anthropic",
-      model,
-      runtime: "claude-cli",
-    });
+    const data = runtimeCallbackData(model, "claude-cli", variants);
     expect(data.startsWith("mdl1~r:")).toBe(true);
     const parsed = parseModelCallbackData(data);
     expect(parsed?.type).toBe("select-runtime-ref");
@@ -278,5 +288,37 @@ describe("runtime variants", () => {
         .map((button) => button.text)
         .slice(0, 2),
     ).toEqual(["API · Claude Opus 5.5 ✓", "Claude CLI · Claude Opus 5.5"]);
+  });
+
+  it("keeps the runtime prefix when a long model name is truncated", () => {
+    const model = "claude-opus-5-5-extended-context-preview";
+    const variants = new Map([
+      [
+        `anthropic/${model}`,
+        [
+          { runtime: "openclaw", label: "API" },
+          { runtime: "claude-cli", label: "Claude CLI" },
+        ],
+      ],
+    ]);
+    const labels = buildModelsKeyboard({
+      provider: "anthropic",
+      models: [model],
+      currentPage: 1,
+      totalPages: 1,
+      runtimeVariants: variants,
+      baseModelNames: new Map([
+        [`anthropic/${model}`, "Claude Opus 5.5 Extended Context Preview Edition"],
+      ]),
+    })
+      .flat()
+      .map((button) => button.text)
+      .slice(0, 2);
+    expect(labels[0]?.startsWith("API · …")).toBe(true);
+    expect(labels[1]?.startsWith("Claude CLI · …")).toBe(true);
+    expect(labels[0]).not.toBe(labels[1]);
+    for (const label of labels) {
+      expect(label?.length).toBeLessThanOrEqual(38);
+    }
   });
 });
