@@ -9,6 +9,11 @@ read_when:
 `openclaw doctor --fix` owns the persistent file-to-SQLite migrations. This page
 describes each migration source and what to do when one stays blocked.
 
+Matrix's one-time inbound dedupe scan applies only when Matrix is configured or
+legacy Matrix state needs inspection. A fresh installation with neither does not
+need a Matrix migration or exclusive Gateway maintenance. Completed scans keep a
+durable receipt so later Doctor runs do not repeat them.
+
 Pre-June iMessage caches, Active Memory session toggles, Nostr bus
 and profile state, and Microsoft Teams conversations, polls, SSO tokens, and
 feedback learnings are no longer imported from JSON files. If those sources
