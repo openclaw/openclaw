@@ -3,9 +3,14 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { ConfigUiHints } from "./schema.hints.js";
 import {
+  LOOKUP_SCHEMA_COMPOSITION_KEYS,
+  lookupSchemaHasChildren,
+  resolveLookupSchemaNode,
+  type LookupSchemaNode,
+} from "./schema.lookup-refs.js";
+import {
   asSchemaObject,
   findWildcardHintMatch,
-  schemaHasChildren,
   type ConfigJsonSchemaObject as JsonSchemaObject,
   type ConfigSchemaResponse,
 } from "./schema.shared.js";
@@ -43,7 +48,6 @@ const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
   "writeOnly",
 ]);
 const MAX_LOOKUP_PATH_SEGMENTS = 32;
-const LOOKUP_SCHEMA_COMPOSITION_KEYS = ["anyOf", "oneOf", "allOf"] as const;
 const LOOKUP_SCHEMA_NESTED_FORM_DEPTH = 4;
 
 type ConfigSchemaLookupChild = ProtocolConfigSchemaLookupResult["children"][number];
@@ -86,22 +90,26 @@ function resolveItemsSchema(schema: JsonSchemaObject, index?: number): JsonSchem
 }
 
 function resolveLookupChildSchema(
-  schema: JsonSchemaObject,
+  node: LookupSchemaNode,
   segment: string,
-): JsonSchemaObject | null {
-  if (isBlockedObjectKey(segment)) {
+  seen = new Set<JsonSchemaObject>(),
+): LookupSchemaNode | null {
+  if (isBlockedObjectKey(segment) || seen.has(node.identity)) {
     return null;
   }
+  const { schema, referenceRoot } = node;
+  const visited = new Set(seen).add(node.identity);
 
   const properties = schema.properties;
   if (properties && Object.hasOwn(properties, segment)) {
-    return asSchemaObject(properties[segment]);
+    const child = asSchemaObject(properties[segment]);
+    return child ? resolveLookupSchemaNode(child, referenceRoot) : null;
   }
 
   const itemIndex = parseConfigPathArrayIndex(segment);
   const items = resolveItemsSchema(schema, itemIndex);
   if ((segment === "*" || itemIndex !== undefined) && items) {
-    return items;
+    return resolveLookupSchemaNode(items, referenceRoot);
   }
 
   for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
@@ -111,7 +119,10 @@ function resolveLookupChildSchema(
     }
     for (const variant of variants) {
       const variantSchema = asSchemaObject(variant);
-      const resolved = variantSchema ? resolveLookupChildSchema(variantSchema, segment) : null;
+      const variantNode = variantSchema
+        ? resolveLookupSchemaNode(variantSchema, referenceRoot)
+        : null;
+      const resolved = variantNode ? resolveLookupChildSchema(variantNode, segment, visited) : null;
       if (resolved) {
         return resolved;
       }
@@ -119,7 +130,7 @@ function resolveLookupChildSchema(
   }
 
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    return schema.additionalProperties;
+    return resolveLookupSchemaNode(schema.additionalProperties, referenceRoot);
   }
 
   return null;
@@ -128,8 +139,9 @@ function resolveLookupChildSchema(
 function resolveLookupSchema(
   response: ConfigSchemaResponse,
   parts: readonly string[],
-): JsonSchemaObject | null {
-  let current = asSchemaObject(response.schema);
+): LookupSchemaNode | null {
+  const root = asSchemaObject(response.schema);
+  let current = root ? resolveLookupSchemaNode(root) : null;
   for (const segment of parts) {
     if (!current) {
       break;
@@ -142,9 +154,15 @@ function resolveLookupSchema(
 type ConfigSchemaPathSegmentKind = "property" | "record-key" | "array-index" | "invalid-record-key";
 
 function classifyLookupChildSchema(
-  schema: JsonSchemaObject,
+  node: LookupSchemaNode,
   segment: string,
+  seen = new Set<JsonSchemaObject>(),
 ): ConfigSchemaPathSegmentKind | null {
+  if (seen.has(node.identity)) {
+    return null;
+  }
+  const { schema, referenceRoot } = node;
+  const visited = new Set(seen).add(node.identity);
   if (schema.properties && Object.hasOwn(schema.properties, segment)) {
     return "property";
   }
@@ -158,7 +176,10 @@ function classifyLookupChildSchema(
     }
     for (const variant of variants) {
       const variantSchema = asSchemaObject(variant);
-      const kind = variantSchema ? classifyLookupChildSchema(variantSchema, segment) : null;
+      const variantNode = variantSchema
+        ? resolveLookupSchemaNode(variantSchema, referenceRoot)
+        : null;
+      const kind = variantNode ? classifyLookupChildSchema(variantNode, segment, visited) : null;
       if (kind) {
         return kind;
       }
@@ -252,8 +273,21 @@ export function classifyConfigSchemaPathSegment(
   return current ? classifyLookupChildSchema(current, segment) : null;
 }
 
-function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
+function stripSchemaForLookup(
+  node: LookupSchemaNode,
+  nestedFormDepth = 0,
+  seen = new Set<JsonSchemaObject>(),
+): JsonSchemaNode {
+  if (seen.has(node.identity)) {
+    return {};
+  }
+  const { schema, referenceRoot } = node;
+  const visited = new Set(seen).add(node.identity);
   const next: JsonSchemaNode = {};
+  const stripChild = (childSchema: JsonSchemaObject) => {
+    const child = resolveLookupSchemaNode(childSchema, referenceRoot);
+    return child ? stripSchemaForLookup(child, nestedFormDepth + 1, visited) : {};
+  };
 
   for (const [key, value] of Object.entries(schema)) {
     if (LOOKUP_SCHEMA_STRING_KEYS.has(key) && typeof value === "string") {
@@ -306,22 +340,16 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
       (schema.additionalProperties && typeof schema.additionalProperties === "object"))
   ) {
     next.properties = Object.fromEntries(
-      Object.entries(schema.properties).map(([key, child]) => [
-        key,
-        stripSchemaForLookup(child, nestedFormDepth + 1),
-      ]),
+      Object.entries(schema.properties).map(([key, child]) => [key, stripChild(child)]),
     );
   }
   if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    next.additionalProperties = stripSchemaForLookup(
-      schema.additionalProperties,
-      nestedFormDepth + 1,
-    );
+    next.additionalProperties = stripChild(schema.additionalProperties);
   }
   if (Array.isArray(schema.items)) {
-    next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
+    next.items = schema.items.map(stripChild);
   } else if (schema.items && typeof schema.items === "object") {
-    next.items = stripSchemaForLookup(schema.items, nestedFormDepth + 1);
+    next.items = stripChild(schema.items);
   }
   if (nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) {
     for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
@@ -331,7 +359,7 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
       }
       next[key] = variants
         .filter((variant) => variant && typeof variant === "object")
-        .map((variant) => stripSchemaForLookup(variant, nestedFormDepth + 1));
+        .map(stripChild);
     }
   }
 
@@ -339,25 +367,30 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
 }
 
 function buildLookupChildren(
-  schema: JsonSchemaObject,
+  node: LookupSchemaNode,
   path: string,
   uiHints: ConfigUiHints,
   splitPath: (path: string) => string[],
   resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
+  const { schema, referenceRoot } = node;
   const children: ConfigSchemaLookupChild[] = [];
   const required = new Set(schema.required ?? []);
 
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
+    const child = resolveLookupSchemaNode(childSchema, referenceRoot);
+    if (!child) {
+      return;
+    }
     const childPath = path ? `${path}.${key}` : key;
     const resolvedHint = findWildcardHintMatch({ uiHints, path: childPath, splitPath });
     const reloadMetadata = resolveReloadMetadata?.(childPath);
     children.push({
       key,
       path: childPath,
-      type: childSchema.type,
+      type: child.schema.type,
       required: isRequired,
-      hasChildren: schemaHasChildren(childSchema),
+      hasChildren: lookupSchemaHasChildren(child),
       reloadKind: reloadMetadata?.kind,
       hint: resolvedHint?.hint,
       hintPath: resolvedHint?.path,
@@ -403,7 +436,7 @@ export function lookupConfigSchema(
 
   // Parent and child lookups share path parsing only for this response.
   const hintParts = new Map<string, string[]>();
-  const splitHintPath = schemaHasChildren(current)
+  const splitHintPath = lookupSchemaHasChildren(current)
     ? (hintPath: string): string[] => {
         let cachedParts = hintParts.get(hintPath);
         if (!cachedParts) {
