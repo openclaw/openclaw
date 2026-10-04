@@ -52,15 +52,16 @@ publication, merge, or deployment authority.
 
 ## Handoff boundaries
 
-- `isolated` drops every explicit handoff field.
+- `isolated` drops every explicit handoff field and rejects `candidateBinding`.
 - `artifact-only` may carry candidate binding and artifact references.
 - `evidence-only` may carry candidate binding and evidence references.
-- `summary-only` carries only a bounded summary.
+- `summary-only` carries only a bounded summary and rejects `candidateBinding`.
 
-OpenClaw rejects requirements that the selected boundary cannot preserve.
-References remain caller-provided data. Handoff filtering controls only the
-explicit `boundedLaunch.handoff` payload; it is not a sandbox for the original task,
-workspace, memory, or tool visibility.
+OpenClaw rejects requirements or candidate-binding metadata that the selected
+boundary cannot preserve. The boundary governs the explicit
+`boundedLaunch.handoff` payload and exact candidate binding; it is not a sandbox
+for the original task, workspace, memory, or tool visibility. References remain
+caller-provided data.
 
 ## Exact verifier launch
 

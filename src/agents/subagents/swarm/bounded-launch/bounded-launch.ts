@@ -170,6 +170,15 @@ export function prepareBoundedLaunch(params: {
   const requirements = readRequirements(options.requirements);
   validateContract(boundary, requirements);
   const candidateBinding = readCandidateBinding(options.candidateBinding);
+  if (
+    candidateBinding &&
+    boundary !== "artifact-only" &&
+    boundary !== "evidence-only"
+  ) {
+    throw new Error(
+      "boundedLaunch candidate binding cannot cross a boundary that drops candidate identity",
+    );
+  }
 
   const raw =
     options.handoff === undefined ? {} : readRecord(options.handoff, "boundedLaunch.handoff");
