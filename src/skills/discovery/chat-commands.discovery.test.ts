@@ -303,12 +303,21 @@ describe("agent skill allowlist block path", () => {
     ).toBeUndefined();
   });
 
-  it("renders a hint naming the config path the operator must change", () => {
-    expect(
-      formatAgentSkillAllowlistBlockHint({
-        configPath: "agents.entries.scoped.skills",
-        skillName: "new-skill",
-      }),
-    ).toContain("agents.entries.scoped.skills");
+  it("warns that removing a per-agent list falls back to the shared defaults", () => {
+    const hint = formatAgentSkillAllowlistBlockHint({
+      configPath: "agents.entries.scoped.skills",
+      skillName: "new-skill",
+    });
+    expect(hint).toContain("agents.entries.scoped.skills");
+    expect(hint).toContain("falls back to agents.defaults.skills");
+  });
+
+  it("offers removing the shared defaults list to leave skills unrestricted", () => {
+    const hint = formatAgentSkillAllowlistBlockHint({
+      configPath: "agents.defaults.skills",
+      skillName: "new-skill",
+    });
+    expect(hint).toContain("agents.defaults.skills");
+    expect(hint).toContain("remove it to leave skills unrestricted");
   });
 });

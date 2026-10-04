@@ -6,6 +6,8 @@ type AgentSkillsLimits = {
   maxSkillsPromptChars?: number;
 };
 
+const AGENT_DEFAULTS_SKILLS_PATH = "agents.defaults.skills";
+
 type EffectiveAgentSkillFilterSource = {
   filter: string[] | undefined;
   /** Config path that owns the effective allowlist, when one is configured. */
@@ -28,7 +30,7 @@ function resolveEffectiveAgentSkillFilterSource(
   }
   return {
     filter: normalizeSkillFilter(cfg.agents?.defaults?.skills),
-    configPath: "agents.defaults.skills",
+    configPath: AGENT_DEFAULTS_SKILLS_PATH,
   };
 }
 
@@ -71,7 +73,15 @@ export function formatAgentSkillAllowlistBlockHint(params: {
   configPath: string;
   skillName: string;
 }): string {
-  return `Note: the agent skill allowlist at "${params.configPath}" does not include "${params.skillName}", so this agent cannot see or use it. Add "${params.skillName}" to that list, or remove the list to allow all skills.`;
+  const { configPath, skillName } = params;
+  // Removing a per-agent list does not leave skills unrestricted: it inherits
+  // agents.defaults.skills, which may exclude the skill too. Only removing the
+  // shared defaults list itself makes the agent unrestricted.
+  const remedy =
+    configPath === AGENT_DEFAULTS_SKILLS_PATH
+      ? `Add "${skillName}" to it, or remove it to leave skills unrestricted.`
+      : `Add "${skillName}" to it. Removing it falls back to ${AGENT_DEFAULTS_SKILLS_PATH}, which may still exclude this skill.`;
+  return `Note: the skill allowlist at "${configPath}" does not include "${skillName}", so this agent cannot see or use it. ${remedy}`;
 }
 
 export function resolveEffectiveAgentSkillsLimits(
