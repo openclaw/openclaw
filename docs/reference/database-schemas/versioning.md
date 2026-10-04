@@ -125,6 +125,14 @@ can read and write the database safely, leaving the new index intact and recreat
 their day index; reopening with the current build retires it again. Binary rollback
 requires no row conversion or schema-version change.
 
+Memory chunk admission retires the nonunique `idx_memory_index_chunks_path`
+index at the same agent schema version. Both schema publishers retain the
+`(path, source)` index for path and source lookups. Writable memory initialization
+drops the redundant index after legacy storage validation; agent-only and read-only
+admission tolerate either state without recreating it. Older writable builds may
+rebuild it on downgrade or rollback. Rows and constraints are unchanged; see the
+[storage decision](/reference/database-schemas/storage-changes#memory-chunk-path-index-retirement).
+
 Removing the Tasks and TaskFlow runtime does not change the shared-state or agent
 schema. The existing tables, indexes, and optional execution-owner columns
 remain part of the released storage contract. Cron reads and writes its existing
