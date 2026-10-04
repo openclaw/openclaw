@@ -538,7 +538,7 @@ describe("ci workflow guards", () => {
     const job = readCiWorkflow().jobs["android-screenshots"];
     expect(job.permissions).toEqual({ contents: "read" });
     expect(job.environment).toBeUndefined();
-    expect(job["runs-on"]).toBe("ubuntu-24.04");
+    expect(evaluateWorkflowRunner(job["runs-on"])).toBe("ubuntu-24.04");
     const toolchain = job.steps.find(
       (step: WorkflowStep) => step.uses === "./.ci-harness/.github/actions/setup-android-toolchain",
     );

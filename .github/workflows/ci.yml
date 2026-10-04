@@ -5958,7 +5958,7 @@ jobs:
     name: "android-screenshots"
     needs: [preflight]
     if: ${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_android_screenshots == 'true') }}
-    runs-on: ubuntu-24.04
+    runs-on: *hosted_linux_runner
     timeout-minutes: 90
     steps:
       - *android_checkout_step
