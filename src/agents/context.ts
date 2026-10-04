@@ -25,11 +25,6 @@ import {
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
 
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,

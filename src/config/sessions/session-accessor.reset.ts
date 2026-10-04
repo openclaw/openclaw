@@ -4,7 +4,6 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import {
@@ -63,10 +62,6 @@ function assertSessionInitializationAgentScope(agentId: string, sessionKey: stri
     throw new SessionInitializationAgentScopeMismatchError(normalizedAgentId, sessionKeyAgentId);
   }
 }
-
-const loadSessionArchiveRuntime = createLazyRuntimeModule(
-  () => import("../../gateway/session-archive.runtime.js"),
-);
 
 type ReplySessionInitializationSelection = {
   agentId: string;
@@ -300,7 +295,7 @@ async function archivePreviousSessionTranscript(params: {
     return {};
   }
   const { archiveSessionTranscriptsDetailed, resolveStableSessionEndTranscript } =
-    await loadSessionArchiveRuntime();
+    await import("../../gateway/session-archive.runtime.js");
   const archivedTranscripts = archiveSessionTranscriptsDetailed({
     sessionId: params.previousEntry.sessionId,
     storePath: params.storePath,

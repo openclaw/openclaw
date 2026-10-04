@@ -126,7 +126,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     return { dispose() {} };
   }
   let menu: NativeLinkMenu | null = null;
-  let menuModule: Promise<typeof import("../components/native-link-menu.runtime.ts")> | undefined;
   let menuRequest = 0;
   let disposed = false;
   let nativeUpdatePending = false;
@@ -161,8 +160,7 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     closeMenu();
     const request = menuRequest;
     const path = event.composedPath();
-    const { mountNativeLinkMenu } = await (menuModule ??=
-      import("../components/native-link-menu.runtime.ts"));
+    const { mountNativeLinkMenu } = await import("../components/native-link-menu.runtime.ts");
     if (disposed || options.signal?.aborted || request !== menuRequest || !anchor.isConnected) {
       return;
     }
@@ -228,7 +226,6 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
     event.preventDefault();
     event.stopPropagation();
     void showMenu(event, link.anchor, link.url).catch((error: unknown) => {
-      menuModule = undefined;
       if (!disposed) {
         console.error("[openclaw] native link menu failed to load; right-click to retry", error);
       }

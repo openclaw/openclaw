@@ -290,7 +290,6 @@ function resetAgentCliCommandMocksForTest() {
   startOneShotDiagnosticsExporters.mockReset();
   startOneShotDiagnosticsExporters.mockResolvedValue(null);
   vi.stubEnv("OPENCLAW_GATEWAY_URL", "");
-  agentViaGatewayTesting.resetLazyImportsForTests();
   agentViaGatewayTesting.setGatewayAbortRetryDelaysMsForTests([0, 0, 0, 0]);
   // Each test observes a fresh mock generation, even after the real module was
   // warmed; a single hoisted factory would hide later unexpected imports.
@@ -2608,66 +2607,20 @@ describe("agentCliCommand", () => {
     expect(runtime.exit).not.toHaveBeenCalledWith(1);
   });
 
-  it("keeps a resolved session module cached until the existing lazy reset", async () => {
-    await withTempStore(async () => {
-      mockGatewaySuccessReply();
-      const run = () => agentCliCommand({ message: "hi", to: "+1555" }, runtime);
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(loadAgentSessionModuleMock).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).not.toHaveBeenCalled();
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledTimes(3);
-      expect(
-        callGateway.mock.calls.map(([value]) => {
-          const request = requireRecord(value, "gateway request");
-          return requireRecord(request.params, "gateway params").sessionKey;
-        }),
-      ).toEqual(["agent:main:main", "agent:main:main", "agent:main:main"]);
-    });
-  });
-
-  it("keeps a rejected session module cached until the existing lazy reset", async () => {
+  it("stops dispatch and releases signal listeners when the session module fails to load", async () => {
     await withTempStore(async () => {
       const failure = new Error("synthetic session module load failure");
-      const rejectedGeneration = vi.fn(() => {
+      vi.doMock("./agent/session.runtime.js", () => {
         throw failure;
       });
-      vi.doMock("./agent/session.runtime.js", rejectedGeneration);
       const signals = createSignalProcess();
-      const run = () =>
+      await expect(
         agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
           process: signals.processLike,
-        });
-      const firstError = await run().catch((error: unknown) => error);
-      expect(firstError).toBeInstanceOf(Error);
-      expect(firstError).toMatchObject({ cause: failure });
-      expect(rejectedGeneration).toHaveBeenCalledOnce();
-
-      const nextGeneration = vi.fn();
-      vi.doMock("./agent/session.runtime.js", async (importOriginal) => {
-        nextGeneration();
-        return await importOriginal<typeof import("./agent/session.runtime.js")>();
-      });
-      await expect(run()).rejects.toBe(firstError);
-      expect(nextGeneration).not.toHaveBeenCalled();
+        }),
+      ).rejects.toMatchObject({ cause: failure });
       expect(callGateway).not.toHaveBeenCalled();
-      expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
-
-      agentViaGatewayTesting.resetLazyImportsForTests();
-      mockGatewaySuccessReply();
-      await expect(run()).resolves.toEqual(gatewaySuccessReply("hello"));
-      expect(nextGeneration).toHaveBeenCalledOnce();
-      expect(callGateway).toHaveBeenCalledOnce();
+      expect(agentCommand).not.toHaveBeenCalled();
       expect(signals.listenerCount("SIGINT") + signals.listenerCount("SIGTERM")).toBe(0);
     });
   });
