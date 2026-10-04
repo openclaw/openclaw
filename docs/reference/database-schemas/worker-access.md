@@ -1898,16 +1898,6 @@ writes retain their interval through the existing writer's commit and settlement
 Synchronous guards perform no receipt SQL or worker submission. Agent database
 admission refusals remain with their in-memory admission owner.
 
-Shared HTTP, Discord, Slack, and Telegram message handoffs add owner-held uses
-from exact receipt, job, and deletion facts prepared by the existing read worker.
-After asynchronous preparation, the Gateway owner acquires an interval through
-provider initiation, then releases it without waiting for the response. Each
-retry prepares a fresh use; reads also prepare authority before accepting their
-results. Transcript writes retain their interval through commit and settlement.
-The existing synchronous current-job guards remain active during this staged
-transport migration. Their native SQL path is removed only after the remaining
-transports adopt prepared initiation; this stage does not claim its elimination.
-
 Cron mutations share host-owned receipt-authority custody for the physical shared
 database, across store partitions and approval writers. Runtime mutations, raw
 saves, mutable-load repairs, native grant consumption, and agent-deletion
