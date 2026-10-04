@@ -1856,12 +1856,11 @@ src/commands/doctor-plugin-registry.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
 src/commands/doctor-retired-phone-control.ts	1
-src/commands/doctor-sandbox-legacy-registry.ts	7
 src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
 src/commands/doctor-session-incognito-key-repair-state.ts	8
-src/commands/doctor-session-snapshots.ts	4
+src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-compact.ts	1
 src/commands/doctor-session-sqlite-recover-report.ts	1
 src/commands/doctor-session-state-providers.ts	3
@@ -1901,7 +1900,6 @@ src/commands/doctor/shared/legacy-config-migrations.runtime.models.codex.ts	4
 src/commands/doctor/shared/legacy-config-migrations.runtime.models.refs.ts	1
 src/commands/doctor/shared/legacy-config-state-migration-input.ts	2
 src/commands/doctor/shared/legacy-talk-config-normalizer.ts	1
-src/commands/doctor/shared/legacy-web-tools-migrate.ts	1
 src/commands/doctor/shared/open-policy-allowfrom.ts	2
 src/commands/doctor/shared/plugin-runtime-symlinks.ts	1
 src/commands/doctor/shared/plugin-tool-allowlist-warnings.ts	1
