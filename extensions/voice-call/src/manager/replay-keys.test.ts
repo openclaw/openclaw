@@ -23,7 +23,7 @@ describe("voice-call manager replay keys", () => {
     const firstReservation = reserveRejectedProviderCall(calls, "provider-a");
     expect(firstReservation).toBeDefined();
     for (let index = 0; index < 9_999; index += 1) {
-      calls.set(`provider-${index}`, Symbol());
+      calls.set(`provider-${index}`, Symbol("retained-call"));
     }
 
     reserveRejectedProviderCall(calls, "provider-b");

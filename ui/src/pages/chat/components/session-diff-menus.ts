@@ -62,13 +62,10 @@ class SessionDiffMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onAction: (action: SessionDiffMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
 
-  constructor() {
-    super();
-    new DropdownMenuController(this, {
-      getTrigger: () => this.menu?.trigger ?? null,
-      onClose: () => this.onClose(),
-    });
-  }
+  readonly menuLifecycle = new DropdownMenuController(this, {
+    getTrigger: () => this.menu?.trigger ?? null,
+    onClose: () => this.onClose(),
+  });
 
   override connectedCallback() {
     super.connectedCallback();

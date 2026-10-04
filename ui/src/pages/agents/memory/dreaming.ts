@@ -378,8 +378,8 @@ const DREAMING_RESOURCE_SPECS: {
 async function loadDreamingResource<Key extends DreamingResourceKey>(
   state: DreamingState,
   key: Key,
+  spec: DreamingResourceSpec<Key> = DREAMING_RESOURCE_SPECS[key],
 ): Promise<void> {
-  const spec = DREAMING_RESOURCE_SPECS[key];
   const agentId = resolveSelectedAgentId(state);
   const loadingKey = `${key}Loading` as const;
   const errorKey = `${key}Error` as const;

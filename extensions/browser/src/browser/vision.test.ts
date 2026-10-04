@@ -15,13 +15,16 @@ const mocks = vi.hoisted(() => ({
   saveMediaBuffer: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/media-understanding-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>()),
   describeImageFile: mocks.describeImageFile,
 }));
-vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   saveMediaBuffer: mocks.saveMediaBuffer,
 }));
-vi.mock("./screenshot.js", () => ({
+vi.mock("./screenshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./screenshot.js")>()),
   normalizeBrowserScreenshot: mocks.normalizeBrowserScreenshot,
 }));
 

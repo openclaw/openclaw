@@ -53,13 +53,17 @@ type RuntimeWebProviderSelectionParams = {
   resolveSecretInput: (
     params: RuntimeWebResolveSecretInputParams,
   ) => Promise<SecretResolutionResult<WebSearchCredentialResolutionSource>>;
-  /** Writes the selected credential into the resolved runtime config snapshot. */
-  setResolvedCredential: (params: {
-    resolvedConfig: OpenClawConfig;
-    provider: RuntimeWebProvider;
-    value: string;
-  }) => void;
 };
+
+function ensureConfigObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
+  const current = target[key];
+  if (isRecord(current)) {
+    return current;
+  }
+  const next: Record<string, unknown> = {};
+  target[key] = next;
+  return next;
+}
 
 function inactivePathsForProvider(
   provider: RuntimeWebProvider,
@@ -115,11 +119,7 @@ function setResolvedCredentialPath(params: {
     return;
   }
   try {
-    setPathExistingStrict(
-      params.resolvedConfig as Record<string, unknown>,
-      pathSegments,
-      params.value,
-    );
+    setPathExistingStrict(params.resolvedConfig, pathSegments, params.value);
   } catch {
     // Env-only provider defaults may not have a config path to mirror.
   }
@@ -131,6 +131,15 @@ function setResolvedCredentialPath(params: {
 export async function resolveRuntimeWebProviderSelection(
   params: RuntimeWebProviderSelectionParams,
 ): Promise<RuntimeWebProviderSelectionResult> {
+  const setResolvedCredential = (provider: RuntimeWebProvider, value: string): void => {
+    if (provider.setConfiguredCredentialValue) {
+      provider.setConfiguredCredentialValue(params.resolvedConfig, value);
+      return;
+    }
+    const tools = ensureConfigObject(params.resolvedConfig, "tools");
+    const web = ensureConfigObject(tools, "web");
+    provider.setCredentialValue(ensureConfigObject(web, params.kind), value);
+  };
   const scopePath = `tools.web.${params.kind}`;
   const noFallbackCode =
     params.kind === "search"
@@ -237,12 +246,7 @@ export async function resolveRuntimeWebProviderSelection(
           refKey: selectedCandidateResolution.secretRefKey,
           reason: selectedCandidateResolution.unresolvedRefReason,
           contractDigest,
-          restoreResolvedValue: (resolvedValue) =>
-            params.setResolvedCredential({
-              resolvedConfig: params.resolvedConfig,
-              provider,
-              value: resolvedValue,
-            }),
+          restoreResolvedValue: (resolvedValue) => setResolvedCredential(provider, resolvedValue),
         });
       }
 
@@ -268,11 +272,7 @@ export async function resolveRuntimeWebProviderSelection(
             path: selectedCandidatePath,
             value: selectedCandidateResolution.value,
           });
-          params.setResolvedCredential({
-            resolvedConfig: params.resolvedConfig,
-            provider,
-            value: selectedCandidateResolution.value,
-          });
+          setResolvedCredential(provider, selectedCandidateResolution.value);
         }
         break;
       }

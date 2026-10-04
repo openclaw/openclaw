@@ -25,6 +25,11 @@ type MultiSelectRow = MultiSelectOption & { custom?: boolean };
 
 let instanceCounter = 0;
 
+function nextListboxId(): string {
+  instanceCounter += 1;
+  return `openclaw-multi-select-${instanceCounter}`;
+}
+
 function providerFromValue(value: string): string | undefined {
   const separator = value.indexOf("/");
   return separator > 0 ? value.slice(0, separator) : undefined;
@@ -53,7 +58,7 @@ export class MultiSelect extends OpenClawLightDomElement {
   @state() private query = "";
   @state() private activeIndex = 0;
 
-  private readonly listboxId = `openclaw-multi-select-${++instanceCounter}`;
+  private readonly listboxId = nextListboxId();
   private field: HTMLElement | null = null;
   private input: HTMLInputElement | null = null;
 

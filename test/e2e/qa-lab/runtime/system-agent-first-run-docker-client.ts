@@ -230,13 +230,13 @@ async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
   delete defaults.models;
   // v2026.9.4 (3a9d69db) wrote this runtime-bearing main entry after claiming
   // the receipt, before workspace setup. Do not recreate the retired producer.
-  const main = {
+  const mainEntry = {
     default: true,
     models: { [EXPECTED_PERSISTED_MODEL]: { agentRuntime: { id: "claude-cli" } } },
   };
   const releasedConfig: OpenClawConfigWithLegacyRoster = {
     ...structuredClone(inferenceConfig),
-    agents: { defaults, entries: { main } },
+    agents: { defaults, entries: { main: mainEntry } },
   };
   const securityAcknowledgedAt = releasedConfig.wizard?.securityAcknowledgedAt;
   assert(
@@ -275,7 +275,7 @@ async function runReleasedPendingRecovery(inferenceConfig: OpenClawConfig) {
   clearConfigCache();
   const after: OpenClawConfigWithLegacyRoster = JSON.parse(await fs.readFile(configPath, "utf8"));
   const owner = readLocalOnboardingStateForConfig(configPath, after);
-  const mainPreserved = isDeepStrictEqual(after.agents?.entries, { main });
+  const mainPreserved = isDeepStrictEqual(after.agents?.entries, { main: mainEntry });
   console.log(
     `OpenClaw released pending recovery state: ${JSON.stringify({
       status: owner?.status,

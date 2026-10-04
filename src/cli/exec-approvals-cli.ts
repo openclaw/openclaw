@@ -1294,7 +1294,7 @@ export function registerExecApprovalsCli(program: Command) {
         try {
           input = JSON5.parse(raw);
         } catch (err) {
-          throw new Error(`Failed to parse approvals JSON: ${String(err)}`);
+          throw new Error(`Failed to parse approvals JSON: ${String(err)}`, { cause: err });
         }
         if (isNativeApprovalsSnapshot(snapshot)) {
           const native = normalizeNativePolicyInput(input);

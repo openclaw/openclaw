@@ -75,16 +75,6 @@ type SecretResolutionSource =
   | WebSearchCredentialResolutionSource
   | WebFetchCredentialResolutionSource;
 
-function ensureConfigObject(target: Record<string, unknown>, key: string): Record<string, unknown> {
-  const current = target[key];
-  if (isRecord(current)) {
-    return current;
-  }
-  const next: Record<string, unknown> = {};
-  target[key] = next;
-  return next;
-}
-
 type ResolvedRuntimeWebTools = {
   metadata: RuntimeWebToolsMetadata;
   degradedOwners: DegradedSecretOwner[];
@@ -344,19 +334,6 @@ function inferSingleBundledPluginScopedWebToolConfigOwner(
   return matches[0];
 }
 
-function inferExactBundledPluginScopedWebToolConfigOwner(params: {
-  config: OpenClawConfig;
-  key: "webSearch" | "webFetch";
-  pluginId: string;
-}): string | undefined {
-  const entry = params.config.plugins?.entries?.[params.pluginId];
-  if (!isRecord(entry) || entry.enabled === false) {
-    return undefined;
-  }
-  const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
-  return isRecord(pluginConfig?.[params.key]) ? params.pluginId : undefined;
-}
-
 type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 
 async function hasCustomWebProviderPluginRisk(params: {
@@ -532,21 +509,6 @@ async function resolveSecretInputWithEnvFallback(params: {
   };
 }
 
-function setResolvedWebProviderApiKey(params: {
-  kind: "search" | "fetch";
-  resolvedConfig: OpenClawConfig;
-  provider: PluginWebSearchProviderEntry | PluginWebFetchProviderEntry;
-  value: string;
-}): void {
-  if (params.provider.setConfiguredCredentialValue) {
-    params.provider.setConfiguredCredentialValue(params.resolvedConfig, params.value);
-    return;
-  }
-  const tools = ensureConfigObject(params.resolvedConfig as Record<string, unknown>, "tools");
-  const web = ensureConfigObject(tools, "web");
-  params.provider.setCredentialValue(ensureConfigObject(web, params.kind), params.value);
-}
-
 async function resolveBundledWebProviders(params: {
   kind: "search" | "fetch";
   sourceConfig: OpenClawConfig;
@@ -677,11 +639,13 @@ export async function resolveRuntimeWebTools(params: {
       !(await getHasCustomWebProviderRisk(contract))
     ) {
       if (rawProvider) {
-        configuredBundledPluginIdHint = inferExactBundledPluginScopedWebToolConfigOwner({
-          config: params.sourceConfig,
-          key: "webSearch",
-          pluginId: rawProvider,
-        });
+        const entry = params.sourceConfig.plugins?.entries?.[rawProvider];
+        if (isRecord(entry) && entry.enabled !== false) {
+          const pluginConfig = isRecord(entry.config) ? entry.config : undefined;
+          if (isRecord(pluginConfig?.webSearch)) {
+            configuredBundledPluginIdHint = rawProvider;
+          }
+        }
       }
       configuredBundledPluginIdHint ??= inferSingleBundledPluginScopedWebToolConfigOwner(
         params.sourceConfig,
@@ -764,7 +728,7 @@ export async function resolveRuntimeWebTools(params: {
         : undefined;
     const invalidConfiguredProvider = isSearch && Boolean(rawProvider) && !configuredProvider;
     if (rawProvider && !configuredProvider) {
-      const diagnostic: RuntimeWebDiagnostic = {
+      const diagnostic = {
         code: isSearch
           ? "WEB_SEARCH_PROVIDER_INVALID_AUTODETECT"
           : "WEB_FETCH_PROVIDER_INVALID_AUTODETECT",
@@ -772,7 +736,7 @@ export async function resolveRuntimeWebTools(params: {
           ? `tools.web.${kind}.provider is "${rawProvider}". No provider will be selected.`
           : `tools.web.${kind}.provider is "${rawProvider}". Falling back to auto-detect precedence.`,
         path: `tools.web.${kind}.provider`,
-      };
+      } satisfies RuntimeWebDiagnostic;
       diagnostics.push(diagnostic);
       metadata.diagnostics.push(diagnostic);
       pushWarning(params.context, {
@@ -815,7 +779,6 @@ export async function resolveRuntimeWebTools(params: {
           providerFailuresByRefKey,
           forceColdRefKeys: params.forceColdRefKeys,
         }),
-      setResolvedCredential: (credential) => setResolvedWebProviderApiKey({ ...credential, kind }),
     });
     attachWebProviderFailures(selection.unavailableProviders, providerFailuresByRefKey);
     collectUnavailableWebProviders({
