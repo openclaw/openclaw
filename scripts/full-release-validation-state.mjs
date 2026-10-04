@@ -32,13 +32,11 @@ import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
   buildReleaseStateArtifact,
-  buildReleaseValidationManifest,
   classifyReleaseGhTransportError,
   classifyReleaseSnapshot,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   releasePlanGateFailures,
-  releaseManifestChildEvidence,
   MAX_RELEASE_ARTIFACT_BYTES,
   serializeReleaseArtifact,
   selectReleaseStateArtifacts,
@@ -50,8 +48,14 @@ import {
 } from "./full-release-validation-policy.mjs";
 import { sortJsonValueKeys } from "./lib/canonical-json.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
+import {
+  buildReleaseValidationManifest,
+  manifestContextFromEnvironment,
+  releaseManifestChildEvidence,
+} from "./lib/full-release-manifest.mjs";
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
+import { verifyQualificationAdmission } from "./release-qualification-admission.mjs";
 
 export * from "./full-release-validation-policy.mjs";
 
@@ -659,73 +663,6 @@ function planExpected() {
   };
 }
 
-function manifestContextFromEnvironment(source) {
-  const env = process.env;
-  const coverage = source?.coverage ?? {};
-  const inputs = {};
-  for (const [key, variable, sourceKey] of [
-    ["provider", "PROVIDER", "provider"],
-    ["mode", "MODE", "mode"],
-    ["liveSuiteFilter", "LIVE_SUITE_FILTER", "live_suite_filter"],
-    ["crossOsSuiteFilter", "CROSS_OS_SUITE_FILTER", "cross_os_suite_filter"],
-    ["releasePackageSpec", "RELEASE_PACKAGE_SPEC", "release_package_spec"],
-    [
-      "packageAcceptancePackageSpec",
-      "PACKAGE_ACCEPTANCE_PACKAGE_SPEC",
-      "package_acceptance_package_spec",
-    ],
-    ["codexPluginSpec", "CODEX_PLUGIN_SPEC", "codex_plugin_spec"],
-    ["npmTelegramPackageSpec", "NPM_TELEGRAM_PACKAGE_SPEC", "npm_telegram_package_spec"],
-    ["npmTelegramProviderMode", "NPM_TELEGRAM_PROVIDER_MODE", "npm_telegram_provider_mode"],
-    ["npmTelegramScenario", "NPM_TELEGRAM_SCENARIO", "npm_telegram_scenario"],
-    ["skipPackageTelegramE2e", "SKIP_PACKAGE_TELEGRAM_E2E", "skip_package_telegram_e2e"],
-    ["allowUnreleasedChangelog", "ALLOW_UNRELEASED_CHANGELOG", "allow_unreleased_changelog"],
-    [
-      "pluginPrereleaseNodeExcludePatternsJson",
-      "PLUGIN_PRERELEASE_NODE_EXCLUDE_PATTERNS_JSON",
-      "plugin_prerelease_node_exclude_patterns_json",
-    ],
-    [
-      "extensionTestExcludePatternsJson",
-      "EXTENSION_TEST_EXCLUDE_PATTERNS_JSON",
-      "extension_test_exclude_patterns_json",
-    ],
-  ]) {
-    inputs[key] = env[variable] ?? coverage[sourceKey] ?? "";
-  }
-  inputs.targetContextRef = env.TARGET_CONTEXT_REF ?? source?.targetContextRef ?? "";
-  inputs.targetVersion = env.TARGET_VERSION ?? source?.projection?.version ?? "";
-  const waiver = env.TELEGRAM_WAIVER ?? coverage.telegram_waiver ?? "";
-  if (waiver) {
-    inputs.telegramWaiver = waiver;
-  }
-  return {
-    runId: env.GITHUB_RUN_ID,
-    runAttempt: env.GITHUB_RUN_ATTEMPT,
-    workflowRef: env.GITHUB_REF_NAME,
-    workflowSha: env.GITHUB_SHA,
-    workflowFullRef: env.GITHUB_REF,
-    workflowRefType: env.GITHUB_REF_TYPE,
-    targetRef: env.TARGET_REF ?? source?.targetContextRef ?? "",
-    releaseProfile: env.RELEASE_PROFILE ?? coverage.release_profile ?? "",
-    rerunGroup: env.RERUN_GROUP ?? coverage.rerun_group ?? "",
-    runReleaseSoak: env.RUN_RELEASE_SOAK ?? coverage.run_release_soak ?? "",
-    validationInputs: inputs,
-    publicationArtifacts: {
-      npmPreflight: JSON.parse(env.QUALIFIED_NPM_BUNDLE_JSON || "null"),
-      pluginNpm: JSON.parse(env.PREPARED_PLUGIN_NPM_JSON || "null"),
-      docker: env.PREPARED_DOCKER_MANIFEST_SHA256
-        ? {
-            preparedRunId: env.PREPARED_DOCKER_RUN_ID,
-            preparedRunAttempt: env.PREPARED_DOCKER_RUN_ATTEMPT,
-            preparedArtifactName: env.PREPARED_DOCKER_ARTIFACT_NAME,
-            preparedManifestSha256: env.PREPARED_DOCKER_MANIFEST_SHA256,
-          }
-        : null,
-    },
-  };
-}
-
 function publicationKnownBudget(record, evidenceReuse) {
   serializeReleaseArtifact(record);
   const source = record.sourceAdmission;
@@ -1085,6 +1022,20 @@ async function planMode() {
         cachedPlan: restored,
       });
     }
+    if (restored.sourceAdmission?.qualificationAdmission) {
+      const admitted = verifyQualificationAdmission({
+        descriptor: restored.sourceAdmission.qualificationAdmission,
+        repository: expected.repository,
+        candidateSha: restored.targetSha,
+        qualificationSha: restored.workflowSha,
+        workflowRef: restored.workflowRef,
+        inputs: restored.qualificationInputs,
+      });
+      validateReleaseExecutionPlanArtifact(restored, {
+        ...expected,
+        qualificationCoverage: admitted.coverage,
+      });
+    }
     writeExecutionPlan(outputPath, restored);
     return;
   }
@@ -1109,6 +1060,22 @@ async function planMode() {
           };
     Object.assign(planInputs, publication);
   }
+  if (planInputs.sourceAdmission?.qualificationAdmission) {
+    const event = readArtifact(
+      requiredString(process.env.GITHUB_EVENT_PATH, "workflow event path"),
+      "workflow event",
+    );
+    const admitted = verifyQualificationAdmission({
+      descriptor: planInputs.sourceAdmission.qualificationAdmission,
+      repository: expected.repository,
+      candidateSha: expected.targetSha,
+      qualificationSha: expected.workflowSha,
+      workflowRef: expected.workflowRef,
+      inputs: event.inputs,
+    });
+    planInputs.qualificationInputs = event.inputs;
+    planInputs.qualificationCoverage = admitted.coverage;
+  }
   const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
   const candidate = candidateFromInputs(planInputs, built.gates);
@@ -1121,6 +1088,8 @@ async function planMode() {
     sourceAdmission: planInputs.sourceAdmission,
     publicationAdmissionContract: planInputs.publicationAdmissionContract,
     publicationAdmission: planInputs.publicationAdmission,
+    qualificationCoverage: planInputs.qualificationCoverage,
+    qualificationInputs: planInputs.qualificationInputs,
     candidate,
     coveragePolicy: planInputs.coveragePolicy,
     children: hydrateReusedPlan(built.children, { childReuse: planInputs.childReuse ?? {} }),

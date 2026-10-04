@@ -2,6 +2,7 @@ import type { ChildProcess, SendHandle } from "node:child_process";
 import { Socket } from "node:net";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { killProcessTree } from "../kill-tree.js";
 import { spawnWithInheritedOomScore } from "../linux-oom-score.js";
 import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../supervisor/cancellation-policy.js";
@@ -35,6 +36,7 @@ const owned = new Map<number, Owned>();
 const receiver = createBrokerReceiver();
 let stopping = false;
 const starting = new Map<number, { canceled?: boolean; signal?: NodeJS.Signals | number }>();
+const launchGrants = new Map<number, ReturnType<typeof createDeferredCore<boolean>>>();
 let resources: Awaited<ReturnType<typeof createBrokerNativeResourceServer>> | undefined;
 let startup: "waiting" | "initializing" | "ready" = "waiting";
 
@@ -67,6 +69,9 @@ function shutdown(): void {
     return;
   }
   stopping = true;
+  for (const grant of launchGrants.values()) {
+    grant.resolve(false);
+  }
   resources?.disconnect();
   sender.close(new Error("Spawn broker parent disconnected"));
   receiver.clear();
@@ -130,7 +135,7 @@ function disposeFailedChild(child: ChildProcess | undefined): void {
 }
 
 async function launch(
-  message: Extract<BrokerRequest, { type: "spawn" | "spawn-execa" }>,
+  message: Extract<BrokerRequest, { type: "spawn" | "prepare-spawn" | "spawn-execa" }>,
 ): Promise<void> {
   if (stopping || owned.size + starting.size + (resources?.size ?? 0) >= 256) {
     const error = new SpawnBrokerError("Spawn broker request capacity exceeded");
@@ -167,7 +172,12 @@ async function launch(
   starting.set(message.id, pending);
   let spawnedChild: ChildProcess | undefined;
   const assertActive = () => {
-    if (stopping || !process.connected) {
+    // Ordinary queued commands still settle cancellation through their native process result.
+    if (
+      stopping ||
+      !process.connected ||
+      (message.type === "prepare-spawn" && (pending.canceled || pending.signal))
+    ) {
       throw new Error("Spawn broker is stopping");
     }
   };
@@ -176,13 +186,26 @@ async function launch(
     // another descriptor acknowledgement or a large buffered command result.
     const admission = await sender.reserve<Admission>(async (publish) => {
       assertActive();
+      if (message.type === "prepare-spawn") {
+        const grant = createDeferredCore<boolean>();
+        launchGrants.set(message.id, grant);
+        try {
+          await publish({ type: "prepared", id: message.id });
+          if (!(await grant.promise)) {
+            throw new Error("Spawn broker launch authority refused");
+          }
+          assertActive();
+        } finally {
+          launchGrants.delete(message.id);
+        }
+      }
       const execa =
         message.type === "spawn-execa"
           ? await startBrokerExeca(message.argv, message.options, assertActive)
           : undefined;
       const child =
         execa?.child ??
-        (message.type === "spawn"
+        (message.type !== "spawn-execa"
           ? spawnWithInheritedOomScore(message.argv[0]!, message.argv.slice(1), message.options)
           : undefined);
       spawnedChild = child;
@@ -408,11 +431,19 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     shutdown();
     return;
   }
+  if (message.type === "launch") {
+    launchGrants.get(message.id)?.resolve(message.allowed);
+    return;
+  }
   if (message.type === "pipe-received") {
     sender.acknowledge(message.id, message.fd);
     return;
   }
-  if (message.type === "spawn" || message.type === "spawn-execa") {
+  if (
+    message.type === "spawn" ||
+    message.type === "prepare-spawn" ||
+    message.type === "spawn-execa"
+  ) {
     void launch(message).catch(shutdown);
     return;
   }
@@ -431,9 +462,11 @@ process.on("message", (raw: unknown, handle: SendHandle) => {
     const pending = starting.get(message.id);
     if (pending && message.type === "cancel") {
       pending.canceled = true;
+      launchGrants.get(message.id)?.resolve(false);
     }
     if (pending && message.type === "kill") {
       pending.signal = message.signal;
+      launchGrants.get(message.id)?.resolve(false);
     }
     if (message.type === "ipc") {
       void report({

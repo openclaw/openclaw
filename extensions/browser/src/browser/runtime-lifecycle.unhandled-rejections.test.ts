@@ -73,7 +73,6 @@ describe("browser unhandled rejection lifecycle", () => {
 
       await stopBrowserRuntime({
         current: state,
-        getState: () => state,
         clearState,
         onWarn: vi.fn(),
       });
@@ -107,7 +106,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(handler?.(wrapped)).toBe(true);
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -128,7 +126,6 @@ describe("browser unhandled rejection lifecycle", () => {
     expect(handler?.(new Error("No dialog is showing"))).toBe(false);
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -154,7 +151,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const clearState = vi.fn();
     await stopBrowserRuntime({
       current: state,
-      getState: () => state,
       clearState,
       onWarn: vi.fn(),
     });

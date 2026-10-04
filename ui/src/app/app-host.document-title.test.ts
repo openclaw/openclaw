@@ -96,6 +96,8 @@ describe("OpenClaw shell document title", () => {
 
   function createContext(options: {
     connected?: boolean;
+    phase?: ApplicationContext["gateway"]["snapshot"]["phase"];
+    lastError?: string | null;
     approvalCount?: number;
     agentsList?: AgentsListResult | null;
     assistantAgentId?: string;
@@ -105,7 +107,8 @@ describe("OpenClaw shell document title", () => {
     return {
       gateway: {
         snapshot: {
-          phase: (options.connected ?? true) ? "connected" : "reconnecting",
+          phase: options.phase ?? ((options.connected ?? true) ? "connected" : "reconnecting"),
+          lastError: options.lastError ?? null,
           assistantAgentId: options.assistantAgentId ?? null,
         },
         connection: { gatewayUrl: "ws://gateway.test" },
@@ -128,6 +131,40 @@ describe("OpenClaw shell document title", () => {
     shell.routeState = {};
     shell.syncDocumentTitle();
     expect(document.title).toBe("OpenClaw Control");
+  });
+
+  it.each(["stopped", "connecting", "starting"] as const)(
+    "keeps a new tab neutral during %s",
+    (phase) => {
+      const context = createContext({ phase, approvalCount: 2 });
+      const shell = createShell(context);
+      shell.routeState = { routeId: "chat" };
+      // Slow initial handshakes are still loading, even after the offline grace period.
+      context.gateway.snapshot.offlineStable = true;
+
+      shell.syncDocumentTitle();
+
+      expect(document.title).toBe("Chat — OpenClaw");
+    },
+  );
+
+  it.each([
+    { phase: "connecting", lastError: "Connection refused" },
+    { phase: "stopped", lastError: "Authentication failed" },
+    { phase: "reconnecting" },
+    { phase: "offline" },
+    { phase: "reload-required" },
+  ] as const)("keeps actual connection failures visible: $phase", ({ phase, ...error }) => {
+    const context = createContext({ phase, ...error, approvalCount: 2 });
+    const shell = createShell(context);
+    shell.routeState = { routeId: "usage" };
+
+    shell.syncDocumentTitle();
+    expect(document.title).toBe("(Disconnected) Usage — OpenClaw");
+
+    context.gateway.snapshot.phase = "connected";
+    shell.syncDocumentTitle();
+    expect(document.title).toBe("(2) Usage — OpenClaw");
   });
 
   it("does not read stored outboxes for a connected document title", () => {
@@ -185,7 +222,7 @@ describe("OpenClaw shell document title", () => {
       await settleLitElement(shell);
     }
 
-    expect(document.title).toBe("(Disconnected) Revised launch plan — OpenClaw");
+    expect(document.title).toBe("Revised launch plan — OpenClaw");
     expect(renderShell).not.toHaveBeenCalled();
   });
 
@@ -215,7 +252,7 @@ describe("OpenClaw shell document title", () => {
     replacement.sessions.patchRowLocal(background.key, { derivedTitle: "Replacement title" });
     await vi.advanceTimersByTimeAsync(20);
     await settleLitElement(shell);
-    expect(document.title).toBe("(Disconnected) Replacement title — OpenClaw");
+    expect(document.title).toBe("Replacement title — OpenClaw");
 
     shell.remove();
     await settleLitElement(shell);

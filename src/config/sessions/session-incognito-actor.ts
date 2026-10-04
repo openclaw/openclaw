@@ -215,6 +215,7 @@ export function createIncognitoSessionFacts(
         },
         restrict?: (request: SqliteWorkerAdmissionRequest) => SqliteWorkerAdmissionRequest,
         onCommitted?: (value: IncognitoSessionOperations[Key]["output"]) => void,
+        onCommittedWithoutReply?: (facts: readonly IncognitoSessionFacts[]) => void,
       ) => {
         // Capture caller-owned input before queue waits.
         const captured = structuredClone(command);
@@ -275,8 +276,12 @@ export function createIncognitoSessionFacts(
                     }
                     try {
                       const committedValue = recovered ?? (outcome.ok ? outcome.value : undefined);
-                      if (committedValue && native.admission.settlement?.kind === "completed") {
-                        onCommitted?.(committedValue);
+                      if (native.admission.settlement?.kind === "completed") {
+                        if (committedValue) {
+                          onCommitted?.(committedValue);
+                        } else {
+                          onCommittedWithoutReply?.(postimage);
+                        }
                       }
                     } finally {
                       // Revocation cannot undo COMMIT. Publish while FIFO custody is still held.
@@ -519,16 +524,20 @@ export function createIncognitoSessionFacts(
           command: { type: Key; input: IncognitoSideDataOperations[Key]["input"] },
           signal?: AbortSignal,
           publish?: (value: IncognitoSideDataOperations[Key]["output"]) => void,
+          invalidate?: (facts: readonly IncognitoSessionFacts[]) => void,
         ): Promise<IncognitoSideDataOperations[Key]["output"]> =>
           perform(
             authority,
             command,
             isIncognitoSideDataWrite(command.type),
-            (result) => {
-              publish?.(result.value);
-              return result.value;
-            },
+            (result) => result.value,
             signal,
+            undefined,
+            false,
+            undefined,
+            undefined,
+            publish ? (result) => publish(result.value) : undefined,
+            invalidate,
           ),
         history: <Key extends keyof IncognitoHistoryOperations>(
           authority: IncognitoSessionAuthority,

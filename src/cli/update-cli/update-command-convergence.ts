@@ -264,7 +264,6 @@ export async function convergeUpdatePlugins(params: {
           opts: params.opts,
           ...(params.candidateRuntime ? { doctorConfigWrites: true as const } : {}),
           pluginUpdate: producedPluginUpdate,
-          freshDoctorRequired: producedPluginUpdate.changed,
           beforeDoctor: params.beforeDoctor,
           assertCurrent,
           yes: params.opts.yes === true,

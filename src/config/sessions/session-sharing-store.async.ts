@@ -153,21 +153,33 @@ export async function runSessionCollaborationWrite<
       );
     }
     const actorCommand = toIncognitoCollaborationCommand(command, location.sessionKey);
+    let published = false;
+    const invalidate = () => {
+      if (!published && !command.type.startsWith("suggestion.")) {
+        sessionChanges.emit({ ...location, factsInvalidated: true });
+        published = true;
+      }
+    };
     try {
       let value!: T;
-      await actor.sessions.sideData(currentAuthority, actorCommand, undefined, (result) => {
-        value = publish(
-          // SAFETY: The mapped actor command retains the original Key's input/output pair.
-          result as SessionSharingWorkerOperations[Key]["output"],
-          location,
-          undefined,
-        );
-      });
+      await actor.sessions.sideData(
+        currentAuthority,
+        actorCommand,
+        undefined,
+        (result) => {
+          value = publish(
+            // SAFETY: The mapped actor command retains the original Key's input/output pair.
+            result as SessionSharingWorkerOperations[Key]["output"],
+            location,
+            undefined,
+          );
+          published = true;
+        },
+        invalidate,
+      );
       return value;
     } catch (error) {
-      if (!command.type.startsWith("suggestion.")) {
-        sessionChanges.emit({ ...location, factsInvalidated: true });
-      }
+      invalidate();
       throw error;
     }
   }

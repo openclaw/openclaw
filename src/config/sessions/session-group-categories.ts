@@ -52,6 +52,16 @@ export function updateSessionGroupCategoriesInWorker(params: {
             })),
           );
         },
+        (facts) => {
+          sessionChanges.emitBatch(
+            facts.map(({ sessionKey }) => ({
+              agentId,
+              storePath: actor.path,
+              sessionKey,
+              factsInvalidated: "category" as const,
+            })),
+          );
+        },
       )
       .then((changed) => changed.length);
   }

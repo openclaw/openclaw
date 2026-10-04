@@ -119,6 +119,12 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .addOption(
       new Option("--expected-runtime-pin <json>", "Require the observed runtime intent").hideHelp(),
     )
+    .addOption(
+      new Option(
+        "--restore-service-cli <json>",
+        "Restore the service onto a retained OpenClaw CLI",
+      ).hideHelp(),
+    )
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--allow-unconfigured", "Allow the service to start without gateway.mode=local")

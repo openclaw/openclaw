@@ -154,6 +154,14 @@ to append an ordinary saved sidebar pin. Pinning is a no-op for an unknown or
 already pinned ID; call it for a user action such as creation, not on every
 catalog refresh, so a later manual removal stays removed.
 
+Navigation items can supply `actions` with an `id`, `label`, optional `icon` and
+`destructive` flag, and a `run` callback. The sidebar opens these actions on
+right-click, **Shift+F10**, or the context-menu key on the focused link, including
+nested and pinned entries. Selecting an action closes the menu; **Escape** or an
+outside click dismisses it. Use `host.ui.isNavigationPinned(id)` to read a saved
+pin and `host.ui.unpinNavigation(id)` to remove it idempotently. Plugins choose
+which actions to offer and own confirmation for destructive actions.
+
 For a dashboard widget, also register a backend
 `api.session.controls.registerControlUiDescriptor` with `surface: "widget"`,
 the same widget `id`, and its `requiredScopes`. The Gateway advertises widget

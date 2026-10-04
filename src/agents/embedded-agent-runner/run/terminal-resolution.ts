@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { setReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -615,10 +616,16 @@ async function completeEmbeddedRun(
           ? [{ text: SILENT_REPLY_TOKEN }]
           : input.payloadsForTerminalPath?.length
             ? isTruncatedPartialReply
-              ? [...input.payloadsForTerminalPath, { text: TRUNCATED_REPLY_NOTICE_TEXT }]
+              ? [
+                  ...input.payloadsForTerminalPath,
+                  setReplyPayloadMetadata(
+                    { text: TRUNCATED_REPLY_NOTICE_TEXT },
+                    { hostNotice: true },
+                  ),
+                ]
               : input.payloadsForTerminalPath
             : input.attempt.yieldDetected && !yieldHasContinuation
-              ? [{ text: YIELD_DIAGNOSTIC_TEXT }]
+              ? [setReplyPayloadMetadata({ text: YIELD_DIAGNOSTIC_TEXT }, { hostNotice: true })]
               : input.payloadsForTerminalPath;
   if (!error) {
     input.setTerminalLifecycleMeta({

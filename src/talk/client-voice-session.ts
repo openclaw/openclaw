@@ -1,5 +1,6 @@
 /** Durable per-agent voice-call records for Talk continuity and mutation evidence. */
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
@@ -44,17 +45,14 @@ import {
 } from "./client-voice-session-store.js";
 import {
   buildPersistedVoiceMessage,
-  createVoiceTranscriptOperationRegistry,
+  VoiceTranscriptOperationRegistry,
   normalizeVoiceTranscriptText,
   VOICE_TRANSCRIPT_MAX_UNRESOLVED,
-  VOICE_TRANSCRIPT_QUEUE_POLICY,
   voiceTranscriptEventId,
 } from "./voice-transcript.js";
 
 const voiceSessionByRunId = new Map<string, ClientVoiceRunBinding>();
-const voiceSessionOperations = createVoiceTranscriptOperationRegistry(
-  VOICE_TRANSCRIPT_QUEUE_POLICY,
-);
+const voiceSessionOperations = new VoiceTranscriptOperationRegistry();
 let unsubscribeToolEffects: (() => void) | undefined;
 let unsubscribeRunCompletion: (() => void) | undefined;
 
@@ -69,19 +67,6 @@ function hasLiveConsultRun(record: ClientVoiceSessionRecord): boolean {
   });
 }
 
-async function runVoiceSessionOperation<T>(
-  agentId: string,
-  voiceSessionId: string,
-  operation: () => Promise<T>,
-  options: { weight?: number; waitForCapacity?: boolean } = {},
-): Promise<T> {
-  return await voiceSessionOperations.run(
-    operationKey(agentId, voiceSessionId),
-    operation,
-    options,
-  );
-}
-
 async function closeVoiceSessionOperationOwner(
   params: Parameters<typeof closeClientVoiceSessionInternal>[0],
 ): Promise<void> {
@@ -91,10 +76,9 @@ async function closeVoiceSessionOperationOwner(
   );
 }
 
-function effectStatus(event: TrustedToolExecutionEvent): ClientVoiceToolEffect["status"] {
-  if (event.type === "tool.execution.started") {
-    return "started";
-  }
+function effectStatus(
+  event: Exclude<TrustedToolExecutionEvent, { type: "tool.execution.started" }>,
+): ClientVoiceToolEffect["status"] {
   if (event.type === "tool.execution.completed") {
     return "succeeded";
   }
@@ -424,10 +408,6 @@ export function resolveOpenClientVoiceSessionId(params: {
   return match;
 }
 
-function transcriptFailureKey(entryId: string): string {
-  return createHash("sha256").update(entryId, "utf8").digest("hex");
-}
-
 function appendVoiceTranscript(params: {
   agentId: string;
   sessionKey: string;
@@ -455,9 +435,8 @@ function appendVoiceTranscript(params: {
           confirmation: normalized.confirmation,
         })
       : null;
-  return runVoiceSessionOperation(
-    normalized.agentId,
-    normalized.voiceSessionId,
+  return voiceSessionOperations.run(
+    operationKey(normalized.agentId, normalized.voiceSessionId),
     async () => {
       const record = readRecord(normalized.agentId, normalized.voiceSessionId);
       if (!record) {
@@ -470,7 +449,7 @@ function appendVoiceTranscript(params: {
       if (record.origin !== normalized.origin) {
         throw new Error("voice session origin does not allow this transcript source");
       }
-      const failureKey = transcriptFailureKey(normalized.entryId);
+      const failureKey = sha256Hex(normalized.entryId);
       if (
         record.transcriptFailureKeys.length >= VOICE_TRANSCRIPT_MAX_UNRESOLVED &&
         !record.transcriptFailureKeys.includes(failureKey)

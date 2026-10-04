@@ -398,11 +398,12 @@ export function buildEmbeddedRunPayloads(params: {
           text: warningText,
           ...(!isRestartStatus ? { isError: true } : {}),
         };
-        if (!isRestartStatus) {
-          setReplyPayloadMetadata(warning, {
-            toolErrorWarning: { toolName: params.lastToolError.toolName },
-          });
-        }
+        setReplyPayloadMetadata(
+          warning,
+          isRestartStatus
+            ? { hostNotice: true }
+            : { toolErrorWarning: { toolName: params.lastToolError.toolName } },
+        );
         replyItems.push(warning);
       }
     }

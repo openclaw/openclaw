@@ -85,10 +85,10 @@ export class ChatPaneSessionPanelToggleController {
     };
   }
 
-  private handlePluginPanel(event: Event): boolean {
+  private handlePluginPanel(event: Event): void {
     const owner = this.options.current();
     if (!owner || !(event instanceof CustomEvent)) {
-      return false;
+      return;
     }
     // SAFETY: The typed host SDK and validated ui.command adapter own this event.
     const detail = event.detail as PluginPanelToggleDetail;
@@ -98,7 +98,7 @@ export class ChatPaneSessionPanelToggleController {
       !areUiSessionKeysEquivalent(detail.sessionKey, owner.state.sessionKey) ||
       (detail.agentId && detail.agentId !== resolveChatAgentId(owner.state))
     ) {
-      return false;
+      return;
     }
     const slot = `plugin:${key}` as const;
     clearSessionPanelToggle(slot, event);
@@ -109,7 +109,6 @@ export class ChatPaneSessionPanelToggleController {
       layout = setSidebarDock(layout, detail.dock);
     }
     this.options.updateSidebarLayout(layout);
-    return true;
   }
 
   handle(

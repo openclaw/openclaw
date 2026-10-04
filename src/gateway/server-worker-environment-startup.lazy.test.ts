@@ -27,7 +27,7 @@ type WorkerGatewayTools =
 
 const mocks = vi.hoisted(() => {
   return {
-    createTools: vi.fn<WorkerGatewayTools>(() => []),
+    createTools: vi.fn<WorkerGatewayTools>(async () => []),
     createGatewayTools: undefined as GatewayToolFactory | undefined,
     prepareNodeArtifacts: undefined as Parameters<
       typeof createWorkerEnvironmentService

@@ -1154,14 +1154,14 @@ describe("runtime web tools resolution", () => {
     expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
-  it("uses exact plugin-id hints for configured bundled provider entries without manifest owner lookup", async () => {
+  it("normalizes configured provider IDs before using exact bundled plugin hints", async () => {
     const { metadata, context } = await runRuntimeWebTools({
       config: asConfig({
         tools: {
           web: {
             search: {
               enabled: true,
-              provider: "brave",
+              provider: " BrAvE ",
             },
           },
         },

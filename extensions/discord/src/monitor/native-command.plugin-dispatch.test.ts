@@ -28,7 +28,6 @@ import { dispatchDiscordNativeAgentReply } from "./native-command-agent-reply.js
 import { resolveDiscordNativeInteractionRouteState } from "./native-command-route.js";
 import { nativeCommandRuntime } from "./native-command.runtime.js";
 import {
-  createConfiguredAcpBinding,
   createMockCommandInteraction as createInteraction,
   type MockCommandInteraction,
 } from "./native-command.test-helpers.js";
@@ -107,25 +106,6 @@ function createConfig(): OpenClawConfig {
       },
     },
   } as OpenClawConfig;
-}
-
-function createConfiguredAcpCase() {
-  const channelId = "1479098716916023408";
-  const guildId = "1459246755253325866";
-  const cfg: OpenClawConfig = {
-    agents: { entries: { codex: {} } },
-    commands: { allowFrom: { discord: ["user:owner"] } },
-    bindings: [createConfiguredAcpBinding({ channelId, peerKind: "channel" })],
-  };
-  return {
-    cfg,
-    interaction: createInteraction({
-      channelType: ChannelType.GuildText,
-      channelId,
-      guildId,
-      guildName: "Ops",
-    }),
-  };
 }
 
 async function createNativeCommand(
@@ -1255,36 +1235,6 @@ describe("Discord native plugin command dispatch", () => {
       messageThreadId: "partial-thread-123",
       threadParentId: "partial-parent-456",
     });
-  });
-
-  it("allows recovery commands through configured ACP bindings even when ensure fails", async () => {
-    const { cfg, interaction } = createConfiguredAcpCase();
-    nativeCommandRuntime.resolveDiscordNativeInteractionRouteState = () =>
-      createRouteState({
-        bound: true,
-        sessionKey: "agent:codex:acp:binding:discord:default:recovery",
-        agentId: "codex",
-      });
-    const dispatchSpy = createDispatchSpy();
-    const command = await createNativeCommand(cfg);
-
-    await command.run(interaction);
-
-    expect(dispatchSpy).toHaveBeenCalledTimes(1);
-    const dispatchCall = firstMockArg(dispatchSpy, "dispatchReplyWithDispatcher") as {
-      ctx?: { SessionKey?: string; CommandTargetSessionKey?: string };
-    };
-    expect(dispatchCall.ctx?.SessionKey).toMatch(/^agent:codex:acp:binding:discord:default:/);
-    expect(dispatchCall.ctx?.CommandTargetSessionKey).toMatch(
-      /^agent:codex:acp:binding:discord:default:/,
-    );
-    const replyCalls = (interaction.reply as unknown as MockCalls).mock.calls;
-    const blockedReply = replyCalls.some(
-      ([payload]) =>
-        isObjectValue(payload) &&
-        payload.content === "Configured ACP binding is unavailable right now. Please try again.",
-    );
-    expect(blockedReply).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -86,7 +86,6 @@ it.each(["stop", "replacement"] as const)(
         await lifecycle.stop();
         await stopBrowserRuntime({
           current: runtime,
-          getState: () => runtime,
           clearState: vi.fn(),
           onWarn: vi.fn(),
         });

@@ -7,6 +7,7 @@ import {
 import type { CommandLaneTaskMarker } from "../process/command-queue.js";
 import type { PreparedEffectUse } from "../shared/effect-authority.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { CronStandingGrantAuthority } from "./standing-grant-authority.types.js";
 
 type CronActiveJobState = {
   activeJobs: Map<string, CronActiveJobMarker>;
@@ -122,6 +123,47 @@ export function captureCronJobMessageSourceAuthority(params: {
   return captureCronJobMessageAuthority(params, true);
 }
 
+export function captureCronJobStandingGrantAuthority(params: {
+  jobId: string;
+  operationalRunInstance: OperationalRunInstanceRef;
+}): CronStandingGrantAuthority | undefined {
+  const marker = getCurrentCronActiveJobMarker(params.jobId);
+  const receipt = marker?.standingGrantAuthority;
+  if (!marker || !receipt) {
+    return undefined;
+  }
+  const { instanceId, runId } = params.operationalRunInstance;
+  const { admittedJobRuns } = getCronActiveJobState();
+  let owner: ReturnType<typeof admittedJobRuns.get>;
+  const assertCurrent = () => {
+    const admitted = admittedJobRuns.get(marker);
+    if (
+      getCurrentCronActiveJobMarker(params.jobId) !== marker ||
+      marker.jobRemoved ||
+      marker.cancellation?.kind === "requested" ||
+      !admitted ||
+      admitted.context.operationalRunInstance.instanceId !== instanceId ||
+      admitted.context.operationalRunInstance.runId !== runId ||
+      (owner !== undefined && admitted !== owner)
+    ) {
+      throw new Error("Cron standing-grant occurrence is no longer active");
+    }
+    owner ??= admitted;
+    owner.assertActive();
+    receipt.assertCurrent();
+  };
+  return {
+    context: receipt.context,
+    handle: { ...receipt.handle },
+    assertCurrent,
+    acquireUse: (assertUseCurrent, signal) =>
+      receipt.acquireUse(() => {
+        assertCurrent();
+        assertUseCurrent();
+      }, signal),
+  };
+}
+
 /** Captures host-owned admission; neither a copied token nor a same-id run can redeem it. */
 export function bindCronSelfRemovalCommitGuard(
   jobId: string,
@@ -156,6 +198,7 @@ export function bindCronSelfRemovalCommitGuard(
 
 export type CronActiveJobMarker = {
   jobId: string;
+  standingGrantAuthority?: CronStandingGrantAuthority;
   agentId?: string;
   stateIdentityKey?: string;
   declarationKey?: string;

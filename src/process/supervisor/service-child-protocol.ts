@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import type { NodeWorkerCleanupBinding } from "../../node-host/node-worker-launch-receipt.js";
 
 export type ServiceChildStart = {
-  type: "start";
+  type: "start" | "prepare";
   generation: string;
   command: string;
   args: string[];
@@ -33,6 +33,7 @@ export type ServiceChildControlMessage = {
 } & (
   | { type: "cancel"; signal: "SIGTERM" | "SIGKILL" }
   | { type: "worker-start" }
+  | { type: "launch" }
   | { type: "worker-close" }
   | { type: "startup-error-ack" }
   | { type: "lineage-closed" }
@@ -40,6 +41,7 @@ export type ServiceChildControlMessage = {
 );
 
 export type ServiceChildAnchorPayload =
+  | { type: "prepared" }
   | { type: "stdin-closed" }
   | { type: "worker-message"; message: unknown }
   | {

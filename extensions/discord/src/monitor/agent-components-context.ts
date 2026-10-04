@@ -6,7 +6,6 @@ import { replySilently } from "./agent-components-reply.js";
 import type {
   AgentComponentContext,
   AgentComponentInteraction,
-  AgentComponentMessageInteraction,
   ComponentInteractionContext,
   DiscordChannelContext,
 } from "./agent-components.types.js";
@@ -46,13 +45,12 @@ export function resolveAgentComponentRoute(params: {
 
 export async function ackComponentInteraction(params: {
   interaction: AgentComponentInteraction;
-  replyOpts: { ephemeral?: boolean };
   label: string;
 }) {
   try {
     await params.interaction.reply({
       content: "✓",
-      ...params.replyOpts,
+      ephemeral: true,
     });
   } catch (err) {
     logError(`${params.label}: failed to acknowledge interaction: ${String(err)}`);
@@ -103,7 +101,6 @@ export function resolveDiscordChannelContext(
 export async function resolveComponentInteractionContext(params: {
   interaction: AgentComponentInteraction;
   label: string;
-  defer?: boolean;
 }): Promise<ComponentInteractionContext | null> {
   const { interaction, label } = params;
   const channelId = interaction.rawData.channel_id;
@@ -117,18 +114,6 @@ export async function resolveComponentInteractionContext(params: {
     logError(`${label}: missing user in interaction`);
     return null;
   }
-
-  const shouldDefer = params.defer !== false && "defer" in interaction;
-  let didDefer = false;
-  if (shouldDefer) {
-    try {
-      await (interaction as AgentComponentMessageInteraction).defer({ ephemeral: true });
-      didDefer = true;
-    } catch (err) {
-      logError(`${label}: failed to defer interaction: ${String(err)}`);
-    }
-  }
-  const replyOpts = didDefer ? {} : { ephemeral: true };
 
   const username = formatUsername(user);
   const userId = user.id;
@@ -146,7 +131,6 @@ export async function resolveComponentInteractionContext(params: {
     user,
     username,
     userId,
-    replyOpts,
     rawGuildId,
     isDirectMessage,
     isGroupDm,

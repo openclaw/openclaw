@@ -127,7 +127,6 @@ describe("system-agent terminal failure cleanup", () => {
       runSystemAgentTurnWithDeps(
         {
           input: "hello",
-          overview: { defaultModel: "openai/gpt-5.5" } as never,
           surface: "gateway",
           approvalArmed: false,
           session,

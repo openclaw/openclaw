@@ -8,6 +8,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as backoff from "../../infra/backoff.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -74,6 +75,37 @@ function mockDiskSpace(root: string) {
     bfree: (6 * GiB) / 4096,
   });
 }
+
+it("joins a dependency installation that holds allocation beyond ten minutes", async () => {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("worktree-install-wait-") };
+  const entered = createDeferred();
+  const release = createDeferred();
+  const holder = withWorktreeAllocationLease({ env }, async () => {
+    entered.resolve();
+    await release.promise;
+  });
+  await awaitGateBeforeSettlement(entered.promise, holder, "installer did not acquire allocation");
+  const now = performance.now.bind(performance);
+  let elapsed = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now() + elapsed);
+  // Advance only contention's clock; the real lease and heartbeat remain live.
+  vi.spyOn(backoff, "sleepWithAbort")
+    .mockImplementationOnce(async () => {
+      elapsed = 12 * 60_000;
+    })
+    .mockImplementationOnce(async () => {
+      release.resolve();
+      await holder;
+    });
+  try {
+    await expect(withWorktreeAllocationLease({ env }, async () => "joined")).resolves.toBe(
+      "joined",
+    );
+  } finally {
+    release.resolve();
+    await holder;
+  }
+});
 
 it("retains admitted bytes after lease loss until its native operation settles", async ({
   signal,

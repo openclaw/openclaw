@@ -7,6 +7,7 @@ import {
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
+import type { SpawnInitiation } from "./spawn-initiation.js";
 import {
   buildWindowsCmdExeCommandLine,
   isWindowsBatchCommand,
@@ -99,7 +100,11 @@ function bunTerminalHasFlowControl(): boolean {
 
 export async function spawnTerminalPty(
   params: TerminalPtySpawnParams,
-  lifecycle?: { abortSignal?: AbortSignal; assertCurrent?: () => void },
+  lifecycle?: {
+    abortSignal?: AbortSignal;
+    assertCurrent?: () => void;
+    initiateSpawn?: SpawnInitiation;
+  },
 ): Promise<TerminalPtyHandle> {
   const assertCurrent = () => {
     lifecycle?.assertCurrent?.();
@@ -111,8 +116,17 @@ export async function spawnTerminalPty(
     // Stock Bun lacks read backpressure; the fork shipping pause also fixes macOS wait4 deadlocks.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
-    return await spawnNodeTerminalPty(params, assertCurrent);
+    return await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
   }
+  const launch = await prepareTerminalPty(params);
+  assertCurrent();
+  return lifecycle?.initiateSpawn ? lifecycle.initiateSpawn(launch) : launch();
+}
+
+/** Load the native backend before a remote host grants the final synchronous launch. */
+export async function prepareTerminalPty(
+  params: TerminalPtySpawnParams,
+): Promise<() => TerminalPtyHandle> {
   const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
@@ -128,8 +142,7 @@ export async function spawnTerminalPty(
     const bunEnv = env ?? inheritedTerminalEnv(terminalName);
     // node-pty always exports the child's working directory as PWD.
     bunEnv.PWD = params.cwd ?? process.cwd();
-    assertCurrent();
-    return spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+    return () => spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
   }
   const { spawn } = await import("@lydell/node-pty");
   const invocation = resolveTerminalPtyInvocation({
@@ -137,30 +150,31 @@ export async function spawnTerminalPty(
     args: params.args,
     env: env ?? process.env,
   });
-  assertCurrent();
-  const pty = spawn(invocation.file, invocation.args, {
-    name: terminalName,
-    cols: params.cols,
-    rows: params.rows,
-    cwd: params.cwd,
-    env,
-  });
-  return {
-    get pid() {
-      return pty.pid;
-    },
-    // SAFETY: node-pty accepts Buffer input at runtime although its declaration exposes string.
-    write: (data) => pty.write(data as string),
-    resize: (cols, rows) => pty.resize(cols, rows),
-    pause: () => pty.pause(),
-    resume: () => pty.resume(),
-    onData: (listener) => pty.onData(listener),
-    onExit: (listener) => pty.onExit(listener),
-    kill: (signal) =>
-      signalTerminalPtyTree(pty.pid, signal, (sig) =>
-        process.platform === "win32" ? pty.kill() : pty.kill(sig),
-      ),
-  } satisfies TerminalPtyHandle;
+  return () => {
+    const pty = spawn(invocation.file, invocation.args, {
+      name: terminalName,
+      cols: params.cols,
+      rows: params.rows,
+      cwd: params.cwd,
+      env,
+    });
+    return {
+      get pid() {
+        return pty.pid;
+      },
+      // SAFETY: node-pty accepts Buffer input at runtime although its declaration exposes string.
+      write: (data) => pty.write(data as string),
+      resize: (cols, rows) => pty.resize(cols, rows),
+      pause: () => pty.pause(),
+      resume: () => pty.resume(),
+      onData: (listener) => pty.onData(listener),
+      onExit: (listener) => pty.onExit(listener),
+      kill: (signal) =>
+        signalTerminalPtyTree(pty.pid, signal, (sig) =>
+          process.platform === "win32" ? pty.kill() : pty.kill(sig),
+        ),
+    } satisfies TerminalPtyHandle;
+  };
 }
 
 // node-pty inherits process.env without host terminal-multiplexer state.

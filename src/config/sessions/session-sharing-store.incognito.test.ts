@@ -1,9 +1,14 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { afterAll, beforeAll, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type {
+  SqliteWorkerOperations,
+  SqliteWorkerStore,
+} from "../../infra/sqlite-worker-contract.js";
+import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { sessionChanges, type SessionRowChange } from "../../sessions/session-row-changes.js";
 import { IncognitoSessionSyncAccessError } from "../../state/incognito-session-error.js";
 import type { IncognitoAgentDatabaseExecution } from "../../state/openclaw-agent-execution-incognito.js";
@@ -47,6 +52,7 @@ beforeAll(async () => {
 afterAll(async () => {
   await actor?.close();
 });
+afterEach(() => vi.restoreAllMocks());
 
 async function fixture(name: string, source = authority) {
   const sessionKey = `agent:main:dashboard:incognito-${name}`;
@@ -178,6 +184,78 @@ it("publishes actor membership, owner, participant and category changes through 
     stop();
   }
 });
+
+it.each(["revoked-authority", "lost-reply"] as const)(
+  "publishes a committed category change after %s without replay",
+  async (failureMode) => {
+    let revoked = false;
+    const failure = new Error(`Synthetic ${failureMode}`);
+    const { scope, entry } = await fixture(failureMode, {
+      assertCurrent() {
+        if (revoked) {
+          throw failure;
+        }
+      },
+    });
+    let executions = 0;
+    const run = workerStore.runSqliteWorkerStoreOperation;
+    vi.spyOn(workerStore, "runSqliteWorkerStoreOperation").mockImplementation(
+      <Operations extends SqliteWorkerOperations, T>(
+        store: SqliteWorkerStore<Operations>,
+        operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
+        stateContext?: Parameters<typeof run>[2],
+        assertCurrent?: Parameters<typeof run>[3],
+        admission?: Parameters<typeof run>[4],
+      ) =>
+        run(
+          store,
+          (operationScope) =>
+            operation({
+              execute: async (command, options) => {
+                const value = await operationScope.execute(command, options);
+                if (command.type === "session.category.apply") {
+                  executions++;
+                  if (failureMode === "lost-reply") {
+                    throw failure;
+                  }
+                  revoked = true;
+                }
+                return value;
+              },
+            }),
+          stateContext,
+          assertCurrent,
+          admission,
+        ),
+    );
+    const changes: SessionRowChange[] = [];
+    const stop = sessionChanges.subscribeFacts((change) => changes.push(change));
+    const sql = observeHostDataSql();
+    try {
+      await expect(
+        updateSessionGroupCategoriesInWorker({ scope, from: entry.category }),
+      ).rejects.toBe(failure);
+      expect(executions).toBe(1);
+      expect(changes).toEqual([
+        expect.objectContaining({
+          agentId: actor.agentId,
+          storePath: actor.path,
+          sessionKey: scope.sessionKey,
+          ...(failureMode === "lost-reply"
+            ? { factsInvalidated: "category" }
+            : { facts: { kind: "category", sessionId: entry.sessionId, category: null } }),
+        }),
+      ]);
+      expect(
+        (await actor.sessions.read(authority, { sessionKey: scope.sessionKey })).entry?.category,
+      ).toBeUndefined();
+      expect(sql.queries).toEqual([]);
+    } finally {
+      sql.restore();
+      stop();
+    }
+  },
+);
 
 it.each(["transaction", "commit"] as const)(
   "retains the actionable incognito refusal at suggestion %s admission",

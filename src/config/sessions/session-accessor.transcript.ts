@@ -21,7 +21,6 @@ export {
   readTranscriptMutationStateSync,
 } from "./session-accessor.sqlite-metadata-read.js";
 export {
-  hasSessionTranscriptMessage,
   inspectTranscriptEventsSync,
   loadLatestAssistantText as readLatestTranscriptAssistantText,
   loadTranscriptEventRowsAfterSeqSync,
@@ -34,6 +33,7 @@ export {
   readTranscriptEventAtSeqSync,
   readTranscriptIdentityByEventId,
 } from "./session-accessor.sqlite-read.js";
+export { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
 export { loadTranscriptEvents } from "./session-transcript-events.js";
 export {
   loadTranscriptSuffixEventsBoundedSync,

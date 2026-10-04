@@ -6,7 +6,10 @@ import { toErrorObject } from "../../infra/errors.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { joinProcessCompletionAndOutput } from "../decoded-output.js";
 import { pipeProcessOutput } from "../pipe-output.js";
-import { spawnServiceChildRelay } from "../spawn-broker/relay-integration.js";
+import {
+  createServiceChildControlSender,
+  spawnServiceChildRelay,
+} from "../spawn-broker/relay-integration.js";
 import { createManagedChildStdin } from "./adapters/child-stdin.js";
 import { toStringEnv } from "./adapters/env.js";
 import { createProcessAdapterEvents } from "./adapters/process-events.js";
@@ -15,11 +18,9 @@ import { readServiceChildControl } from "./service-child-control-reader.js";
 import { isOwnedProcessGroupGone } from "./service-child-group-ownership.js";
 import { createOutputRelay } from "./service-child-output-relay.js";
 import {
-  encodeServiceChildMessage,
   readServiceChildMessage,
   sendServiceChildMessage,
   type ServiceChildAnchorMessage,
-  type ServiceChildControlMessage,
   type ServiceChildStart,
 } from "./service-child-protocol.js";
 import {
@@ -235,24 +236,13 @@ export async function createServiceChildRelayAdapter(
     force: () => kill("SIGKILL"),
   });
 
-  const sendControlMessage = (message: ServiceChildControlMessage): Promise<void> => {
-    if (useWindowsJobAnchor) {
-      return sendServiceChildMessage(child, message);
-    }
-    return new Promise((resolve, reject) => {
-      if (!control || control.destroyed) {
-        reject(new Error("service child control pipe is closed"));
-        return;
-      }
-      control.write(encodeServiceChildMessage(message), "utf8", (error) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve();
-        }
-      });
-    });
-  };
+  const sendControlMessage = createServiceChildControlSender({
+    child,
+    getControl: () => control,
+    useWindowsJobAnchor,
+    startup: startup.promise,
+    cleanup: cleanup.completion.promise,
+  });
 
   const retirement = createServiceChildRelayRetirement({
     child,
@@ -400,7 +390,12 @@ export async function createServiceChildRelayAdapter(
       return;
     }
     inboundSequence = message.sequence;
-    if (message.type === "ready" && state === "starting") {
+    if (message.type === "prepared" && state === "starting" && params.initiateSpawn) {
+      void sendControlMessage(
+        { type: "launch", generation, sequence: ++outboundSequence },
+        params.initiateSpawn,
+      ).catch((error: unknown) => loseIdentity(String(error)));
+    } else if (message.type === "ready" && state === "starting") {
       // Ready is not construction-complete: secret delivery can still be
       // blocked. Keep abort protection until the adapter returns.
       if ((message.treeOwnership === "linux-subreaper") !== useLinuxSubreaper) {
@@ -578,7 +573,7 @@ export async function createServiceChildRelayAdapter(
   });
 
   const start: ServiceChildStart = {
-    type: "start",
+    type: params.initiateSpawn ? "prepare" : "start",
     generation,
     command: params.command,
     args: params.args,

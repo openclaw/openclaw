@@ -536,8 +536,7 @@ describe("unproved Doctor authority callers", () => {
       });
       const result = completePostCorePluginUpdate({
         root: state.root,
-        pluginUpdate,
-        freshDoctorRequired: true,
+        pluginUpdate: { ...pluginUpdate, changed: true },
         yes: true,
         json: true,
         assertCurrent: authority.assertCurrent,

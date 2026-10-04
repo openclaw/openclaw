@@ -1137,6 +1137,13 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
 
   it.each([
     {
+      config: "test/vitest/vitest.extension-whatsapp.config.ts",
+      dir: "extensions",
+      targets: ["extensions/whatsapp/src/session.media-upload.test.ts"],
+      sibling: "extensions/whatsapp/src/session.test.ts",
+      glob: "whatsapp/src/*.test.ts",
+    },
+    {
       config: "test/vitest/vitest.extension-slack.config.ts",
       dir: "extensions",
       targets: [

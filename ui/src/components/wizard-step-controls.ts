@@ -251,12 +251,8 @@ function renderTextStep(props: WizardStepControlsProps) {
     step.sensitive && props.onToggleSensitiveVisibility
       ? renderSensitiveInput({
           id: props.inputId,
-          name: "wizard-text",
           value,
           revealed: props.sensitiveRevealed === true,
-          revealLabel: t("configForm.revealValue"),
-          hideLabel: t("configForm.hideValue"),
-          inputClassName: "input",
           placeholder: step.placeholder,
           disabled: props.busy,
           invalid: Boolean(props.validationErrorId),

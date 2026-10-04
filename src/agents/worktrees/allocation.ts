@@ -19,7 +19,8 @@ import { captureWorktreeRunEndContext, retainWorktreeRunEndFailure } from "./run
 import type { WorktreeLeaseSet, WorktreeWorkerAuthority } from "./types.js";
 
 const WORKTREE_CREATE_LEASE_MS = 60_000;
-const WORKTREE_CREATE_LEASE_WAIT_MS = 10 * 60_000;
+// A dependency install can take 15 minutes; contenders also wait for checkout and cleanup.
+const WORKTREE_CREATE_LEASE_WAIT_MS = 30 * 60_000;
 
 export type WorktreeAllocationGuard = WorktreeFilesystemOptions & {
   rollbackGuard: () => void;

@@ -181,6 +181,7 @@ export function createWorkboardPage(
         reconcileCardOverlays(state, (card) => matchesBoardFilter(card, boardId));
       }
       if (
+        context.presented &&
         boardId !== WORKBOARD_ALL_BOARDS_FILTER &&
         workboard.boardsReady &&
         !state.boards.some((board) => board.id === boardId)

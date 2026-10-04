@@ -131,9 +131,9 @@ export function captureNativeSessionWorkerDeletion(entries: readonly DeletionEnt
         prepared?.assertIdle();
       }
     },
-    committed() {
-      for (const { prepared } of captured) {
-        if (prepared?.target.initialization) {
+    committed(sessionKeys?: ReadonlySet<string>) {
+      for (const { sessionKey, prepared } of captured) {
+        if (prepared?.target.initialization && (!sessionKeys || sessionKeys.has(sessionKey))) {
           commitSessionInitializationRollback(prepared.target.initialization);
         }
       }
@@ -195,7 +195,9 @@ export async function runPreparedSqliteSessionWrite<T>(
         return await write.commit(assertHeld);
       };
       // Opaque native mutations stay on their original writer and ALS owner.
-      return scheduling === "worker" && !hasPreparedNativeSessionDeletion()
+      return scheduling === "worker" &&
+        (!hasPreparedNativeSessionDeletion() ||
+          captureNativeSessionWorkerDeletion(write.deletedEntries))
         ? await commitHeld()
         : await runExclusiveSqliteSessionWrite(scope, commitHeld, operation);
     };

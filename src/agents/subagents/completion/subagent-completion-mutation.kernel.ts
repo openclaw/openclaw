@@ -27,10 +27,7 @@ import {
   bindSubagentRunRecord,
   rowToSubagentRunRecord,
 } from "../registry/subagent-registry.store.codec.js";
-import {
-  deleteSubagentRunRowInDatabase,
-  upsertSubagentRunRowInDatabase,
-} from "../registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../registry/subagent-registry.store.kernel.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   readSubagentRun,
@@ -232,9 +229,9 @@ function commitCompletionMutations(
       );
     }
     if (retire) {
-      deleteSubagentRunRowInDatabase(database, subagent.runId);
+      writeSubagentRunValuesInDatabase(database, [], [subagent.runId]);
     } else {
-      upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(subagent));
+      writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(subagent)], []);
     }
   }
   const queueIds = mutations.flatMap(({ queued }) => (queued ? [queued.id] : []));

@@ -889,7 +889,7 @@ describe("mattermost inbound user posts", () => {
       const verboseDebug = vi.fn();
       const baseUrl = `http://127.0.0.1:${address.port}`;
       const config: OpenClawConfig = {
-        agents: { defaults: { envelopeTimezone: "user", userTimezone: "Asia/Jakarta" } },
+        agents: { defaults: { userTimezone: "Asia/Jakarta" } },
         messages: { groupChat: { historyLimit: 2 } },
         channels: {
           ...(contextVisibility ? { defaults: { contextVisibility } } : {}),

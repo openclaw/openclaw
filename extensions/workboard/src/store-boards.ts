@@ -2,6 +2,7 @@ import type {
   WorkboardBoardMetadata,
   WorkboardBoardSummary,
   WorkboardCard,
+  WorkboardChange,
   WorkboardListResult,
   WorkboardSessionPlacement,
   WorkboardSessionsBoard,
@@ -65,7 +66,12 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
     return readCards(this.store, boardId === undefined ? undefined : { kind: "board", boardId });
   }
 
-  listCards(board: unknown): Promise<WorkboardListResult & { boards: WorkboardBoardSummary[] }> {
+  listCards(board: unknown): Promise<
+    WorkboardListResult & {
+      boards: WorkboardBoardSummary[];
+      revision: WorkboardChange & { boardId?: string };
+    }
+  > {
     return this.runOperation(() => {
       const boardId = normalizeBoardId(board);
       const cached = this.cardLists.get(boardId);
@@ -83,6 +89,7 @@ export class WorkboardBoardStore extends WorkboardStoreRuntime {
             cards: cards.map(redactClaimToken),
             boards,
             statuses: WORKBOARD_STATUSES,
+            revision: { ...this.cardsRevision, ...(boardId === undefined ? {} : { boardId }) },
           };
           freezeCardList(result);
           // Arbitrary missing-board queries must not grow the retained cache.

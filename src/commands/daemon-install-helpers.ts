@@ -50,6 +50,11 @@ import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
+  collectAuthProfileSecretRefs,
+  collectAuthProfileServiceEnvVars,
+  resolveAuthProfileStoreForServiceEnv,
+} from "./daemon-install-auth-profile-env.js";
+import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
   type GatewayInstallPlan,
@@ -76,74 +81,6 @@ function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
     return false;
   }
   return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
-}
-
-async function resolveAuthProfileStoreForServiceEnv(
-  authStore: AuthProfileStore | undefined,
-): Promise<AuthProfileStore | undefined> {
-  if (authStore) {
-    return authStore;
-  }
-  // Keep the daemon install cold path cheap when there is no auth store to read.
-  const { hasAnyAuthProfileStoreSource } =
-    await import("./daemon-install-auth-profiles-source.runtime.js");
-  if (!hasAnyAuthProfileStoreSource()) {
-    return undefined;
-  }
-  const { loadAuthProfileStoreForSecretsRuntime } =
-    await import("./daemon-install-auth-profiles-store.runtime.js");
-  return loadAuthProfileStoreForSecretsRuntime();
-}
-
-function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): SecretRef[] {
-  if (!authStore) {
-    return [];
-  }
-  const refs: SecretRef[] = [];
-  for (const credential of Object.values(authStore.profiles)) {
-    const ref =
-      credential.type === "api_key"
-        ? credential.keyRef
-        : credential.type === "token"
-          ? credential.tokenRef
-          : undefined;
-    if (ref) {
-      refs.push(ref);
-    }
-  }
-  return refs;
-}
-
-function collectAuthProfileServiceEnvVars(params: {
-  env: Record<string, string | undefined>;
-  authStore?: AuthProfileStore;
-  warn?: DaemonInstallWarnFn;
-}): Record<string, string> {
-  const entries: Record<string, string> = {};
-
-  for (const ref of collectAuthProfileSecretRefs(params.authStore)) {
-    if (ref.source !== "env") {
-      continue;
-    }
-    const key = normalizeEnvVarKey(ref.id, { portable: true });
-    if (!key) {
-      continue;
-    }
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
-      params.warn?.(
-        `Auth profile env ref "${key}" blocked by host-env security policy`,
-        "Auth profile",
-      );
-      continue;
-    }
-    const value = params.env[key]?.trim();
-    if (!value) {
-      continue;
-    }
-    entries[key] = value;
-  }
-
-  return entries;
 }
 
 async function collectAmbientProviderApiKeyServiceEnvVars(params: {
@@ -623,6 +560,8 @@ export async function buildGatewayInstallPlan(params: {
   devMode?: boolean;
   runtimePath?: string;
   pinnedRuntimePath?: string;
+  /** Retained CLI to plan for instead of this process's own entrypoint and executable. */
+  serviceCli?: { executable: string; entrypoint: string };
   wrapperPath?: string;
   platform?: NodeJS.Platform;
   warn?: DaemonInstallWarnFn;
@@ -660,7 +599,7 @@ export async function buildGatewayInstallPlan(params: {
     env: params.env,
     runtime: params.runtime,
     runtimeExplicit: params.runtimeExplicit,
-    devMode: params.devMode,
+    devMode: params.serviceCli ? false : params.devMode,
     runtimePath: params.runtimePath,
     pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
@@ -684,6 +623,7 @@ export async function buildGatewayInstallPlan(params: {
     runtime,
     runtimePath,
     wrapperPath,
+    cliEntrypoint: params.serviceCli?.entrypoint,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
@@ -695,6 +635,7 @@ export async function buildGatewayInstallPlan(params: {
   });
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
+    execPath: params.serviceCli?.executable,
     port: params.port,
     runtime,
     existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
@@ -706,6 +647,7 @@ export async function buildGatewayInstallPlan(params: {
     platform,
     extraPathDirs: resolveDaemonServicePathDirs({
       runtimePath,
+      argv: params.serviceCli && [params.serviceCli.executable, params.serviceCli.entrypoint],
       env: serviceInputEnv,
       platform,
     }),
@@ -751,4 +693,3 @@ export function gatewayInstallErrorHint(platform = process.platform): string {
     ? "Tip: native Windows now falls back to a per-user Startup-folder login item when Scheduled Task creation is denied; if install still fails, rerun from an elevated PowerShell or skip service install."
     : `Tip: rerun \`${formatCliCommand("openclaw gateway install")}\` after fixing the error.`;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
