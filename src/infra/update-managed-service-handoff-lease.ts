@@ -422,7 +422,6 @@ export function createManagedHandoffLeaseStore(
     if (!binding) {
       return null;
     }
-    const { custody } = binding;
     const executor = processIdentity(pid, argv);
     return withDatabase(true, (db) =>
       transact(db, () => {
@@ -432,7 +431,7 @@ export function createManagedHandoffLeaseStore(
           return null;
         }
         return leases.map((lease) => {
-          const payload = serializeManagedCommandBinding(lease, executor, custody);
+          const payload = serializeManagedCommandBinding(lease, executor, binding.custody);
           const updatedAt = Math.max(Date.now(), lease.updatedAt + 1);
           if (!updateRow(db, lease, { payload_json: payload, updated_at: updatedAt })) {
             throw new Error("Candidate process binding changed.");
