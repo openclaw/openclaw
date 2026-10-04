@@ -457,6 +457,11 @@ export async function prepareManagedLlamaServer(params: {
     embeddingModelIsDefault: params.embeddingModelIsDefault,
     embeddingModelPath: params.embeddingModelPath,
     defaultEmbeddingModelPath: params.defaultEmbeddingModelPath,
+    // Every launch inherits process.env. An isolated candidate is accepted with generated args
+    // and no service env, so only the configured service contributes its own args and env.
+    serviceSettings: params.isolated
+      ? { env: process.env }
+      : { args: params.localService?.args, env: { ...process.env, ...params.localService?.env } },
     reconcileOrigin: params.isolated ? undefined : reconcileOrigin,
   });
   params.signal?.throwIfAborted();
