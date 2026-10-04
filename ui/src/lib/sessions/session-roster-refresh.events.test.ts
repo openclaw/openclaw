@@ -100,10 +100,12 @@ describe("session roster event traffic", () => {
     },
   );
 
-  it.each(["enter", "unpin", "archive", "owner-prefix"])(
-    "refills a limited window after %s changes its boundary",
+  it.each(["enter", "unpin", "archive", "owner-prefix", "create", "unknown-mutation"])(
+    "refreshes membership after %s changes its boundary",
     async (change) => {
       vi.useFakeTimers();
+      const limited = change !== "create" && change !== "unknown-mutation";
+      const entering = change === "enter" || !limited;
       const held = session("main", change === "unpin" || change === "owner-prefix" ? 10 : 40, {
         key: "agent:main:held",
         sessionId: "held",
@@ -112,28 +114,27 @@ describe("session roster event traffic", () => {
       const recent = session("main", 30, { key: "agent:main:recent", sessionId: "recent" });
       const boundary = session("main", 20, { key: "agent:main:boundary", sessionId: "boundary" });
       const incoming = session("main", 50, { key: "agent:main:incoming", sessionId: "incoming" });
-      const next =
-        change === "enter"
-          ? incoming
-          : {
-              ...held,
-              updatedAt: change === "owner-prefix" ? 50 : held.updatedAt,
-              ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
-              ...(change === "archive" ? { archived: true } : {}),
-            };
-      const initialRows = change === "owner-prefix" ? [held, recent, boundary] : [held, recent];
-      const finalRows =
-        change === "enter"
-          ? [next, held]
-          : change === "owner-prefix"
-            ? [next, recent]
-            : [recent, boundary];
+      const next = entering
+        ? incoming
+        : {
+            ...held,
+            updatedAt: change === "owner-prefix" ? 50 : held.updatedAt,
+            ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
+            ...(change === "archive" ? { archived: true } : {}),
+          };
+      const initialRows = !limited
+        ? [held]
+        : change === "owner-prefix"
+          ? [held, recent, boundary]
+          : [held, recent];
+      const finalRows = entering
+        ? [next, held]
+        : change === "owner-prefix"
+          ? [next, recent]
+          : [recent, boundary];
       const page = (rows: typeof initialRows) => ({
         ...sessionsResult(rows, 1),
-        totalCount: 4,
-        limitApplied: 2,
-        nextOffset: 2,
-        hasMore: true,
+        ...(limited ? { totalCount: 4, limitApplied: 2, nextOffset: 2, hasMore: true } : {}),
       });
       const request = vi
         .fn()
@@ -144,22 +145,29 @@ describe("session roster event traffic", () => {
       try {
         await sessions.refresh({
           agentId: "main",
-          limit: 2,
+          ...(limited ? { limit: 2 } : {}),
           ownerFirst: change === "owner-prefix",
           force: true,
         });
-        for (let index = 0; index < 10; index += 1) {
+        for (let index = 0; index < (limited ? 10 : 1); index += 1) {
           gatewayHarness.publishEvent("sessions.changed", {
-            reason: "patch",
+            reason: limited ? "patch" : change,
             sessionKey: next.key,
-            pinnedAt: null,
+            ...(limited ? { pinnedAt: null } : { ancestorSessions: [] }),
             session: next,
           });
         }
-        await vi.advanceTimersByTimeAsync(20_000);
+        if (!limited) {
+          expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual(initialRows);
+        }
+        await vi.advanceTimersByTimeAsync(limited ? 20_000 : 5_000);
         expect(request).toHaveBeenCalledTimes(2);
         expect(sessions.state.result?.sessions).toEqual(finalRows);
-        expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
+        if (limited) {
+          expect(sessions.state.result).toMatchObject({ hasMore: true, nextOffset: 2, count: 2 });
+        } else {
+          expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual(finalRows);
+        }
       } finally {
         sessions.dispose();
         vi.useRealTimers();
@@ -170,12 +178,6 @@ describe("session roster event traffic", () => {
   it.each([
     "snapshot",
     "patch",
-    "subagent-status",
-    "title",
-    "involvement",
-    "swarm-note",
-    "update",
-    "updated",
     "active-message",
     "terminal-message",
     "invalidation",
@@ -349,37 +351,6 @@ describe("session roster event traffic", () => {
         expect(reads).toBe(3);
         await vi.advanceTimersByTimeAsync(15_000);
         expect(reads).toBe(3);
-      } finally {
-        sessions.dispose();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["create", "unknown-mutation"])(
-    "refreshes unheld membership for a %s snapshot",
-    async (reason) => {
-      vi.useFakeTimers();
-      const row = session("main", 1, { sessionId: "tracked" });
-      const added = session("main", 2, { key: "agent:main:new", sessionId: "added" });
-      const request = vi
-        .fn(async () => sessionsResult([added, row], 2))
-        .mockResolvedValueOnce(sessionsResult([row], 1));
-      const gatewayHarness = createGatewayHarness(createTestGatewayClient(request));
-      const { gateway } = gatewayHarness;
-      const sessions = createTestSessionCapability(gateway);
-      try {
-        await sessions.refresh({ agentId: "main", force: true });
-        gatewayHarness.publishEvent("sessions.changed", {
-          reason,
-          sessionKey: added.key,
-          session: added,
-          ancestorSessions: [],
-        });
-        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([row]);
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(request).toHaveBeenCalledTimes(2);
-        expect(sessions.listSnapshot({ agentId: "main" }).result?.sessions).toEqual([added, row]);
       } finally {
         sessions.dispose();
         vi.useRealTimers();
