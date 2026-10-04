@@ -13945,9 +13945,10 @@ struct ChatViewModelSessionManagementTests {
         #expect(await transport.listSessionsQueries().count >= 2)
 
         await MainActor.run { vm.renameSession(key: "agent:main:topic-a", label: "Bad name") }
-        await waitForObservedState {
-            vm.sessions.first?.displayName == "Trip planning" && vm.errorText == "rename failed"
-        }
+        // The failure path reverts the row and publishes the error in one MainActor step.
+        await waitForObservedState { vm.errorText != nil }
+        #expect(await MainActor.run { vm.sessions.first?.displayName } == "Trip planning")
+        #expect(await MainActor.run { vm.errorText } == "rename failed")
     }
 
     @Test func `archive removes the session from the active list`() async throws {
