@@ -45,7 +45,7 @@ it.each([false, true])(
   },
 );
 
-it("keeps restart recovery ownership diagnostics out of user replies", async () => {
+it("renders restart recovery ownership changes as session guidance", async () => {
   const replyOperation = createReplyOperation({
     sessionKey: "agent:main:restart-claim-changed",
     sessionId: "restart-claim-changed",
@@ -64,7 +64,9 @@ it("keeps restart recovery ownership diagnostics out of user replies", async () 
       sessionCtx: {},
     });
 
-    expect(reply?.text).toBe("⚠️ Gateway is restarting. Please wait a few seconds and try again.");
+    expect(reply?.text).toBe(
+      "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
+    );
     expect(reply?.text).not.toContain("restart recovery claim");
   } finally {
     replyOperation.complete();

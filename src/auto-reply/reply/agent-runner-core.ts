@@ -396,7 +396,7 @@ export async function handleReplyAgentRunError(
     replyOperation.fail("run_failed", error);
     return returnWithQueuedFollowupDrain(
       markReplyPayloadForSourceSuppressionDelivery({
-        text: buildRestartLifecycleReplyText(),
+        text: "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
       }),
     );
   }
