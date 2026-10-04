@@ -194,6 +194,12 @@ const EXEC_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
 
 const PLUGIN_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([GATEWAY_CLIENT_IDS.TUI]);
 
+// macOS owns a native `openclaw.approval.requested` presenter. The other native
+// apps do not handle that event, so they remain exec-only recipients.
+const SYSTEM_AGENT_APPROVAL_CLIENT_IDS: ReadonlySet<GatewayClientId> = new Set([
+  GATEWAY_CLIENT_IDS.MACOS_APP,
+]);
+
 function canDeliverApprovals(
   gatewayClient: GatewayRequestContextClient,
   approvalKind: "exec" | "plugin" | "system-agent",
@@ -218,7 +224,9 @@ function canDeliverApprovals(
         hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.EXEC_APPROVALS))) ||
     (approvalKind === "plugin" &&
       (PLUGIN_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id) ||
-        hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS)))
+        hasGatewayClientCap(gatewayClient.connect.caps, GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS))) ||
+    (approvalKind === "system-agent" &&
+      SYSTEM_AGENT_APPROVAL_CLIENT_IDS.has(gatewayClient.connect.client.id))
   );
 }
 
