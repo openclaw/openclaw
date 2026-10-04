@@ -1,12 +1,33 @@
 import type { Event, Relay } from "nostr-tools";
 import { BUZZ_INBOUND_MESSAGE_KINDS } from "./message-event.js";
-import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
+import { queryBuzzRelaySnapshot, resolveBuzzRelayRetryDelayMs } from "./relay-subscription.js";
 import {
   BUZZ_REPLAY_DISPATCH_MAX_PENDING,
   type BuzzReplayDispatchReservation,
 } from "./replay-dispatch.js";
 
 const HISTORY_PAGE_COMPLETE_REASON = "buzz room history page loaded";
+
+// Catch-up opens one history query per configured room in a burst on every connect,
+// so a busy relay rate-limits a room in the middle of the burst. That close names its
+// own delay and leaves the connection up, so wait it out instead of failing the room.
+// Exhausting these attempts keeps the original error, and the bus still fails loudly.
+const HISTORY_RATE_LIMIT_MAX_RETRIES = 3;
+
+async function waitForBuzzRelayRetry(delayMs: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    const settle = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", settle);
+      resolve();
+    };
+    const timer = setTimeout(settle, delayMs);
+    signal?.addEventListener("abort", settle, { once: true });
+  });
+}
 
 type BuzzRoomHistoryCatchUp = "complete" | "aborted" | "timestamp-over-limit";
 
@@ -25,38 +46,58 @@ async function queryBuzzRoomHistoryPage(params: {
   skipEventIds?: ReadonlySet<string>;
   signal?: AbortSignal;
 }): Promise<BuzzRoomHistoryPage> {
-  const events: Event[] = [];
-  let overLimit = false;
-  return await queryBuzzRelaySnapshot({
-    relay: params.relay,
-    filters: [
-      {
-        kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
-        "#h": [params.channelId],
-        since: params.since,
-        until: params.until,
-        ...(params.requestLimit === undefined ? {} : { limit: params.requestLimit }),
-      },
-    ],
-    signal: params.signal,
-    timeoutMessage: `Timed out loading Buzz room history for ${params.channelId}`,
-    abortMessage: "Buzz room history query aborted",
-    failureMessage: "Buzz room history query failed",
-    closeReason: HISTORY_PAGE_COMPLETE_REASON,
-    closeMessage: (reason) => `Buzz room history query closed for ${params.channelId}: ${reason}`,
-    onEvent: (event) => {
-      if (params.skipEventIds?.has(event.id)) {
-        return;
+  for (let attempt = 0; ; attempt += 1) {
+    // A retried page starts from an empty accumulator so a partial first attempt
+    // cannot duplicate events into the replay dispatcher.
+    const events: Event[] = [];
+    let overLimit = false;
+    try {
+      return await queryBuzzRelaySnapshot({
+        relay: params.relay,
+        filters: [
+          {
+            kinds: [...BUZZ_INBOUND_MESSAGE_KINDS],
+            "#h": [params.channelId],
+            since: params.since,
+            until: params.until,
+            ...(params.requestLimit === undefined ? {} : { limit: params.requestLimit }),
+          },
+        ],
+        signal: params.signal,
+        timeoutMessage: `Timed out loading Buzz room history for ${params.channelId}`,
+        abortMessage: "Buzz room history query aborted",
+        failureMessage: "Buzz room history query failed",
+        closeReason: HISTORY_PAGE_COMPLETE_REASON,
+        closeMessage: (reason) =>
+          `Buzz room history query closed for ${params.channelId}: ${reason}`,
+        onEvent: (event) => {
+          if (params.skipEventIds?.has(event.id)) {
+            return;
+          }
+          if (events.length < params.maxEvents) {
+            events.push(event);
+          } else {
+            overLimit = true;
+          }
+        },
+        result: () => ({ events, overLimit }),
+        checkAbortAfterSubscribe: true,
+      });
+    } catch (error) {
+      const retryDelayMs = resolveBuzzRelayRetryDelayMs(error);
+      if (
+        retryDelayMs === undefined ||
+        attempt >= HISTORY_RATE_LIMIT_MAX_RETRIES ||
+        params.signal?.aborted
+      ) {
+        throw error;
       }
-      if (events.length < params.maxEvents) {
-        events.push(event);
-      } else {
-        overLimit = true;
+      await waitForBuzzRelayRetry(retryDelayMs, params.signal);
+      if (params.signal?.aborted) {
+        throw error;
       }
-    },
-    result: () => ({ events, overLimit }),
-    checkAbortAfterSubscribe: true,
-  });
+    }
+  }
 }
 
 async function drainBuzzRoomHistoryRange(params: {
