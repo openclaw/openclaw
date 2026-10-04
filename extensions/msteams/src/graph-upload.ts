@@ -20,18 +20,6 @@ const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
 
-function requireMSTeamsSharePointSiteId(siteId?: string): string {
-  const normalized = siteId?.trim();
-  if (!normalized) {
-    throw new Error(
-      "No SharePoint site ID available for file upload. " +
-        "Set channels.msteams.sharePointSiteId, or verify that the team's AAD group ID " +
-        "is resolvable and the bot has Sites.Read.All to resolve the team site automatically.",
-    );
-  }
-  return normalized;
-}
-
 /**
  * Resolve a SharePoint site ID for a file upload. Uses the explicit config value when set;
  * otherwise resolves a standard channel's team site dynamically. Called lazily at the
@@ -58,18 +46,16 @@ export async function resolveUploadSiteId(
     return explicit;
   }
   if (!params.teamId) {
-    return requireMSTeamsSharePointSiteId(undefined);
+    throw new Error(
+      "No SharePoint site ID available for file upload. " +
+        "Set channels.msteams.sharePointSiteId, or verify that the team's AAD group ID " +
+        "is resolvable and the bot has Sites.Read.All to resolve the team site automatically.",
+    );
   }
-  const lookupTeam = params.getTeamDetails;
   assertMSTeamsSendHandoff(params);
   const groupId = await resolveTeamGroupId({
     conversationTeamId: params.teamId,
-    getTeamDetails: lookupTeam
-      ? async (teamId) => {
-          assertMSTeamsSendHandoff(params);
-          return await lookupTeam(teamId);
-        }
-      : undefined,
+    getTeamDetails: params.getTeamDetails,
   });
   if (!groupId) {
     throw new Error(
@@ -79,7 +65,6 @@ export async function resolveUploadSiteId(
   }
   const handoff = { assertDirectAdapterHandoff: params.assertDirectAdapterHandoff };
   if (params.channelId) {
-    assertMSTeamsSendHandoff(params);
     await assertStandardChannelForAutoUpload({
       groupId,
       channelId: params.channelId,
@@ -88,7 +73,6 @@ export async function resolveUploadSiteId(
       ...handoff,
     });
   }
-  assertMSTeamsSendHandoff(params);
   return await resolveTeamSiteId({
     groupId,
     tokenProvider: params.tokenProvider,
@@ -160,6 +144,8 @@ async function requestSharePointJson<T>(
         fetchImpl: params.fetchFn,
         mode: "trusted_env_proxy",
         beforeRequest: () => assertMSTeamsSendHandoff(params),
+        // Preserve fetch's redirect limit, method/body replay, and cross-origin
+        // credential stripping while checking authority again before each hop.
         maxRedirects: 20,
         allowCrossOriginUnsafeRedirectReplay: true,
         auditContext: "msteams.graph-upload",
@@ -228,16 +214,6 @@ async function assertStandardChannelForAutoUpload(
   }
 }
 
-// ============================================================================
-// SharePoint upload functions for group chats and channels
-// ============================================================================
-
-/**
- * Upload a file to a SharePoint site.
- * This is used for group chats and channels where /me/drive doesn't work for bots.
- *
- * @param params.siteId - SharePoint site ID (e.g., "contoso.sharepoint.com,guid1,guid2")
- */
 async function uploadToSharePoint(
   params: {
     buffer: Buffer;

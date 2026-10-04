@@ -203,18 +203,13 @@ async function getApiClientForReference(
 
 type TeamsGetById = (teamId: string) => Promise<{ aadGroupId?: string }>;
 
-function getStructuralApiClient(app: MSTeamsApp): MSTeamsApiClient {
-  // SAFETY: the SDK app exposes its structural API client on `api`; lookup only reads teams.getById.
-  return app.api as MSTeamsApiClient;
-}
-
 /** Team lookup follows the stored conversation endpoint when it is not the app endpoint. */
 export async function resolveReferenceScopedTeamsGetById(
   app: MSTeamsApp,
   serviceUrl: string | undefined,
 ): Promise<TeamsGetById | undefined> {
-  const appApi = getStructuralApiClient(app);
-  const appGetById = appApi.teams?.getById?.bind(appApi.teams);
+  const appApi: MSTeamsApiClient = app.api;
+  const appGetById = appApi.teams?.getById.bind(appApi.teams);
   if (!serviceUrl) {
     return appGetById;
   }
@@ -228,7 +223,7 @@ export async function resolveReferenceScopedTeamsGetById(
     return appGetById;
   }
   const client = await getApiClientForReference(app, { serviceUrl: normalized });
-  return client.teams?.getById?.bind(client.teams) ?? appGetById;
+  return client.teams?.getById.bind(client.teams) ?? appGetById;
 }
 
 function mergeReferenceIntoActivity(

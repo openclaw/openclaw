@@ -92,7 +92,8 @@ vi.mock("./messenger.js", () => ({
   }),
 }));
 
-vi.mock("./runtime.js", () => ({
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
   getMSTeamsRuntime: () => ({
     channel: {
       text: {
@@ -101,7 +102,6 @@ vi.mock("./runtime.js", () => ({
       },
     },
   }),
-  getOptionalMSTeamsRuntime: () => undefined,
 }));
 
 vi.mock("./graph-upload.js", async (importOriginal) => {
