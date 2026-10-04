@@ -33,7 +33,7 @@ export type CronCreatorToolAuthorityMaterialization = {
   runtimeAuthority?: CronRuntimeAuthority;
 };
 
-export type CronCreatorToolAuthoritySnapshot = Omit<
+type CronCreatorToolAuthoritySnapshot = Omit<
   CronCreatorToolAuthorityMaterialization,
   "runtimeAuthority"
 > & {
@@ -56,19 +56,15 @@ export type CronToolOptions = {
    */
   config?: OpenClawConfig;
   currentDeliveryContext?: DeliveryContext;
-  /**
-   * Effective tool surface visible to the caller that created or edited a cron job.
-   * Cron agent turns and trigger scripts use fresh runtimes, so agent-origin jobs
-   * need this cap persisted before the original session policy is lost.
-   */
+  /** Legacy SDK input; new cron writes do not capture or persist this tool list. */
   creatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
-  /** Host-owned proof that creatorToolAllowlist reached the final executable surface. */
+  /** Legacy SDK capture receipt; unused by current cron writes. */
   creatorToolAllowlistCaptureRef?: CronToolsAllowCaptureRef;
-  /** Attempt-cached authority resolved only when a mutation changes its tool cap. */
+  /** Legacy SDK resolver; current cron writes preserve requester identity without a snapshot. */
   resolveCreatorToolAuthority?: (options?: {
     signal?: AbortSignal;
   }) => Promise<CronCreatorToolAuthoritySnapshot>;
-  /** Visible fail-closed reason when a queued local turn cannot retain fresh MCP authority. */
+  /** Legacy SDK diagnostic; cron execution now uses the owning agent's current permissions. */
   creatorAuthorityUnavailableReason?: "queued-local-operator-configured-mcp";
   selfRemoveOnlyJobId?: string;
   runId?: string;

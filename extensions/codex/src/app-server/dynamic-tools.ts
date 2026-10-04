@@ -59,7 +59,6 @@ import {
   resolveLiveToolResultMaxChars,
 } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
-import { createCodexAutomationsToolsAllowResolver } from "./dynamic-tool-automations-allowlist.js";
 import { finalizeCodexToolAvailability } from "./dynamic-tool-availability.js";
 import {
   createCodexDynamicToolSpecs,
@@ -339,7 +338,6 @@ export function createCodexDynamicToolBridge(params: {
       directToolNames,
       functionToolsOnly: params.functionToolsOnly,
     });
-  const resolveAutomationsToolsAllow = createCodexAutomationsToolsAllowResolver(specs);
   let readRemoteWorkspaceFile: RemoteWorkspaceFileReader | undefined;
   return {
     availableTools: availableTools.map((entry) => entry.tool),
@@ -398,9 +396,7 @@ export function createCodexDynamicToolBridge(params: {
         });
       }
       const { tool, name: toolName } = toolEntry;
-      const rawArguments =
-        toolName === "automations" ? resolveAutomationsToolsAllow(call.arguments) : call.arguments;
-      const args = asNonArrayRecord(rawArguments);
+      const args = asNonArrayRecord(call.arguments);
       const invocationStartedAt = Date.now();
       const signal = options?.signal
         ? AbortSignal.any([params.signal, options.signal])
@@ -424,7 +420,7 @@ export function createCodexDynamicToolBridge(params: {
         call: {
           toolCallId: call.callId,
           toolName,
-          arguments: rawArguments,
+          arguments: call.arguments,
           threadId: call.threadId,
           turnId: call.turnId,
         },
@@ -745,22 +741,6 @@ export function createCodexDynamicToolBridge(params: {
         },
       });
     },
-  };
-}
-
-/** Applies the exact schema and hook-wrapper projection used by the executable Codex bridge. */
-export function projectCodexExecutableDynamicTools(params: {
-  tools: readonly AnyAgentTool[];
-  hookContext?: CodexDynamicToolHookContext;
-}): {
-  availableTools: AnyAgentTool[];
-  quarantinedTools: CodexDynamicToolSchemaQuarantine[];
-} {
-  const projected = projectCodexExecutableDynamicToolSurface(params.tools, params.hookContext);
-  const finalized = finalizeCodexToolAvailability(projected.tools);
-  return {
-    availableTools: finalized.tools.map((entry) => entry.tool),
-    quarantinedTools: [...projected.quarantinedTools, ...finalized.quarantinedTools],
   };
 }
 

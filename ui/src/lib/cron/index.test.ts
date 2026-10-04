@@ -866,29 +866,25 @@ describe("cron controller", () => {
   it.each([
     { name: "inherited", policy: {} },
     {
-      name: "deny all",
+      name: "explicit false values",
       policy: {
-        toolsAllow: [],
         fallbacks: [],
         allowUnsafeExternalContent: false,
         lightContext: false,
       },
     },
     {
-      name: "restricted default",
+      name: "explicit true values",
       policy: {
-        toolsAllow: ["read"],
-        toolsAllowIsDefault: true,
         fallbacks: ["openai/gpt-5.5"],
         allowUnsafeExternalContent: true,
         lightContext: true,
       },
     },
-    { name: "unrestricted", policy: { toolsAllow: ["*"] } },
   ] satisfies Array<{
     name: string;
     policy: Partial<Extract<CronJob["payload"], { kind: "agentTurn" }>>;
-  }>)("clones $name payload policy without its capture marker", async ({ policy }) => {
+  }>)("clones $name payload policy", async ({ policy }) => {
     const source = createCronJob({
       id: "source",
       name: "Policy source",
@@ -905,7 +901,6 @@ describe("cron controller", () => {
       message: "Synthetic task",
       ...policy,
     };
-    delete expected.toolsAllowIsDefault;
     expect(submitted.payload).toEqual(expected);
     expect(validateCronAddParams(submitted)).toBe(true);
     expect(source).toEqual(original);
@@ -994,7 +989,7 @@ describe("cron controller", () => {
     payload: CronJob["payload"];
     trigger: CronJob["trigger"];
     target: "agentTurn" | "systemEvent";
-  }>)("clone payload policy: retains common restrictions for $name", async (scenario) => {
+  }>)("clones $name with the operator-authored payload", async (scenario) => {
     const source = createCronJob({
       id: "kind-source",
       name: "Kind transition source",
@@ -1030,7 +1025,6 @@ describe("cron controller", () => {
       ...(scenario.target === "systemEvent"
         ? { text: "New operator-authored task" }
         : { message: "New operator-authored task" }),
-      toolsAllow: scenario.payload.toolsAllow,
     });
   });
 

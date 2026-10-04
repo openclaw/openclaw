@@ -97,7 +97,10 @@ describe("admin automation management", () => {
         await expect(
           tool.execute("command-update", { action: "update", jobId, job: patch }),
         ).resolves.toMatchObject({ details: { id: jobId } });
-        expect(calls).toEqual([["cron.update", { id: jobId, patch }]]);
+        expect(calls).toEqual([
+          ["cron.get", { id: jobId }],
+          ["cron.update", { id: jobId, expectedConfigRevision: configRevision, patch }],
+        ]);
       });
     },
   );

@@ -598,7 +598,7 @@ describe("CronService persists delivered status", () => {
 });
 
 describe("cron payload conversion", () => {
-  it("persists payload kind conversions without reopening the tool allowlist", async () => {
+  it("persists payload kind conversions with legacy snapshot data", async () => {
     const { storePath } = await makeStorePath();
     const cron = createService(storePath, { cronEnabled: false, runIsolatedAgentJob: vi.fn() });
 

@@ -132,7 +132,6 @@ describe("cron model schema regressions", () => {
         description: expect.stringMatching(/null to clear/i),
       });
     }
-    expect(propertyAt(projected, "job.payload.toolsAllow")).toMatchObject({ type: "array" });
     expect(JSON.stringify(projected)).not.toMatch(/"type"\s*:\s*\[|"not"\s*:\s*\{/);
   });
 
@@ -145,7 +144,7 @@ describe("cron model schema regressions", () => {
           agentId: null,
           displayName: null,
           sessionKey: null,
-          payload: { toolsAllow: null, model: null, fallbacks: null },
+          payload: { model: null, fallbacks: null },
         },
       }),
     ).toBe(true);

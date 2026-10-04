@@ -516,17 +516,15 @@ async function executeAgentRun(params: StartAgentRunExecutionParams): Promise<vo
                 extraSystemPrompt: params.request.extraSystemPrompt,
                 bootstrapContextMode: params.request.bootstrapContextMode,
                 bootstrapContextRunKind: params.effectiveBootstrapContextRunKind,
-                toolsAllow: pluginSubagentToolsAllow ?? params.restoredCronContinuation?.toolsAllow,
+                // Cron continuations use the current agent tool policy.
+                toolsAllow: pluginSubagentToolsAllow,
                 runtimePluginToolGrant,
                 trustedInternalHandoff: prepared.trustedInternalHandoff,
                 pinnedWidgetAuthoring: restartRecoveryContext?.pinnedWidgetAuthoring,
-                toolsAllowIsDefault: params.restoredCronContinuation?.toolsAllowIsDefault,
                 scheduledToolPolicy: params.restoredCronContinuation
                   ? resolveScheduledToolPolicyContext({
-                      toolsAllow: params.restoredCronContinuation.toolsAllow,
                       scheduledToolPolicy: params.restoredCronContinuation.scheduledToolPolicy,
                       callerOrigin: params.restoredCronContinuation.scheduledToolCallerOrigin,
-                      execTarget: params.restoredCronContinuation.toolsAllowExecTarget,
                     })
                   : undefined,
                 requireExplicitMessageTarget:

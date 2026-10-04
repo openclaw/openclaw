@@ -58,21 +58,14 @@ export function registerGatewayCronMutationAuthorityTests({
         ownerSessionKey: owner.sessionKey,
         ownerAccountId: owner.accountId,
       };
-      const runtimeAuthority = {
-        version: 1 as const,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { apps: [{ id: "calendar" }] },
-      };
       let current = true;
       const commitGuard = () => {
         if (!current) {
           throw new Error("authority revoked during worker admission");
         }
       };
-      const captureRuntimeAuthority = vi.fn(() => runtimeAuthority);
       const precondition = vi.fn(() => undefined);
-      const options = { scheduledToolPolicy, commitGuard, captureRuntimeAuthority };
+      const options = { scheduledToolPolicy, commitGuard };
       let restarted: CronFixture | undefined;
       try {
         const job = await addCronJob(
@@ -91,14 +84,13 @@ export function registerGatewayCronMutationAuthorityTests({
         );
         const patch = {
           sessionTarget: "isolated" as const,
-          payload: { kind: "agentTurn" as const, message: "updated", toolsAllow: ["write"] },
+          payload: { kind: "agentTurn" as const, message: "updated" },
         };
         const update = (next: Parameters<CronFixture["cron"]["update"]>[1]) =>
           method === "update"
             ? state.cron.update(job.id, next, options)
             : state.cron.updateWithPrecondition(job.id, next, precondition, options);
         await update(patch);
-        expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
         if (method === "updateWithPrecondition") {
           expect(precondition).toHaveBeenCalledOnce();
         }
@@ -107,9 +99,6 @@ export function registerGatewayCronMutationAuthorityTests({
           "committed authority job",
         );
         expect(committed.scheduledToolPolicy).toEqual(scheduledToolPolicy);
-        expect(committed.runtimeAuthority).toEqual(runtimeAuthority);
-
-        captureRuntimeAuthority.mockClear();
         precondition.mockClear();
         const held = holdNextCronMutation();
         const revoked = update({ name: "must not commit" }).then(
@@ -125,7 +114,6 @@ export function registerGatewayCronMutationAuthorityTests({
             ok: false,
             error: { message: expect.stringContaining("authority revoked") },
           });
-          expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
           if (method === "updateWithPrecondition") {
             expect(precondition).toHaveBeenCalledOnce();
           }

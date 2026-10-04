@@ -4,7 +4,7 @@ import {
   errorShape,
   GatewayErrorDetailCodes,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { CronJob, CronJobPatch } from "../../cron/types.js";
+import type { CronJob } from "../../cron/types.js";
 import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
@@ -24,26 +24,6 @@ import type { GatewayRequestHandler, GatewayRequestHandlerOptions, RespondFn } f
 import { defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
-
-export function isLegacyCreatorPromptUpdate(
-  job: CronJob,
-  patch: CronJobPatch,
-  callerScope: CronCallerScope | undefined,
-): boolean {
-  // A prompt edit keeps the legacy execution policy; it cannot establish new
-  // authority or transfer management to another session/account.
-  return (
-    callerScope?.sessionKey !== undefined &&
-    job.owner?.sessionKey === callerScope.sessionKey &&
-    job.owner?.accountId === callerScope.accountId &&
-    job.scheduledToolPolicy === undefined &&
-    job.payload.kind === "agentTurn" &&
-    patch.payload !== undefined &&
-    (patch.payload.kind === undefined || patch.payload.kind === "agentTurn") &&
-    Object.keys(patch).every((key) => key === "payload") &&
-    Object.keys(patch.payload).every((key) => key === "kind" || key === "message")
-  );
-}
 
 export function respondRefusedCronAgent(agentId: string | undefined, respond: RespondFn): boolean {
   const refusal = agentId ? readAgentDatabaseAdmissionRefusal(agentId) : undefined;

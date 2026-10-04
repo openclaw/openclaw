@@ -24,9 +24,9 @@ function damagedPinnedJob(kind: "trigger" | "script" | "agentTurn"): CronStoredJ
   };
 }
 
-describe("scheduled exec target recovery", () => {
+describe("scheduled jobs inherit current execution policy", () => {
   it.each(["trigger", "script", "agentTurn"] as const)(
-    "stops a damaged pinned %s job before executable work",
+    "runs an existing %s job without replaying its obsolete exec pin",
     async (kind) => {
       const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
       const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
@@ -45,13 +45,10 @@ describe("scheduled exec target recovery", () => {
 
       const result = await executeJobCore(state, damagedPinnedJob(kind));
 
-      expect(result).toMatchObject({
-        status: "error",
-        error: expect.stringContaining("captured exec restriction is missing or invalid"),
-      });
-      expect(evaluateCronTrigger).not.toHaveBeenCalled();
-      expect(runScriptJob).not.toHaveBeenCalled();
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: "ok" });
+      expect(evaluateCronTrigger).toHaveBeenCalledTimes(kind === "trigger" ? 1 : 0);
+      expect(runScriptJob).toHaveBeenCalledTimes(kind === "script" ? 1 : 0);
+      expect(runIsolatedAgentJob).toHaveBeenCalledTimes(kind === "script" ? 0 : 1);
     },
   );
 

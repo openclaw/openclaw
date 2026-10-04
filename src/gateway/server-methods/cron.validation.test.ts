@@ -1061,7 +1061,28 @@ describe("cron method validation", () => {
     },
   );
 
-  it("rejects agent-runtime tool jobs without an explicit toolsAllow cap", async () => {
+  it.each([{ toolsAllow: [] }, { toolsAllow: ["read"] }, { toolsAllow: ["*"] }])(
+    "rejects newly authored tool caps %j without mutating jobs",
+    async ({ toolsAllow }) => {
+      const added = await invokeCronAdd(
+        agentTurnCronParams({ payload: { kind: "agentTurn", message: "run", toolsAllow } }),
+      );
+      expectResponseError(added.respond, {
+        messageIncludes: "Per-job tool restrictions are no longer supported",
+      });
+      expect(added.context.committedAdds).toHaveLength(0);
+      const updated = await invokeCronUpdate(
+        { id: "cron-1", patch: { payload: { kind: "agentTurn", toolsAllow } } },
+        createCronJob(),
+      );
+      expectResponseError(updated.respond, {
+        messageIncludes: "Per-job tool restrictions are no longer supported",
+      });
+      expect(updated.context.committedUpdates).toHaveLength(0);
+    },
+  );
+
+  it("allows agent-runtime jobs without a tool snapshot and stamps their owner", async () => {
     const { context, respond } = await invokeCronAdd(
       agentTurnCronParams({
         payload: { kind: "agentTurn", message: "hello" },
@@ -1069,11 +1090,13 @@ describe("cron method validation", () => {
       { client: callerClient("ops") },
     );
 
-    expect(context.cron.add).not.toHaveBeenCalled();
-    expectResponseError(respond, {
-      code: "INVALID_REQUEST",
-      messageIncludes: "explicit payload.toolsAllow cap",
+    expect(requireCronAddPayload(context).payload).toEqual({ kind: "agentTurn", message: "hello" });
+    expect(requireCronAddPayload(context).owner).toEqual({
+      agentId: "ops",
+      sessionKey: "agent:ops:main",
+      accountId: "default",
     });
+    expectCronSuccess(respond);
   });
 
   it("allows agent-runtime transport-only jobs without a toolsAllow cap", async () => {
@@ -1484,30 +1507,7 @@ describe("cron method validation", () => {
     revokeCronCreatorAuthorityRunScope(scope);
   });
 
-  it("preserves creator runtime authority while revalidating delegated authority at commit", async () => {
-    const runtimeAuthority = {
-      version: 1 as const,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { apps: [{ id: "calendar" }] },
-    };
-    const scope = createCronCreatorAuthorityRunScope("run-add-authority");
-    const grant = mintCronCreatorAuthorityGrant(scope, undefined, runtimeAuthority);
-    const context = createCronContext();
-    context.validateAgentRuntimeApprovalAuthority = () => true;
-
-    const result = await invokeCron("cron.add", agentTurnCronParams(), {
-      context,
-      client: callerClientWithCronCreatorAuthority(grant),
-    });
-
-    expectCronSuccess(result.respond);
-    expect(context.committedRuntimeAuthorityCaptures).toEqual([true]);
-    expect(context.committedRuntimeAuthorities).toEqual([runtimeAuthority]);
-    revokeCronCreatorAuthorityRunScope(scope);
-  });
-
-  it("keeps delegated liveness validation separate from runtime authority capture", async () => {
+  it("preserves delegated liveness validation for scheduled job edits", async () => {
     const currentJob = createCronJob({
       agentId: "ops",
       owner: { agentId: "ops", sessionKey: "agent:ops:main", accountId: "default" },
@@ -1522,8 +1522,12 @@ describe("cron method validation", () => {
     );
 
     expectCronSuccess(result.respond);
-    expect(context.committedRuntimeAuthorityCaptures).toEqual([false]);
-    expect(context.committedRuntimeAuthorities).toEqual([undefined]);
+    expect(context.committedUpdates).toEqual([
+      {
+        id: currentJob.id,
+        patch: { description: "routine edit" },
+      },
+    ]);
   });
 
   it("rejects a mismatched cron.add runId without consuming the exact grant", async () => {
@@ -1914,7 +1918,7 @@ describe("cron method validation", () => {
       {
         jobId: currentJob.id,
         patch: {
-          payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] },
+          payload: { kind: "agentTurn", message: "updated" },
         },
       },
       { context, client: callerClientWithCronCreatorAuthority(grant) },
@@ -1945,14 +1949,13 @@ describe("cron method validation", () => {
     const params = {
       jobId: currentJob.id,
       patch: {
-        payload: { kind: "agentTurn", message: "updated", toolsAllow: ["read"] },
+        payload: { kind: "agentTurn", message: "updated" },
       },
     };
 
     const first = await invokeCron("cron.update", params, { context, client });
     expectCronSuccess(first.respond);
     expect(context.committedUpdates).toHaveLength(1);
-    expect(context.committedRuntimeAuthorityCaptures).toEqual([true]);
 
     const replay = await invokeCron("cron.update", params, { context, client });
     expectResponseError(replay.respond, {
@@ -2083,7 +2086,6 @@ describe("cron method validation", () => {
           payload: {
             kind: "agentTurn",
             message: "replace creator prompt",
-            toolsAllow: ["*"],
           },
         },
       },
@@ -2589,7 +2591,7 @@ describe("cron method validation", () => {
   });
 
   it.each([undefined, { agentId: "ops", sessionKey: "agent:ops:discord:group:ops" }])(
-    "rejects capless prompt edits without a proven owner account: %j",
+    "allows prompt edits to legacy jobs in the caller scope: %j",
     async (owner) => {
       const { context, respond } = await invokeCronUpdate(
         {
@@ -2604,15 +2606,15 @@ describe("cron method validation", () => {
         { client: callerClient("ops", undefined, owner?.sessionKey) },
       );
 
-      expect(context.cron.update).not.toHaveBeenCalled();
-      expectResponseError(respond, {
-        code: "INVALID_REQUEST",
-        messageIncludes: "explicit payload.toolsAllow cap",
+      expect(requireCronUpdatePatch(context).payload).toEqual({
+        kind: "agentTurn",
+        message: "updated",
       });
+      expectCronSuccess(respond);
     },
   );
 
-  it("updates a legacy creator's prompt through the tool after Doctor without adopting permissions", async () => {
+  it("keeps a repaired legacy job scoped to its authenticated creator", async () => {
     const { storePath } = await makeStorePath();
     const sessionKey = "agent:ops:discord:work:direct:user-1";
     const legacy = createCronJob({
@@ -2649,7 +2651,6 @@ describe("cron method validation", () => {
       await updateCronJobFromAgentTool({
         id: legacy.id,
         patch: { payload },
-        creatorToolAllowlist: [{ name: "read" }],
         gatewayOpts: {},
         callGateway: async (method, _opts, params) => {
           if (method !== "cron.get" && method !== "cron.update") {
@@ -2673,7 +2674,12 @@ describe("cron method validation", () => {
       });
       const updated = expectDefined((await loadCronStore(storePath)).jobs[0], "updated cron job");
       expect(updated.payload).toEqual({ kind: "agentTurn", message: "updated" });
-      expect(updated.scheduledToolPolicy).toBeUndefined();
+      expect(updated.scheduledToolPolicy).toEqual({
+        version: 1,
+        mode: "account",
+        ownerSessionKey: sessionKey,
+        ownerAccountId: "work",
+      });
       expect(repair.changes).toContain(
         "Reconciled 1 cron job owner account from persisted creator identity; existing tool permissions were preserved.",
       );
@@ -2682,18 +2688,9 @@ describe("cron method validation", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", "agent:ops:discord:work:direct:user-2");
       await expect(edit({ message: "another session" })).rejects.toThrow(
-        "explicit payload.toolsAllow cap",
+        "cron job not found: cron-1",
       );
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
-      client = callerClient("ops", "work", sessionKey);
-      await expect(edit({ kind: "agentTurn", toolsAllow: ["read"] })).resolves.toMatchObject({
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: sessionKey,
-          ownerAccountId: "work",
-        },
-      });
     } finally {
       cron.stop();
     }
@@ -2716,12 +2713,12 @@ describe("cron method validation", () => {
     expectCronSuccess(respond);
   });
 
-  it("passes authenticated provenance for an explicit agent-runtime tool edit", async () => {
+  it("preserves authenticated owner policy when editing a legacy capped job", async () => {
     const { context, respond } = await invokeCronUpdate(
       {
         id: "cron-1",
         patch: {
-          payload: { kind: "agentTurn", message: "updated", toolsAllow: ["write"] },
+          payload: { kind: "agentTurn", message: "updated" },
         },
       },
       createCronJob({

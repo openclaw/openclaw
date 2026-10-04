@@ -279,39 +279,34 @@ describe("Codex app-server elicitation bridge", () => {
     vi.restoreAllMocks();
   });
 
-  it("declines app elicitations for scheduled app authority", async () => {
-    const params = {
-      ...createParams(),
-      trigger: "cron",
-      scheduledRuntimeAuthority: {
-        version: 1,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { version: 1 },
-      },
-    } as EmbeddedRunAttemptParams;
+  it.each([true, false])(
+    "uses current app policy for scheduled elicitations (allowed=%s)",
+    async (allowDestructiveActions) => {
+      const params = {
+        ...createParams(),
+        trigger: "cron",
+      } as EmbeddedRunAttemptParams;
 
-    const result = await handleCodexAppServerElicitationRequest({
-      requestParams: buildPluginApprovalElicitation(),
-      paramsForRun: params,
-      pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions: true }),
-    });
+      const result = await handleCodexAppServerElicitationRequest({
+        requestParams: buildPluginApprovalElicitation(),
+        paramsForRun: params,
+        pluginAppPolicyContext: createPluginAppPolicyContext({ allowDestructiveActions }),
+      });
 
-    expect(result).toEqual({ action: "decline", content: null, _meta: null });
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual(
+        allowDestructiveActions
+          ? { action: "accept", content: { approve: true }, _meta: null }
+          : { action: "decline", content: null, _meta: null },
+      );
+      expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps unrelated Computer Use elicitation policy unchanged", async () => {
     mockApprovalDecision("plugin:approval-computer-use", "allow-once");
     const params = {
       ...createParams(),
       trigger: "cron",
-      scheduledRuntimeAuthority: {
-        version: 1,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { version: 1 },
-      },
     } as EmbeddedRunAttemptParams;
 
     const result = await handleCodexAppServerElicitationRequest({

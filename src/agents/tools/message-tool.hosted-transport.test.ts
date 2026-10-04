@@ -340,7 +340,6 @@ it("retains scheduled invocation config through bound Gateway dispatch after pre
         sessionId,
         sessionKey,
         jobId,
-        toolsAllow: ["message"],
         scheduledToolPolicy: policy,
         executionIdentity: {
           ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },

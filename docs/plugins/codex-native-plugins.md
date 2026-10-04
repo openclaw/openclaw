@@ -198,40 +198,22 @@ changes.
 
 ## Scheduled automations
 
-When an authenticated owner creates an automation from a Codex turn, OpenClaw
-captures the app IDs and approval limits callable on that exact Codex thread.
-The stored authority is bound to the creator's prepared Codex profile and
-account. Scheduled runs intersect that cap with current Codex policy and app
-availability. They never gain new app IDs or a broader destructive,
-open-world, or approval ceiling. Tools added later within an already captured
-app may run only when both the stored ceiling and current policy allow them.
+Scheduled work uses the owning agent's current authenticated account, plugin
+configuration, and tool approval policy. It follows the same native Codex and
+MCP startup path as an ordinary turn. Creating or editing a schedule does not
+capture app credentials, tool names, or a separate permission ceiling.
 
-Scheduled app calls are unattended. Only actions explicitly allowed both when
-the job was created and when it runs can proceed without a prompt. An action
-that still requires approval or elicitation is declined. A changed account,
-runtime, revoked app, narrower policy, or unavailable inventory stops before
-app execution and reports how to restore access or reauthorize the automation.
-Model fallbacks cannot move this authority to another runtime or account.
+Existing per-job tool lists and captured app grants are not replayed. A job
+does not need to be recreated when its agent's plugins or runtime change.
+Disconnecting an app or restricting the agent's current policy still removes
+that access. Scheduling does not bypass approvals or grant access to another
+agent's account.
 
-This path is stricter than an ordinary interactive turn. OpenClaw generates
-per-tool `enabled` and `approval_mode` values from current tool metadata and
-the captured authority. An explicit native `enabled: true` cannot override a
-captured or current destructive/open-world restriction on a scheduled run.
-Approval intersections keep `"prompt"` if either side requires it;
-`"approve"` defers to the other side. Combining `"auto"` with `"writes"`
-produces `"prompt"`, because their annotation-dependent rules are not totally
-ordered.
-
-Jobs created before app authority capture may keep their ordinary OpenClaw
-tool cap and continue non-app work, but cannot recover Codex app access
-automatically. Recreate or reauthorize only a job that needs app access, from a
-fresh authenticated owner turn. See
+There is no separate read-only or narrower per-job tool policy. Use an agent
+with the appropriate permissions for scheduled work. New `toolsAllow` or CLI
+`--tools` requests are rejected with guidance to configure the owning agent;
+legacy stored values are ignored, not advertised as an enforced restriction. See
 [Automations](/automation/cron-jobs#codex-apps-in-scheduled-automations).
-Ordinary edits preserve captured app authority. Explicitly replacing a job's
-`toolsAllow` cap without a fresh authenticated Codex authority capture clears
-that authority; the next run reports that app access requires reauthorization.
-An update from a fresh authenticated owner turn can instead capture and store a
-new app ceiling for the updated job.
 
 ## Manage plugins from chat
 
@@ -447,10 +429,9 @@ entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
 Missing inventory methods, authentication errors, transport failures, and
-connector refresh failures do not admit app tools. Ordinary turns, including
-those using `allow_destructive_actions: "ask"`, can continue with native apps
-disabled when inventory exceeds its startup budget. Scheduled runs stop if
-their captured app policy cannot be revalidated within that budget.
+connector refresh failures do not admit app tools. Ordinary and scheduled turns,
+including those using `allow_destructive_actions: "ask"`, can continue with native
+apps disabled when inventory exceeds its startup budget.
 
 Migration and runtime use separate cache keys:
 

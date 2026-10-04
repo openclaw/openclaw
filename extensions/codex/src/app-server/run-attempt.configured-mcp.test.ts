@@ -157,18 +157,72 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(harness.requests.some((request) => request.method === "turn/start")).toBe(false);
   });
 
-  it("preserves bounded canonical continuity when scheduled MCP replaces ordinary ownership", async () => {
+  it.each(["user", "cron"] as const)("keeps configured MCP native for %s runs", async (trigger) => {
+    const sessionFile = path.join(tempDir, "session-" + trigger + ".jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace-" + trigger));
+    configureFakeMcp(params);
+    params.trigger = trigger;
+    if (trigger === "cron") {
+      params.scheduledToolPolicy = { version: 1, mode: "trusted" };
+    }
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    const request = harness.requests.find((entry) => entry.method === "thread/start");
+    const start = request?.params as
+      | { config?: Record<string, unknown>; dynamicTools?: unknown }
+      | undefined;
+    // Scheduling must not move MCP into gateway wrappers or disable the native
+    // environment. That changes both authentication and where shell work runs.
+    expect(start?.config).toMatchObject({ mcp_servers: { fake: { command: process.execPath } } });
+    expect(mcpMocks.requesterCalls).toBe(1);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+  });
+
+  it("still disables native MCP and shell for an actually restricted turn", async () => {
+    const sessionFile = path.join(tempDir, "session-restricted.jsonl");
+    const params = createParams(sessionFile, path.join(tempDir, "workspace-restricted"));
+    configureFakeMcp(params);
+    params.toolsAllow = ["cron"];
+    params.pluginHarnessToolPolicyRestricted = true;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "config/read") {
+        return { config: { mcp_servers: { fake: { enabled: true } } }, origins: {}, layers: [] };
+      }
+      if (method === "mcpServerStatus/list") {
+        return { data: [{ name: "fake", tools: {}, serverInfo: null }], nextCursor: null };
+      }
+      return undefined;
+    });
+    const run = runCodexAppServerAttempt(params);
+    await Promise.race([
+      harness.waitForMethod("turn/start"),
+      run.then((result) => {
+        throw new Error(`restricted turn finished before turn/start: ${JSON.stringify(result)}`);
+      }),
+    ]);
+    const request = harness.requests.find((entry) => entry.method === "thread/start");
+    expect((request?.params as { config?: unknown })?.config).toMatchObject({
+      "features.shell_tool": false,
+      mcp_servers: { fake: { enabled: false } },
+    });
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).resolves.toBeDefined();
+  });
+
+  it("preserves conversation history when a legacy scheduled MCP binding returns to native ownership", async () => {
     const sessionFile = path.join(tempDir, "session-scheduled-mcp-ownership-continuity.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-scheduled-mcp-ownership-continuity");
     const cutoff = Date.now();
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-ordinary",
+      threadId: "thread-scheduled-old",
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
       dynamicToolsFingerprint: "[]",
-      mcpServersFingerprint: "configured-mcp-test-fixture",
+      configuredMcpOwnershipVersion: 1,
       historyCoveredThrough: new Date(cutoff).toISOString(),
     });
     const sessionManager = openFileBackedSessionManagerForTest(sessionFile, {
@@ -192,12 +246,11 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     configureFakeMcp(params);
     params.prompt = "continue after the scheduled ownership transition";
     params.trigger = "cron";
-    params.toolsAllow = ["*"];
     params.scheduledToolPolicy = { version: 1, mode: "trusted" };
     const harness = createStartedThreadHarness(async (method) => {
       if (method === "thread/start") {
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-          threadId: "thread-ordinary",
+          threadId: "thread-scheduled-old",
         });
       }
       return undefined;
@@ -211,36 +264,14 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     await harness.waitForMethod("turn/start");
     const threadStart = harness.requests.find((request) => request.method === "thread/start")
       ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
-    expect(mcpMocks.requesterCalls).toBe(0);
-    expect(mcpMocks.staticCalls).toHaveLength(1);
-    expect(threadStart?.config).not.toHaveProperty("mcp_servers");
-    expect(JSON.stringify(threadStart?.config ?? {})).not.toContain("fake-mcp");
-    expect(JSON.stringify(threadStart?.dynamicTools ?? [])).toContain("fake__show");
-    expect(mcpMocks.staticCalls[0]).not.toHaveProperty("requesterSenderId");
-    expect(mcpMocks.staticCalls[0]).toMatchObject({
-      toolsAllow: ["*"],
-      autoApproveCodexAppServerApprovals: true,
+    expect(threadStart?.config).toMatchObject({
+      mcp_servers: { fake: { command: process.execPath } },
     });
-    const toolResult = await harness.handleServerRequest({
-      id: "request-fake-ping",
-      method: "item/tool/call",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        callId: "call-fake-ping",
-        namespace: null,
-        tool: "fake__show",
-        arguments: {},
-      },
-    });
-    expect(toolResult).toMatchObject({ success: true });
-    expect(JSON.stringify(toolResult)).toContain("initial-result");
-    expect(mcpMocks.staticToolExecutes[0]).toHaveBeenCalledOnce();
+    expect(mcpMocks.requesterCalls).toBe(1);
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
 
-    expect(harness.requests.map((request) => request.method)).toContain("thread/start");
-    expect(harness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    expect(harness.requests.map((entry) => entry.method)).toContain("thread/start");
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const inputText =
       (turnStart?.params as { input?: Array<{ text?: string }> } | undefined)?.input?.[0]?.text ??
@@ -251,15 +282,9 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     expect(inputText).toContain("recent scheduled ownership answer");
     expect(inputText).toContain("Current user request:");
     expect(inputText).toContain("continue after the scheduled ownership transition");
-    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
-    expect(mcpMocks.captureCalls[0]).toMatchObject({
-      storedNames: expect.arrayContaining(["fake__show"]),
-      provenance: { version: 1, source: "final-executable-surface" },
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-1",
     });
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding).toMatchObject({ threadId: "thread-1", configuredMcpOwnershipVersion: 1 });
-    expect(binding).not.toHaveProperty("mcpServersFingerprint");
-    expect(binding).not.toHaveProperty("userMcpServersFingerprint");
   });
 
   it.each([
@@ -381,8 +406,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       expect(mcpMocks.requesterParams[0]?.manifestRegistry).toBe(
         params.preparedModelRuntime?.metadataSnapshot.manifestRegistry,
       );
-      expect(mcpMocks.captureCalls).toHaveLength(1);
-      expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
     },
   );
 
@@ -451,17 +474,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     await expect(run).resolves.toBeDefined();
 
     expect(harness.requests.map((request) => request.method)).not.toContain("mcpServerStatus/list");
-    expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]!.storedNames).toEqual(
-      expect.arrayContaining(["fake__show", "fake__show_2"]),
-    );
-    expect(new Set(mcpMocks.captureCalls[0]!.storedNames).size).toBe(
-      mcpMocks.captureCalls[0]!.storedNames.length,
-    );
-    expect(mcpMocks.captureCalls[0]!.provenance).toEqual({
-      version: 1,
-      source: "final-executable-surface",
-    });
     expect(mcpMocks.dispose).toHaveBeenCalledOnce();
     expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
   });
@@ -480,7 +492,7 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       );
       configureFakeMcp(params);
       params.trigger = "cron";
-      params.toolsAllow = ["*"];
+      params.toolsAllow = ["cron", "fake__show"];
       params.scheduledToolPolicy = { version: 1, mode: "trusted" };
       mcpMocks.staticDiagnosticNotice =
         "Configured MCP is incomplete for this scheduled run: fake: authentication required. " +
@@ -499,8 +511,6 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
       expect(harness.requests.some((request) => request.method === "thread/inject_items")).toBe(
         false,
       );
-      expect(mcpMocks.captureCalls).toHaveLength(1);
-      expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
 
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       await expect(run).resolves.toBeDefined();

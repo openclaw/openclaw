@@ -206,7 +206,6 @@ describe("createLazyGatewayCronState", () => {
     const lazy = createLazyGatewayCronState(createParams());
     const opts = {
       commitGuard: vi.fn(),
-      captureRuntimeAuthority: vi.fn(() => undefined),
     };
     const precondition = vi.fn();
     await lazy.cron.update("demo", { description: "updated" }, opts);

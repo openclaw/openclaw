@@ -10,6 +10,7 @@ type ScriptFixture = Omit<
   "runtimeConfig" | "signal"
 > & {
   script: string;
+  toolsAllow?: string[];
   state: unknown;
   streamBatch?: string;
   timeoutSeconds?: number;
@@ -39,7 +40,6 @@ export function createCronScriptRuntimeFixture(deps: RuntimeDeps) {
         : {}),
     }),
     scheduledToolPolicy: params.scheduledToolPolicy,
-    toolsAllowExecTarget: params.execTarget,
   });
   return {
     evaluateTrigger: (params: ScriptFixture) =>

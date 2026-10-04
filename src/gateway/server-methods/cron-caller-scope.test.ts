@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { observeCronJobWrites } from "../../../test/helpers/cron/runtime-mutation.js";
 import {
   createCronRegressionState,
   createDueIsolatedJob,
 } from "../../../test/helpers/cron/service-regression-fixtures.js";
+import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
@@ -14,11 +15,13 @@ import {
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
 } from "../cron-creator-authority-grant.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import {
   cronJobMatchesCallerScope,
   cronJobMatchesDeclarationScope,
   readCronCallerScope,
-  resolveCronCreatorAuthorityCapture,
+  resolveCronMutationCommitGuard,
 } from "./cron-caller-scope.js";
 
 function createScopedJob(): CronJob {
@@ -56,32 +59,33 @@ describe("cron caller scope ownership", () => {
         });
         const cron = new CronService(state.deps);
         let issuerCurrent = true;
-        const scope = createCronCreatorAuthorityRunScope("creator-commit", { kind: "local" });
-        const authority = {
-          version: 1 as const,
-          runtimeId: "codex",
-          namespace: "codex.apps",
-          payload: { apps: [{ id: "calendar" }] },
-        };
+        const operationalRunInstance = createOperationalRunInstanceRef("creator-commit");
+        const scope = createCronCreatorAuthorityRunScope(operationalRunInstance.runId, {
+          kind: "local",
+        });
         const grant = mintCronCreatorAuthorityGrant(
           scope,
           undefined,
-          authority,
           undefined,
-          "runtime",
+          undefined,
+          "requester",
           () => issuerCurrent,
         );
-        const capture = resolveCronCreatorAuthorityCapture({
-          kind: "agentTool",
-          agentId: "main",
-          accountId: "default",
-          cronCreatorAuthorityGrant: grant,
-          toolsAllowProvenance: { version: 1, source: "final-executable-surface" },
-        });
-        if (!capture) {
-          throw new Error("Creator fixture did not retain its runtime capture");
+        const client = createSyntheticPluginRuntimeClient();
+        client.internal = {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            operationalRunInstance,
+            cronCreatorAuthorityGrant: grant,
+          },
+        };
+        const context = createDirectChatContext({ cron, cronStorePath: storePath });
+        const commitGuard = resolveCronMutationCommitGuard(client, context);
+        if (!commitGuard) {
+          throw new Error("Creator fixture did not retain its commit guard");
         }
-        const captureRuntimeAuthority = vi.fn(capture.captureRuntimeAuthority);
         let observedWrite = false;
         const stopObserving = observeCronJobWrites(job.id, () => {
           observedWrite = true;
@@ -90,19 +94,13 @@ describe("cron caller scope ownership", () => {
           }
         });
         try {
-          const update = cron.update(
-            job.id,
-            { name: "committed creator update" },
-            { captureRuntimeAuthority, commitGuard: capture.assertCurrent },
-          );
+          const update = cron.update(job.id, { name: "committed creator update" }, { commitGuard });
           if (revokeBeforeCommit) {
             await expect(update).rejects.toThrow("no longer active");
           } else {
             await expect(update).resolves.toMatchObject({ name: "committed creator update" });
           }
           expect(observedWrite).toBe(true);
-          expect(captureRuntimeAuthority).toHaveBeenCalledOnce();
-          expect(captureRuntimeAuthority.mock.results[0]?.value).toEqual(authority);
           expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow("no longer active");
           const persisted = (await loadCronStore(storePath)).jobs.find(
             (entry) => entry.id === job.id,
@@ -136,18 +134,12 @@ describe("cron caller scope ownership", () => {
             sessionKey: "agent:main:main",
             turnSourceAccountId: "work",
             cronToolsAllowCapture: "final-executable-surface",
-            cronExecToolTarget: { host: "gateway", ask: "always" },
             ...source,
           },
         },
       } as never);
 
       expect(scope?.toolsAllowProvenance?.callerOrigin).toEqual(origin);
-      expect(scope?.toolsAllowExecTarget).toEqual({
-        version: 1,
-        host: "gateway",
-        ask: "always",
-      });
     },
   );
 

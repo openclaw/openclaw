@@ -70,9 +70,7 @@ describe("cron script gateway exec with secret egress", () => {
           script:
             'const result = await exec({ command: "printf cron-egress-ok" }); if (!JSON.stringify(result).includes("cron-egress-ok")) throw new Error("Command output missing"); return { fire: false };',
           state: null,
-          toolsAllow: ["exec", "process"],
           scheduledToolPolicy: { version: 1, mode: "trusted" } as const,
-          execTarget: { version: 1, host: "gateway" } as const,
           executionIdentity: {
             ingress: { kind: "schedule", boundary: "cron.script", state: "present" } as const,
             onPostAdmission: (context: AdmittedRunContext) => {

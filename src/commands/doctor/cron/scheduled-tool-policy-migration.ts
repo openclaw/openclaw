@@ -76,7 +76,6 @@ function migrateScheduledToolPolicy(
   if (raw.scheduledToolPolicy !== undefined) {
     const normalized = normalizeCronScheduledToolPolicy(raw.scheduledToolPolicy);
     const resolved = resolveCronScheduledToolPolicy({
-      toolsAllow,
       scheduledToolPolicy: normalized,
       owner: { sessionKey: ownerSessionKey, accountId: ownerAccountId },
     });

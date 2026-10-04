@@ -356,13 +356,16 @@ export async function startOrResumeThread(
         !binding?.threadId);
     let rotatedContextEngineBinding = false;
     let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
+    // Scheduled work rechecks current app policy after acquiring its native thread.
+    const requiresCurrentPolicyCheck =
+      params.params.trigger === "cron" || params.pluginThreadConfig?.requiresCurrentPolicyCheck;
     // Scoped inventory requires a loaded native thread. The warm/resume owner
     // calls this only after acquiring that exact subscription, before admission.
     const buildLoadedPluginThreadConfig = async (
       current: CodexAppServerThreadBinding,
     ): Promise<CodexPluginThreadConfig | undefined> => {
       if (
-        !params.pluginThreadConfig?.requiresCurrentPolicyCheck &&
+        !requiresCurrentPolicyCheck &&
         !shouldRecheckRecoverablePluginBinding({
           binding: current,
           pluginThreadConfig: params.pluginThreadConfig,
@@ -376,7 +379,7 @@ export async function startOrResumeThread(
         );
       } catch (error) {
         throwIfAborted();
-        if (params.pluginThreadConfig?.requiresCurrentPolicyCheck) {
+        if (requiresCurrentPolicyCheck) {
           throw error;
         }
         embeddedAgentLog.warn("codex app-server plugin app config recovery check failed", {
@@ -397,19 +400,11 @@ export async function startOrResumeThread(
       transientWebSearchRestriction;
     const unknownProviderWebSearchSupport = params.nativeProviderWebSearchSupport === "unknown";
     const configuredMcpOwnershipChanged =
-      binding?.threadId &&
-      ((params.configuredMcpOwnershipVersion === 1 &&
-        (binding.configuredMcpOwnershipVersion !== 1 ||
-          binding.dynamicToolsFingerprint === undefined ||
-          binding.mcpServersFingerprint !== undefined ||
-          binding.userMcpServersFingerprint !== undefined)) ||
-        (params.configuredMcpOwnershipVersion !== 1 &&
-          binding.configuredMcpOwnershipVersion === 1));
+      binding?.threadId && binding.configuredMcpOwnershipVersion === 1;
     if (configuredMcpOwnershipChanged && binding?.threadId) {
       const predecessorBinding = binding;
-      // Scheduled configured MCP moved from Codex-native config to OpenClaw dynamic tools.
-      // A persistent main/named session has one binding: rotate its exact predecessor instead
-      // of retaining native and scheduled variants that could diverge or widen authority.
+      // Old scheduled bindings moved configured MCP into dynamic tools. Rotate the
+      // exact predecessor once so current runs use native MCP with current policy.
       stageBindingReplacement("changing configured MCP ownership");
       embeddedAgentLog.debug(
         "codex app-server configured MCP ownership changed; starting a new thread",

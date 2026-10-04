@@ -84,7 +84,11 @@ export function registerCronEditCommand(cron: Command) {
         false,
       )
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
-      .option("--clear-tools", "Remove tool allow-list (use all tools)", false)
+      .option(
+        "--clear-tools",
+        "Remove a legacy per-job tool list (use current agent policy)",
+        false,
+      )
       .option("--clear-channel", "Unset the delivery channel", false)
       .option("--clear-to", "Unset the delivery destination", false)
       .option("--clear-thread-id", "Unset the Telegram forum topic thread id", false)

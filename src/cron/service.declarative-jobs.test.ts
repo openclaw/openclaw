@@ -139,7 +139,7 @@ describe("CronService declarative jobs", () => {
       declarationKey: "agent:ops:daily-report",
       displayName: "Daily report",
       owner: { agentId: "ops", sessionKey: "agent:ops:main" },
-      payload: { toolsAllow: ["*"] },
+      payload: { kind: "agentTurn", message: "report" },
     });
 
     const identical = await add(cron, declaration(), { enabledExplicit: true });

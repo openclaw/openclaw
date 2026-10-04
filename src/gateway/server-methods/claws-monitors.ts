@@ -20,7 +20,7 @@ import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
 import { resolveHeartbeatMonitorPlan } from "../../cron/heartbeat-monitor.js";
 import { cronJobReadView } from "../../cron/job-read-view.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../../cron/service/active-run-cancellation.js";
-import { reconcileToolsAllowAuthority } from "../../cron/service/jobs-tool-policy.js";
+import { reconcileScheduledJobOwnerPolicy } from "../../cron/service/jobs-tool-policy.js";
 import { hasPendingCronSessionCleanupForAgent } from "../../cron/service/locked.js";
 import { resolveSkillCollectionReviewMonitorSpecs } from "../../cron/skill-collection-review-monitor.js";
 import { cronStoreKey } from "../../cron/store/key.js";
@@ -60,10 +60,9 @@ function desiredMonitorRevision(input: CronJobCreate, existing: CronJob): string
     state: {},
   };
   // Apply creation's authority defaults without inheriting the row's policy.
-  reconcileToolsAllowAuthority({
+  reconcileScheduledJobOwnerPolicy({
     job: desired,
     previouslyUsedToolRuntime: false,
-    explicitlyMutatesToolsAllow: true,
   });
   return resolveCronJobConfigRevision(desired);
 }

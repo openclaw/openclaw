@@ -1,5 +1,4 @@
 /** Evaluation-scoped bundle MCP tools for headless cron scripts. */
-import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import { loadSessionMcpConfig } from "../agents/agent-bundle-mcp-runtime-config.js";
 import {
   wrapToolWithBeforeToolCallHook,
@@ -7,15 +6,12 @@ import {
 } from "../agents/agent-tools.before-tool-call.js";
 import type { ResolvedConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
-import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { normalizeToolPolicyName } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
-import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export type CronScriptMcpTools = {
-  /** Settles once the named servers have connected and listed tools, or names each that failed. */
+  /** Settles once the configured servers have connected and listed tools, or names each that failed. */
   surface: Promise<{ tools: AnyAgentTool[]; unavailable?: string }>;
   /** Retires the evaluation's MCP runtime, including servers still connecting. */
   dispose: () => Promise<void>;
@@ -29,45 +25,28 @@ type AcquireCronScriptMcpToolsParams = {
   config: OpenClawConfig;
   workspaceDir: string;
   agentDir: string;
-  toolsAllow?: string[];
   capabilityProfile: ResolvedConversationCapabilityProfile;
   reservedToolNames: readonly string[];
   hookContext: HookContext;
 };
 
 /**
- * Starts the evaluation's own session MCP runtime for the configured servers
- * whose safe name its toolsAllow uses as a prefix (`server__tool` or
- * `server__*`). Wildcards, absent caps, and unprefixed globs start nothing:
- * scripts may poll every 30 seconds, so each server they connect must be an
- * explicit choice. Connection and listing run inside the caller's deadline;
+ * Starts the evaluation's own MCP runtime using the current agent configuration
+ * and tool policy. Connection and listing run inside the caller's deadline;
  * `dispose` must run in the caller's `finally`.
  */
 export function acquireCronScriptMcpTools(
   params: AcquireCronScriptMcpToolsParams,
 ): CronScriptMcpTools | undefined {
-  const allowed = (params.toolsAllow ?? []).map(normalizeToolPolicyName);
   const explicitToolDenylist = params.capabilityProfile.policy.explicitToolDenylist;
   // Metadata only: no transport starts until acquisition below.
-  const { loaded, safeServerNamesByServer } = loadSessionMcpConfig({
+  const { loaded } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.config,
     toolDenylist: explicitToolDenylist,
     logDiagnostics: false,
   });
-  const unnamedServerDenials: string[] = [];
-  let namedServerCount = 0;
-  for (const serverName of Object.keys(loaded.mcpServers)) {
-    const safeName = safeServerNamesByServer.get(serverName) ?? serverName;
-    const prefix = `${normalizeToolPolicyName(safeName)}${TOOL_NAME_SEPARATOR}`;
-    if (allowed.some((entry) => entry.length > prefix.length && entry.startsWith(prefix))) {
-      namedServerCount += 1;
-    } else {
-      // Whole-namespace denials exclude a server before discovery, keeping safe names stable.
-      unnamedServerDenials.push(`${safeName}${TOOL_NAME_SEPARATOR}*`);
-    }
-  }
-  if (namedServerCount === 0) {
+  if (Object.keys(loaded.mcpServers).length === 0) {
     return undefined;
   }
   const mcpModule = import("../agents/agent-bundle-mcp-tools.js");
@@ -80,7 +59,7 @@ export function acquireCronScriptMcpTools(
       workspaceDir: params.workspaceDir,
       agentDir: params.agentDir,
       cfg: params.config,
-      toolDenylist: [...explicitToolDenylist, ...unnamedServerDenials],
+      toolDenylist: explicitToolDenylist,
     }),
   }));
   const materialization = acquisition.then(({ mcp, lease }) =>
@@ -93,9 +72,7 @@ export function acquireCronScriptMcpTools(
   const surface = materialization.then((materialized) => {
     const applyPolicy = (candidates: AnyAgentTool[]) =>
       applyFinalEffectiveToolPolicy({
-        bundledTools: applyEmbeddedAttemptToolsAllow(candidates, params.toolsAllow, {
-          toolMeta: (tool) => getPluginToolMeta(tool),
-        }),
+        bundledTools: candidates,
         config: params.config,
         workspaceDir: params.workspaceDir,
         conversationCapabilityProfile: params.capabilityProfile,

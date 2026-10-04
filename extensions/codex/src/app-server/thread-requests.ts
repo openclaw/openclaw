@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -31,7 +30,6 @@ import {
 } from "./protocol.js";
 import { isCodexResponsesOAuthRun } from "./responses-oauth.js";
 import type { CodexThreadConfigurationOptions } from "./thread-configuration-options.js";
-import { fingerprintJsonObject } from "./thread-fingerprints.js";
 import {
   CODEX_NATIVE_PERSONALITY_NONE,
   resolveCodexAppServerModelProvider,
@@ -50,8 +48,8 @@ const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
   "features.code_mode_only": false,
   // Native code mode replaces OpenClaw's own exec/read/write/edit tools with the
-  // Codex shell, and cron creator caps project read/exec on the same premise, so
-  // request the shell explicitly instead of relying on the codex-home default.
+  // Codex shell, so request it explicitly instead of relying on the
+  // codex-home default.
   "features.shell_tool": true,
   "features.apply_patch_streaming_events": true,
   suppress_unstable_features_warning: true,
@@ -162,7 +160,6 @@ export type CodexThreadConfigurationContext = CodexThreadPromptContext &
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
     | "bootstrapContextMode"
-    | "scheduledRuntimeAuthority"
     | "requireWorkspaceOnly"
   >;
 
@@ -454,12 +451,7 @@ export function buildCodexRuntimeThreadConfigForRun(
       messageOnlySourceReply ||
         params.pluginHarnessToolPolicyRestricted === true ||
         params.requireWorkspaceOnly === true
-        ? buildRestrictedToolConfigPatch(
-            restrictedToolSurfaceMcpServerNames,
-            Boolean(params.scheduledRuntimeAuthority) &&
-              !isCodexResponsesOAuthRun(params) &&
-              params.requireWorkspaceOnly !== true,
-          )
+        ? buildRestrictedToolConfigPatch(restrictedToolSurfaceMcpServerNames)
         : buildCodexRingZeroThreadConfigPatch(
             params,
             options.hostSystemAgentActive,
@@ -496,10 +488,7 @@ export function buildCodexRingZeroThreadConfigPatch(
   };
 }
 
-function buildRestrictedToolConfigPatch(
-  inheritedMcpServerNames: readonly string[],
-  scheduledAppAuthorityActive = false,
-): JsonObject {
+function buildRestrictedToolConfigPatch(inheritedMcpServerNames: readonly string[]): JsonObject {
   // Restricted turns already send environments: [] and disable native code mode.
   // Remove Codex-owned tool sources here; project-document suppression belongs to
   // ring-zero, message-only, and tool-disabled context policy at the caller.
@@ -508,12 +497,6 @@ function buildRestrictedToolConfigPatch(
   );
   return {
     ...CODEX_RING_ZERO_THREAD_CONFIG,
-    ...(scheduledAppAuthorityActive
-      ? {
-          "features.apps": true,
-          "orchestrator.mcp.enabled": true,
-        }
-      : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcp_servers: mcpServers } : {}),
   };
 }
@@ -566,24 +549,13 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
     restrictedToolSurface: boolean;
     requiredNativeShell?: boolean;
     additionalDeniedFeatures?: readonly string[];
-    allowedManagedRequirementsFingerprint?: string;
     allowConfiguredManagedHooks?: boolean;
     privateManagedHooksPresent?: boolean;
   },
   signal?: AbortSignal,
 ): Promise<{ enableManagedHooks: boolean }> {
   const requirements = await readCodexManagedRequirements(client, signal);
-  const managedRequirementsFingerprint = buildCodexManagedRequirementsFingerprint(requirements);
-  const managedRequirementsMatch =
-    options.allowedManagedRequirementsFingerprint !== undefined &&
-    managedRequirementsFingerprint === options.allowedManagedRequirementsFingerprint;
-  const managedHooksAllowed =
-    managedRequirementsMatch || options.allowConfiguredManagedHooks === true;
-  if (options.allowedManagedRequirementsFingerprint !== undefined && !managedRequirementsMatch) {
-    throw new Error(
-      "Codex managed requirements changed since this automation was authorized; reauthorize the automation from a fresh owner turn",
-    );
-  }
+  const managedHooksAllowed = options.allowConfiguredManagedHooks === true;
   if (requirements === null) {
     return {
       enableManagedHooks: managedHooksAllowed && options.privateManagedHooksPresent === true,
@@ -646,22 +618,6 @@ export async function assertCodexManagedRequirementsDoNotOverrideToolPolicy(
         options.privateManagedHooksPresent === true ||
         requiredHooksEnabled === true),
   };
-}
-
-/** Hashes the exact managed requirements without retaining their hook commands or policy details. */
-function buildCodexManagedRequirementsFingerprint(requirements: JsonObject | null): string {
-  const fingerprint = fingerprintJsonObject({ version: 1, requirements });
-  return crypto.createHash("sha256").update(fingerprint).digest("hex");
-}
-
-/** Reads and fingerprints the exact managed requirements active on this app-server. */
-export async function readCodexManagedRequirementsFingerprint(
-  client: Pick<CodexAppServerClient, "request">,
-  signal?: AbortSignal,
-): Promise<string> {
-  return buildCodexManagedRequirementsFingerprint(
-    await readCodexManagedRequirements(client, signal),
-  );
 }
 
 async function readCodexManagedRequirements(

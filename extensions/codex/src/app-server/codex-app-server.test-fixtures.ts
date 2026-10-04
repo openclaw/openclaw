@@ -1,4 +1,3 @@
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { vi } from "vitest";
 import type { CodexAppServerClient } from "./client.js";
@@ -29,22 +28,6 @@ export function createCodexRequestRecorder() {
       }
       return pending.promise;
     },
-  };
-}
-
-export function createCronAuthorityCapabilityFixture(
-  runId: string,
-): NonNullable<EmbeddedRunAttemptParams["cronCreatorAuthorityCapability"]> {
-  // Mirror the gateway-minted capability instead of casting a partial fixture;
-  // transcript tools consume callerOrigin and future contract drift must type-fail.
-  const abortController = new AbortController();
-  return {
-    active: true,
-    abort: () => abortController.abort(),
-    callerOrigin: { kind: "local" },
-    grantTokens: new Set<string>(),
-    runId,
-    signal: abortController.signal,
   };
 }
 

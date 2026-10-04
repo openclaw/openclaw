@@ -98,8 +98,6 @@ export type CodexStartOrResumeThreadParams = Omit<
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
-  /** Versioned owner of configured MCP for scheduled dynamic-tool execution. */
-  configuredMcpOwnershipVersion?: 1;
   appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;

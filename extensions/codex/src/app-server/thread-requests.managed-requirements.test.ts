@@ -1,8 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  assertCodexManagedRequirementsDoNotOverrideToolPolicy,
-  readCodexManagedRequirementsFingerprint,
-} from "./thread-requests.js";
+import { assertCodexManagedRequirementsDoNotOverrideToolPolicy } from "./thread-requests.js";
 
 const managedRequirements = {
   hooks: {
@@ -21,34 +18,6 @@ describe("configured app-server managed requirements", () => {
         allowConfiguredManagedHooks: true,
       }),
     ).resolves.toEqual({ enableManagedHooks: true });
-  });
-
-  it("admits the exact managed requirements captured for a scheduled restricted turn", async () => {
-    const request = vi.fn(async () => ({ requirements: managedRequirements }));
-    const managedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
-      request,
-    } as never);
-
-    await expect(
-      assertCodexManagedRequirementsDoNotOverrideToolPolicy({ request } as never, {
-        restrictedToolSurface: true,
-        allowedManagedRequirementsFingerprint: managedRequirementsFingerprint,
-      }),
-    ).resolves.toEqual({ enableManagedHooks: true });
-  });
-
-  it("fails closed when managed requirements change after scheduled authorization", async () => {
-    const request = vi.fn(async () => ({ requirements: managedRequirements }));
-    const allowedManagedRequirementsFingerprint = await readCodexManagedRequirementsFingerprint({
-      request: vi.fn(async () => ({ requirements: { hooks: {} } })),
-    } as never);
-
-    await expect(
-      assertCodexManagedRequirementsDoNotOverrideToolPolicy({ request } as never, {
-        restrictedToolSurface: true,
-        allowedManagedRequirementsFingerprint,
-      }),
-    ).rejects.toThrow("managed requirements changed");
   });
 
   it("keeps an explicit managed disable above the attested hook inventory", async () => {

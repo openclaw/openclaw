@@ -257,7 +257,11 @@ export function hasCronCreatorGrantProvenance(
     input.cronCreatorAuthorityGrant,
     runId,
   );
-  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
+  return Boolean(
+    provenance?.capturesRuntimeAuthority === false ||
+    provenance?.callerOrigin ||
+    provenance?.channelRequester,
+  );
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {

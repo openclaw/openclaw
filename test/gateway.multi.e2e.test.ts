@@ -164,7 +164,7 @@ describe("gateway multi-instance e2e", () => {
             schedule: { kind: "every", everyMs: 3_600_000 },
             sessionTarget: "isolated",
             wakeMode: "now",
-            payload: { kind: "agentTurn", message: "run canary", toolsAllow: [] },
+            payload: { kind: "agentTurn", message: "run canary" },
             delivery: { mode: "none" },
           });
           const target = await managerClient.request<{ id: string }>("cron.add", {

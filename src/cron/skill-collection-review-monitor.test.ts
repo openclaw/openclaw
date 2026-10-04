@@ -35,7 +35,6 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       payload: {
         kind: "agentTurn",
         message: expect.any(String),
-        toolsAllow: ["ls", "read", "write", "edit", "apply_patch", "exec", "process"],
       },
       schedule: {
         kind: "every",
@@ -46,7 +45,6 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       delivery: { mode: "none" },
       wakeMode: "next-heartbeat",
     });
-    expect(specs[0]?.input.payload).not.toHaveProperty("toolsAllowIsDefault");
     const repeated = Array.from(
       resolveSkillCollectionReviewMonitorSpecs(cfg, [], { schedulerSeed: "test-seed" }),
     );

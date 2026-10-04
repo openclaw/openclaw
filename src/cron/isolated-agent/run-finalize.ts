@@ -180,7 +180,6 @@ export async function finalizeCronRun(params: {
       error: params.abortReason(),
       replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
-        prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("cron-setup", params.abortReason()),
       ),
@@ -207,7 +206,6 @@ export async function finalizeCronRun(params: {
       error,
       replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
-        prepared.preflightDiagnostics,
         createCronRunDiagnosticsFromAgentResult(finalRunResult, { finalStatus: "error" }),
         createCronRunDiagnosticsFromError("agent-run", error),
       ),
@@ -234,10 +232,9 @@ export async function finalizeCronRun(params: {
   if (hasFatalErrorPayload && hasTerminalToolFailure) {
     summary = CODE_MODE_MCP_CATALOG_MISS_MESSAGE;
   }
-  const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
+  const runDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
-  const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
   const resolveRunOutcome = (
     result?: Partial<DispatchCronDeliveryState> & { delivery?: CronDeliveryTrace },
   ) => {

@@ -109,10 +109,20 @@ describe("cron script MCP namespace", () => {
     { mode: "payload", server: "sources", tool: "list_sources", cursor: "c1" },
     { mode: "trigger", server: "team__sources", tool: "*", cursor: null },
   ] as const)(
-    "calls authorized MCP tools and retires the runtime ($mode, $server/$tool)",
+    "calls MCP tools allowed by current agent policy and retires the runtime ($mode, $server/$tool)",
     async ({ mode, server, tool, cursor }) => {
       const fixture = createMcpFixture({
-        extra: tool === "*" ? { tools: { deny: ["team__sources__delete_source"] } } : undefined,
+        extra: {
+          tools: {
+            allow: [`${server}__${tool}`],
+            deny: [
+              "broken__*",
+              ...(server === "sources"
+                ? ["team__sources__*"]
+                : ["sources__*", "team__sources__delete_source"]),
+            ],
+          },
+        },
       });
       const runtime = createCronScriptRuntime({ config: fixture.config });
       const input = {
@@ -122,7 +132,6 @@ describe("cron script MCP namespace", () => {
           server === "sources" ? "MCP.sources" : "MCP.teamSources",
         ),
         state: cursor === null ? null : { cursor },
-        toolsAllow: [`${server}__${tool}`],
       };
 
       const result =
@@ -145,44 +154,36 @@ describe("cron script MCP namespace", () => {
     },
   );
 
-  it.each([
-    { caps: "a wildcard", toolsAllow: ["*"], script: "typeof MCP" },
-    { caps: "an unprefixed glob", toolsAllow: ["sour*"], script: "typeof MCP" },
-    { caps: "no toolsAllow", toolsAllow: undefined, script: "typeof MCP" },
-    { caps: "a script that never mentions it", toolsAllow: ["sources__*"], script: '"undefined"' },
-  ])("starts no MCP server for $caps", async ({ toolsAllow, script }) => {
+  it("starts no MCP server for a script that never mentions it", async () => {
     const fixture = createMcpFixture();
     const runtime = createCronScriptRuntime({ config: fixture.config });
 
     await expect(
       runtime.evaluateTrigger({
         jobId: "mcp-not-named",
-        script: `return { fire: false, state: ${script} };`,
+        script: 'return { fire: false, state: "undefined" };',
         state: null,
-        toolsAllow,
       }),
     ).resolves.toEqual({ kind: "evaluated", fire: false, state: "undefined" });
     expect(fixture.starts()).toBe(0);
     expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
   });
 
-  it("runs past a failed named server and names it when the script fails", async () => {
-    const runtime = createCronScriptRuntime({ config: createMcpFixture().config });
-    const toolsAllow = ["sources__list_sources", "broken__*"];
+  it("runs past a failed configured server and names it when the script fails", async () => {
+    const fixture = createMcpFixture({ extra: { tools: { deny: ["team__sources__*"] } } });
+    const runtime = createCronScriptRuntime({ config: fixture.config });
 
     await expect(
       runtime.evaluateTrigger({
         jobId: "mcp-broken",
         script: QUIET_HOUR_SCRIPT,
         state: null,
-        toolsAllow,
       }),
     ).resolves.toMatchObject({ kind: "evaluated", fire: false });
     const result = await runtime.evaluateTrigger({
       jobId: "mcp-broken",
       script: "await MCP.broken.ping({}); return { fire: false };",
       state: null,
-      toolsAllow,
     });
 
     expect(result).toMatchObject({ kind: "error", code: "internal_error" });
@@ -205,6 +206,7 @@ describe("cron script MCP namespace", () => {
       try {
         const port = (listener.address() as AddressInfo).port;
         const fixture = createMcpFixture({
+          extra: { tools: { deny: ["team__sources__*", "broken__*"] } },
           serverArgs: [`${port}`, outcome === "aborted" ? "hang" : "reply"],
         });
         const runtime = createCronScriptRuntime({ config: fixture.config });
@@ -213,7 +215,6 @@ describe("cron script MCP namespace", () => {
           jobId: `mcp-stubborn-${outcome}`,
           script: "await MCP.sources.listSources({}); return { fire: false };",
           state: null,
-          toolsAllow: ["sources__*"],
           abortSignal: controller.signal,
         });
         // The server holds this socket until it is killed, so its close proves retirement.

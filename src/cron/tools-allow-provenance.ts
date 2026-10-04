@@ -81,10 +81,9 @@ export function normalizeCronToolsAllowProvenance(
 
 /** Caller origin is usable only within the job's persisted account policy. */
 export function resolveCronAuthenticatedCallerOrigin(
-  job: Pick<CronStoredJob, "payload" | "owner" | "scheduledToolPolicy" | "toolsAllowProvenance">,
+  job: Pick<CronStoredJob, "owner" | "scheduledToolPolicy" | "toolsAllowProvenance">,
 ) {
   const policy = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
     owner: job.owner,
     scheduledToolPolicy: job.scheduledToolPolicy,
   });
@@ -97,10 +96,9 @@ export function resolveCronAuthenticatedCallerOrigin(
 
 /** Requester facts are usable only within the existing job owner and account policy. */
 export function resolveCronAuthenticatedChannelRequester(
-  job: Pick<CronStoredJob, "payload" | "owner" | "scheduledToolPolicy" | "toolsAllowProvenance">,
+  job: Pick<CronStoredJob, "owner" | "scheduledToolPolicy" | "toolsAllowProvenance">,
 ): CronAuthenticatedChannelRequester | undefined {
   const policy = resolveCronScheduledToolPolicy({
-    toolsAllow: job.payload.toolsAllow,
     owner: job.owner,
     scheduledToolPolicy: job.scheduledToolPolicy,
   });

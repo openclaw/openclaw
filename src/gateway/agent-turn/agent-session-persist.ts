@@ -23,9 +23,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
-  normalizeCronToolsAllowExecTarget,
-  resolveCronToolsAllowExecTargetRecoveryError,
-  restoreCronPinnedExecGrant,
 } from "../../cron/scheduled-tool-policy.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -267,31 +264,14 @@ export async function persistAgentSessionPhase(params: {
                   "cron run continuation has no reusable native CLI session",
                 );
               }
-              const restoredCronContinuationError = resolveCronToolsAllowExecTargetRecoveryError({
-                requirement: marker.toolsAllowExecTargetRequirement,
-                execTarget: marker.toolsAllowExecTarget,
-              });
-              if (restoredCronContinuationError) {
-                rejectMutation(ErrorCodes.UNAVAILABLE, restoredCronContinuationError);
-              }
-              const restoredToolsAllow = restoreCronPinnedExecGrant({
-                toolsAllow: marker.toolsAllow,
-                requirement: marker.toolsAllowExecTargetRequirement,
-                execTarget: marker.toolsAllowExecTarget,
-              });
               const scheduledToolPolicy = normalizeCronScheduledToolPolicy(
                 marker.scheduledToolPolicy,
-              );
-              const toolsAllowExecTarget = normalizeCronToolsAllowExecTarget(
-                marker.toolsAllowExecTarget,
               );
               restoredCronContinuation = {
                 ...params.restoredCronContinuationIdentity,
                 provider,
                 model,
                 ...(freshEntry.thinkingLevel ? { thinking: freshEntry.thinkingLevel } : {}),
-                ...(restoredToolsAllow !== undefined ? { toolsAllow: restoredToolsAllow } : {}),
-                ...(marker.toolsAllowIsDefault === true ? { toolsAllowIsDefault: true } : {}),
                 ...(scheduledToolPolicy ? { scheduledToolPolicy } : {}),
                 ...(scheduledToolPolicy?.mode === "account"
                   ? {
@@ -300,7 +280,6 @@ export async function persistAgentSessionPhase(params: {
                       ),
                     }
                   : {}),
-                ...(toolsAllowExecTarget ? { toolsAllowExecTarget } : {}),
                 ...(marker.cliSessionBindingFacts
                   ? { cliSessionBindingFacts: { ...marker.cliSessionBindingFacts } }
                   : {}),

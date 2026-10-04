@@ -13,13 +13,7 @@ function applyToolsAllowPatch(
   if (Array.isArray(patch.toolsAllow)) {
     const toolsAllow = patch.toolsAllow;
     payload.toolsAllow = toolsAllow;
-    // Same-kind edits keep the marker whenever the default-stamped list is
-    // unchanged — even when the patch omits toolsAllowIsDefault, because the
-    // cron tool's model-facing schema never sends it. Dropping the marker on an
-    // echoed list silently reclassifies "default" as an explicit restriction,
-    // which fail-closes the next run on CLI backends that cannot enforce
-    // runtime toolsAllow. Kind replacements (no existing payload) still require
-    // the cron-tool-stamped marker on the patch itself.
+    // Preserve the legacy list and default marker together for rollback.
     const existingDefaultUnchanged =
       existing?.toolsAllowIsDefault === true &&
       Array.isArray(existing.toolsAllow) &&
@@ -42,8 +36,7 @@ function applyToolsAllowPatch(
 export function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   if (patch.kind !== existing.kind) {
     const next = buildPayloadFromPatch(patch);
-    // toolsAllow is shared security state. Kind changes must not silently
-    // reopen a restricted trigger runtime; null remains the explicit clear.
+    // Keep legacy list data through kind changes; null remains the explicit clear.
     if (patch.toolsAllow === undefined && Array.isArray(existing.toolsAllow)) {
       next.toolsAllow = [...existing.toolsAllow];
       if (existing.toolsAllowIsDefault === true) {

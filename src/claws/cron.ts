@@ -5,7 +5,6 @@ import { resolveCronJobConfigRevision } from "../cron/config-revision.js";
 import { cronJobDefinitionFromReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { createTrustedCronScheduledToolPolicy } from "../cron/scheduled-tool-policy.js";
-import { applyDefaultCronToolsAllow } from "../cron/tools-allow.js";
 import type { CronJob } from "../cron/types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -251,8 +250,8 @@ export function clawCronGatewayJobMatchesRef(
     return false;
   }
   const comparableLive = { ...live, payload: { ...live.payload } } as CronJob;
-  applyDefaultCronToolsAllow(expected);
-  applyDefaultCronToolsAllow(comparableLive);
+  delete comparableLive.payload.toolsAllow;
+  delete comparableLive.payload.toolsAllowIsDefault;
   const expectedWithPolicy = {
     ...expected,
     ...(comparableLive.scheduledToolPolicy

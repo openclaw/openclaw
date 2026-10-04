@@ -45,9 +45,6 @@ export async function cleanupCodexAttempt(
   const { activeTurnId, abortListener, handle, freezeRunTerminalOutcome } = activeTurn;
   resourceState.releaseInferenceContext?.();
   resourceState.releaseInferenceContext = undefined;
-  // Exact-thread cron authority exists only while this creator turn owns the
-  // live client/thread. Retained model callbacks must fail after cleanup begins.
-  prompt.context.attemptTools.scheduledAppAuthoritySourceRef.current = undefined;
   // Finalization can throw before freezing. Close cancellation admission before
   // any teardown await so it cannot replace the cleanup promise being joined.
   freezeRunTerminalOutcome();

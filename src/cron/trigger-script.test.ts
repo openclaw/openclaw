@@ -161,7 +161,6 @@ describe("cron trigger script evaluator", () => {
           agentId: "codex",
           script: "return { fire: false }",
           state: null,
-          toolsAllow: [],
         });
       } else {
         await runtime.executePayload({
@@ -169,7 +168,6 @@ describe("cron trigger script evaluator", () => {
           agentId: "codex",
           script: "return { notify: 'ok' }",
           state: null,
-          toolsAllow: [],
         });
       }
 
@@ -178,72 +176,6 @@ describe("cron trigger script evaluator", () => {
       expect(spawnSync("git", ["add", "-A"], { cwd: parentRepo }).status).toBe(0);
     },
   );
-
-  it.each([
-    { host: "auto", expected: { kind: "evaluated", fire: false } },
-    {
-      host: "node",
-      expected: {
-        kind: "error",
-        code: "internal_error",
-        error: expect.stringContaining(
-          "exec host not allowed (requested gateway; configured host is node",
-        ),
-      },
-    },
-  ] as const)(
-    "honors current host $host for a canonically captured pinned exec cap",
-    async ({ host, expected }) => {
-      const workspaceDir = tempDirs.make("openclaw-cron-canonical-cap-");
-      // Automatic placement must honor the pin despite the script's node request;
-      // an explicit current node restriction must reject the captured Gateway host.
-      const config: OpenClawConfig = {
-        agents: { defaults: { workspace: workspaceDir } },
-        tools: {
-          exec: {
-            host,
-            node: "configured-node-must-not-run",
-            security: "full",
-            ask: "off",
-          },
-        },
-      };
-      const evaluate = createCronScriptRuntime({ config }).evaluateTrigger;
-
-      await expect(
-        evaluate({
-          jobId: "job-canonical-pinned-exec",
-          script:
-            'await exec({ command: "printf openclaw-canonical-ok", host: "node", node: "remote" }); return { fire: false };',
-          state: null,
-          toolsAllow: ["exec", "process"],
-          scheduledToolPolicy: { version: 1, mode: "trusted" },
-          execTarget: { version: 1, host: "gateway" },
-        }),
-      ).resolves.toEqual(expected);
-    },
-  );
-
-  it("keeps an uncanonicalized alias-name cap fail-closed for exec", async () => {
-    const workspaceDir = tempDirs.make("openclaw-cron-alias-collision-");
-    const evaluate = createCronScriptRuntime({
-      config: {
-        agents: { defaults: { workspace: workspaceDir } },
-        tools: { exec: { host: "gateway", security: "full", ask: "off" } },
-      } as OpenClawConfig,
-    }).evaluateTrigger;
-
-    const result = await evaluate({
-      jobId: "job-colliding-gateway-exec",
-      script: 'await exec({ command: "printf must-not-run" }); return { fire: false };',
-      state: null,
-      toolsAllow: ["gateway_exec"],
-      scheduledToolPolicy: { version: 1, mode: "trusted" },
-    });
-
-    expect(result).toMatchObject({ kind: "error", code: "internal_error" });
-    expect(result.kind === "error" ? result.error : "").toContain("exec is not defined");
-  });
 
   it("prefers a valid returned value and injects trigger state", async () => {
     const runHeadless = vi.fn(async (_params: HeadlessParams) =>
@@ -451,32 +383,6 @@ describe("cron trigger script evaluator", () => {
     }
   });
 
-  it("invalidates a cached runtime when toolsAllow changes", async () => {
-    const config = {} as OpenClawConfig;
-    const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
-    const runHeadless = vi.fn(async () => completed({ value: { fire: false } }));
-    const evaluate = createCronTriggerEvaluator({ config, prepareRuntime, runHeadless });
-
-    await evaluate({
-      jobId: "job-tools-allow",
-      script: "return result",
-      state: null,
-      toolsAllow: ["probe"],
-    });
-    await evaluate({
-      jobId: "job-tools-allow",
-      script: "return result",
-      state: null,
-      toolsAllow: ["exec"],
-    });
-
-    expect(prepareRuntime).toHaveBeenCalledTimes(2);
-    expect(prepareRuntime.mock.calls.map(([params]) => params.toolsAllow)).toEqual([
-      ["probe"],
-      ["exec"],
-    ]);
-  });
-
   it("forwards scheduled provenance and invalidates cached authority when it changes", async () => {
     const config = {} as OpenClawConfig;
     const prepareRuntime = vi.fn(async (_params: PrepareParams) => createPreparedRuntime(config));
@@ -491,7 +397,6 @@ describe("cron trigger script evaluator", () => {
         jobId: "job-owner-session",
         script: "return result",
         state: null,
-        toolsAllow: ["write"],
         scheduledToolPolicy: {
           version: 1,
           mode: "account",

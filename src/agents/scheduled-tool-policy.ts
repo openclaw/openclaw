@@ -6,7 +6,7 @@ import {
   type CronScheduledToolPolicy,
 } from "../cron/scheduled-tool-policy.js";
 
-/** Trusted runtime context for a scheduled run with a server-stamped tool cap. */
+/** Trusted owner context used to resolve current agent and channel permissions. */
 export type ScheduledToolPolicyContext = (
   | Extract<CronScheduledToolPolicy, { mode: "trusted" }>
   | (Extract<CronScheduledToolPolicy, { mode: "account" }> & {
@@ -41,16 +41,13 @@ export function resolveScheduledToolCallerContext(params: {
   };
 }
 
-/** Builds scheduled policy context only when both the cap and trusted owner exist. */
+/** Builds owner context independently of retired per-job tool snapshots. */
 export function resolveScheduledToolPolicyContext(params: {
   toolsAllow?: readonly string[];
   scheduledToolPolicy?: unknown;
   callerOrigin?: unknown;
   execTarget?: unknown;
 }): ScheduledToolPolicyContext | undefined {
-  if (params.toolsAllow === undefined) {
-    return undefined;
-  }
   const rawPolicy = params.scheduledToolPolicy;
   // Already-resolved contexts carry context-only fields (ownerOrigin,
   // execTarget) that the strict persisted-policy normalizer rejects; rebuild
@@ -70,29 +67,13 @@ export function resolveScheduledToolPolicyContext(params: {
   if (!policy) {
     return undefined;
   }
-  // Accept the persisted `{version: 1, host}` shape and an already-resolved
-  // context's bare `{host}` shape; anything else keeps the baseline (no pin).
-  const rawExecTarget =
-    params.execTarget ?? (isRecord(rawPolicy) ? rawPolicy.execTarget : undefined);
-  const pinned =
-    isRecord(rawExecTarget) &&
-    rawExecTarget.host === "gateway" &&
-    (rawExecTarget.version === undefined || rawExecTarget.version === 1)
-      ? {
-          execTarget: {
-            host: "gateway" as const,
-            ...(rawExecTarget.ask === "always" ? { ask: "always" as const } : {}),
-          },
-        }
-      : {};
   if (policy.mode === "trusted") {
-    return { ...policy, ...pinned };
+    return policy;
   }
   return {
     ...policy,
     ownerOrigin: normalizeCronScheduledToolCallerOrigin(
-      params.callerOrigin ?? (isRecord(rawPolicy) ? rawPolicy.ownerOrigin : undefined),
+      (isRecord(rawPolicy) ? rawPolicy.ownerOrigin : undefined) ?? params.callerOrigin,
     ),
-    ...pinned,
   };
 }

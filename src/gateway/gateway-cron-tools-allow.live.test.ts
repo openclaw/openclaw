@@ -7,11 +7,7 @@ import {
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
-import {
-  extractNonEmptyAssistantText,
-  isLiveTestEnabled,
-  logLiveProgress,
-} from "../agents/live-test-helpers.js";
+import { isLiveTestEnabled, logLiveProgress } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { CronRunLogEntry } from "../cron/run-log-types.js";
 import type { CronJob } from "../cron/types.js";
@@ -34,9 +30,9 @@ async function cliJson(instance: OpenClawTestInstance, args: string[]): Promise<
   return JSON.parse(result.stdout);
 }
 
-describeLive("cron tool allowlists through live harnesses", () => {
+describeLive("cron current-agent tools through live harnesses", () => {
   it.each(["openclaw", "codex"] as const)(
-    "%s preserves empty caps and applies edited names, groups, globs, and aliases",
+    "%s executes configured agent tools and records each isolated run",
     async (runtime) => {
       const instance = await createOpenClawTestInstance({
         name: `cron-tools-${runtime}`,
@@ -78,7 +74,7 @@ describeLive("cron tool allowlists through live harnesses", () => {
                 models: { [MODEL_KEY]: { agentRuntime: { id: runtime } } },
                 sandbox: { mode: "off" },
               },
-              entries: { probe: { workspace } },
+              entries: { probe: { workspace, tools: { allow: ["read", "exec"] } } },
             },
             tools: { exec: { host: "gateway", security: "full", ask: "off" } },
             secrets: { providers: { default: { source: "env" } } },
@@ -101,7 +97,7 @@ describeLive("cron tool allowlists through live harnesses", () => {
             "cron",
             "add",
             "--name",
-            `allowlist-${runtime}`,
+            `current-agent-tools-${runtime}`,
             "--at",
             new Date(Date.now() + 86_400_000).toISOString(),
             "--agent",
@@ -113,32 +109,24 @@ describeLive("cron tool allowlists through live harnesses", () => {
             "--message",
             "Reply READY.",
           ];
-          const defaultJob = (await cliJson(instance, addArgs)) as CronJob;
-          expect(defaultJob.payload).toMatchObject({ toolsAllow: ["*"] });
-          await cliJson(instance, ["cron", "rm", defaultJob.id]);
-
-          const job = (await cliJson(instance, [...addArgs, "--tools", ""])) as CronJob;
-          expect(job.payload).toMatchObject({ toolsAllow: [] });
+          const job = (await cliJson(instance, addArgs)) as CronJob;
           const sessionKeys = new Set<string>();
-          for (const cap of ["", "read", "group:fs", "r*", "bash"]) {
+          for (const toolName of ["read", "exec"]) {
             // The random contents never appear in the prompt or a previous run.
             const marker = `CRON_FILE_${randomUUID()}`;
             const file = path.join(workspace, `probe-${randomUUID()}.txt`);
             await fs.writeFile(file, `${marker}\n`);
             const instruction =
-              cap === "bash"
+              toolName === "exec"
                 ? `Use the exec tool to run cat ${JSON.stringify(file)}.`
                 : `Use the read tool to read ${JSON.stringify(file)}.`;
-            const updated = (await cliJson(instance, [
+            await cliJson(instance, [
               "cron",
               "edit",
               job.id,
-              "--tools",
-              cap,
               "--message",
-              `${instruction} Reply with the file contents. If no tools are available, reply exactly NO_TOOLS.`,
-            ])) as CronJob;
-            expect(updated.payload).toMatchObject({ toolsAllow: cap ? [cap] : [] });
+              `${instruction} Reply with the file contents.`,
+            ]);
 
             const completed = (await cliJson(instance, [
               "cron",
@@ -190,33 +178,19 @@ describeLive("cron tool allowlists through live harnesses", () => {
             );
             const results = history.messages.filter((message) => message.role === "toolResult");
             expect(assistants.length, JSON.stringify(history)).toBeGreaterThan(0);
-            if (cap === "") {
-              expect(calls).toEqual([]);
-              expect(results).toEqual([]);
-              expect(JSON.stringify(assistants)).not.toContain(marker);
-              const assistantText = assistants
-                .map((message) =>
-                  typeof message.content === "string"
-                    ? message.content.trim()
-                    : extractNonEmptyAssistantText(message.content),
-                )
-                .filter(Boolean)
-                .join(" ");
-              expect(assistantText).toBe("NO_TOOLS");
-            } else {
-              const toolName = cap === "bash" ? "exec" : "read";
-              const call = calls.find((entry) => entry.name === toolName);
-              expect(call, `${runtime} cap ${cap}: expected ${toolName} call`).toBeDefined();
-              const result = results.find((entry) => entry.toolCallId === call?.id);
-              expect(result).toMatchObject({ toolName, isError: false });
-              expect(JSON.stringify(result?.content)).toContain(marker);
-            }
-            logLiveProgress(`cron ${runtime}: tools=${JSON.stringify(cap)} passed (${MODEL_KEY})`);
+            const call = calls.find((entry) => entry.name === toolName);
+            expect(call, `${runtime}: expected ${toolName} call`).toBeDefined();
+            const result = results.find((entry) => entry.toolCallId === call?.id);
+            expect(result).toMatchObject({ toolName, isError: false });
+            expect(JSON.stringify(result?.content)).toContain(marker);
+            logLiveProgress(
+              `cron ${runtime}: ${toolName} completed with saved history (${MODEL_KEY})`,
+            );
           }
         },
         () => instance.cleanup(),
       );
     },
-    6 * RUN_TIMEOUT_MS,
+    2 * RUN_TIMEOUT_MS,
   );
 });

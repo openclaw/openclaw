@@ -530,7 +530,6 @@ describeLive("cron scheduling through an isolated Gateway", () => {
           payload: {
             kind: "command",
             argv: [process.execPath, "-e", "process.exit(1)"],
-            toolsAllow: [],
           },
           delivery: { mode: "none" },
           failureAlert: false,

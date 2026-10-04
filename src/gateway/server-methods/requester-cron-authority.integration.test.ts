@@ -186,23 +186,13 @@ async function createStoredJob(
     },
     {
       scheduledToolPolicy: { version: 1, mode: "trusted" },
-      captureRuntimeAuthority: () => ({
-        version: 1,
-        runtimeId: "codex",
-        namespace: "codex.apps",
-        payload: { apps: [{ id: "calendar" }] },
-      }),
     },
   );
   const before = await read();
-  const runtimeAuthority = before[0]!.runtimeAuthority;
-  expect(runtimeAuthority).toBeDefined();
   return {
     context,
     before,
     read,
-    runtimeAuthority,
-    readRuntimeAuthority: async () => (await read())[0]!.runtimeAuthority,
     update: (identity: AgentRuntimeIdentity) => updateWithGrantFor("cron.update", identity),
     updateWithGrantFor,
   };
@@ -408,7 +398,6 @@ describe("requester continuation persisted automation management", () => {
             payload: { kind: "agentTurn", message: "Reviewed health check" },
           },
         ]);
-        expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
       } else {
         // An absent or wrong-method grant stops at the method-scope fence.
         expect(error).toMatchObject({ message: "missing scope: operator.admin" });

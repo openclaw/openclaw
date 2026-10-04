@@ -9,12 +9,11 @@ import {
   type ExecApprovalDecision,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  captureFinalCodexCronCreatorToolAllowlist,
   formatMcpCodexApprovalRemedy,
   materializeStaticMcpToolsForHarnessRun,
 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { formatStageTimings } from "openclaw/plugin-sdk/time-runtime";
-import { resolveCodexPluginsPolicy, shouldAutoApproveCodexAppServerApprovals } from "./config.js";
+import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
 import {
   buildDynamicTools,
   resolveCodexMessageToolProvider,
@@ -24,10 +23,7 @@ import {
   filterCodexDynamicTools,
   resolveCodexDynamicToolsLoadingForRuntime,
 } from "./dynamic-tool-profile.js";
-import {
-  createCodexDynamicToolBridge,
-  projectCodexExecutableDynamicTools,
-} from "./dynamic-tools.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   resolveInactiveCodexHeartbeatResponseDescriptor,
   selectInactiveCodexHeartbeatResponseTool,
@@ -41,11 +37,6 @@ import { isCodexResponsesOAuth } from "./responses-oauth.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
-import {
-  buildScheduledCodexAppServerConnectionIdentity,
-  captureScheduledCodexAppAuthority,
-  resolveScheduledCodexAppCreatorCaptureDecision,
-} from "./scheduled-app-authority.js";
 import { releaseLeasedSharedCodexAppServerClient } from "./shared-client.js";
 
 export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
@@ -59,9 +50,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     nativeProviderWebSearchSupport,
     hookChannelId,
     codexMcpToolOverrides,
-    authenticatedScheduledMode,
     configuredMcpSurface,
-    canResolveScheduledConfiguredMcpCreatorAuthority,
   } = runtime;
   const {
     params,
@@ -153,56 +142,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     frameImageIdentity?: string;
   } = { value: 0 };
   const runCleanups: Array<(reason: string) => Promise<void>> = [];
-  const cronCreatorToolAllowlist: Array<string | { name: string; pluginId?: string }> = [];
-  const cronCreatorToolAllowlistCaptureRef: {
-    value?: { version: 1; source: "final-executable-surface" };
-  } = {};
-  const scheduledAppAuthoritySourceRef: {
-    current?: Omit<Parameters<typeof captureScheduledCodexAppAuthority>[0], "auth">;
-  } = {};
-  const preparedChatgptAuth =
-    connection.startupPreparedAuth?.kind === "profile" &&
-    connection.startupPreparedAuth.snapshot?.loginParams.type === "chatgptAuthTokens" &&
-    connection.startupPreparedAuth.snapshot.chatgptAccountId
-      ? {
-          kind: "prepared-profile" as const,
-          profileId: connection.startupPreparedAuth.profileId,
-          accountId: connection.startupPreparedAuth.snapshot.chatgptAccountId,
-        }
-      : undefined;
-  const configuredAppServerAuth =
-    !preparedChatgptAuth && connection.appServer.start.transport !== "stdio"
-      ? {
-          kind: "configured-app-server" as const,
-          connectionFingerprint: buildScheduledCodexAppServerConnectionIdentity(
-            connection.appServer,
-          ),
-        }
-      : undefined;
-  const scheduledCodexAppAuth = preparedChatgptAuth ?? configuredAppServerAuth;
-  const appPolicy = resolveCodexPluginsPolicy(pluginConfig);
-  const codexAppsMayBeVisible =
-    !isCodexResponsesOAuth(connection.startupPreparedAuth) &&
-    appPolicy.enabled &&
-    (appPolicy.allowAllPlugins || appPolicy.pluginPolicies.some((entry) => entry.enabled));
-  const appCreatorCapture = resolveScheduledCodexAppCreatorCaptureDecision({
-    appsMayBeVisible: codexAppsMayBeVisible,
-    authenticatedScheduledMode,
-    usesSupervisionConnection: connection.usesSupervisionConnection,
-    homeScope: connection.appServer.start.homeScope,
-    hasPreparedAccountIdentity: Boolean(preparedChatgptAuth),
-    hasConfiguredAppServerIdentity: Boolean(configuredAppServerAuth),
-  });
-  const codexAppAuthorityUnavailableReason = appCreatorCapture.unavailableReason;
-  const canResolveScheduledCodexAppAuthority = appCreatorCapture.supported;
-  const requiresScheduledCodexAppAuthority = appCreatorCapture.required;
-  const canResolveAnyScheduledCreatorAuthority =
-    canResolveScheduledConfiguredMcpCreatorAuthority || requiresScheduledCodexAppAuthority;
-  type CreatorAuthorityResolver = NonNullable<
-    Parameters<typeof buildDynamicTools>[0]["resolveCronCreatorToolAuthority"]
-  >;
-  let creatorAuthorityPromise: ReturnType<CreatorAuthorityResolver> | undefined;
-  let resolveCreatorAuthorityImpl: CreatorAuthorityResolver | undefined;
   const runtimeYieldCompletionClaim: { current?: () => boolean } = {};
   const commonToolParams = {
     // Both catalogs describe one attempt; a later attempt discovers fresh connections.
@@ -221,12 +160,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     policyAgentId,
     pluginConfig,
     profilerEnabled,
-    ...(params.cronCreatorAuthorityUnavailableReason === "queued-local-operator" &&
-    bundleMcpThreadConfig.staticServerNames.length > 0
-      ? {
-          cronCreatorAuthorityUnavailableReason: "queued-local-operator-configured-mcp" as const,
-        }
-      : {}),
     onYieldDetected: (message: string, acknowledgment: string | undefined) => {
       toolState.yieldDetected = true;
       toolState.yieldMessage = message;
@@ -237,33 +170,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       void emitCodexAppServerEvent(params, event);
     },
     computerContextEpoch,
-    ...(canResolveAnyScheduledCreatorAuthority
-      ? {
-          resolveCronCreatorToolAuthority: (options?: { signal?: AbortSignal }) => {
-            if (!resolveCreatorAuthorityImpl) {
-              throw new Error("configured MCP authority resolver was invoked before tool setup");
-            }
-            options?.signal?.throwIfAborted();
-            if (creatorAuthorityPromise) {
-              return creatorAuthorityPromise;
-            }
-            const pending = resolveCreatorAuthorityImpl(options);
-            creatorAuthorityPromise = pending;
-            void pending.catch((error: unknown) => {
-              // A tool-call timeout does not poison later cron mutations in the
-              // same live turn. Substantive discovery/auth/policy failures stay cached.
-              if (
-                creatorAuthorityPromise === pending &&
-                options?.signal?.aborted === true &&
-                error === options.signal.reason
-              ) {
-                creatorAuthorityPromise = undefined;
-              }
-            });
-            return pending;
-          },
-        }
-      : {}),
   };
   let nativeSpecs: CodexDynamicToolSpec[] | undefined;
   if (hasCodexNativeToolCatalog(mutable.startupBinding)) {
@@ -336,8 +242,6 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       onMessageToolTargetResolved: (required) => {
         requireExplicitMessageTarget = required;
       },
-      cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
-      cronCreatorToolAllowlistCaptureRef,
       onPersistentWebSearchPolicyResolved: (allowed) => {
         toolState.persistentWebSearchAllowed = allowed;
       },
@@ -468,7 +372,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
     // Requester-scoped MCP: dynamic tools on a shared thread (never harness-native MCP).
     // Specs come from the session advertised-catalog cache so fingerprints stay stable.
     scopedMcpTools =
-      authenticatedScheduledMode || params.requireWorkspaceOnly === true
+      params.requireWorkspaceOnly === true
         ? undefined
         : await materializeRequesterScopedMcpToolsForHarnessRun({
             ...mcpOptions,
@@ -573,117 +477,11 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       ),
       hookContext,
     });
-    const captureCronCreatorToolAllowlist = async () => {
-      await captureFinalCodexCronCreatorToolAllowlist(
-        cronCreatorToolAllowlist,
-        cronCreatorToolAllowlistCaptureRef,
-        toolBridge.availableTools,
-        { nativeToolSurfaceEnabled },
-      );
-      if (
-        !authenticatedScheduledMode &&
-        bundleMcpThreadConfig.staticServerNames.length > 0 &&
-        !canResolveScheduledConfiguredMcpCreatorAuthority
-      ) {
-        // Native configured MCP is model-visible but absent from this dynamic-tool list.
-        // Keep the names for finite intersections, but never certify a partial default cap.
-        delete cronCreatorToolAllowlistCaptureRef.value;
-      }
-      if (requiresScheduledCodexAppAuthority) {
-        // Native apps are not represented in the OpenClaw dynamic-tool list.
-        // Require the exact-thread resolver before certifying a default cap.
-        delete cronCreatorToolAllowlistCaptureRef.value;
-      }
-    };
-    if (canResolveAnyScheduledCreatorAuthority) {
-      resolveCreatorAuthorityImpl = async (options) => {
-        options?.signal?.throwIfAborted();
-        if (codexAppAuthorityUnavailableReason) {
-          throw new Error(codexAppAuthorityUnavailableReason);
-        }
-        const appSource = scheduledAppAuthoritySourceRef.current;
-        const runtimeAuthority =
-          canResolveScheduledCodexAppAuthority && scheduledCodexAppAuth
-            ? appSource
-              ? await captureScheduledCodexAppAuthority({
-                  ...appSource,
-                  auth: scheduledCodexAppAuth,
-                  signal: options?.signal,
-                })
-              : (() => {
-                  throw new Error(
-                    "Codex app authority is unavailable before the exact creator thread is active. Retry this automation mutation from the current owner turn.",
-                  );
-                })()
-            : undefined;
-        let materialized:
-          | Awaited<ReturnType<typeof materializeStaticMcpToolsForHarnessRun>>
-          | undefined;
-        try {
-          if (canResolveScheduledConfiguredMcpCreatorAuthority) {
-            try {
-              materialized = await materializeStaticMcpToolsForHarnessRun({
-                ...mcpOptions,
-                sessionId: `cron-authority:${params.runId}`,
-                agentId: sessionAgentId,
-                reservedToolNames: configuredMcp
-                  ? reservedToolNames
-                  : toolBridge.availableTools.map((tool) => tool.name),
-                projectedMcpServers: bundleMcpThreadConfig.configPatch?.mcp_servers,
-                retireSessionRuntimeAfterDispose: true,
-              });
-            } catch (error) {
-              const detail = error instanceof Error ? error.message : String(error);
-              throw new Error(
-                `Configured MCP discovery failed while resolving inherited automation authority: ${detail}. Retry after the server is available, or provide an explicit finite toolsAllow list containing only currently visible tools; no automation changes were saved.`,
-                { cause: error },
-              );
-            }
-          }
-          options?.signal?.throwIfAborted();
-          if (materialized?.diagnosticNotice) {
-            throw new Error(
-              `${materialized.diagnosticNotice} Sign in to the affected MCP server and retry, or provide an explicit finite toolsAllow list containing only currently visible tools. No automation changes were saved.`,
-            );
-          }
-          // App-only projections gate view callbacks, never headless scheduled capability.
-          const configuredTools = materialized
-            ? projectCodexExecutableDynamicTools({
-                tools: filterCodexDynamicTools(materialized.tools, pluginConfig),
-                hookContext,
-              }).availableTools
-            : [];
-          const authorityTools: typeof cronCreatorToolAllowlist = [];
-          const captureRef: typeof cronCreatorToolAllowlistCaptureRef = {};
-          await captureFinalCodexCronCreatorToolAllowlist(
-            authorityTools,
-            captureRef,
-            [...toolBridge.availableTools, ...configuredTools],
-            { nativeToolSurfaceEnabled },
-          );
-          if (!captureRef.value) {
-            throw new Error("cron creator authority snapshot did not produce provenance");
-          }
-          options?.signal?.throwIfAborted();
-          return Object.freeze({
-            tools: Object.freeze(authorityTools.map((entry) => Object.freeze(entry))),
-            provenance: Object.freeze(captureRef.value),
-            ...(runtimeAuthority ? { runtimeAuthority } : {}),
-          });
-        } finally {
-          await materialized?.dispose();
-        }
-      };
-    }
     return {
       tools: toolsWithScopedMcp,
       requireExplicitMessageTarget,
       configuredMcp,
       disposeTools,
-      configuredMcpOwnershipVersion:
-        configuredMcpSurface === "scheduled" ? (1 as const) : undefined,
-      captureCronCreatorToolAllowlist,
-      scheduledAppAuthoritySourceRef,
       dynamicToolParams,
       compactionPlanState,
       computerContextEpoch,

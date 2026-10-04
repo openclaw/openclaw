@@ -518,7 +518,7 @@ describe("gateway server cron", () => {
           schedule: { kind: "every", everyMs: 60_000 },
           sessionTarget: "isolated",
           wakeMode: "now",
-          payload: { kind: "agentTurn", message: "test", toolsAllow: ["*"] },
+          payload: { kind: "agentTurn", message: "test" },
           delivery: { mode: "none" },
         },
         {

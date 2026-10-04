@@ -79,7 +79,7 @@ This page is an index. Each section below moved to a child page, and every ancho
 - <a id="param-thinking"></a>[`--thinking`](/automation/cron-jobs/payloads#param-thinking)
 - <a id="param-clear-thinking"></a>[`--clear-thinking`](/automation/cron-jobs/payloads#param-clear-thinking)
 - <a id="param-light-context"></a>[`--light-context`](/automation/cron-jobs/payloads#param-light-context)
-- <a id="param-tools"></a>[`--tools`](/automation/cron-jobs/payloads#param-tools)
+- <a id="param-tools"></a>[Scheduled tool policy](/automation/cron-jobs/payloads#param-tools)
 - <a id="command-payloads"></a>[Command payloads](/automation/cron-jobs/payloads#command-payloads)
 - <a id="script-payloads"></a>[Script payloads](/automation/cron-jobs/payloads#script-payloads)
 - <a id="execution-styles"></a>[Execution styles](/automation/cron-jobs/payloads#execution-styles)

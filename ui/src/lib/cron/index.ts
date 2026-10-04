@@ -560,16 +560,12 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
 }
 
 function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpdate: boolean) {
-  // Clones carry public restrictions, not the source's capture markers or authority.
-  // Updates must omit caps so the Gateway retains that job's existing authority.
-  const toolsAllow = !isUpdate && source && "toolsAllow" in source ? source.toolsAllow : undefined;
-  const restrictions = toolsAllow ? { toolsAllow: [...toolsAllow] } : {};
   if (form.payloadKind === "systemEvent") {
     const text = form.payloadText.trim();
     if (!text) {
       throw new Error(t("cron.errors.systemEventTextRequired"));
     }
-    return { kind: "systemEvent" as const, text, ...restrictions };
+    return { kind: "systemEvent" as const, text };
   }
   if (form.payloadKind !== "agentTurn") {
     throw new Error(`Cron ${form.payloadKind} payloads are read-only in Control UI.`);
@@ -603,7 +599,6 @@ function buildCronPayload(form: CronFormState, source: CronPayload | null, isUpd
         ? { timeoutSeconds: null }
         : {}),
     ...(lightContext !== undefined ? { lightContext } : {}),
-    ...restrictions,
     ...(cloned?.fallbacks ? { fallbacks: [...cloned.fallbacks] } : {}),
     ...(cloned?.allowUnsafeExternalContent !== undefined
       ? { allowUnsafeExternalContent: cloned.allowUnsafeExternalContent }

@@ -40,20 +40,19 @@ vi.mock("./shared-client.js", async (importOriginal) => {
   };
 });
 
-function scheduledStartOptions(sessionFile: string, cwd: string) {
+function nativeStartOptions(sessionFile: string, cwd: string) {
   return {
     params: createParams(sessionFile, cwd),
     cwd,
     dynamicTools: [],
     appServer: createAppServerOptions(),
-    configuredMcpOwnershipVersion: 1 as const,
     mcpServersFingerprintEvaluated: true,
     nativeCodeModeEnabled: false,
     userMcpServersEnabled: false,
   };
 }
 
-describe("startOrResumeThread — configured MCP ownership", () => {
+describe("startOrResumeThread configured MCP ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let tempDir = "";
 
@@ -67,17 +66,17 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     resetThreadLifecycleTestFixtures();
   });
 
-  it("atomically alternates ordinary and scheduled ownership for a persistent named session without dual bindings", async () => {
+  it("replaces a legacy scheduled binding atomically without disturbing a sibling", async () => {
     const sessionFile = path.join(tempDir, "session-alternating.jsonl");
     const workspaceDir = path.join(tempDir, "workspace-alternating");
     registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
     await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-ordinary-old",
+      threadId: "thread-scheduled-old",
       clientId: "client-old",
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
-      mcpServersFingerprint: "mcp-v1",
+      configuredMcpOwnershipVersion: 1,
       dynamicToolsFingerprint: "[]",
     });
 
@@ -96,29 +95,21 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       addCloseHandler: () => () => undefined,
     } as never;
     ensureCodexAppServerClientRuntime(oldClient, { agentDir: workspaceDir });
-    await retainCodexAppServerLiveThread(oldClient, "thread-ordinary-old");
+    await retainCodexAppServerLiveThread(oldClient, "thread-scheduled-old");
     const releaseOldClientLease = vi.fn();
     sharedClientMocks.retainByInstanceId = (clientId) =>
       clientId === "client-old" ? { client: oldClient, release: releaseOldClientLease } : undefined;
 
-    const successorIds = ["thread-scheduled-v1", "thread-ordinary-new", "thread-scheduled-v2"];
     const currentRequest = vi.fn(async (method: string, requestParams?: { threadId?: string }) => {
       if (method === "config/read") {
         return { config: {}, origins: {}, layers: [] };
       }
       if (method === "thread/start") {
         await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-          threadId:
-            successorIds.length === 3
-              ? "thread-ordinary-old"
-              : successorIds.length === 2
-                ? "thread-scheduled-v1"
-                : "thread-ordinary-new",
+          threadId: "thread-scheduled-old",
         });
-        expect(released).toHaveLength(
-          successorIds.length === 3 ? 0 : successorIds.length === 2 ? 1 : 2,
-        );
-        return threadStartResult(successorIds.shift()!);
+        expect(released).toHaveLength(0);
+        return threadStartResult("thread-native-new");
       }
       if (method === "thread/unsubscribe" && requestParams?.threadId) {
         released.push(requestParams.threadId);
@@ -147,48 +138,20 @@ describe("startOrResumeThread — configured MCP ownership", () => {
       userMcpServersEnabled: false,
     };
 
-    const transitions = [
-      { threadId: "thread-scheduled-v1", version: 1 as const },
-      { threadId: "thread-ordinary-new", version: undefined },
-      { threadId: "thread-scheduled-v2", version: 1 as const },
-    ];
-    let previousId = "thread-ordinary-old";
-    const expectedReleases: string[] = [];
-    for (const transition of transitions) {
-      const next = await startOrResumeThread({
-        ...common,
-        ...(transition.version
-          ? { configuredMcpOwnershipVersion: transition.version }
-          : { mcpServersFingerprint: "mcp-v2" }),
-      });
-      expect(next).toMatchObject({ threadId: transition.threadId });
-      expect(next.configuredMcpOwnershipVersion).toBe(transition.version);
-      expectedReleases.push(previousId);
-      expect(released).toEqual(expectedReleases);
-      await expect(
-        consumeCodexAppServerLiveThread(
-          previousId === "thread-ordinary-old" ? oldClient : currentClient,
-          previousId,
-        ),
-      ).resolves.toBeUndefined();
-      await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-        threadId: transition.threadId,
-        clientId: "client-current",
-      });
-      if (transition.threadId !== "thread-scheduled-v2") {
-        await retainCodexAppServerLiveThread(
-          currentClient,
-          next.threadId,
-          undefined,
-          next.liveThreadConfigFingerprint,
-        );
-      }
-      previousId = next.threadId;
-    }
+    const next = await startOrResumeThread({
+      ...common,
+      mcpServersFingerprint: "mcp-v2",
+    });
+    expect(next).toMatchObject({ threadId: "thread-native-new" });
+    expect(released).toEqual(["thread-scheduled-old"]);
+    await expect(
+      consumeCodexAppServerLiveThread(oldClient, "thread-scheduled-old"),
+    ).resolves.toBeUndefined();
     expect(releaseOldClientLease).toHaveBeenCalledOnce();
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-scheduled-v2",
-      configuredMcpOwnershipVersion: 1,
+      threadId: "thread-native-new",
+      clientId: "client-current",
+      mcpServersFingerprint: "mcp-v2",
     });
 
     const sibling = await consumeCodexAppServerLiveThread(currentClient, "thread-sibling");
@@ -210,7 +173,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         cwd: workspaceDir,
         model: "gpt-5.4-codex",
         modelProvider: "openai",
-        mcpServersFingerprint: "mcp-v1",
+        configuredMcpOwnershipVersion: 1,
         dynamicToolsFingerprint: "[]",
       });
       const controller = new AbortController();
@@ -260,7 +223,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
         startOrResumeThreadImpl({
           bindingStore,
           client,
-          ...scheduledStartOptions(sessionFile, workspaceDir),
+          ...nativeStartOptions(sessionFile, workspaceDir),
           signal: controller.signal,
         }),
       ).rejects.toThrow(

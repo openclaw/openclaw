@@ -16,10 +16,7 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  resolveCodexScheduledToolProjectionFactory,
-  runWithCronCreatorAuthorityCapabilityResolver,
-} from "openclaw/plugin-sdk/codex-mcp-projection";
+import { resolveCodexScheduledToolProjectionFactory } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   createStageTimingTracker,
@@ -108,12 +105,6 @@ type DynamicToolBuildParams = {
   policyAgentId: string;
   pluginConfig: CodexPluginConfig;
   profilerEnabled?: boolean;
-  cronCreatorToolAllowlistRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistRef"];
-  cronCreatorToolAllowlistCaptureRef?: OpenClawCodingToolsOptions["cronCreatorToolAllowlistCaptureRef"];
-  resolveCronCreatorToolAuthority?: Parameters<
-    typeof runWithCronCreatorAuthorityCapabilityResolver
-  >[0]["resolve"];
-  cronCreatorAuthorityUnavailableReason?: OpenClawCodingToolsOptions["cronCreatorAuthorityUnavailableReason"];
   forceHeartbeatTool?: boolean;
   ignoreDisableMessageTool?: boolean;
   ignoreRuntimePlan?: boolean;
@@ -304,9 +295,6 @@ export async function buildDynamicTools(
     onToolOutcome: params.onToolOutcome,
     isTurnTainted: params.isTurnTainted,
     allocateToolOutcomeOrdinal: params.allocateToolOutcomeOrdinal,
-    cronCreatorToolAllowlistRef: input.cronCreatorToolAllowlistRef,
-    cronCreatorToolAllowlistCaptureRef: input.cronCreatorToolAllowlistCaptureRef,
-    cronCreatorAuthorityUnavailableReason: input.cronCreatorAuthorityUnavailableReason,
   };
 
   input.onMessageToolTargetResolved?.(options.requireExplicitMessageTarget === true);
@@ -318,14 +306,7 @@ export async function buildDynamicTools(
     }
     return createToolSurface(options, bindingOptions);
   };
-  const allTools = input.resolveCronCreatorToolAuthority
-    ? runWithCronCreatorAuthorityCapabilityResolver({
-        capability: params.cronCreatorAuthorityCapability,
-        runId: params.runId,
-        resolve: input.resolveCronCreatorToolAuthority,
-        run: buildOpenClawCodingTools,
-      })
-    : buildOpenClawCodingTools();
+  const allTools = buildOpenClawCodingTools();
   toolBuildStages.mark("create-openclaw-coding-tools");
   const preNormalizationDiagnostics: RuntimeToolSchemaDiagnostic[] = [];
   const readableAllToolProjection = filterProviderNormalizableTools(allTools);

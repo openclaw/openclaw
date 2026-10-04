@@ -311,7 +311,6 @@ it.each([
           sessionId: runId,
           sessionKey,
           jobId,
-          toolsAllow: ["message"],
           scheduledToolPolicy,
         });
       admission = gatewayContext

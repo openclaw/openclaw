@@ -3,9 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
-import { resolveExecTarget } from "../agents/bash-tools.exec-runtime.js";
 import * as pluginTools from "../agents/openclaw-plugin-tools.js";
-import { resolveScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -92,26 +90,20 @@ describe("MCP automation creator capture", () => {
 
   const cases: Array<{
     label: string;
-    toolsAllow?: string[];
     nativeExec: boolean;
     unreadableSchema?: boolean;
-    nativeRestriction?: "allow" | "deny";
   }> = [
-    { label: "inherited native", toolsAllow: undefined, nativeExec: true, unreadableSchema: false },
-    { label: "finite native", toolsAllow: ["exec"], nativeExec: true, unreadableSchema: false },
-    { label: "restricted MCP", toolsAllow: undefined, nativeExec: false, unreadableSchema: false },
+    { label: "native", nativeExec: true, unreadableSchema: false },
+    { label: "restricted MCP", nativeExec: false, unreadableSchema: false },
     {
       label: "schema-filtered MCP",
-      toolsAllow: undefined,
       nativeExec: false,
       unreadableSchema: true,
     },
-    { label: "native denied", nativeExec: true, nativeRestriction: "deny" },
-    { label: "native excluded", nativeExec: true, nativeRestriction: "allow" },
   ];
   it.each(cases)(
-    "persists the $label creator authority",
-    async ({ toolsAllow, nativeExec, unreadableSchema, nativeRestriction }) => {
+    "preserves the $label creator account through automation creation",
+    async ({ nativeExec, unreadableSchema }) => {
       const root = tempDirs.make("openclaw-cli-cron-capture-");
       const storePath = path.join(root, "cron", "jobs.json");
       const cfg: OpenClawConfig = {
@@ -119,11 +111,10 @@ describe("MCP automation creator capture", () => {
         tools: {
           allow: [
             "automations",
-            ...(nativeRestriction === "allow" ? [] : ["exec"]),
+            "exec",
             ...(!nativeExec ? ["sessions_list"] : []),
             ...(unreadableSchema ? ["unreadable_plugin"] : []),
           ],
-          ...(nativeRestriction === "deny" ? { deny: ["exec"] } : {}),
           exec: { host: "auto" },
         },
         plugins: { enabled: false },
@@ -214,7 +205,6 @@ describe("MCP automation creator capture", () => {
                 payload: {
                   kind: "agentTurn",
                   message: "Read the input on the Gateway host.",
-                  ...(toolsAllow ? { toolsAllow } : {}),
                 },
                 delivery: { mode: "none" },
               },
@@ -225,27 +215,11 @@ describe("MCP automation creator capture", () => {
         if (stored.payload.kind !== "agentTurn") {
           throw new Error("expected the created agent-turn payload");
         }
-        const policy = resolveScheduledToolPolicyContext({
-          toolsAllow: stored.payload.toolsAllow,
-          scheduledToolPolicy: stored.scheduledToolPolicy,
-          callerOrigin: stored.toolsAllowProvenance?.callerOrigin,
-          execTarget: stored.toolsAllowExecTarget,
+        expect(stored.owner).toEqual({
+          agentId: "main",
+          sessionKey: SESSION,
+          accountId: "default",
         });
-        const capturesNativeExec = nativeExec && !nativeRestriction;
-        expect(stored.payload.toolsAllow).toEqual(toolsAllow ?? ["*"]);
-        expect(stored.toolsAllowExecTarget).toEqual(
-          capturesNativeExec ? { version: 1, host: "gateway" } : undefined,
-        );
-        if (capturesNativeExec) {
-          // Ordinary sandbox availability must not replace the captured target.
-          expect(
-            resolveExecTarget({
-              configuredTarget: policy?.execTarget?.host ?? cfg.tools?.exec?.host,
-              elevatedRequested: false,
-              sandboxAvailable: true,
-            }).effectiveHost,
-          ).toBe("gateway");
-        }
         expect(stored.scheduledToolPolicy).toEqual({
           version: 1,
           mode: "account",

@@ -78,7 +78,7 @@ In the Control UI, an open automation refreshes its next-run time and condition 
 
 An authenticated channel sender explicitly listed in `commands.ownerAllowFrom`, or a Control UI administrator with `operator.admin`, can ask the agent to list, inspect, update, run, or remove any existing automation on that Gateway, regardless of its creator or channel. For example, ask it to disable a reminder created in Telegram. This matches the administrator's authority on the **Automations** page. Create command payloads through the operator CLI or Gateway API.
 
-Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership and captured tool restrictions. Remote administration does not grant local-host or provider-read authority, or permission to capture fresh configured-MCP execution authority. An incomplete tool capture still prevents inheriting an uncaptured tool surface.
+Fresh authenticated Control UI administrator turns can also create ordinary automations through chat, including recurring agent turns in the current conversation with `timeoutSeconds: 0`. Creation keeps the caller's account/session ownership. Scheduled execution uses the owning agent's current tools and policies. Remote administration does not grant local-host or provider-read authority.
 
 The Gateway grants this authority from the authenticated turn's admission facts. Each operation uses a one-use grant that expires after 60 seconds and remains bound to that exact active run. Channel owner membership is rechecked against the current global owner list when the capability is used and immediately before a mutation commits. Channel allowlists, wildcard entries, display names, account IDs, and session routes do not establish ownership. Other channel turns and Control UI turns without `operator.admin` receive no management grant. If access is denied or a grant expires, retry from a fresh authenticated configured channel owner or Control UI administrator turn, or use the **Automations** page.
 
@@ -91,9 +91,9 @@ Each admin management request records its method, run, operational instance, and
 For older automations missing creator account metadata, run `openclaw doctor --fix`.
 Doctor reconciles the account only when the stored creator identity proves it,
 and reports the repair. The matching creator session can then update an agent
-prompt without supplying a new tool cap. Existing tool permissions and creator
-attribution stay intact; capless jobs retain their legacy execution policy.
-An explicit permission edit still requires matching owner authority. Jobs whose
+prompt while preserving creator attribution. Scheduled execution uses the owning
+agent's current tool policy, including for jobs with legacy saved tool lists.
+Executable edits still require matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 

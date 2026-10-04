@@ -924,15 +924,29 @@ describe("Codex app-server thread lifecycle bindings", () => {
   });
 
   it.each([
-    { incognito: false, stage: "plugin config", revocation: "thread/closed" },
-    { incognito: false, stage: "plugin config", revocation: "host" },
-    { incognito: true, stage: "app attestation", revocation: "thread/closed" },
+    {
+      incognito: false,
+      stage: "plugin config",
+      revocation: "thread/closed",
+      policyCheck: "explicit",
+    },
+    { incognito: false, stage: "plugin config", revocation: "host", policyCheck: "explicit" },
+    {
+      incognito: true,
+      stage: "app attestation",
+      revocation: "thread/closed",
+      policyCheck: "explicit",
+    },
+    { incognito: false, stage: "app attestation", revocation: "host", policyCheck: "cron" },
   ])(
-    "refuses revoked warm ownership during $stage ($revocation, incognito: $incognito)",
-    async ({ incognito, stage, revocation }) => {
+    "refuses revoked warm ownership during $stage ($revocation, incognito: $incognito, policy: $policyCheck)",
+    async ({ incognito, stage, revocation, policyCheck }) => {
       const sessionFile = path.join(tempDir, "warm-revocation.jsonl");
       const workspaceDir = path.join(tempDir, "warm-revocation-workspace");
       const params = createParams(sessionFile, workspaceDir);
+      if (policyCheck === "cron") {
+        params.trigger = "cron";
+      }
       if (incognito) {
         params.sessionKey = "agent:main:dashboard:incognito-warm-revocation";
       }
@@ -975,7 +989,7 @@ describe("Codex app-server thread lifecycle bindings", () => {
         nativeHookRelayGeneration: "original-relay",
         pluginThreadConfig: {
           enabled: true,
-          requiresCurrentPolicyCheck: true,
+          requiresCurrentPolicyCheck: policyCheck === "explicit",
           inputFingerprint: "warm-app-input",
           build: async () => {
             await pause("plugin config");

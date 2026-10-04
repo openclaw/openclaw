@@ -205,7 +205,7 @@ describe("cron edit", () => {
       payload: { kind: "command", argv: ["echo", "hello"] },
       timeout: "12",
       tools: ["--clear-tools"],
-      patch: { kind: "command", timeoutSeconds: 12, toolsAllow: ["*"] },
+      patch: { kind: "command", timeoutSeconds: 12, toolsAllow: null },
     },
   ])("preserves $payload.kind on timeout edits", async ({ payload, timeout, tools, patch }) => {
     existing({ payload });
@@ -267,7 +267,7 @@ describe("cron edit", () => {
   });
 
   it.each([
-    [{ kind: "agentTurn", message: "hello" }, ["--clear-tools"], ["*"]],
+    [{ kind: "agentTurn", message: "hello" }, ["--clear-tools"], null],
     [{ kind: "command", argv: ["echo", "hello"] }, ["--tools", ""], []],
     [{ kind: "script", script: "return {}" }, ["--tools", "read,write"], ["read", "write"]],
     [{ kind: "systemEvent", text: "hello" }, ["--tools", "read"], ["read"]],

@@ -61,7 +61,7 @@ describe("scheduled account policy outcomes", () => {
     { name: "default account", accountId: "default", toolsAllow: ["read"], fails: false },
     { name: "legacy accountless cap", accountId: undefined, toolsAllow: ["read"], fails: false },
     { name: "legacy capless job", accountId: undefined, toolsAllow: undefined, fails: false },
-    { name: "intentional no-tool job", accountId: "work", toolsAllow: [], fails: false },
+    { name: "legacy empty tool snapshot", accountId: "work", toolsAllow: [], fails: false },
     {
       name: "configured DM account without delivery",
       accountId: "work",
@@ -185,7 +185,6 @@ describe("scheduled account policy outcomes", () => {
         } else {
           expect(persisted?.state.lastError).toBeUndefined();
           expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-          expect(runEmbeddedAgentMock.mock.calls[0]?.[0].toolsAllow).toEqual(toolsAllow);
           if (!accountId) {
             expect(runEmbeddedAgentMock.mock.calls[0]?.[0].scheduledToolPolicy).toBeUndefined();
           }

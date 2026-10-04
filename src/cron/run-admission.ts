@@ -5,7 +5,6 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../agents/admitted-run-context.js";
 import type { ScheduledToolPolicyContext } from "../agents/scheduled-tool-policy.js";
-import { isRuntimeToolAllowed } from "../agents/tool-policy-match.js";
 import { withPostAdmissionExecutionOwnerBinding } from "../audit/execution-owner-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { CronAuthenticatedChannelRequester } from "../gateway/cron-creator-authority-grant.types.js";
@@ -36,7 +35,6 @@ export function prepareCronRunAdmission(params: {
   jobId: string;
   deliveryAttemptFence: CronCompletionDeliveryFence | null;
   channelRequester?: CronAuthenticatedChannelRequester;
-  toolsAllow?: string[];
   scheduledToolPolicy?: ScheduledToolPolicyContext;
   executionIdentity?: CronExecutionIdentityAdmission;
   ingressBoundary?: "cron.isolated-agent" | "cron.script";
@@ -72,10 +70,9 @@ export function prepareCronRunAdmission(params: {
         params.executionIdentity.onPostAdmission,
       )
     : basePreparedRunAdmission;
-  const scheduledMessageAuthority =
-    scheduledToolPolicy && isRuntimeToolAllowed("message", params.toolsAllow)
-      ? captureCronJobMessageActionAuthority({ jobId: params.jobId, operationalRunInstance })
-      : undefined;
+  const scheduledMessageAuthority = scheduledToolPolicy
+    ? captureCronJobMessageActionAuthority({ jobId: params.jobId, operationalRunInstance })
+    : undefined;
   const scheduledMessageSourceAuthority = scheduledMessageAuthority
     ? captureCronJobMessageSourceAuthority({ jobId: params.jobId, operationalRunInstance })
     : undefined;

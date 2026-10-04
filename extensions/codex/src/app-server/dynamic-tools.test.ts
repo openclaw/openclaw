@@ -42,10 +42,7 @@ import {
   handleDynamicToolCallWithTimeout,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
-import {
-  createCodexDynamicToolBridge,
-  projectCodexExecutableDynamicTools,
-} from "./dynamic-tools.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   type CodexDynamicToolCallParams,
@@ -739,27 +736,6 @@ describe("createCodexDynamicToolBridge", () => {
         text: `Unknown OpenClaw tool: ${testCase.name}`,
       },
     ]);
-  });
-
-  it("uses the bridge's executable projection for authority snapshots", () => {
-    const tools = [
-      createTool({ name: "configured_ok" }),
-      createTool({
-        name: "configured_unsupported",
-        parameters: { type: "array", items: { type: "string" } },
-      }),
-    ];
-    const projected = projectCodexExecutableDynamicTools({ tools });
-    const bridge = createCodexDynamicToolBridge({
-      tools,
-      signal: new AbortController().signal,
-    });
-
-    expect(projected.availableTools.map((tool) => tool.name)).toEqual(
-      bridge.availableTools.map((tool) => tool.name),
-    );
-    expect(projected.availableTools.map((tool) => tool.name)).toEqual(["configured_ok"]);
-    expect(projected.quarantinedTools).toEqual(bridge.telemetry.quarantinedTools);
   });
 
   it("quarantines unreadable dynamic tool descriptors without dropping healthy siblings", () => {

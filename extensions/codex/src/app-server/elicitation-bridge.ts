@@ -123,10 +123,6 @@ export async function routeCodexAppServerElicitationRequest(params: {
     pluginAppPolicyContext: params.pluginAppPolicyContext,
   });
   if (pluginResolution.kind !== "not_plugin") {
-    if (params.paramsForRun.trigger === "cron" && params.paramsForRun.scheduledRuntimeAuthority) {
-      logPluginElicitationDecline("scheduled_authority_non_interactive", requestParams);
-      return handled(createCodexElicitationResponse("decline"));
-    }
     if (pluginResolution.kind === "decline") {
       logPluginElicitationDecline(pluginResolution.reason, requestParams);
       return handled(createCodexElicitationResponse("decline"));

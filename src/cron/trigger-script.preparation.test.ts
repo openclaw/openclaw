@@ -192,9 +192,11 @@ describe("cron preparation plugin ownership", () => {
         expect(contexts[0]?.metadataSnapshot).toBe(metadataSnapshot);
         expect(contexts[1]).toBe(contexts[0]);
       }
+      // Saved job caps no longer hide a currently permitted plugin. The live agent
+      // deny below remains authoritative, even when legacy data requested that tool.
       await expect(run("first", "other", [])).resolves.toMatchObject({
         kind: "completed",
-        state: null,
+        state: { calls: 1 },
       });
       await expect(run("first", "other", ["cold_probe"])).resolves.toMatchObject({
         kind: "completed",

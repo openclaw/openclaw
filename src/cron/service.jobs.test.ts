@@ -252,7 +252,7 @@ describe("agent payload patches", () => {
     expect(current.payload).toEqual({ kind: "agentTurn", message: "do it" });
   });
 
-  it("builds a replacement agent payload with authored settings and default tool authority", () => {
+  it("builds a replacement agent payload with authored settings", () => {
     const current = job();
     applyJobPatch(current, {
       sessionTarget: "session:agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==",
@@ -261,8 +261,6 @@ describe("agent payload patches", () => {
         message: "hello",
         lightContext: true,
         fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-        toolsAllow: ["exec", "read"],
-        toolsAllowIsDefault: true,
       },
     });
     expect(current.sessionTarget).toBe(
@@ -273,8 +271,6 @@ describe("agent payload patches", () => {
       message: "hello",
       lightContext: true,
       fallbacks: ["anthropic/claude-haiku-3-5", "openai/gpt-5"],
-      toolsAllow: ["exec", "read"],
-      toolsAllowIsDefault: true,
     });
   });
 
@@ -290,7 +286,7 @@ describe("agent payload patches", () => {
         fallbacks: null,
       },
     });
-    expect(current.payload).toEqual({ kind: "agentTurn", message: "do it", toolsAllow: ["*"] });
+    expect(current.payload).toEqual({ kind: "agentTurn", message: "do it" });
   });
 
   it.each([
@@ -304,12 +300,11 @@ describe("agent payload patches", () => {
       toolsAllow: ["exec", "read"],
       marker: true,
     },
-    { patch: { toolsAllow: null }, toolsAllow: ["*"], marker: undefined },
   ] satisfies {
     patch: Omit<Extract<NonNullable<CronJobPatch["payload"]>, { kind: "agentTurn" }>, "kind">;
     toolsAllow: string[];
     marker: true | undefined;
-  }[])("preserves authority semantics for $patch", ({ patch, toolsAllow, marker }) => {
+  }[])("preserves legacy payload data for $patch", ({ patch, toolsAllow, marker }) => {
     const current = agentJob(undefined, {
       payload: {
         kind: "agentTurn",
@@ -403,59 +398,11 @@ describe("announce delivery channel validation", () => {
   });
 });
 
-describe("cron tool authority defaults", () => {
-  it("preserves explicit empty caps and leaves transport-only jobs capless", () => {
-    const noTools = createJob(
-      state(),
-      agentInput({
-        sessionTarget: "session:project-alpha",
-        payload: { kind: "agentTurn", message: "render", toolsAllow: [] },
-      }),
-    );
-    const transportOnly = createJob(state(), input());
-    expect(noTools.payload.toolsAllow).toEqual([]);
-    expect(transportOnly.payload.toolsAllow).toBeUndefined();
-  });
-
-  it("preserves legacy and explicit authority during declarative convergence", () => {
-    const legacy = agentJob({ mode: "none" });
-    const explicit = agentJob(
-      { mode: "none" },
-      {
-        payload: {
-          kind: "agentTurn",
-          message: "explicit",
-          toolsAllow: ["read", "cron"],
-          toolsAllowIsDefault: true,
-        },
-      },
-    );
-    const declaration = agentInput({
-      payload: { kind: "agentTurn", message: "updated" },
-      delivery: { mode: "none" },
-    });
-    applyDeclarativeJobSpec(legacy, declaration, convergence);
-    applyDeclarativeJobSpec(explicit, declaration, convergence);
-    expect(legacy.payload.toolsAllow).toBeUndefined();
-    expect(explicit.payload).toMatchObject({
-      toolsAllow: ["read", "cron"],
-      toolsAllowIsDefault: true,
-    });
-  });
-
+describe("declarative schedule updates", () => {
   it("repairs a missing anchor when converging an unchanged every schedule", () => {
     const current = job({ createdAtMs: NOW - 30_000 });
     applyDeclarativeJobSpec(current, input(), { ...convergence, enabledExplicit: false });
     expect(current.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: NOW - 30_000 });
-  });
-
-  it("adopts explicit authority when a declaration becomes tool-bearing", () => {
-    const current = job();
-    applyDeclarativeJobSpec(current, input({ trigger: { script: "return true" } }), {
-      ...convergence,
-      cronConfig: { triggers: { enabled: true } },
-    });
-    expect(current.payload.toolsAllow).toEqual(["*"]);
   });
 });
 

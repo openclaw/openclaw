@@ -107,7 +107,7 @@ describe("Codex app-server dynamic tool build", () => {
     );
   });
 
-  it("binds a resolver-backed constructed tool surface exactly once", async () => {
+  it("binds a constructed tool surface exactly once", async () => {
     const workspaceDir = path.join(tempDir, "resolver-bound-workspace");
     const params = createParams(path.join(tempDir, "resolver-bound-session.jsonl"), workspaceDir);
     params.disableTools = false;
@@ -116,15 +116,10 @@ describe("Codex app-server dynamic tool build", () => {
     params.hostCapabilities = createCodexTestHostCapabilities({ bindToolSurface });
     const factory = vi.fn(() => [createRuntimeDynamicTool("read")]);
     setCodexTestToolFactory(params, factory);
-    const resolveCronCreatorToolAuthority = vi.fn(async () => ({
-      tools: ["read"],
-      provenance: { version: 1 as const, source: "final-executable-surface" as const },
-    }));
     const effectiveCwd = path.join(workspaceDir, "native-cwd");
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
       effectiveCwd,
-      resolveCronCreatorToolAuthority,
     });
 
     expect(factory).toHaveBeenCalledOnce();

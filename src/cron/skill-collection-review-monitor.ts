@@ -29,10 +29,7 @@ import { resolveHeartbeatPhaseMs } from "../infra/heartbeat-schedule.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ManifestModelIdNormalizationSource } from "../plugins/manifest-model-id-normalization.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
-import {
-  SKILL_WORKSHOP_MAINTENANCE_PROMPT,
-  SKILL_WORKSHOP_MAINTENANCE_TOOLS,
-} from "../skills/workshop/maintenance-prompt.js";
+import { SKILL_WORKSHOP_MAINTENANCE_PROMPT } from "../skills/workshop/maintenance-prompt.js";
 import { supportsCronExecutionRoot } from "./execution-root-runtime.js";
 import { resolveCronAgentConfigFromSnapshot } from "./isolated-agent/run-config.js";
 import { resolveCronAgentSessionKey } from "./isolated-agent/session-key.js";
@@ -260,7 +257,6 @@ export function* resolveSkillCollectionReviewMonitorSpecs(
         payload: {
           kind: "agentTurn",
           message: SKILL_WORKSHOP_MAINTENANCE_PROMPT,
-          toolsAllow: [...SKILL_WORKSHOP_MAINTENANCE_TOOLS],
         },
         sessionTarget: "isolated",
         delivery: { mode: "none" },

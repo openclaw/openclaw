@@ -132,7 +132,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
                 loopDetectionEnabled)))),
       bundleMcpThreadConfig,
       configuredMcpDynamicSurface: attemptTools.configuredMcp !== undefined,
-      configuredMcpOwnershipVersion: attemptTools.configuredMcpOwnershipVersion,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
       sandboxExecServerEnabled,
@@ -157,9 +156,6 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
     state.sandboxExecEnvironment = startupResult.sandboxEnvironment;
     state.releaseSharedClientLease = startupResult.releaseSharedClientLease;
     state.restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
-    // Capture native authority only after this exact client's managed-policy
-    // preflight succeeds; startup retries may have replaced the initial client.
-    await attemptTools.captureCronCreatorToolAllowlist();
     pluginAppServer = startupResult.pluginAppServer;
     toolBridge.setRemoteWorkspaceFileReader?.(
       createCodexRemoteWorkspaceFileReader(startupResult.client, connection.authority),

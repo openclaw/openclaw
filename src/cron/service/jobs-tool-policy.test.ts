@@ -1,82 +1,84 @@
 import { describe, expect, it } from "vitest";
-import type { CronStoredJob, CronToolsAllowExecTarget } from "../types.js";
+import { makeCronJob } from "../delivery.test-helpers.js";
+import type { CronStoredJob } from "../types.js";
 import {
   cronJobMessageActionAuthorityInputsEqual,
-  reconcileToolsAllowAuthority,
+  reconcileScheduledJobOwnerPolicy,
   resolveCronJobMessageToolAuthorityInputs,
 } from "./jobs-tool-policy.js";
 
-function toolJob(toolsAllow: string[] | undefined): CronStoredJob {
+const owner = { agentId: "main", sessionKey: "agent:main:chat:group:team", accountId: "work" };
+const policy = {
+  version: 1 as const,
+  mode: "account" as const,
+  ownerSessionKey: owner.sessionKey,
+  ownerAccountId: owner.accountId,
+};
+const origin = { kind: "external" as const, channel: "chat" };
+function toolJob(): CronStoredJob {
   return {
-    id: "job-1",
-    name: "job",
-    enabled: true,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    schedule: { kind: "every", everyMs: 60_000 },
-    payload: {
-      kind: "script",
-      script: "return {}",
-      ...(toolsAllow ? { toolsAllow } : {}),
-    },
-    state: {},
-  } as unknown as CronStoredJob;
+    ...makeCronJob({ payload: { kind: "agentTurn", message: "Read project notes" } }),
+    owner,
+  };
 }
 
-describe("reconcileToolsAllowAuthority exec pin", () => {
-  const gateway = { version: 1, host: "gateway" } satisfies CronToolsAllowExecTarget;
-  const pinned = { ...gateway, ask: "always" } satisfies CronToolsAllowExecTarget;
-  it.each<
-    [
-      name: string,
-      cap: string[] | undefined,
-      previous: CronToolsAllowExecTarget | undefined,
-      explicit: boolean,
-      captured: CronToolsAllowExecTarget | undefined,
-      expected: CronToolsAllowExecTarget | undefined,
-    ]
-  >([
-    ["stamps explicit exec", ["exec", "read"], undefined, true, pinned, pinned],
-    ["pins wildcard exec", ["*"], undefined, true, pinned, pinned],
-    ["excludes non-exec caps", ["read"], undefined, true, gateway, undefined],
-    ["clears rewritten caps without capture", ["exec"], pinned, true, undefined, undefined],
-    ["preserves untouched caps", ["exec"], pinned, false, undefined, pinned],
-    ["drops removed caps", undefined, gateway, false, gateway, undefined],
-  ])("%s", (_name, cap, previous, explicit, captured, expected) => {
-    const job = toolJob(cap);
-    if (previous) {
-      job.toolsAllowExecTarget = structuredClone(previous);
-      job.toolsAllowExecTargetRequirement = {
+describe("scheduled job owner policy", () => {
+  it("binds the authenticated account without a per-job cap", () => {
+    const job = toolJob();
+    reconcileScheduledJobOwnerPolicy({
+      job,
+      previouslyUsedToolRuntime: false,
+      scheduledToolPolicy: policy,
+    });
+    expect(job.scheduledToolPolicy).toEqual(policy);
+  });
+
+  it("cannot stamp another account's policy onto a job", () => {
+    const job = toolJob();
+    expect(() =>
+      reconcileScheduledJobOwnerPolicy({
+        job,
+        previouslyUsedToolRuntime: false,
+        scheduledToolPolicy: { ...policy, ownerAccountId: "other" },
+      }),
+    ).toThrow("scheduled account policy must match the persisted job owner");
+  });
+
+  it("does not replace an existing owner with the operator editing the schedule", () => {
+    const job: CronStoredJob = {
+      ...toolJob(),
+      scheduledToolPolicy: policy,
+      toolsAllowProvenance: {
         version: 1,
-        target: structuredClone(previous),
-        grantIndex: 0,
-      };
-    }
-    reconcileToolsAllowAuthority({
+        source: "final-executable-surface",
+        callerOrigin: origin,
+      },
+    };
+    reconcileScheduledJobOwnerPolicy({
       job,
       previouslyUsedToolRuntime: true,
-      explicitlyMutatesToolsAllow: explicit,
-      toolsAllowExecTarget: captured ? structuredClone(captured) : undefined,
+      scheduledToolPolicy: { version: 1, mode: "trusted" },
     });
-    if (expected) {
-      expect(job.toolsAllowExecTarget).toEqual(expected);
-      expect(job.toolsAllowExecTargetRequirement).toEqual({
-        version: 1,
-        target: expected,
-        grantIndex: 0,
-      });
-    } else {
-      expect(job.toolsAllowExecTarget).toBeUndefined();
-      expect(job.toolsAllowExecTargetRequirement).toBeUndefined();
-    }
+    expect(job.scheduledToolPolicy).toEqual(policy);
+    expect(job.toolsAllowProvenance?.callerOrigin).toEqual(origin);
+  });
+
+  it("retains the authenticated owner when the payload becomes transport-only", () => {
+    const job: CronStoredJob = {
+      ...toolJob(),
+      scheduledToolPolicy: policy,
+      payload: { kind: "systemEvent", text: "wake" },
+    };
+    reconcileScheduledJobOwnerPolicy({ job, previouslyUsedToolRuntime: true });
+    expect(job.scheduledToolPolicy).toEqual(policy);
   });
 });
 
 describe("account read authority inputs", () => {
   it("binds a recorded caller origin to executable inputs but not display metadata", () => {
     const job = {
-      ...toolJob(["message"]),
-      payload: { kind: "agentTurn" as const, message: "read", toolsAllow: ["message"] },
+      ...toolJob(),
+      payload: { kind: "agentTurn" as const, message: "read" },
       owner: { sessionKey: "agent:main:local", accountId: "work" },
       scheduledToolPolicy: {
         version: 1 as const,
@@ -108,16 +110,21 @@ describe("account read authority inputs", () => {
 });
 
 describe("scheduled message authority", () => {
-  it("admits message access for an automatic snapshot that runs with its owner's tools", () => {
-    const job = toolJob(["read"]);
-    job.payload = { kind: "agentTurn", message: "post", toolsAllow: ["read"] };
-    job.scheduledToolPolicy = { version: 1, mode: "trusted" };
-    expect(resolveCronJobMessageToolAuthorityInputs(job)).toBeUndefined();
+  it.each([undefined, true])(
+    "admits message access despite a legacy snapshot (default marker: %s)",
+    (toolsAllowIsDefault) => {
+      const job = toolJob();
+      job.payload = {
+        kind: "agentTurn",
+        message: "post",
+        toolsAllow: ["read"],
+        toolsAllowIsDefault,
+      };
+      job.scheduledToolPolicy = { version: 1, mode: "trusted" };
 
-    // Older builds saved this snapshot without `message`; the run gets `*`.
-    Object.assign(job.payload, { toolsAllowIsDefault: true });
-    expect(resolveCronJobMessageToolAuthorityInputs(job)).toEqual({
-      policy: { version: 1, mode: "trusted" },
-    });
-  });
+      expect(resolveCronJobMessageToolAuthorityInputs(job)).toEqual({
+        policy: { version: 1, mode: "trusted" },
+      });
+    },
+  );
 });

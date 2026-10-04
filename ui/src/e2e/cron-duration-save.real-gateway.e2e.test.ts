@@ -745,14 +745,13 @@ suite.define(() => {
   it("clone payload policy: preserves public options through the real Gateway and CLI readback", async () => {
     await withGatewayCommands("real-clone-policy-commands.json", async (cliJson) => {
       for (const variant of [
-        { name: "finite-cap", toolsAllow: ["read"], allowUnsafeExternalContent: false },
-        { name: "empty-cap", toolsAllow: [], allowUnsafeExternalContent: true },
+        { name: "external-content-disabled", allowUnsafeExternalContent: false },
+        { name: "external-content-enabled", allowUnsafeExternalContent: true },
       ]) {
         const sourceName = `Synthetic clone ${variant.name} source`;
         const payload = {
           kind: "agentTurn" as const,
           message: "node -e \"console.log('synthetic clone fixture')\"",
-          toolsAllow: variant.toolsAllow,
           fallbacks: [],
           lightContext: false,
           allowUnsafeExternalContent: variant.allowUnsafeExternalContent,

@@ -230,34 +230,16 @@ failures, and connector refresh failures fail closed.
 
 ## Scheduled app authority
 
-When a Codex creator turn captures scheduled app authority, an automation without an explicit
-`toolsAllow` list saves that turn's callable tools and app policy. With a prepared ChatGPT profile, scheduled app access
-remains bound to that exact profile and account. Without a prepared profile, an
-agent-scoped configured WebSocket app-server owns the schedule through its
-connection fingerprint. Reauthenticating that same endpoint to another account
-does not revoke the schedule: subsequent runs use the endpoint's current account,
-subject to the captured app ceiling and current app/tool policy. Scheduled
-authority does not store or replay authentication credentials.
+Automations use the owning agent's current authenticated account, tools, plugin
+policy, and execution environment. A schedule does not capture a separate tool
+list, app permission ceiling, or managed-requirement fingerprint. Existing saved
+caps are ignored; configure the owning agent to restrict scheduled work.
 
-Scheduled app approval ceilings preserve native tool overrides and the approval
-policy of the account identified by each tool. For tools that select an account
-when called, the shared tool ceiling uses the strictest combination of the
-configured account and default policies. Such tools can require approval across
-accounts even when one account permits the action automatically.
-
-Removing or un-configuring the endpoint, changing its connection fingerprint, or
-changing its captured managed requirements rejects the run before app execution.
-The job remains inspectable, with an error in automation run history and its
-last-run state; normal failure backoff still applies. Restore the authorized
-connection or recreate the automation from a fresh authenticated owner turn.
-Account changes that remove access to a captured app also fail visibly.
-
-Before rolling back to a build without configured-endpoint authority and cron
-authority hydration, disable these jobs with `openclaw automations disable <id>`
-and verify them with `openclaw automations list --all`. Do not rely on an older
-binary to enforce the new authority envelope. Keep the jobs disabled until you
-return to a supporting build or recreate them under that build's supported auth
-path. See [Automations](/automation/cron-jobs) for run history and failure handling.
+Each scheduled run checks current app policy before reusing a native thread.
+Disconnected or revoked apps require recovery on the owning agent, just as for
+an ordinary turn. Updating a schedule does not grant account access or bypass
+normal tool approvals. See [Native Codex plugins](/plugins/codex-native-plugins#scheduled-automations)
+and [Automations](/automation/cron-jobs) for the current policy and run history.
 
 ## Environment isolation
 

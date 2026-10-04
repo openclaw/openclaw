@@ -937,11 +937,11 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("passes the persisted payload tool cap to trigger evaluation", async () => {
+  it("passes the persisted job owner to trigger evaluation", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-14T12:00:00.000Z"));
     const clock = createGatewaySchedulerClock(Date.now());
-    const cfg = createCronConfig("server-cron-trigger-tool-cap");
+    const cfg = createCronConfig("server-cron-trigger-owner");
     cfg.cron = {
       ...cfg.cron,
       triggers: { enabled: true },
@@ -951,9 +951,14 @@ describe("buildGatewayCronService", () => {
     try {
       const job = await addCronJob(
         state,
-        "restricted trigger",
-        { kind: "systemEvent", text: "wake", toolsAllow: ["read", "cron"] },
+        "account-scoped trigger",
+        { kind: "systemEvent", text: "wake" },
         {
+          owner: {
+            agentId: "main",
+            sessionKey: "agent:main:discord:group:ops",
+            accountId: "work",
+          },
           schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
           trigger: { script: "json({ fire: false })" },
           sessionTarget: "main",
@@ -968,7 +973,11 @@ describe("buildGatewayCronService", () => {
         expect.objectContaining({
           job: expect.objectContaining({
             id: job.id,
-            payload: expect.objectContaining({ toolsAllow: ["read", "cron"] }),
+            owner: {
+              agentId: "main",
+              sessionKey: "agent:main:discord:group:ops",
+              accountId: "work",
+            },
           }),
         }),
       );

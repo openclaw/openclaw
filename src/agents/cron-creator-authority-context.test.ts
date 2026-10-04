@@ -20,7 +20,6 @@ import {
   runWithCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapabilityResolver,
 } from "./cron-creator-authority-context.js";
-import { createCronTool } from "./tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -212,35 +211,10 @@ describe("Cron grant admission", () => {
     });
   });
 
-  it("exposes add but refuses incomplete capture and retired requester authority", async () => {
-    const runId = "remote-admin-capture";
-    const { authority, caller, run } = admittedFixture(runId, "unknown", "control-ui-admin", true);
-    caller.sessionKey = "agent:main:remote";
+  it("rejects pending grants and retained requester minting after admitted run retirement", async () => {
+    const runId = "remote-admin-retirement";
+    const { authority, run } = admittedFixture(runId, "unknown", "control-ui-admin", true);
     await run(async () => {
-      const callGatewayTool = vi.fn();
-      const tool = createCronTool(
-        {
-          runId,
-          agentSessionKey: caller.sessionKey,
-          creatorToolAllowlist: ["read"],
-          creatorToolAllowlistCaptureRef: {},
-        },
-        { callGatewayTool },
-      );
-      expect(tool.parameters).toHaveProperty(
-        "properties.action.enum",
-        expect.arrayContaining(["add", "list", "update"]),
-      );
-      await expect(
-        tool.execute("incomplete", {
-          action: "add",
-          job: {
-            schedule: { kind: "every", everyMs: 60_000 },
-            payload: { kind: "agentTurn", message: "Read status" },
-          },
-        }),
-      ).rejects.toThrow("did not capture the complete model-callable tool surface");
-      expect(callGatewayTool).not.toHaveBeenCalled();
       const requester = bindCronRequesterGrant(runId)!;
       const grant = requester();
       releaseAgentRunDelegatedAuthority(authority);

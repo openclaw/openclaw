@@ -158,7 +158,7 @@ describe("cron.update scheduled policy adoption", () => {
           sessionKey,
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "Check status", toolsAllow: ["message"] },
+          payload: { kind: "agentTurn", message: "Check status" },
           delivery: { mode: "none" },
           owner,
         },
@@ -201,11 +201,11 @@ describe("cron.update scheduled policy adoption", () => {
         );
         expect(dormant).toMatchObject({
           sessionTarget: "main",
-          payload: { kind: "systemEvent", toolsAllow: ["message"] },
+          payload: { kind: "systemEvent", text: "Check status" },
           scheduledToolPolicy: accountPolicy,
         });
         if (definition === "erased policy") {
-          // Canonical legacy state retained the tool cap without a scheduled policy.
+          // Legacy state can lack a scheduled policy after a payload conversion.
           delete dormant.scheduledToolPolicy;
           await saveCronStore(storePath, store);
           expect(
@@ -223,7 +223,7 @@ describe("cron.update scheduled policy adoption", () => {
         );
         expect(restored).toMatchObject({
           sessionTarget: "isolated",
-          payload: { kind: "agentTurn", toolsAllow: ["message"] },
+          payload: { kind: "agentTurn", message: "Check status" },
           owner,
         });
         expect(restored.scheduledToolPolicy).toEqual(expected);

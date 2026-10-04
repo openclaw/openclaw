@@ -24,7 +24,6 @@ import {
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
 import { cronAddResultReadView, cronJobReadView } from "../../cron/job-read-view.js";
 import { resolveCronJobBoundSessionKeys } from "../../cron/job-session-bindings.js";
-import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import type { CronListPageResult } from "../../cron/service/list-page-types.js";
 import type { CronUpdateOptions } from "../../cron/service/state.js";
 import {
@@ -60,12 +59,10 @@ import {
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
   readCronCallerScope,
-  resolveCronCreatorAuthorityCapture,
   resolveCronJobOwnerAgentId,
   resolveCronMutationCommitGuard,
   resolveCronRequesterProvenanceForJob,
   resolveCronScheduledToolPolicyForCaller,
-  type CronCallerScope,
 } from "./cron-caller-scope.js";
 import { isCronInvalidRequestError } from "./cron-error-classification.js";
 import { cronHistoryHandler } from "./cron-history.js";
@@ -78,7 +75,6 @@ import {
 } from "./cron-input-validation.js";
 import {
   assertCronReadCurrent,
-  isLegacyCreatorPromptUpdate,
   resolveCronJobId,
   respondInvalidCronParams,
   respondMissingCronJobId,
@@ -105,18 +101,6 @@ class CronJobConfigRevisionConflictError extends Error {
   ) {
     super("cron job definition no longer matches the loaded version");
   }
-}
-
-function requiresExplicitAgentRuntimeToolsAllow(params: {
-  job: Pick<CronJob, "payload" | "trigger">;
-  callerScope: CronCallerScope | undefined;
-}): boolean {
-  return (
-    params.callerScope !== undefined &&
-    !params.callerScope.manageAll &&
-    cronJobUsesToolRuntime(params.job) &&
-    params.job.payload.toolsAllow === undefined
-  );
 }
 
 export const cronHandlers: GatewayRequestHandlers = {
@@ -431,16 +415,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const actor = operatorActor ?? creatorSession?.createdActor;
     const actorId = normalizeOptionalString(actor?.id);
     const createdActor = actor ? { ...actor, ...(actorId ? { id: actorId } : {}) } : undefined;
-    let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
-    let assertCapturedAuthorityCurrent: (() => void) | undefined;
-    try {
-      const capture = resolveCronCreatorAuthorityCapture(callerScope);
-      captureRuntimeAuthority = capture?.captureRuntimeAuthority;
-      assertCapturedAuthorityCurrent = capture?.assertCurrent;
-    } catch (err) {
-      respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
-      return;
-    }
     const assertMutationCurrent = resolveCronMutationCommitGuard(client, context, undefined, {
       sessionMutationCommitGuard,
       hasCurrentClientAuthority,
@@ -448,7 +422,6 @@ export const cronHandlers: GatewayRequestHandlers = {
     const assertCreatorSessionCurrent = createCronCreatorSessionGuard(callerScope, creatorSession);
     const commitGuard = () => {
       assertMutationCurrent?.();
-      assertCapturedAuthorityCurrent?.();
       assertCreatorSessionCurrent();
     };
     const jobCreate = applyCronCreateCallerScopeDefault(candidate as CronJobCreate, callerScope);
@@ -461,14 +434,6 @@ export const cronHandlers: GatewayRequestHandlers = {
       })
     ) {
       respondInvalidCronParams(respond, "cron.add", "job agentId outside caller scope");
-      return;
-    }
-    if (requiresExplicitAgentRuntimeToolsAllow({ job: jobCreate, callerScope })) {
-      respondInvalidCronParams(
-        respond,
-        "cron.add",
-        "agent-runtime tool jobs require an explicit payload.toolsAllow cap",
-      );
       return;
     }
     const timestampValidation = validateScheduleTimestamp(jobCreate.schedule);
@@ -511,7 +476,6 @@ export const cronHandlers: GatewayRequestHandlers = {
           ? { skillLibrarySelections: creatorSession.skillLibrarySelections }
           : {}),
         commitGuard,
-        ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
         matchesExisting: (job) =>
           cronJobMatchesDeclarationScope({
             job,
@@ -524,9 +488,6 @@ export const cronHandlers: GatewayRequestHandlers = {
               scheduledToolPolicy: resolveCronScheduledToolPolicyForCaller(callerScope),
               ...(callerScope?.toolsAllowProvenance
                 ? { toolsAllowProvenance: callerScope.toolsAllowProvenance }
-                : {}),
-              ...(callerScope?.toolsAllowExecTarget
-                ? { toolsAllowExecTarget: callerScope.toolsAllowExecTarget }
                 : {}),
             }
           : {}),
@@ -587,23 +548,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       expectedConfigRevision?: string;
     };
     const callerScope = readCronCallerScope(client);
-    let captureRuntimeAuthority: (() => CronRuntimeAuthority | undefined) | undefined;
-    let assertCapturedAuthorityCurrent: (() => void) | undefined;
-    try {
-      const capture = resolveCronCreatorAuthorityCapture(callerScope);
-      captureRuntimeAuthority = capture?.captureRuntimeAuthority;
-      assertCapturedAuthorityCurrent = capture?.assertCurrent;
-    } catch (err) {
-      respondInvalidCronParams(respond, "cron.update", formatErrorMessage(err));
-      return;
-    }
     const commitGuard = resolveCronMutationCommitGuard(client, context, undefined, {
-      sessionMutationCommitGuard: assertCapturedAuthorityCurrent
-        ? () => {
-            sessionMutationCommitGuard?.();
-            assertCapturedAuthorityCurrent?.();
-          }
-        : sessionMutationCommitGuard,
+      sessionMutationCommitGuard,
       hasCurrentClientAuthority,
     });
     const jobId = resolveCronJobId(p);
@@ -658,19 +604,12 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
     const validateUpdate = async (jobToUpdate: CronJob) => {
-      const nextJob = await assertValidCronUpdatePatch({
+      await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob: jobToUpdate,
         patch,
       });
-      if (
-        touchesToolRuntime &&
-        requiresExplicitAgentRuntimeToolsAllow({ job: nextJob, callerScope }) &&
-        !isLegacyCreatorPromptUpdate(jobToUpdate, patch, callerScope)
-      ) {
-        throw new TypeError("agent-runtime tool jobs require an explicit payload.toolsAllow cap");
-      }
     };
     try {
       await validateUpdate(currentJob);
@@ -679,22 +618,17 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const updateOptions: CronUpdateOptions | undefined =
-      touchesToolRuntime ||
-      commitGuard ||
-      captureRuntimeAuthority ||
-      callerScope?.toolsAllowProvenance
+      touchesToolRuntime || commitGuard || callerScope?.toolsAllowProvenance
         ? {
-            // Management access preserves the job's existing execution ceiling.
+            // Management access preserves the job's existing account policy.
             ...(touchesToolRuntime
               ? {
                   scheduledToolPolicy: callerScope?.manageAll
                     ? null
                     : resolveCronScheduledToolPolicyForCaller(callerScope),
-                  toolsAllowExecTarget: callerScope?.toolsAllowExecTarget,
                 }
               : {}),
             ...(commitGuard ? { commitGuard } : {}),
-            ...(captureRuntimeAuthority ? { captureRuntimeAuthority } : {}),
           }
         : undefined;
     let job: Awaited<ReturnType<typeof context.cron.update>>;

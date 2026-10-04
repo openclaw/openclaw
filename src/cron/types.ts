@@ -24,10 +24,7 @@ import type {
 import type { CronJobBase, CronPacing } from "./types-shared.js";
 
 export type { CronPacing } from "./types-shared.js";
-export type {
-  CronToolsAllowExecTarget,
-  CronToolsAllowExecTargetRequirement,
-} from "./scheduled-tool-policy.js";
+export type { CronToolsAllowExecTarget } from "./scheduled-tool-policy.js";
 export type { CronCompletionStatus } from "./completion-status.js";
 
 /** Supported schedule forms persisted in cron job specs. */
@@ -242,9 +239,9 @@ export function isSystemOwnedCronPayloadKind(kind: unknown): kind is "heartbeat"
 }
 
 type CronPayloadToolAllow = {
-  /** Restricts agentTurn execution, or the trigger runtime for other payload kinds. */
+  /** Legacy per-job tool list retained for rollback, ignored during execution. */
   toolsAllow?: string[];
-  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  /** Legacy marker distinguishing auto-stamped lists from explicitly authored lists. */
   toolsAllowIsDefault?: boolean;
 };
 
@@ -382,11 +379,11 @@ export type CronStoredJob = CronJob & {
   createdActor?: SessionCreatedActor;
   toolsAllowProvenance?: CronToolsAllowProvenance;
   toolsAllowExecTarget?: CronToolsAllowExecTarget;
-  /** Exact expected pin for jobs created from a verified host-owned exec projection. */
+  /** Legacy expected execution pin retained for rollback. */
   toolsAllowExecTargetRequirement?: CronToolsAllowExecTargetRequirement;
-  /** Runtime-private authority omitted from public Gateway and wire contracts. */
+  /** Legacy runtime snapshot retained for rollback and omitted from public contracts. */
   runtimeAuthority?: CronRuntimeAuthority;
-  /** Authority was explicitly cleared and must be reauthorized before app reuse. */
+  /** Legacy runtime snapshot recovery marker retained for rollback. */
   runtimeAuthorityRecoveryRequired?: true;
 };
 

@@ -3,6 +3,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveCronCreationDelivery } from "../../cron/delivery-context.js";
 import { assertCronDeliveryInputNonBlankFields } from "../../cron/delivery-target-validation.js";
+import { assertNoNewCronToolAllowlist } from "../../cron/normalize-payload.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import type { CronDelivery } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
@@ -38,12 +39,6 @@ import {
   REMINDER_CONTEXT_MARKER,
   stripExistingContext,
 } from "./cron-tool-context.js";
-import {
-  assertInheritedCronToolCaptureReady,
-  capCronJobToolsAllowOnCreate,
-  cronCreateRequiresCreatorAuthority,
-  resolveCronCreatorExecToolTarget,
-} from "./cron-tool-creator-cap.js";
 import { CronToolOutputSchema } from "./cron-tool-output-schema.js";
 import {
   assertCronPacingInput,
@@ -51,16 +46,8 @@ import {
   CRON_TOOL_LIST_MAX_LIMIT,
 } from "./cron-tool-schema.js";
 import { listCronSelfJob } from "./cron-tool-self-list.js";
-import {
-  assertCronCreatorAuthorityResolutionAvailable,
-  assertNoCronShellExecution,
-  updateCronJobFromAgentTool,
-} from "./cron-tool-write.js";
-import type {
-  CronCreatorToolAuthoritySnapshot,
-  CronToolDeps,
-  CronToolOptions,
-} from "./cron-tool.types.js";
+import { assertNoCronShellExecution, updateCronJobFromAgentTool } from "./cron-tool-write.js";
+import type { CronToolDeps, CronToolOptions } from "./cron-tool.types.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -195,7 +182,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   const scriptCue = params.triggersEnabled
-    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); only the failure alert waits for consecutive failures, run output still follows the job's delivery."
+    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts use the agent's current configured MCP servers and tool permissions. When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); only the failure alert waits for consecutive failures, run output still follows the job's delivery."
     : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
@@ -216,11 +203,11 @@ TARGET+PAYLOAD:
 - "main" = heartbeat lane; payload {kind:"systemEvent",text} (systemEvent default target).
 - "session:<key>" = named session.
 - {kind:"agentTurn",message}; timeoutSeconds 0=none.
-- Inherited configured MCP authority includes only model-callable tools; interactive app-view-only capabilities are excluded from headless jobs.${scriptPayloadLine}
+- Scheduled work uses this agent's current tools and connected accounts; there is no separate per-job tool list.${scriptPayloadLine}
 
 PACED LOOP: recurring job + pacing{min?,max?} durations ("15m","4h"; at least one). Inside its run, job calls next_check in:"<dur>" to set the next delay (clamped to bounds, measured from run end; failed runs keep normal backoff). Adaptive polling: tighten when active, back off when quiet.
 
-AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks) in a workspace script the payload runs in one exec; keep detailed instructions in a workspace file beside it that the message references ("Follow scripts/<job>.md"), so fixes need only file edits. Message names exact tool ids + argument shapes; cap toolsAllow to what the run needs.${scriptCue}
+AUTHORING (recurring): every fire re-runs the same instructions; keep the model for judgment only. Put repeatable logic (listing/diffing, dedupe, checkpoints/watermarks) in a workspace script the payload runs in one exec; keep detailed instructions in a workspace file beside it that the message references ("Follow scripts/<job>.md"), so fixes need only file edits. Message names exact tool ids + argument shapes.${scriptCue}
 
 ${triggerSection}
 
@@ -313,7 +300,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             agentId: opts.agentId,
           })
         : undefined;
-      const creatorExecToolTarget = resolveCronCreatorExecToolTarget(opts?.creatorToolAllowlist);
       const callerIdentity =
         callerAgentId && opts?.agentSessionKey?.trim()
           ? {
@@ -323,39 +309,8 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               ...(readCronSelfRemoveOnlyJobId(opts)
                 ? { cronSelfManagementJobId: readCronSelfRemoveOnlyJobId(opts) }
                 : {}),
-              ...(opts?.creatorToolAllowlistCaptureRef?.value?.version === 1 &&
-              opts.creatorToolAllowlistCaptureRef.value.source === "final-executable-surface"
-                ? {
-                    cronToolsAllowCapture: "final-executable-surface" as const,
-                    ...(creatorExecToolTarget ? { cronExecToolTarget: creatorExecToolTarget } : {}),
-                  }
-                : {}),
             }
           : undefined;
-
-      const withCreatorAuthorityProvenance = async <T>(
-        authority: CronCreatorToolAuthoritySnapshot | undefined,
-        run: () => Promise<T>,
-      ): Promise<T> => {
-        if (!authority) {
-          return await run();
-        }
-        if (!callerIdentity) {
-          throw new Error(
-            "fresh configured MCP cron authority requires an authenticated local agent run",
-          );
-        }
-        const cronExecToolTarget = resolveCronCreatorExecToolTarget(authority.tools);
-        return await withGatewayToolCallerIdentity(
-          {
-            ...callerIdentity,
-            cronToolsAllowCapture: "final-executable-surface",
-            ...(cronExecToolTarget ? { cronExecToolTarget } : {}),
-            cronCreatorAuthorityGrant: authority.grant,
-          },
-          run,
-        );
-      };
 
       return await withGatewayToolCallerIdentity(callerIdentity, async () => {
         switch (action) {
@@ -443,6 +398,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
           case "add": {
             const canonicalJob = stripCronCreateNullClears(readCronToolJob(params, "add").job);
             assertNoCronShellExecution(canonicalJob);
+            assertNoNewCronToolAllowlist(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
             if (
@@ -462,6 +418,10 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               normalizeCronJobCreate(canonicalJob, {
                 sessionContext: { sessionKey: opts?.agentSessionKey },
               }) ?? canonicalJob;
+            if (isRecord(job.payload)) {
+              delete job.payload.toolsAllow;
+              delete job.payload.toolsAllowIsDefault;
+            }
             if (
               typeof job.declarationKey === "string" &&
               job.declarationKey.length > 0 &&
@@ -469,31 +429,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             ) {
               delete job.enabled;
             }
-            const requiresCreatorAuthority = cronCreateRequiresCreatorAuthority(
-              job,
-              opts?.creatorToolAllowlist,
-            );
-            assertCronCreatorAuthorityResolutionAvailable({
-              required: requiresCreatorAuthority,
-              resolveCreatorToolAuthority: opts?.resolveCreatorToolAuthority,
-              creatorToolAllowlistCaptureRef: opts?.creatorToolAllowlistCaptureRef,
-              unavailableReason: opts?.creatorAuthorityUnavailableReason,
-            });
-            const resolvedAuthority =
-              requiresCreatorAuthority && opts?.resolveCreatorToolAuthority
-                ? await opts.resolveCreatorToolAuthority({ signal: operationSignal })
-                : undefined;
-            operationSignal?.throwIfAborted();
-            const creatorToolAllowlist = resolvedAuthority?.tools ?? opts?.creatorToolAllowlist;
-            const creatorToolAllowlistCaptureRef = resolvedAuthority
-              ? { value: resolvedAuthority.provenance }
-              : opts?.creatorToolAllowlistCaptureRef;
-            capCronJobToolsAllowOnCreate(
-              job,
-              creatorToolAllowlist,
-              resolvedAuthority?.holdsRuntimeAuthority,
-            );
-            assertInheritedCronToolCaptureReady(job, creatorToolAllowlistCaptureRef);
             const { alias } = resolveMainSessionAlias(runtimeConfig);
             const resolvedSessionKey = opts?.agentSessionKey
               ? resolveInternalSessionKey({ key: opts.agentSessionKey, alias })
@@ -567,11 +502,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 }
               }
             }
-            return jsonResult(
-              await withCreatorAuthorityProvenance(resolvedAuthority, () =>
-                callGateway("cron.add", gatewayOpts, job),
-              ),
-            );
+            return jsonResult(await callGateway("cron.add", gatewayOpts, { ...job }));
           }
           case "update": {
             const id = requireCronJobIdParam(params);
@@ -583,6 +514,7 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             if (!managementAuthority) {
               assertNoCronShellExecution(canonicalPatch);
             }
+            assertNoNewCronToolAllowlist(canonicalPatch);
             assertCronDeliveryInputNonBlankFields(canonicalPatch.delivery);
             assertCronPacingInput(canonicalPatch.pacing);
             if (
@@ -592,29 +524,21 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
               throw new Error("displayName must be a non-empty string or null");
             }
             const patch = normalizeCronJobPatch(canonicalPatch) ?? canonicalPatch;
+            if (isRecord(patch.payload)) {
+              delete patch.payload.toolsAllow;
+              delete patch.payload.toolsAllowIsDefault;
+            }
             if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
               throw new Error("job required");
             }
-            // Admin patches still need stored-payload inference, but must not
-            // recapture the creator's execution authority.
-            const creatorOptions = managementAuthority ? undefined : opts;
             return jsonResult(
               await updateCronJobFromAgentTool({
                 id,
                 patch,
                 adminManagement: Boolean(managementAuthority),
-                creatorToolAllowlist: creatorOptions?.creatorToolAllowlist,
-                creatorToolAllowlistCaptureRef: creatorOptions?.creatorToolAllowlistCaptureRef,
-                resolveCreatorToolAuthority: creatorOptions?.resolveCreatorToolAuthority,
-                withCreatorAuthorityProvenance:
-                  !managementAuthority && callerIdentity
-                    ? withCreatorAuthorityProvenance
-                    : undefined,
                 gatewayOpts,
                 callGateway,
                 operationSignal,
-                creatorAuthorityUnavailableReason:
-                  creatorOptions?.creatorAuthorityUnavailableReason,
               }),
             );
           }

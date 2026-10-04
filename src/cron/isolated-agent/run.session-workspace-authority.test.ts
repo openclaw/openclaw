@@ -142,7 +142,7 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
       enabled: false,
       schedule: { kind: "every", everyMs: 60_000 },
       sessionTarget: `session:${targetKey}`,
-      payload: { kind: "agentTurn", message: "Read sentinel.txt", toolsAllow: ["read"] },
+      payload: { kind: "agentTurn", message: "Read sentinel.txt" },
       delivery: { mode: "none" },
     };
     if (scenario === "operator") {

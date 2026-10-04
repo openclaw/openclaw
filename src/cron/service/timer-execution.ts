@@ -11,7 +11,6 @@ import {
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
-import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-policy.js";
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
@@ -47,20 +46,6 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
-  }
-  const execTargetRecoveryError = resolveCronToolsAllowExecTargetRecoveryError({
-    jobId: job.id,
-    requirement: job.toolsAllowExecTargetRequirement,
-    execTarget: job.toolsAllowExecTarget,
-  });
-  if (execTargetRecoveryError) {
-    return {
-      status: "error",
-      error: execTargetRecoveryError,
-      diagnostics: createCronRunDiagnosticsFromError("cron-preflight", execTargetRecoveryError, {
-        nowMs: state.deps.nowMs,
-      }),
-    };
   }
   if (options?.streamScheduleKey !== undefined || options?.streamSourceIdentity !== undefined) {
     // Defense in depth over the locked admission checks: stream-origin work must

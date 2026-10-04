@@ -410,8 +410,6 @@ describe("createPersistCronSessionEntry", () => {
       runSessionKey,
       createdActor: { type: "human", source: "profile", id: "profile-ada" },
       thinkingLevel: "high",
-      toolsAllow: ["image_generate", "exec", "write"],
-      toolsAllowIsDefault: true,
       scheduledToolPolicy: {
         version: 1,
         mode: "account",
@@ -419,12 +417,6 @@ describe("createPersistCronSessionEntry", () => {
         ownerAccountId: "work",
       },
       scheduledToolCallerOrigin: { kind: "local" },
-      toolsAllowExecTarget: { version: 1, host: "gateway", ask: "always" },
-      toolsAllowExecTargetRequirement: {
-        version: 1,
-        target: { version: 1, host: "gateway", ask: "always" },
-        grantIndex: 1,
-      },
       persistSessionEntry,
     });
 
@@ -437,16 +429,6 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]?.previousSessionId).toBeUndefined();
     expect(store[runSessionKey]?.forkSource).toBeUndefined();
-    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTarget).toEqual({
-      version: 1,
-      host: "gateway",
-      ask: "always",
-    });
-    expect(store[runSessionKey]?.cronRunContinuation?.toolsAllowExecTargetRequirement).toEqual({
-      version: 1,
-      target: { version: 1, host: "gateway", ask: "always" },
-      grantIndex: 1,
-    });
     expect(store[runSessionKey]?.cronRunContinuation?.scheduledToolPolicy).toEqual({
       version: 1,
       mode: "account",
@@ -467,8 +449,6 @@ describe("createPersistCronSessionEntry", () => {
       cronRunContinuation: {
         lifecycleRevision,
         phase: "running",
-        toolsAllow: ["image_generate", "write"],
-        toolsAllowIsDefault: true,
       },
     });
 

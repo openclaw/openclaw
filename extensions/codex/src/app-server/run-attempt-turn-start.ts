@@ -242,15 +242,6 @@ export async function startCodexAttemptTurn(
   if (!started) {
     throw new Error("codex app-server turn/start failed without an error");
   }
-  const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;
-  if (resourceState.thread.pluginAppPolicyContext) {
-    authoritySourceRef.current = {
-      client: resourceState.client,
-      threadId: resourceState.thread.threadId,
-      policyContext: resourceState.thread.pluginAppPolicyContext,
-      configCwd: connection.effectiveCwd,
-    };
-  }
   turnIdRef.current = started.turn.turn.id;
   return started;
 }

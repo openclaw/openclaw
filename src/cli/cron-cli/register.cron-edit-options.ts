@@ -223,9 +223,8 @@ export async function resolveCronEditPayloadDeliveryPatch(
   }
   if (payload) {
     if (opts.clearTools) {
-      // Clearing a restriction means an explicit unrestricted grant. Persisting
-      // a wildcard avoids creating a new capless legacy job at the upgrade boundary.
-      payload.toolsAllow = ["*"];
+      // Remove the retired field without introducing a new per-job tool list.
+      payload.toolsAllow = null;
     } else if (toolsAllow) {
       payload.toolsAllow = toolsAllow;
     }

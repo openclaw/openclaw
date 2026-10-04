@@ -121,7 +121,6 @@ async function withWebchatTool(
           accountId: "internal-account",
           threadId: "internal-thread",
         },
-        creatorToolAllowlist: ["read"],
       },
       {
         callGatewayTool: async (method, _opts, params) => {
@@ -202,7 +201,10 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           sessionKey,
           enabled: false,
           delivery: delivery ?? { mode: "announce" },
-          payload: expect.objectContaining({ kind: "agentTurn", toolsAllow: ["read"] }),
+          payload: expect.objectContaining({
+            kind: "agentTurn",
+            message: "Report the condition result.",
+          }),
           trigger: { script: "return { fire: false };", once: true },
         }),
       ]);

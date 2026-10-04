@@ -3,7 +3,6 @@ import {
   tryResolveCronJobEffectiveAgentId,
 } from "../../cron/agent-id.js";
 import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
-import type { CronRuntimeAuthority } from "../../cron/runtime-authority.js";
 import {
   createAccountCronScheduledToolPolicy,
   createTrustedCronScheduledToolPolicy,
@@ -13,7 +12,6 @@ import type {
   CronJob,
   CronJobCreate,
   CronJobPatch,
-  CronToolsAllowExecTarget,
   CronToolsAllowProvenance,
 } from "../../cron/types.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
@@ -35,36 +33,6 @@ import type {
   GatewayRequestHandlerOptions,
 } from "./types.js";
 
-export function resolveCronCreatorAuthorityCapture(
-  callerScope: CronCallerScope | undefined,
-):
-  | { captureRuntimeAuthority: () => CronRuntimeAuthority | undefined; assertCurrent: () => void }
-  | undefined {
-  const grant = callerScope?.cronCreatorAuthorityGrant;
-  if (!grant) {
-    return undefined;
-  }
-  if (
-    resolveCronCreatorAuthorityGrantProvenance(grant, grant.runId)?.capturesRuntimeAuthority ===
-    false
-  ) {
-    return undefined;
-  }
-  if (callerScope.toolsAllowProvenance?.source !== "final-executable-surface") {
-    throw new TypeError("cron creator authority grant is missing tool-surface provenance");
-  }
-  let consumed: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
-  return {
-    captureRuntimeAuthority() {
-      consumed = consumeCronCreatorAuthorityGrant(grant);
-      return consumed.authority;
-    },
-    assertCurrent() {
-      consumed?.assertCurrent();
-    },
-  };
-}
-
 export function resolveCronMutationCommitGuard(
   client: GatewayClient | null,
   context: GatewayRequestContext,
@@ -84,24 +52,17 @@ export function resolveCronMutationCommitGuard(
   const identity = client?.internal?.agentRuntimeIdentity;
   const manageAll = identity ? getCronManagementAuthority(identity) : undefined;
   const creatorGrant = identity?.cronCreatorAuthorityGrant;
-  const requesterGrant =
-    creatorGrant &&
-    identity &&
-    resolveCronCreatorAuthorityGrantProvenance(creatorGrant, identity.operationalRunInstance.runId)
-      ?.capturesRuntimeAuthority === false
-      ? creatorGrant
-      : undefined;
   if (
     !validatesAuthority &&
     !jobScope?.callerScope &&
     !manageAll &&
-    !requesterGrant &&
+    !creatorGrant &&
     !callerAuthority?.sessionMutationCommitGuard &&
     !callerAuthority?.hasCurrentClientAuthority
   ) {
     return undefined;
   }
-  let consumedRequester: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
+  let consumedCreator: ReturnType<typeof consumeCronCreatorAuthorityGrant> | undefined;
   return bindGatewayDeviceRevocation(() => {
     callerAuthority?.sessionMutationCommitGuard?.();
     if (callerAuthority?.hasCurrentClientAuthority?.() === false) {
@@ -131,11 +92,11 @@ export function resolveCronMutationCommitGuard(
         throw new TypeError(`unknown cron job id: ${jobScope.jobId}`);
       }
     }
-    if (requesterGrant) {
-      if (consumedRequester) {
-        consumedRequester.assertCurrent();
+    if (creatorGrant && !manageAll) {
+      if (consumedCreator) {
+        consumedCreator.assertCurrent();
       } else {
-        consumedRequester = consumeCronCreatorAuthorityGrant(requesterGrant);
+        consumedCreator = consumeCronCreatorAuthorityGrant(creatorGrant);
       }
     }
   }, callerAuthority?.hasCurrentClientAuthority);
@@ -148,8 +109,6 @@ export type CronCallerScope = {
   accountId: string;
   currentJobId?: string;
   toolsAllowProvenance?: CronToolsAllowProvenance;
-  /** Restrict-only exec policy carried by the signed creator-turn identity. */
-  toolsAllowExecTarget?: CronToolsAllowExecTarget;
   cronCreatorAuthorityGrant?: CronCreatorAuthorityGrant;
   manageAll?: () => void;
 };
@@ -224,14 +183,6 @@ export function readCronCallerScope(
     currentJobId,
     manageAll,
     ...(toolsAllowProvenance ? { toolsAllowProvenance } : {}),
-    ...(surfaceProvenance && identity.cronExecToolTarget?.host === "gateway"
-      ? {
-          toolsAllowExecTarget: {
-            version: 1 as const,
-            ...identity.cronExecToolTarget,
-          },
-        }
-      : {}),
     ...(!manageAll && identity.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: identity.cronCreatorAuthorityGrant }
       : {}),

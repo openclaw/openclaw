@@ -49,7 +49,7 @@ describe("scheduled policy preservation across payload conversions", () => {
         schedule: { kind: "every", everyMs: 60_000 },
         sessionTarget: "isolated",
         wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "report", toolsAllow: ["message"] },
+        payload: { kind: "agentTurn", message: "report" },
         delivery: { mode: "none" },
       };
       try {
@@ -83,7 +83,7 @@ describe("scheduled policy preservation across payload conversions", () => {
           mode === "account" ? accountPolicy : { version: 1, mode: "trusted" },
         );
         expect(restored?.owner).toMatchObject(owner);
-        expect(restored?.payload.toolsAllow).toEqual(["message"]);
+        expect(restored?.payload).toMatchObject({ kind: "agentTurn", message: "report" });
       } finally {
         cron.stop();
       }

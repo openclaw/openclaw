@@ -48,7 +48,6 @@ describe("cron scheduled tool policy", () => {
     });
     expect(
       resolveCronScheduledToolPolicy({
-        toolsAllow: ["write"],
         scheduledToolPolicy: policy,
         owner: {
           sessionKey: "agent:main:discord:group:ops",
@@ -58,7 +57,6 @@ describe("cron scheduled tool policy", () => {
     ).toEqual(policy);
     expect(
       resolveCronScheduledToolPolicy({
-        toolsAllow: ["write"],
         scheduledToolPolicy: policy,
         owner: {
           sessionKey: "agent:main:discord:group:ops",
