@@ -391,7 +391,8 @@ and preserves the same cleanup contract for shipped `owner.sqlite` markers.
 Cleanup rechecks directory and token identity before removal. Live leases,
 unreadable entries, symlinks, and invalid tokens preserve files. An aged instance
 left without a token by interrupted allocation or older partial cleanup is
-reclaimed after a successful rename probe. Allocation creates the token before
+reclaimed only after a complete process and open-file census proves inactivity,
+followed by a successful rename probe. Allocation creates the token before
 creating payload, and disposal removes payload before its token.
 The token belongs to its capture instance; captures do not create a global
 coordination database.
@@ -413,13 +414,15 @@ Startup and hourly cleanup also reclaim tokenless `openclaw-plugin-build-*` and
 the current system temporary directory. Roots must be older than one hour and
 have no custody token. On macOS and Linux, cleanup rechecks that each legacy root belongs
 to the current UID immediately before its rename, preserving other users' captures even in
-privileged runs. Windows has no equivalent UID check, so privileged Windows cleanup keeps
-the age and rename-probe rules below.
-A complete process census that finds another OpenClaw
-producer preserves legacy roots. When the census is unavailable, including on
-Windows, cleanup uses age and a rename probe instead; sharing violations leave
-locked roots for a later cycle. This is best-effort cleanup of reconstructible
-legacy scratch, not proof that an older producer has stopped using it.
+privileged runs. A live OpenClaw producer preserves tokenless roots. On Linux,
+cleanup also inspects process file descriptors, working directories, and mapped
+files, including holders that are not OpenClaw processes. Only a complete census
+with no holder permits removal. Unreadable or incomplete inspection preserves
+the roots and emits one warning per sweep with the reason; cleanup retries on a
+later sweep without interrupting loading or updates. Platforms without complete
+open-file inspection, including macOS and Windows, preserve tokenless roots.
+Managed instances with custody tokens continue to use their native lease on all
+platforms. A rename probe alone never establishes inactivity.
 
 Older `openclaw-plugin-build-*` directories in the system temporary directory
 have no owner record proving whether their producer is still alive. Doctor reports
