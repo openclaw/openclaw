@@ -180,7 +180,6 @@ describe("msteams messenger sharepoint site", () => {
           getAccessToken: async () => "token",
         },
         sharePointSiteId: "site-123",
-        retry: { maxAttempts: 3, baseDelayMs: 0, maxDelayMs: 0 },
         onRetry: (e) => retryEvents.push({ nextAttempt: e.nextAttempt, delayMs: e.delayMs }),
       });
 
@@ -189,8 +188,8 @@ describe("msteams messenger sharepoint site", () => {
       expect(providerPayloads[1]).toBe(providerPayloads[0]);
       expect(ids).toEqual(["id:one"]);
       expect(retryEvents).toEqual([
-        { nextAttempt: 2, delayMs: 0 },
-        { nextAttempt: 3, delayMs: 0 },
+        { nextAttempt: 2, delayMs: 250 },
+        { nextAttempt: 3, delayMs: 500 },
       ]);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
