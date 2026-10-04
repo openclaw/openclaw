@@ -1,8 +1,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { constants } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import * as stateDatabase from "./openclaw-state-db.js";
@@ -23,6 +27,11 @@ import {
   syncGitHubIdentity,
 } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
+import {
+  inspectProfileAvatarInDatabase,
+  selectProfileDisplayEntries,
+  selectResolvedUserProfileMetadataById,
+} from "./user-profiles-internal.js";
 import { migrateLegacyTailscaleProfileIdentities } from "./user-profiles-tailscale-migration.js";
 import {
   adoptTailscaleProfileAvatar,
@@ -186,6 +195,94 @@ describe("user profiles", () => {
     expect(cleared).toMatchObject({ id: target.id });
     expect(cleared).not.toHaveProperty("role");
     expect(getUserProfileRole(target.id, options)).toBeNull();
+  });
+
+  it.each(["unadmitted", "admitted", "authorizer"] as const)(
+    "preserves metadata and display reads on a %s handle across role schema changes",
+    (mode) => {
+      const profile = ensureProfileForEmail("reader@example.test", options);
+      setUserProfileRole(profile.id, "maintainer", options);
+      expect(setAvatar(profile.id, new Uint8Array([1, 2, 3]), "image/png", options).ok).toBe(true);
+      const reader = openNodeSqliteDatabase(options.path, { readOnly: true });
+      enableNodeSqliteKyselyStatementCache(reader);
+      if (mode !== "unadmitted") {
+        admitSqliteSchema(reader);
+      }
+      if (mode === "authorizer") {
+        reader.setAuthorizer((action, table, column) =>
+          action === constants.SQLITE_READ && table === "user_profiles" && column === "role"
+            ? constants.SQLITE_IGNORE
+            : constants.SQLITE_OK,
+        );
+      }
+      try {
+        const role = mode === "authorizer" ? null : "maintainer";
+        expect(selectResolvedUserProfileMetadataById(reader, profile.id)).toMatchObject({
+          id: profile.id,
+          role,
+        });
+        expect(selectProfileDisplayEntries(reader, [profile.id])).toMatchObject([
+          [
+            profile.id,
+            { id: profile.id, ...(mode === "authorizer" ? {} : { role }), has_avatar: 1 },
+          ],
+        ]);
+        if (mode === "admitted") {
+          expect(inspectProfileAvatarInDatabase(reader, profile.id)).toMatchObject({
+            profile: { id: profile.id, role },
+            hasAvatar: true,
+            avatar: { byteLength: 3 },
+          });
+        } else {
+          expect(() => inspectProfileAvatarInDatabase(reader, profile.id)).toThrow(
+            "Profile avatar reads require admitted schema facts",
+          );
+        }
+        openOpenClawStateDatabase(options).db.exec("ALTER TABLE user_profiles DROP COLUMN role");
+        runSqliteReadOperationSync(reader, () => {
+          expect(selectResolvedUserProfileMetadataById(reader, profile.id)).not.toHaveProperty(
+            "role",
+          );
+          expect(selectProfileDisplayEntries(reader, [profile.id])[0]?.[1]).not.toHaveProperty(
+            "role",
+          );
+          if (mode === "admitted") {
+            expect(inspectProfileAvatarInDatabase(reader, profile.id)).toMatchObject({
+              profile: { id: profile.id },
+              hasAvatar: true,
+              avatar: { byteLength: 3 },
+            });
+          }
+        });
+      } finally {
+        reader.close();
+      }
+    },
+  );
+
+  it("keeps ensured writer projections available when an authorizer denies schema probes and unrelated columns", () => {
+    const profile = ensureProfileForEmail("authorized-reader@example.test", options);
+    setUserProfileRole(profile.id, "maintainer", options);
+    const db = openOpenClawStateDatabase(options).db;
+    db.setAuthorizer((action, table, column) =>
+      action === constants.SQLITE_PRAGMA ||
+      (action === constants.SQLITE_READ &&
+        table === "user_profiles" &&
+        column === "primary_github_account_id")
+        ? constants.SQLITE_DENY
+        : constants.SQLITE_OK,
+    );
+    try {
+      expect(selectResolvedUserProfileMetadataById(db, profile.id)).toMatchObject({
+        id: profile.id,
+        role: "maintainer",
+      });
+      expect(selectProfileDisplayEntries(db, [profile.id])).toMatchObject([
+        [profile.id, { id: profile.id, role: "maintainer" }],
+      ]);
+    } finally {
+      db.setAuthorizer(null);
+    }
   });
 
   it("keeps immutable owners isolated when a numeric GitHub login is renamed and reused", () => {
