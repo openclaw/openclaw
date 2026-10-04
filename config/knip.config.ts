@@ -707,6 +707,8 @@ const config = {
     // This worker-thread proof entry is loaded from its test with new URL(),
     // which Knip cannot discover as a static import.
     "src/worker/repro-worker-connection-closing-window.ts",
+    // The failed-acquisition regression spawns this catalog worker by resolved path.
+    "src/plugins/plugin-instance-module-loader.failed-acquisition.worker.ts",
     "src/shared/text/assistant-visible-text.ts",
     bundledPluginFile("telegram", "src/draft-chunking.ts"),
   ],

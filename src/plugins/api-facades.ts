@@ -1,4 +1,5 @@
 import { bindPluginCliProgram } from "./cli-callback-binding.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { pluginInstanceState, type PluginInstanceHandle } from "./plugin-instance-scope.js";
 import type { OpenClawPluginCliRegistrar } from "./plugin-registration.types.js";
 import type { OpenClawPluginApi } from "./types.js";
@@ -72,6 +73,16 @@ export function attachPluginApiFacades<T extends object>(
   return api as T & PluginApiFacadeFields;
 }
 
+/** A replaced module handle still belongs to the caller already on the stack. */
+function rejectForeignPluginApiCaller(instance: PluginInstanceHandle): void {
+  const caller = pluginInstanceInvocation.getStore()?.instance;
+  if (caller && caller !== instance) {
+    throw new Error(
+      `Plugin ${instance.pluginId} API registration does not belong to the calling workspace generation`,
+    );
+  }
+}
+
 /** Registration callbacks and their API retain the exact admitted instance. */
 export function instrumentPluginInstanceApi(
   api: OpenClawPluginApi,
@@ -93,8 +104,9 @@ export function instrumentPluginInstanceApi(
           return value;
         }
         if (key === "registerCli" || key === "registerNodeCliFeature") {
-          return (registrar: OpenClawPluginCliRegistrar, ...options: unknown[]) =>
-            instance.run(() =>
+          return (registrar: OpenClawPluginCliRegistrar, ...options: unknown[]) => {
+            rejectForeignPluginApiCaller(instance);
+            return instance.run(() =>
               Reflect.apply(value, target, [
                 instance.wrap(async (context: Parameters<OpenClawPluginCliRegistrar>[0]) => {
                   const { withPluginCliServiceScheduler } =
@@ -109,9 +121,11 @@ export function instrumentPluginInstanceApi(
                 ...options.map((option) => instance.wrap(option)),
               ]),
             );
+          };
         }
-        return (...args: unknown[]) =>
-          instance.run(() =>
+        return (...args: unknown[]) => {
+          rejectForeignPluginApiCaller(instance);
+          return instance.run(() =>
             Reflect.apply(
               value,
               target,
@@ -120,6 +134,7 @@ export function instrumentPluginInstanceApi(
               ),
             ),
           );
+        };
       },
     }),
   );

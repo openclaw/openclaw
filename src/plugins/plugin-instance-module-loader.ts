@@ -14,11 +14,18 @@ import {
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
+import { getPluginInstanceOwner } from "./plugin-instance-scope.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import {
   preparePluginModuleLoaderRecovery,
   type PluginInstanceModuleLoaderParams,
 } from "./plugin-module-loader-recovery.js";
+import {
+  nativeEsmModuleIdentity,
+  readRetainedNativeEsmModule,
+  retainNativeEsmModuleLoad,
+} from "./plugin-native-esm-identity.js";
 import { bindNativePluginInstanceModuleLoader } from "./plugin-native-module-loader.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { bindSharedPluginModuleLoader } from "./plugin-shared-module-loader.js";
@@ -29,7 +36,75 @@ import {
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
 import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
+import { getPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+
+type RetainedNativeEsmOwner = {
+  instance: object;
+  execute: <T>(run: () => T) => T;
+  moduleSource: (filename: string) => string;
+  accepts: () => boolean;
+};
+
+const retainedNativeEsmOwners = new Map<string, Set<RetainedNativeEsmOwner>>();
+const retainedNativeEsmKnownOwners = new Map<string, WeakSet<object>>();
+const retainedNativeEsmArtifacts = new Map<
+  string,
+  ReturnType<typeof capturePluginGenerationArtifact>
+>();
+const retainedNativeEsmSourceBuilds = new Map<
+  string,
+  Map<string, ReturnType<typeof buildPluginTypeScriptSource>>
+>();
+
+function nativeEsmSourceBuilds(
+  identity: string | undefined,
+): Map<string, ReturnType<typeof buildPluginTypeScriptSource>> {
+  if (!identity) {
+    return new Map();
+  }
+  const existing = retainedNativeEsmSourceBuilds.get(identity);
+  if (existing) {
+    return existing;
+  }
+  const created = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
+  retainedNativeEsmSourceBuilds.set(identity, created);
+  return created;
+}
+
+function liveNativeEsmOwners(identity: string): readonly RetainedNativeEsmOwner[] {
+  return [...(retainedNativeEsmOwners.get(identity) ?? [])].filter((owner) => owner.accepts());
+}
+
+function nativeEsmRetentionWorkspace(
+  instance: PluginInstanceModuleLoaderParams["instance"],
+): string | undefined {
+  const owner = getPluginInstanceOwner(instance);
+  const workspaceDir = owner
+    ? getPluginRuntimeLoadContext(owner.registry)?.workspaceDir
+    : undefined;
+  const workspace = workspaceDir?.trim();
+  return workspace ? workspace : undefined;
+}
+
+function retainedNativeEsmOwnerFor(
+  identity: string,
+  instance: object | undefined,
+): RetainedNativeEsmOwner {
+  const owners = liveNativeEsmOwners(identity);
+  if (instance) {
+    const requested = owners.find((owner) => owner.instance === instance);
+    if (!requested) {
+      throw new Error("Plugin native ESM capture has no live workspace owner for this load");
+    }
+    return requested;
+  }
+  const only = owners.length === 1 ? owners[0] : undefined;
+  if (only) {
+    return only;
+  }
+  throw new Error("Plugin native ESM capture has no live workspace owner for this load");
+}
 
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
@@ -64,7 +139,46 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
+  // The catalog worker keeps one capture per workspace for an unchanged native
+  // ESM entry. Another capture for that same workspace would be a module job
+  // Node cannot unload. A different workspace gets its own module, so its
+  // module-level state stays there. Each live generation keeps its own
+  // execution owner, and a deferred import uses the generation that requested it.
+  const nativeEsmIdentity = nativeEsmModuleIdentity(
+    params.source,
+    nativeEsmRetentionWorkspace(params.instance),
+  );
+  const retainedNativeEsm = nativeEsmIdentity
+    ? readRetainedNativeEsmModule(nativeEsmIdentity)
+    : undefined;
+  if (nativeEsmIdentity && retainedNativeEsm) {
+    if (
+      params.expectedSourceDigest !== undefined &&
+      retainedNativeEsm.sourceDigest !== params.expectedSourceDigest
+    ) {
+      throw new Error(
+        `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
+      );
+    }
+    params.instance.sourceDigest = retainedNativeEsm.sourceDigest;
+  }
+  if (nativeEsmIdentity) {
+    const bindModuleLoader = params.instance.bindModuleLoader.bind(params.instance);
+    params.instance.bindModuleLoader = (load, hasSource) => {
+      bindModuleLoader(
+        retainNativeEsmModuleLoad(
+          nativeEsmIdentity,
+          params.source,
+          () => params.instance.sourceDigest,
+          load,
+        ),
+        hasSource,
+      );
+    };
+  }
+  // Compiled TypeScript lives beside the retained module. A later generation has
+  // to see the same output map, or a helper's old URL no longer resolves.
+  const sourceBuilds = nativeEsmSourceBuilds(nativeEsmIdentity);
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
       const source = build.sourceForOutput(filename);
@@ -74,28 +188,97 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     }
     return { source: filename };
   };
-  const artifact = capturePluginGenerationArtifact(
-    params.rootDir,
-    params.standalone ? params.source : undefined,
-    (run) => params.instance.run(run),
-    (filename) => {
-      const entry = sourceForOutput(filename);
-      return entry.generated ? filename : entry.source;
-    },
-    params.nativeRecovery,
-  );
-  if (
-    params.expectedSourceDigest !== undefined &&
-    artifact.sourceDigest !== params.expectedSourceDigest
-  ) {
-    artifact.dispose();
-    throw new Error(
-      `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
-    );
+  let releaseNativeEsmOwner: (() => void) | undefined;
+  if (nativeEsmIdentity) {
+    let accepts = true;
+    const owners = retainedNativeEsmOwners.get(nativeEsmIdentity) ?? new Set();
+    retainedNativeEsmOwners.set(nativeEsmIdentity, owners);
+    const owner: RetainedNativeEsmOwner = {
+      instance: params.instance,
+      execute: (run) => params.instance.run(run),
+      moduleSource: (filename) => {
+        const entry = sourceForOutput(filename);
+        return entry.generated ? filename : entry.source;
+      },
+      accepts: () => accepts,
+    };
+    owners.add(owner);
+    const knownOwners = retainedNativeEsmKnownOwners.get(nativeEsmIdentity) ?? new WeakSet();
+    knownOwners.add(params.instance);
+    retainedNativeEsmKnownOwners.set(nativeEsmIdentity, knownOwners);
+    releaseNativeEsmOwner = () => {
+      accepts = false;
+      owners.delete(owner);
+      if (owners.size === 0) {
+        retainedNativeEsmOwners.delete(nativeEsmIdentity);
+      }
+    };
   }
-  bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
-  params.instance.sourceDigest = artifact.sourceDigest;
-  params.instance.onModuleDispose(artifact.disposeAsync);
+  const requestNativeEsmOwner = nativeEsmIdentity
+    ? () =>
+        retainedNativeEsmOwnerFor(nativeEsmIdentity, pluginInstanceInvocation.getStore()?.instance)
+    : undefined;
+  const reusedArtifact =
+    nativeEsmIdentity && retainedNativeEsm
+      ? retainedNativeEsmArtifacts.get(nativeEsmIdentity)
+      : undefined;
+  // The owner is visible to capture before this returns. Validation can still
+  // reject, and module disposal is not registered until the bind succeeds.
+  let artifact = reusedArtifact;
+  try {
+    artifact ??= capturePluginGenerationArtifact(
+      params.rootDir,
+      params.standalone ? params.source : undefined,
+      requestNativeEsmOwner
+        ? (run) => requestNativeEsmOwner().execute(run)
+        : (run) => params.instance.run(run),
+      requestNativeEsmOwner
+        ? (filename) => requestNativeEsmOwner().moduleSource(filename)
+        : (filename) => {
+            const entry = sourceForOutput(filename);
+            return entry.generated ? filename : entry.source;
+          },
+      params.nativeRecovery,
+    );
+    if (
+      !reusedArtifact &&
+      params.expectedSourceDigest !== undefined &&
+      artifact.sourceDigest !== params.expectedSourceDigest
+    ) {
+      artifact.dispose();
+      throw new Error(
+        `Plugin ${params.instance.pluginId} source changed after installation; inspect it before reloading.`,
+      );
+    }
+    if (nativeEsmIdentity && !reusedArtifact) {
+      retainedNativeEsmArtifacts.set(nativeEsmIdentity, artifact);
+    }
+    bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
+    params.instance.sourceDigest = artifact.sourceDigest;
+    const retainedArtifact = artifact;
+    params.instance.onModuleDispose(() => {
+      releaseNativeEsmOwner?.();
+      if (nativeEsmIdentity && readRetainedNativeEsmModule(nativeEsmIdentity)) {
+        return undefined;
+      }
+      if (nativeEsmIdentity) {
+        retainedNativeEsmArtifacts.delete(nativeEsmIdentity);
+      }
+      return retainedArtifact.disposeAsync();
+    });
+  } catch (error) {
+    releaseNativeEsmOwner?.();
+    if (
+      nativeEsmIdentity &&
+      artifact &&
+      artifact !== reusedArtifact &&
+      retainedNativeEsmArtifacts.get(nativeEsmIdentity) === artifact
+    ) {
+      retainedNativeEsmArtifacts.delete(nativeEsmIdentity);
+      artifact.dispose();
+    }
+    throw error;
+  }
   const bindModuleLoader = preparePluginModuleLoaderRecovery(
     params,
     artifact,
@@ -108,7 +291,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     pluginSdkResolution: params.pluginSdkResolution,
     devSourceRoot: params.devSourceRoot,
   });
-  if (aliases.packageRoot) {
+  if (aliases.packageRoot && !reusedArtifact) {
     artifact.linkHost(aliases.packageRoot);
   }
   installOpenClawPluginSdkNativeResolver({
@@ -186,8 +369,15 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   const demandedModules = new Map<string, { url: string } | { error: unknown }>();
   let resolvingPaths = false;
   params.instance.onModuleDispose(() => {
+    if (nativeEsmIdentity && readRetainedNativeEsmModule(nativeEsmIdentity)) {
+      return;
+    }
     for (const build of sourceBuilds.values()) {
       build.dispose();
+    }
+    sourceBuilds.clear();
+    if (nativeEsmIdentity) {
+      retainedNativeEsmSourceBuilds.delete(nativeEsmIdentity);
     }
   });
   const includeSources = (additions: readonly string[]) => {
@@ -215,6 +405,26 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   };
   const hooks = Module.registerHooks({
     resolve(specifier, context, nextResolve) {
+      // The newest generation's hook runs first. Yield to another live workspace.
+      // Reject a released owner of this plugin before capture. Another plugin's
+      // instance belongs to the next hook.
+      const requestedOwner = pluginInstanceInvocation.getStore()?.instance;
+      if (nativeEsmIdentity && requestedOwner) {
+        const knownOwner =
+          retainedNativeEsmKnownOwners.get(nativeEsmIdentity)?.has(requestedOwner) === true;
+        if (!knownOwner) {
+          return nextResolve(specifier, context);
+        }
+        const requestedIsLive = liveNativeEsmOwners(nativeEsmIdentity).some(
+          (owner) => owner.instance === requestedOwner,
+        );
+        if (!requestedIsLive) {
+          throw new Error("Plugin native ESM capture has no live workspace owner for this load");
+        }
+        if (requestedOwner !== params.instance) {
+          return nextResolve(specifier, context);
+        }
+      }
       // Lazy native imports outlive the binding call. Only this graph's importers
       // borrow its SDK alias cache; callbacks may otherwise use a newer registry.
       const parent = context.parentURL;

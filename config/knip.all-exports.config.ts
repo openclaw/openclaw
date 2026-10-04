@@ -57,6 +57,8 @@ const ROOT_TEST_ENTRY_GLOBS = [
   "test/type-contracts/**/*.ts!",
   // The module-generation test launches this Bun regression directly from its source path.
   "src/plugins/plugin-module-generation.bun.test-support.ts!",
+  // The failed-acquisition regression spawns this catalog worker by resolved path.
+  "src/plugins/plugin-instance-module-loader.failed-acquisition.worker.ts!",
   // The plugin artifact suite launches these Node tests with the native tooling preload.
   "src/cli/plugins-feature-artifact.native.test-support.ts!",
   // ExecHostTransportProofTests.swift launches this isolated native client by path.
