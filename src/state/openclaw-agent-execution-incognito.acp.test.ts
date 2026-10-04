@@ -56,6 +56,32 @@ afterAll(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
+it.each(["", " \t "])("returns null for the empty ACP session key %j", async (sessionKey) => {
+  await expect(
+    readAcpSessionEntryAsync({ cfg, env, sessionKey }, { actor, authority }),
+  ).resolves.toBeNull();
+  await expect(
+    upsertAcpSessionMeta(
+      {
+        cfg,
+        env,
+        sessionKey,
+        mutate() {
+          throw new Error("Empty ACP mutation invoked its mutator");
+        },
+      },
+      { actor, authority },
+    ),
+  ).resolves.toBeNull();
+});
+
+it("normalizes an ACP session key while retaining a missing-entry result", async () => {
+  const sessionKey = key("missing");
+  await expect(
+    readAcpSessionEntryAsync({ cfg, env, sessionKey: ` ${sessionKey} ` }, { actor, authority }),
+  ).resolves.toMatchObject({ sessionKey, storeSessionKey: sessionKey, entry: undefined });
+});
+
 it("orders set, link and clear through both owners with zero caller-thread SQL", async () => {
   const readComposed = async ({
     authority: boundAuthority,

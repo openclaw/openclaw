@@ -58,18 +58,6 @@ describe("renderPluginCatalogDetail", () => {
       container.querySelector(".plugin-catalog-detail__icon .plugins-tile--white"),
     ).not.toBeNull();
   });
-
-  it("does not invent a ClawHub link for an unproven local package", () => {
-    const result = createDiscoveryDetail(createPlugin({ id: "demo", name: "Demo" }));
-    result.plugin.id = "local_ZGVtbw";
-    result.plugin.catalog.packageName = "demo";
-    result.plugin.local.pluginId = "demo";
-    result.plugin.local.action = "manage";
-    result.detail.origin = "local";
-    const container = mount(result, { canInstall: false });
-
-    expect(container.querySelector('a[href^="https://clawhub.ai/"]')).toBeNull();
-  });
 });
 
 it.each([

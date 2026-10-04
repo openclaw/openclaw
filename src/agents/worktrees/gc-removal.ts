@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { withWorktreeAllocationLease } from "./allocation.js";
 import {
@@ -29,6 +30,7 @@ import type {
   ManagedWorktreeRecord,
   ManagedWorktreeRunEndCleanupOutcome,
   RemoveManagedWorktreeResult,
+  WorktreeWorkerAuthority,
 } from "./types.js";
 
 const log = createSubsystemLogger("agents/worktrees");
@@ -45,6 +47,7 @@ export async function removeWorktreeIfLossless(
     env: NodeJS.ProcessEnv;
     now: () => number;
     getConfig: () => OpenClawConfig;
+    workerAuthority?: WorktreeWorkerAuthority;
     prepareRecord: (record: ManagedWorktreeRecord) => Promise<ManagedWorktreeRecord>;
     remove: (params: {
       id: string;
@@ -88,8 +91,22 @@ export async function removeWorktreeIfLossless(
   // Run-end cleanup must leave a durable outcome even when safety retains the checkout.
   // QA and operators observe this product-boundary fact through worktrees.list.
   try {
-    claimWorktreeRemoval(env, { worktreeId: id, token: claimToken, assertCurrent });
+    await claimWorktreeRemoval(env, {
+      worktreeId: id,
+      token: claimToken,
+      assertCurrent,
+      workerAuthority: {
+        ...params.workerAuthority,
+        assertCurrent: params.workerAuthority
+          ? params.workerAuthority.assertCurrent
+          : assertCurrent,
+        predicates: [...(params.workerAuthority?.predicates ?? []), { kind: "binding", record }],
+      },
+    });
   } catch (error) {
+    if (hasSqliteWorkerOutcomeUnknown(error)) {
+      throw error;
+    }
     if (error instanceof WorktreeRemovalContentionError) {
       if (error.kind === "finalized") {
         // The winning remover owns the terminal cleanup fact; a late contender
@@ -128,7 +145,7 @@ export async function removeWorktreeIfLossless(
           ? undefined
           : (`retained-${inspection.retainedReason}` as const);
     if (retainedOutcome) {
-      abortWorktreeRemoval(env, id, claimToken);
+      await abortWorktreeRemoval(env, id, claimToken);
       recordOutcome(retainedOutcome);
       return false;
     }
@@ -141,7 +158,10 @@ export async function removeWorktreeIfLossless(
     });
     return result.removed;
   } catch (error) {
-    abortWorktreeRemoval(env, id, claimToken);
+    if (hasSqliteWorkerOutcomeUnknown(error)) {
+      throw error;
+    }
+    await abortWorktreeRemoval(env, id, claimToken);
     try {
       recordOutcome("failed", error);
     } catch {
@@ -176,6 +196,14 @@ export function assertOwnerAllowsCleanup(
   if (getRegistryWorktree(env, record.id)?.lastActiveAt !== record.lastActiveAt) {
     throw new WorktreeRemovalLockError("busy", "worktree activity changed during cleanup");
   }
+  assertOwnerPolicyAllowsCleanup(record, params, retiredOwner);
+}
+
+export function assertOwnerPolicyAllowsCleanup(
+  record: ManagedWorktreeRecord,
+  params: WorktreeCleanupOwnerPolicy,
+  retiredOwner = false,
+) {
   if (
     record.ownerId !== undefined &&
     (params.shouldProtectOwner?.(record.ownerKind, record.ownerId) === true ||
@@ -221,6 +249,15 @@ export function createWorktreeGcErrorHandler(context: {
             {
               env,
               signal,
+              workerAuthority: {
+                assertCurrent: () => {
+                  assertCurrent?.();
+                  assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
+                },
+                predicates: [
+                  { kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt },
+                ],
+              },
               commitGuard: () => {
                 assertCurrent?.();
                 assertOwnerAllowsCleanup(env, record, policy, retiredOwner);
@@ -228,10 +265,11 @@ export function createWorktreeGcErrorHandler(context: {
             },
             async (guard) => {
               const token = randomUUID();
-              claimWorktreeRemoval(env, {
+              await claimWorktreeRemoval(env, {
                 worktreeId: record.id,
                 token,
                 assertCurrent: guard.commitGuard,
+                workerAuthority: guard.workerAuthority,
               });
               const assertClaim = createWorktreeRemovalClaimsGuard(env, [record.id], token);
               try {
@@ -264,7 +302,7 @@ export function createWorktreeGcErrorHandler(context: {
                   record.id,
                 );
               } finally {
-                abortWorktreeRemoval(env, record.id, token);
+                await abortWorktreeRemoval(env, record.id, token);
               }
             },
           );

@@ -1,3 +1,4 @@
+import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import type {
   SessionExactEntriesWorkerResult,
   SessionExactEntriesWorkerSelection,
@@ -23,3 +24,8 @@ export type PreparedSessionEntryWorkerRead = {
   database: { agentId: string; path: string; env: NodeJS.ProcessEnv };
   assertCurrent: () => void;
 };
+
+export type SessionEntryReadSourcePreparation = (
+  database: PreparedSessionEntryWorkerRead["database"],
+  identity: DatabasePathIdentity,
+) => void;

@@ -1,7 +1,9 @@
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { randomUUID } from "node:crypto";
+import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { GitWorktreeEffect } from "./git-worktree-operations.js";
+import { runWorktreeRunEndCommand } from "./registry-run-end.js";
+import { captureWorktreeRunEndContext } from "./run-end-lifecycle.js";
+import type { WorktreeWorkerAuthority } from "./types.js";
 
 type ProvisionedSnapshotEffect = Extract<
   GitWorktreeEffect,
@@ -12,48 +14,48 @@ type ProvisionedSnapshotEffect = Extract<
 export function createProvisionedSnapshotWriter(
   env: NodeJS.ProcessEnv,
   worktreeId: string,
-  assertCurrent: () => void,
+  authority: WorktreeWorkerAuthority = {},
 ) {
-  const context = captureOpenClawStateWorkerContext({ env });
+  const context = captureWorktreeRunEndContext(env);
+  const predicates = structuredClone(authority.predicates);
+  const lease = authority.lease;
+  const assertCurrent = authority.assertCurrent;
+  let uncertain: { error: unknown } | undefined;
   return async (
     effect: ProvisionedSnapshotEffect,
     assertEffectCurrent?: () => void,
   ): Promise<void> => {
-    const assertWriteCurrent = () => {
-      assertCurrent();
-      assertEffectCurrent?.();
-    };
-    const { runOpenClawStateWorkerOperation } =
-      await import("../../state/openclaw-state-worker-store.js");
-    let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
+    if (uncertain) {
+      throw uncertain.error;
+    }
     try {
-      await runOpenClawStateWorkerOperation(
+      await runWorktreeRunEndCommand(
         context,
-        (scope) =>
-          scope.execute({
-            type: "worktrees.writeProvisionedSnapshot",
-            input:
+        {
+          type: "worktrees.writeProvisionedSnapshot",
+          input: {
+            value:
               effect.type === "worktree.snapshot-provisioned-reset"
                 ? { worktreeId, kind: "reset" }
                 : { worktreeId, kind: "chunk", ...effect.input },
-          }),
+            receipt: randomUUID(),
+          },
+        },
         {
-          assertCurrent: assertWriteCurrent,
-          createAdmission: (operation) => {
-            settled = operation.settled;
-            return {
-              nativeLocations: [context.admission.databasePath],
-              admission: createSqliteWorkerOperationAdmission((_request, grant) => {
-                context.admission.assertCurrent();
-                assertWriteCurrent();
-                grant();
-              }),
-            };
+          lease,
+          predicates,
+          assertCurrent: () => {
+            assertCurrent?.();
+            assertEffectCurrent?.();
           },
         },
       );
-    } finally {
-      await settled;
+    } catch (error) {
+      // Git transports an error's code, while this host retains its native settlement identity.
+      if (hasSqliteWorkerOutcomeUnknown(error)) {
+        uncertain = { error };
+      }
+      throw error;
     }
   };
 }
@@ -61,12 +63,12 @@ export function createProvisionedSnapshotWriter(
 export async function clearRegistryWorktreeProvisionedChunks(
   env: NodeJS.ProcessEnv,
   worktreeId: string,
-  assertCurrent: () => void,
+  authority?: WorktreeWorkerAuthority,
 ): Promise<void> {
   await createProvisionedSnapshotWriter(
     env,
     worktreeId,
-    assertCurrent,
+    authority,
   )({
     type: "worktree.snapshot-provisioned-reset",
     input: {},

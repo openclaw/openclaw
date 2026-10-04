@@ -764,26 +764,38 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
     });
   }));
 
-it.for(["concurrent-close", "close-failure", "late-context"] as const)(
+it.for([
+  ["concurrent-close", true, 1],
+  ["close-failure", false, 1],
+  ["late-context", true, 1],
+  ["tracked-close-success", true, 2],
+  ["tracked-close-failure", false, 1],
+] as const)(
   "preserves native browser resource ownership: %s",
-  (mode, context) =>
+  ([mode, success, closeCalls], context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      expect(result.code, result.output).toBe(mode === "close-failure" ? 1 : 0);
-      expect(result.report?.numPassedTests, result.output).toBe(mode === "close-failure" ? 0 : 1);
-      expect(result.report?.numFailedTests, result.output).toBe(mode === "close-failure" ? 2 : 0);
+      const tracked = mode.startsWith("tracked-");
+      expect(result.code, result.output).toBe(success ? 0 : 1);
       expect(result.journal).toMatchObject({
-        closeCalls: 1,
-        arrived: true,
-        published: false,
-        browserClosed: mode !== "close-failure",
-        serverClosed: mode !== "close-failure",
+        closeCalls,
+        browserClosed: success,
+        serverClosed: success,
       });
-      if (mode === "close-failure") {
+      if (!tracked) {
+        expect(result.report.numPassedTests, result.output).toBe(success ? 1 : 0);
+        expect(result.report.numFailedTests, result.output).toBe(success ? 0 : 2);
+        expect(result.journal).toMatchObject({ arrived: true, published: false });
+      }
+      if (tracked || !success) {
+        expect(result.successorStarted, result.output).toBe(success);
+      }
+      if (!success) {
         expect(result.output).toContain("synthetic context close failure");
-        expect(result.journal.heldBodyErrorRetained).toBe(true);
-        expect(result.successorStarted).toBe(false);
         expect(result.output).toContain("retiring owned fork");
+      }
+      if (mode === "close-failure") {
+        expect(result.journal.heldBodyErrorRetained).toBe(true);
       }
     }),
 );
@@ -801,59 +813,56 @@ it("joins late suite setup before closing its acquired server", (context) =>
     });
   }));
 
-it("joins a native test timeout before the next state-owning attempt", (context) =>
-  runJoinedShutdownTest(context, async () => {
-    const result = await runFixture("scenario-timeout", context.signal);
-    expect(result.code, result.output).toBe(0);
-    expect(result.report?.numPassedTests, result.output).toBe(2);
-    expect(result.report?.numFailedTests, result.output).toBe(0);
-    expect(result.journal.events).toEqual(["acquired", "gateway closed", "released"]);
-    expect(result.retainedExists).toBe(false);
-    expect(result.successorStarted).toBe(true);
-  }));
-
-it.for(["scenario-noncooperative", "scenario-late-close", "scenario-close-failure"] as const)(
-  "ends only the unsafe native fork and retains its state: %s",
-  (mode, context) =>
+it.for([
+  ["scenario-timeout", undefined],
+  ["scenario-noncooperative", "scenario cleanup did not settle within 500ms"],
+  ["scenario-late-close", "scenario cleanup did not settle within 500ms"],
+  ["scenario-close-failure", "synthetic gateway close failure"],
+] as const)(
+  "joins scenario cleanup or retires the unsafe fork and retains its state: %s",
+  ([mode, failure], context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      expect(result.code, result.output).toBe(1);
-      expect(result.report.numFailedTests, result.output).toBeGreaterThan(0);
-      expect(result.output).toContain("retiring owned fork");
-      expect(result.output).toContain(
-        mode === "scenario-close-failure"
-          ? "synthetic gateway close failure"
-          : "scenario cleanup did not settle within 500ms",
-      );
-      expect(result.retainedExists).toBe(true);
-      expect(result.successorStarted).toBe(false);
-      expect(result.journal.events).not.toContain("released");
+      expect(result.code, result.output).toBe(failure ? 1 : 0);
+      expect(result.retainedExists).toBe(Boolean(failure));
+      expect(result.successorStarted).toBe(!failure);
+      if (failure) {
+        expect(result.report.numFailedTests, result.output).toBeGreaterThan(0);
+        expect(result.output).toContain("retiring owned fork");
+        expect(result.output).toContain(failure);
+        expect(result.journal.events).not.toContain("released");
+      } else {
+        expect(result.report.numPassedTests, result.output).toBe(2);
+        expect(result.report.numFailedTests, result.output).toBe(0);
+        expect(result.journal.events).toEqual(["acquired", "gateway closed", "released"]);
+      }
       if (mode === "scenario-late-close") {
         expect(result.journal.events).toContain("late close settled");
       }
     }),
 );
 
-it("does not clean up suite resources whose acquisition never started", (context) =>
-  runJoinedShutdownTest(context, async () => {
-    const result = await runFixture("resources-browser-failure", context.signal);
-    expect(result.code, result.output).toBe(1);
-    expect(result.output).toContain("synthetic browser startup failure");
-    expect(result.journal.events).toEqual([]);
-    expect(result.retainedExists).toBe(false);
-  }));
-
-it.for(["resources-success", "resources-close-failure", "resources-late-setup"] as const)(
+it.for([
+  ["resources-success", false, undefined],
+  ["resources-close-failure", true, "synthetic shared resource close failure"],
+  ["resources-late-setup", true, "Hook timed out"],
+  ["resources-browser-failure", false, "synthetic browser startup failure"],
+] as const)(
   "owns shared state through native suite cleanup: %s",
-  (mode, context) =>
+  ([mode, retained, failure], context) =>
     runJoinedShutdownTest(context, async () => {
       const result = await runFixture(mode, context.signal);
-      const success = mode === "resources-success";
-      expect(result.code, result.output).toBe(success ? 0 : 1);
-      expect(result.report.success, result.output).toBe(success);
-      expect(result.retainedExists).toBe(!success);
+      expect(result.code, result.output).toBe(failure ? 1 : 0);
+      expect(result.retainedExists).toBe(retained);
+      if (failure) {
+        expect(result.output).toContain(failure);
+      }
+      if (mode === "resources-browser-failure") {
+        expect(result.journal.events).toEqual([]);
+        return;
+      }
+      expect(result.report.success, result.output).toBe(!failure);
       if (mode === "resources-late-setup") {
-        expect(result.output).toContain("Hook timed out");
         expect(result.journal.events).toEqual(["resource acquired", "resource closed"]);
       } else {
         expect(result.report.numPassedTests, result.output).toBe(2);
@@ -862,31 +871,8 @@ it.for(["resources-success", "resources-close-failure", "resources-late-setup"] 
           "first",
           "second",
           "resource closed",
-          ...(success ? ["released"] : []),
+          ...(failure ? [] : ["released"]),
         ]);
-      }
-      if (mode === "resources-close-failure") {
-        expect(result.output).toContain("synthetic shared resource close failure");
-      }
-    }),
-);
-
-it.for(["tracked-close-success", "tracked-close-failure"] as const)(
-  "fences ordinary cases after failed per-test cleanup: %s",
-  (mode, context) =>
-    runJoinedShutdownTest(context, async () => {
-      const result = await runFixture(mode, context.signal);
-      const success = mode === "tracked-close-success";
-      expect(result.code, result.output).toBe(success ? 0 : 1);
-      expect(result.successorStarted, result.output).toBe(success);
-      expect(result.journal).toMatchObject({
-        closeCalls: success ? 2 : 1,
-        browserClosed: success,
-        serverClosed: success,
-      });
-      if (!success) {
-        expect(result.output).toContain("synthetic context close failure");
-        expect(result.output).toContain("retiring owned fork");
       }
     }),
 );

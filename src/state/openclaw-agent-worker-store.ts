@@ -38,6 +38,7 @@ import {
 import { getOpenClawAgentDatabaseIfOpen } from "./openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import type {
+  AgentDatabaseExecutionScope,
   AgentDatabaseRequestExecutionSource,
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
@@ -66,6 +67,35 @@ export type OpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperat
   ): Promise<T>;
   close(): Promise<void>;
 };
+
+/** Send a paired module's command through the caller's already-admitted executor. */
+export function executeOpenClawAgentWorkerPublication<
+  Operations extends SqliteWorkerOperations,
+  Key extends keyof Operations,
+>(
+  scope: AgentDatabaseExecutionScope,
+  publication: {
+    id: string;
+    moduleUrl: string;
+    input: unknown;
+    command: { type: Key; input: Operations[Key]["input"] };
+  },
+  options?: { signal?: AbortSignal },
+): Promise<Operations[Key]["output"]> {
+  const { command } = publication;
+  if (typeof command.type !== "string") {
+    throw new Error("Agent publication commands require a string type");
+  }
+  const result = scope.execute(
+    {
+      type: "database.domain.publish",
+      input: { ...publication, command: { type: command.type, input: command.input } },
+    },
+    options,
+  );
+  // SAFETY: The paired static module owns this serialized command/result contract.
+  return result as Promise<Operations[Key]["output"]>;
+}
 
 /** Retains a native borrow or checks a caller-held executor; each operation borrows the canonical executor. */
 export async function openOpenClawAgentSqliteWorkerStore<Operations extends SqliteWorkerOperations>(
@@ -329,12 +359,10 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
           async (execution, source) => {
             const receipt = await execution.runExisting(source, async (scope) => ({
               value: await preparation.handoff(() =>
-                scope.execute(
-                  {
-                    type: "database.domain.publish",
-                    // SAFETY: These private bytes snapshot this method's typed publication above.
-                    input: deserialize(captured) as typeof publication,
-                  },
+                executeOpenClawAgentWorkerPublication<Operations, typeof command.type>(
+                  scope,
+                  // SAFETY: These private bytes snapshot this method's typed publication above.
+                  deserialize(captured) as typeof publication,
                   commandOptions,
                 ),
               ),
@@ -346,8 +374,7 @@ export async function openOpenClawAgentSqliteWorkerStore<Operations extends Sqli
           },
           commandOptions?.signal,
         );
-        // SAFETY: The paired static module owns this serialized command/result contract.
-        return await (result as Promise<Operations[typeof command.type]["output"]>);
+        return await result;
       } finally {
         preparation.release();
       }

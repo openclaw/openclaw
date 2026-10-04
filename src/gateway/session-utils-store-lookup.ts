@@ -6,7 +6,10 @@ import { resolveAgentMainSessionKey, type SessionEntry } from "../config/session
 import { collectCanonicalSessionLookupKeys } from "../config/sessions/main-session-key.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntryListScope } from "../config/sessions/session-accessor.types.js";
-import type { SessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
+import { withSessionEntriesFromStoresInWorker } from "../config/sessions/session-entry-read-runtime.js";
+import type { SessionMember } from "../config/sessions/session-sharing-store.kernel.js";
+import { prepareSessionStoreTargetInventory } from "../config/sessions/session-store-target-inventory.js";
+import { prepareSessionStoreTargetInventoryRead } from "../config/sessions/session-store-target-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   DEFAULT_AGENT_ID,
@@ -14,23 +17,32 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import {
+  prepareSessionRowPublicationScope,
+  sessionChangeAffectsStoredRow,
+} from "../sessions/session-row-facts.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import {
   resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
-  selectStoredSessionLineage,
 } from "./session-store-key.js";
 import {
   resolveGatewaySessionStoreCandidates,
   resolveGatewaySessionStoreLookupCandidates,
   type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-candidates.js";
+import { GatewaySessionFactsChangedDuringReadError } from "./session-utils-store-errors.js";
 import {
   loadGatewaySessionStoreReads,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-read.js";
+import {
+  captureGatewaySessionReadSource,
+  withIncognitoGatewaySessionStoreTarget,
+} from "./session-utils-store-retained.js";
 import {
   resolveGatewaySessionStoreReadResults,
   type GatewaySessionStoreLookup,
@@ -294,6 +306,171 @@ export function resolveGatewaySessionStoreTargetWithStore(
   );
 }
 
+/** Retain discovery and exact worker rows through one synchronous authority consumer. */
+export async function withGatewaySessionStoreTarget<T>(
+  params: Pick<
+    GatewaySessionStoreLookupParams,
+    "cfg" | "key" | "agentId" | "env" | "projection"
+  > & {
+    includeMembership?: boolean;
+  },
+  consume: (
+    target: GatewaySessionStoreTargetWithStore,
+    membership: ReadonlyMap<string, readonly SessionMember[]>,
+    assertCurrent: () => void,
+  ) => T,
+): Promise<T> {
+  const normalized = {
+    ...params,
+    key: normalizeOptionalString(params.key) ?? "",
+    exactRead: true,
+    readOnly: true,
+  };
+  const identity = resolveSessionStoreIdentity({
+    cfg: params.cfg,
+    sessionKey: normalized.key,
+    agentId: params.agentId,
+  });
+  if (isIncognitoSessionKey(identity.canonicalKey)) {
+    return withIncognitoGatewaySessionStoreTarget({
+      ...params,
+      key: normalized.key,
+      identity,
+      resolve: () => resolveGatewaySessionStoreTargetWithStore(normalized),
+      consume,
+    });
+  }
+  const parsedAgentId = parseAgentSessionKey(normalized.key)?.agentId;
+  const inventory = prepareSessionStoreTargetInventory(
+    params.cfg,
+    [identity.agentId, ...(parsedAgentId ? [parsedAgentId] : [])],
+    params.env,
+  );
+  const inventoryRead = prepareSessionStoreTargetInventoryRead(inventory);
+  return inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
+    const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+    for (const source of sources.agents) {
+      if (!source.result.available && source.result.reason !== "database-missing") {
+        throw new Error(
+          `Session store discovery failed (${source.result.reason}); retry after storage is available.`,
+        );
+      }
+      targetDiscoveryCache.set(source.agentId, {
+        existing: source.result.available ? source.result.targets : [],
+        fallback: {
+          agentId: source.agentId,
+          storePath: inventory.paths.get(source.agentId)!.configured,
+        },
+      });
+    }
+    const plan = prepareGatewaySessionStoreTargetLookup({
+      ...normalized,
+      cfg: inventory.config,
+      env: inventory.env,
+      targetDiscoveryCache,
+    });
+    const publications = plan.reads.map((read) => ({
+      read,
+      scope: prepareSessionRowPublicationScope([read.storePath]),
+    }));
+    let changed = false;
+    const stop = sessionChanges.subscribeFacts((change) => {
+      if (
+        publications.some(({ read, scope }) =>
+          sessionChangeAffectsStoredRow(change, {
+            ...scope,
+            agentId: read.agentId,
+            sessionKeys: read.options.exactKeys ?? [],
+          }),
+        )
+      ) {
+        changed = true;
+      }
+    });
+    let consumed = false;
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        changed = false;
+        assertDiscoveryCurrent();
+        try {
+          return await withSessionEntriesFromStoresInWorker(
+            plan.reads.map((read) => ({
+              agentId: read.agentId ?? identity.agentId,
+              storePath: read.storePath,
+              sessionKeys: read.options.exactKeys ?? [],
+              // Admission needs complete member rows; list-only readers need sharing identities.
+              projection:
+                params.projection === "list" && !params.includeMembership ? "sharing" : "full",
+              includeMembers: params.includeMembership,
+              includeAuthorization: true,
+              env: inventory.env,
+            })),
+            (prepared) => {
+              const assertCurrent = () => {
+                assertDiscoveryCurrent();
+                if (changed) {
+                  throw new GatewaySessionFactsChangedDuringReadError();
+                }
+                for (const owner of prepared) {
+                  owner.assertCurrent();
+                }
+              };
+              for (const [index, read] of plan.reads.entries()) {
+                const owner = prepared[index]!;
+                read.result = ok(
+                  Object.fromEntries(
+                    owner.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
+                  ),
+                );
+                read.readSource = { agentId: owner.database.agentId, path: owner.database.path };
+                read.capturedReadSource = captureGatewaySessionReadSource(
+                  read.readSource,
+                  owner.result.databaseIdentity,
+                );
+              }
+              assertCurrent();
+              const target = plan.resolve();
+              const memberships = new Map<string, readonly SessionMember[]>();
+              for (const owner of prepared) {
+                if (owner.database.path === target.readSource?.path) {
+                  for (const [key, members] of Object.entries(owner.result.members ?? {})) {
+                    memberships.set(key, members);
+                  }
+                }
+              }
+              consumed = true;
+              return consume(target, memberships, assertCurrent);
+            },
+            {
+              prepareSource(input, database, source) {
+                for (const { read, scope } of publications) {
+                  if (
+                    read.storePath === input.storePath &&
+                    (read.agentId ?? identity.agentId) === input.agentId
+                  ) {
+                    scope.prepareSource(database, source);
+                  }
+                }
+              },
+            },
+          );
+        } catch (error) {
+          // The inventory still pins the original stores. Never repeat a consumer's effects.
+          if (
+            consumed ||
+            attempt >= 1 ||
+            !(error instanceof GatewaySessionFactsChangedDuringReadError)
+          ) {
+            throw error;
+          }
+        }
+      }
+    } finally {
+      stop();
+    }
+  });
+}
+
 /** Worker readers fill the same ordered lookup plan before its synchronous selection. */
 export async function prepareGatewaySessionStoreTargetReadOnly(
   params: GatewaySessionStoreLookupParams & {
@@ -327,75 +504,21 @@ export async function prepareGatewaySessionStoreTargetReadOnly(
   return await resolve(prepareGatewaySessionStoreTarget(normalized));
 }
 
-/** Stored-address joins share discovery without passing selected keys through request aliases. */
-export function createGatewaySessionLineageReader(cfg: OpenClawConfig) {
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  function readAlias(key: string, agentId: string) {
-    const target = resolveGatewaySessionStoreTargetWithStore({
-      cfg,
-      key,
-      ...(parseAgentSessionKey(key) ? {} : { agentId }),
-      readOnly: true,
-      exactRead: true,
-      clone: false,
-      projection: "list",
-      targetDiscoveryCache,
-    });
-    return target.store[target.canonicalKey];
-  }
-  const readStored = (agentId: string, key: string): SessionEntry | undefined => {
-    // Every private join has one ephemeral owner, never the durable discovery candidates.
-    if (isIncognitoSessionKey(key)) {
-      return readAlias(key, agentId);
-    }
-    return prepareGatewaySessionStoreTarget({
-      cfg,
-      agentId,
-      key,
-      preserveQualifiedAddress: true,
-      readOnly: true,
-      exactRead: true,
-      clone: false,
-      projection: "list",
-      targetDiscoveryCache,
-    }).resolve().store[key];
-  };
-  return { readStored, readAlias };
-}
-
-/** Exact row owners supply missing parent facts without expanding their selected store. */
-export function createGatewaySessionEntryReader(params: {
+/** Read an already-stored lineage address without applying request aliases. */
+export function readGatewayStoredSessionEntry(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  store: Record<string, SessionEntry>;
-  readSource?: SessionEntryReadSource;
-}): (key: string) => SessionEntry | undefined {
-  const reader = createGatewaySessionLineageReader(params.cfg);
-  return (key) => {
-    if (params.store[key]) {
-      return params.store[key];
-    }
-    if (key === "global" || key === "unknown") {
-      const readSource = params.readSource;
-      if (!readSource) {
-        return undefined;
-      }
-      // Raw lineage belongs to the selected physical store, not its child's logical agent.
-      return readGatewaySessionStore({
-        agentId: readSource.agentId,
-        storePath: readSource.path,
-        options: { readSource, readOnly: true, exactKeys: [key], projection: "list" },
-      })[key];
-    }
-    return selectStoredSessionLineage({
-      cfg: params.cfg,
-      agentId: params.agentId,
-      sessionKey: key,
-      read: reader.readStored,
-      // Missing-literal lineage keeps the shipped request-alias/deleted-owner contract.
-      readAlias: () => reader.readAlias(key, params.agentId),
-    }).value;
-  };
+  key: string;
+  targetDiscoveryCache: GatewaySessionStoreDiscoveryCache;
+}): SessionEntry | undefined {
+  return prepareGatewaySessionStoreTarget({
+    ...params,
+    preserveQualifiedAddress: true,
+    readOnly: true,
+    exactRead: true,
+    clone: false,
+    projection: "list",
+  }).resolve().store[params.key];
 }
 
 /** Resolve one synchronous set of logical metadata targets using exact grouped reads. */

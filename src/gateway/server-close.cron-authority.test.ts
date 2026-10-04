@@ -33,6 +33,7 @@ it("joins committed publication and queued receipt finalization across the real 
   let refusing: Promise<void> | undefined;
   let finishing: Promise<void> | undefined;
   let closing: Promise<void> | undefined;
+  let queuedUse: Promise<receiptAuthority.CronReceiptAuthorityUse> | undefined;
   let observation: ReturnType<typeof receiptAuthority.observeCronReceiptAuthority> | undefined;
   try {
     const port = await fixture.reservePort();
@@ -40,6 +41,8 @@ it("joins committed publication and queued receipt finalization across the real 
     const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
     const storePath = fixture.state.statePath("cron", "authority-close.json");
     const job = makeCronReceiptJob("accepted-before-close", "main");
+    job.payload = { kind: "agentTurn", message: "synthetic", toolsAllow: ["message"] };
+    job.scheduledToolPolicy = { version: 1, mode: "trusted" };
     await withinTest(saveCronStore(storePath, { version: 1, jobs: [job] }), signal);
     const handle = claimCronRunReceiptForTest(storePath, job, 1);
     const context = captureOpenClawStateWorkerContext();
@@ -62,6 +65,9 @@ it("joins committed publication and queued receipt finalization across the real 
       readCronRunReceiptCurrentFactsInDatabase(shared, command),
     );
     await withinTest(observation.prepared, signal);
+    (await observation.acquireUse({ permission: "message", assertCurrent() {} })).initiate(
+      () => undefined,
+    );
 
     const run = stateWorker.runOpenClawStateWorkerOperation;
     let heldSave = false;
@@ -119,6 +125,27 @@ it("joins committed publication and queued receipt finalization across the real 
       }),
     );
     void refusing.catch(() => {});
+    const useQueued = createDeferred();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      kernel.scheduler.schedule({
+        id: "cron-use-before-close",
+        delayMs: 0,
+        run() {
+          queuedUse = observation!.acquireUse({
+            permission: "message",
+            assertCurrent() {},
+            signal: kernel.scheduler.signal,
+          });
+          useQueued.resolve();
+          return queuedUse.catch(() => {});
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await withinTest(useQueued.promise, signal);
+    } finally {
+      vi.useRealTimers();
+    }
     finishing = kernel.connectionWork.track(() =>
       finishCronRunReceiptAsync({
         handle,
@@ -153,6 +180,9 @@ it("joins committed publication and queued receipt finalization across the real 
     );
     expect(kernel.scheduler.signal.aborted).toBe(true);
     expect(kernel.connectionWork.signal.aborted).toBe(true);
+    await expect(
+      observation.acquireUse({ permission: "message", assertCurrent() {} }),
+    ).rejects.toMatchObject({ reason: "retired" });
     expect(() => observation!.readForPreparation()).toThrow("unavailable");
     await expect(saveCronStore(storePath, { version: 1, jobs: [job] })).rejects.toThrow(
       "unavailable",
@@ -165,6 +195,7 @@ it("joins committed publication and queued receipt finalization across the real 
 
     releaseSaveReply.resolve();
     await withinTest(saving, signal);
+    await expect(queuedUse).rejects.toMatchObject({ reason: "retired" });
     await expect(refusing).rejects.toThrow("unavailable");
     await withinTest(
       awaitGateBeforeSettlement(
@@ -198,7 +229,7 @@ it("joins committed publication and queued receipt finalization across the real 
   } finally {
     releaseSaveReply.resolve();
     releaseFinish.resolve();
-    await Promise.allSettled([saving, refusing, finishing, closing]);
+    await Promise.allSettled([saving, refusing, finishing, closing, queuedUse]);
     observation?.release();
     vi.restoreAllMocks();
     await fixture.cleanup();

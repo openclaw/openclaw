@@ -142,13 +142,16 @@ export async function handleChatHistoryRequest({
         },
         signal,
       );
-      return Boolean(
-        transcript &&
-        scopeLegacySessionKeyToAgent({
-          sessionKey: transcript.sessionKey,
-          agentId: sessionAgentId,
-        }) === scopeLegacySessionKeyToAgent({ sessionKey: canonicalKey, agentId: sessionAgentId }),
-      );
+      if (!transcript) {
+        return false;
+      }
+      const storedKey = transcript.sessionKey;
+      // Literal stored owners must not acquire the scope of a legacy alias.
+      const ownerKey =
+        storedKey === "global" || storedKey === "unknown"
+          ? storedKey
+          : scopeLegacySessionKeyToAgent({ sessionKey: storedKey, agentId: sessionAgentId });
+      return ownerKey === canonicalKey;
     };
     if (!(await readTranscriptOwner())) {
       if (retainedTranscript) {

@@ -32,13 +32,15 @@ export async function readAcpSessionEntryAsync(
   params: AcpSessionEntryReadInput,
   incognito?: { actor: IncognitoAgentDatabaseExecution; authority: IncognitoSessionAuthority },
 ): Promise<AcpSessionStoreEntry | null> {
-  if (!incognito) {
+  const sessionKey = params.sessionKey.trim();
+  // Empty keys share the reader's null result without opening a session store.
+  if (!incognito || !sessionKey) {
     return withAcpSessionEntryRead(params, (entry) => entry);
   }
   const { actor, authority } = incognito;
   actor.assertCurrent();
   authority.assertCurrent();
-  const input = { ...params };
+  const input = { ...params, sessionKey };
   const context = captureAcpSessionReadContext(input);
   return actor.sessions.withSharedState(async () => {
     const captured = await context;
