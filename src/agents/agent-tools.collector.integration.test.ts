@@ -55,7 +55,7 @@ it.each([
   const constructedTools = createOpenClawCodingTools({
     ...context,
     config: {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       tools: { swarm: true },
     },
     agentId: "main",

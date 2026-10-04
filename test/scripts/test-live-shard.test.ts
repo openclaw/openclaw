@@ -28,6 +28,7 @@ import {
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
+  withoutReleaseWaivedLiveFiles,
 } from "../../scripts/test-live-shard.mts";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
@@ -36,6 +37,21 @@ import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
+
+  it("drops release-waived single-case live files only for the waived candidate version", () => {
+    const files = [
+      "src/gateway/gateway-progress-refresh.live.test.ts",
+      "src/gateway/gateway-codex-harness.live.test.ts",
+      "test/gateway-subagent-restart.live.test.ts",
+    ];
+    for (const version of ["2026.9.8", "2026.9.9"]) {
+      expect(withoutReleaseWaivedLiveFiles(files, version)).toEqual([
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ]);
+    }
+    expect(withoutReleaseWaivedLiveFiles(files, "2026.9.10")).toEqual(files);
+    expect(withoutReleaseWaivedLiveFiles(files, undefined)).toEqual(files);
+  });
 
   it("discovers live tests without scanning source roots in-process", () => {
     expectNoReaddirSyncDuring(() => {

@@ -12,11 +12,10 @@ export function createWorkerInferenceDrainService(
   const registered = {
     get: () => undefined,
     ...service,
-    cancelInferenceForSession: async () => [],
-    hasInferenceForSession: () => false,
   };
   registerWorkerInferenceSessionControl(registered, {
-    reserveDrain: (sessionId) => {
+    hasSession: () => false,
+    reserveSessionDrain: (sessionId) => {
       const completed = createDeferred();
       let drain: WorkerInferenceSessionDrain | undefined;
       let started = false;
@@ -43,8 +42,8 @@ export function createWorkerInferenceDrainService(
         }),
       };
     },
-    captureCancel: () => ({ runIds: [], cancel: async () => [] }),
-    resolveTarget: () => undefined,
+    captureSessionCancellation: () => ({ runIds: [], cancel: async () => [] }),
+    resolveSessionTargetForRunId: () => undefined,
   });
   return registered;
 }
@@ -56,18 +55,15 @@ export function createWorkerInferenceCancellationService(
   cancel: (params: { sessionId: string; runId?: string }) => string[],
   target?: BoundAgentRunSessionTarget,
 ) {
-  const service = {
-    cancelInferenceForSession: async (params: { sessionId: string; runId?: string }) =>
-      cancel(params),
-    hasInferenceForSession: (candidate: string, runId?: string) =>
-      candidate === sessionId && (runId === undefined ? runIds.length > 0 : runIds.includes(runId)),
-  };
+  const service = {};
   registerWorkerInferenceSessionControl(service, {
-    resolveTarget: (runId) => (runIds.includes(runId) ? target : undefined),
-    reserveDrain: () => {
+    hasSession: (candidate, runId) =>
+      candidate === sessionId && (runId === undefined ? runIds.length > 0 : runIds.includes(runId)),
+    resolveSessionTargetForRunId: (runId) => (runIds.includes(runId) ? target : undefined),
+    reserveSessionDrain: () => {
       throw new Error("unexpected drain reservation in cancellation fixture");
     },
-    captureCancel: (candidate, runId) => {
+    captureSessionCancellation: (candidate, runId) => {
       const captured =
         candidate === sessionId ? runIds.filter((id) => runId === undefined || id === runId) : [];
       return {

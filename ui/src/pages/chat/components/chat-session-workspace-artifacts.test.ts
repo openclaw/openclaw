@@ -361,25 +361,16 @@ describe("session workspace artifacts", () => {
     }
   });
 
-  it.each(
-    [
-      {
-        content: "Résumé 東京 🦀",
-        fence: "```",
-        mimeType: "text/plain",
-      },
-      {
-        content: "Résumé 東京 🦀",
-        fence: "```",
-        mimeType: "text/plain; charset=utf-8",
-      },
-      {
-        content: JSON.stringify({ message: "Résumé 東京 🦀" }),
-        fence: "```json",
-        mimeType: "application/json",
-      },
-    ].flatMap((testCase) => [false, true].map((http) => Object.assign({ http }, testCase))),
-  )(
+  it.each([
+    { mimeType: "text/plain", http: false, content: "Résumé 東京 🦀", fence: "```" },
+    { mimeType: "text/plain; charset=utf-8", http: true, content: "Résumé 東京 🦀", fence: "```" },
+    {
+      mimeType: "application/json",
+      http: false,
+      content: JSON.stringify({ message: "Résumé 東京 🦀" }),
+      fence: "```json",
+    },
+  ])(
     "decodes UTF-8 $mimeType artifacts without corrupting visible or raw text (HTTP: $http)",
     async (testCase) => {
       const data = btoa(String.fromCharCode(...new TextEncoder().encode(testCase.content)));

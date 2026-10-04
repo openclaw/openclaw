@@ -342,14 +342,8 @@ describe("runReplyAgent runtime config", () => {
     });
     runSessionCompactionIfNeededMock.mockImplementation(runRequiredCheckpoint);
     runMemoryFlushIfNeededMock.mockImplementation(
-      async (params: {
-        replyOperation: ReplyOperation;
-        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
-      }) => {
+      async (params: { replyOperation: ReplyOperation }) => {
         params.replyOperation.setPhase("memory_flushing");
-        params.onVisibleErrorPayloads?.([
-          { text: "⚠️ memory flush preparation failed", isError: true },
-        ]);
         return { sessionEntry: undefined, outcome: "failed" };
       },
     );
@@ -726,7 +720,7 @@ describe("runReplyAgent runtime config", () => {
       if (!result || Array.isArray(result)) {
         throw new Error("expected a single preflight compaction failure reply payload");
       }
-      expect(result.text).toContain("auto-compaction could not recover");
+      expect(result.text).toContain("OpenClaw couldn't shorten it.");
       expect(getReplyPayloadMetadata(result)?.deliverDespiteSourceReplySuppression).toBe(true);
       expect(followupRun.run.sessionId).toBe(sessionSnapshot.sessionId);
       expect(sessionEntry).toEqual(sessionSnapshot);
@@ -866,8 +860,8 @@ describe("runReplyAgent runtime config", () => {
     if (!result || Array.isArray(result)) {
       throw new Error("expected a single preflight compaction failure reply payload");
     }
-    expect(result.text).toContain("Context is too large");
-    expect(result.text).toContain("auto-compaction could not recover");
+    expect(result.text).toContain("This conversation is too long");
+    expect(result.text).toContain("OpenClaw couldn't shorten it.");
     expect(result.text).toContain("/compact");
     expect(result.text).toContain("/new");
     const metadata = getReplyPayloadMetadata(result);

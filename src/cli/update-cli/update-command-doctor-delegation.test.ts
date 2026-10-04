@@ -664,22 +664,12 @@ it("does not invent unsettled writers when the Doctor executable never starts", 
 });
 
 function busyDoctorWriterArgv(identityAvailable: boolean): string[] {
-  const custodyModule = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../../infra/update-doctor-process-custody",
-    distWorkerPath: "infra/update-doctor-process-custody.js",
-  });
-  const spawnModule = resolveRuntimeWorkerUrl({
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../../process/exec-spawn",
-    distWorkerPath: "process/exec-spawn.js",
-  });
+  // Prepare the whole child graph before its deadline, alongside its executor.
+  const custodyModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.doctorCustody);
+  const spawnModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.processSpawn);
   const executorModule = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
   return [
     process.execPath,
-    ...(custodyModule.pathname.endsWith(".ts")
-      ? ["--import", new URL("../../../scripts/tsx.mjs", import.meta.url).href]
-      : []),
     "--input-type=module",
     "-e",
     `

@@ -31,6 +31,9 @@ export type DoctorConfigPreflightOptions = {
 export type DoctorConfigPreflightResult = {
   snapshot: ConfigFileSnapshot;
   baseConfig: OpenClawConfig;
+  /** Original resolved roster retained until its config and data migrations finish. */
+  rosterMigrationSource?: OpenClawConfig;
+  rosterMigrationOwnerId?: string;
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   modelBillingRouteMigrationSource?: OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;

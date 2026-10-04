@@ -64,7 +64,6 @@ describe("browser unhandled rejection lifecycle", () => {
       const state = await createBrowserRuntimeState({
         resolved: makeBrowserServerState().resolved,
         port: 18791,
-        onWarn: vi.fn(),
       });
       if (acquired) {
         await getGatewayExtensionRelayModule();
@@ -88,7 +87,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
     const handler = getUnhandledRejectionHandlers()[0];
     const direct = Object.assign(
@@ -119,7 +117,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
     const handler = getUnhandledRejectionHandlers()[0];
     expect(
@@ -144,7 +141,6 @@ describe("browser unhandled rejection lifecycle", () => {
     const state = await createBrowserRuntimeState({
       resolved: { profiles: {} } as never,
       port: 18791,
-      onWarn: vi.fn(),
     });
 
     expect(registerUnhandledRejectionHandlerMock).toHaveBeenCalledTimes(1);

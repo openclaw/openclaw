@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { BUNDLED_PLUGIN_TEST_GLOB } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { globSync } from "tinyglobby";
+import { afterEach, describe, expect, it } from "vitest";
 import { resolveConfig } from "vitest/node";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { normalizeConfigPath } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreIsolatedVitestConfig } from "./vitest/vitest.agents-core-isolated.config.ts";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
@@ -228,6 +230,7 @@ describe("createScopedVitestConfig", () => {
 });
 
 describe("scoped vitest configs", () => {
+  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const defaultCliProcessConfig = createCliProcessVitestConfig({});
   const defaultCliConfig = createCliVitestConfig({});
   const defaultExtensionTelegramConfig = createExtensionTelegramVitestConfig({});
@@ -491,7 +494,11 @@ describe("scoped vitest configs", () => {
         execArgv: process.versions.bun ? ["--no-install"] : [],
       },
     ]);
-    for (const file of ["loader.lazy-alias.test.ts", "plugin-sdk-native-resolver.test.ts"]) {
+    for (const file of [
+      "loader.lazy-alias.test.ts",
+      "plugin-module-loader-cache.source-prescan.test.ts",
+      "plugin-sdk-native-resolver.test.ts",
+    ]) {
       expect(
         projects
           .filter(
@@ -507,17 +514,28 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    for (const [file, included] of [
+    const files = [
       ["ui/src/pages/chat/chat-view.test.ts", true],
       ["ui/src/components/form-controls.browser.test.ts", true],
       ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
       ["extensions/workboard/browser/catalog.test.ts", true],
       ["extensions/workboard/browser/native.browser.test.ts", false],
-    ] as const) {
-      expect(
-        testConfig.include?.some((pattern) => minimatch(file, pattern)),
-        file,
-      ).toBe(included);
+    ] as const;
+    const tempDir = tempDirs.make("openclaw-ui-scoped-");
+    for (const [file] of files) {
+      const target = path.join(tempDir, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, "");
+    }
+    const discovered = new Set(
+      globSync(testConfig.include ?? [], {
+        cwd: tempDir,
+        dot: true,
+        expandDirectories: false,
+      }),
+    );
+    for (const [file, included] of files) {
+      expect(discovered.has(file), file).toBe(included);
     }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
     expect(testConfig.exclude).toContain("extensions/*/browser/**/*.e2e.test.ts");

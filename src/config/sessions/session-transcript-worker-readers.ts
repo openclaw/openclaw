@@ -53,6 +53,18 @@ export function createSessionHistoryWorkerReaders(
       );
   }
   return {
+    readRuntimeTarget: reader(
+      "session-runtime-target",
+      "runtime transcript target",
+      (input) => ({ kind: "session-runtime-target", ...input }),
+      (value) => value.target,
+    ),
+    readConversations: reader(
+      "conversation-rows",
+      "conversations",
+      (input) => ({ kind: "conversation-rows", ...input }),
+      (value) => value.rows,
+    ),
     prewarm: reader(
       "prewarm",
       "prewarm acknowledgement",
@@ -64,6 +76,45 @@ export function createSessionHistoryWorkerReaders(
       "pending archives",
       (input) => ({ kind: "session-pending-archives", ...input }),
       (value) => value.pending,
+    ),
+    readLifecycleArtifactPlan: reader(
+      "lifecycle-artifact-plan",
+      "lifecycle artifact plan",
+      (input) => ({ kind: "lifecycle-artifact-plan", ...input }),
+      (value) => value,
+    ),
+    readMemorySessionTargets: reader(
+      "memory-session-targets",
+      "memory session targets",
+      (input) => ({
+        kind: "memory-session-targets",
+        ...input,
+        params: {
+          ...input.params,
+          env: captureSessionTranscriptStorageEnvironment(input.params.env),
+        },
+      }),
+      (value) => value.targets,
+    ),
+    readArchiveInventory: reader(
+      "session-archive-inventory",
+      "archive inventory",
+      (input) => ({
+        kind: "session-archive-inventory",
+        ...input,
+        env: captureSessionTranscriptStorageEnvironment(input.env ?? process.env),
+      }),
+      (value) => value.archives,
+    ),
+    readCorpusInventory: reader(
+      "session-corpus-inventory",
+      "corpus inventory",
+      (input) => ({
+        kind: "session-corpus-inventory",
+        ...input,
+        scope: { ...input.scope, env: captureSessionTranscriptStorageEnvironment(input.scope.env) },
+      }),
+      (value) => value.entries,
     ),
     readArchivePresence: reader(
       "session-archive-presence",
@@ -247,6 +298,12 @@ export function createSessionHistoryWorkerReaders(
         input.limits ? undefined : receiveChunk,
       );
     },
+    readMaintenance: reader(
+      "transcript-maintenance",
+      "transcript maintenance facts",
+      (input) => ({ kind: "transcript-maintenance", ...input }),
+      (value) => value,
+    ),
     readCurrentTurnEntry: reader(
       "current-turn-entry",
       "a current-turn entry",
@@ -288,6 +345,12 @@ export function createSessionHistoryWorkerReaders(
           return value;
         },
       ),
+    readSuggestions: reader(
+      "session-suggestions",
+      "suggestions",
+      (input) => ({ kind: "session-suggestions", ...input }),
+      (value) => value.suggestions,
+    ),
     readExactEntries: async (input, signal) => {
       const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
       return runRequest(
@@ -324,11 +387,23 @@ export function createSessionHistoryWorkerReaders(
       (input) => ({ kind: "session-progress-card", ...input }),
       (value) => value.card,
     ),
+    readPendingInputHistory: reader(
+      "session-pending-input-history",
+      "pending input history",
+      (input) => ({ kind: "session-pending-input-history", ...input }),
+      (value) => value.snapshot,
+    ),
     readPendingInputReceipts: reader(
       "session-pending-input-receipts",
       "pending input receipts",
       (input) => ({ kind: "session-pending-input-receipts", ...input }),
       (value) => value.receipts,
+    ),
+    readPendingInputSource: reader(
+      "session-pending-input-source",
+      "a submitted input source",
+      (input) => ({ kind: "session-pending-input-source", ...input }),
+      (value) => value.snapshot,
     ),
     readConversationDelivery: reader(
       "conversation-delivery",

@@ -5,6 +5,7 @@ import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-pa
 import * as diagnosticModelCallRuntime from "../../agents/embedded-agent-runner/run/attempt.model-diagnostic-events.js";
 import * as streamResolutionRuntime from "../../agents/embedded-agent-runner/stream-resolution.js";
 import * as modelSelectionRuntime from "../../agents/model-selection.js";
+import type { PreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime-auth.js";
 import * as preparedRuntime from "../../agents/prepared-model-runtime.js";
 import * as providerStreamRuntime from "../../agents/provider-stream.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
@@ -69,16 +70,15 @@ export const config = {
       models: { [`${PROVIDER}/${MODEL}`]: {} },
       workspace: WORKSPACE_BASE,
     },
-    list: [
-      { id: "main", default: true },
-      {
-        id: "runtime-agent",
+    entries: {
+      main: {},
+      "runtime-agent": {
         models: {
           [`${PROVIDER}/${MODEL}`]: { alias: ALIAS, agentRuntime: { id: "openclaw" } },
         },
         params: { temperature: 0.1 },
       },
-    ],
+    },
   },
 } satisfies OpenClawConfig;
 export const sessionEntry: SessionEntry = {
@@ -188,7 +188,9 @@ export function providerStream(message = finalMessage(), options: { omitToolEnd?
 export function setup(
   entry: SessionEntry = sessionEntry,
   options: {
+    config?: OpenClawConfig;
     catalogOnlyModel?: boolean;
+    accountCatalog?: PreparedAccountCatalogAccess;
     pluginRegistry?: PluginRegistry;
     afterModelPreparation?: () => void;
     observeStage?: (
@@ -207,13 +209,14 @@ export function setup(
     prepareWorkspace?: string;
   } = {};
   const preparedModelRuntime = {
+    accountCatalog: options.accountCatalog,
     catalogOwner: undefined,
     agentDir: "/gateway-agent",
     activeProjectKeys: [],
     allowGatewaySubagentBinding: true,
     workspaceDir: WORKSPACE,
-    config,
-    observationConfig: config,
+    config: options.config ?? config,
+    observationConfig: options.config ?? config,
     isCurrent: () => true,
     authModes: {},
     metadataSnapshot: createEmptyPluginMetadataSnapshot(WORKSPACE),

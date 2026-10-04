@@ -58,8 +58,6 @@ export function renderConfig(props: ConfigProps) {
   const analysis = getConfigSchemaAnalysis(
     viewState,
     asConfigSchema(props.schema),
-    props.includeSections,
-    props.excludeSections,
     include,
     exclude,
   );
@@ -494,6 +492,7 @@ export function renderConfig(props: ConfigProps) {
                             sectionPrelude: props.sectionPrelude,
                             revealSensitive:
                               props.activeSection === "env" ? envSensitiveVisible : false,
+                            maskSensitive: true,
                             isSensitivePathRevealed: (path) =>
                               isSensitivePathRevealed(viewState, path),
                             onToggleSensitivePath: (path) => {

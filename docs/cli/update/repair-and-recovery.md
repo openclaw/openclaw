@@ -149,7 +149,10 @@ alongside valid captures, with its directory and no sealed manifest reference.
 Keep current data and inspect the originals before attempting restoration.
 Older installed updaters may not preserve or forward an original capture; a
 newer Doctor reports that limitation instead of treating current bytes as the
-pre-update state. Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
+pre-update state. If capture discovery cannot verify an older driver's history,
+Doctor warns and continues repairs under its existing maintenance and update
+ownership. Required migration backups still apply.
+Take a [verified backup](/install/updating#before-updating-create-a-verified-backup)
 before an upgrade when you need a complete recovery copy.
 
 ### Retained updater runtime
@@ -431,6 +434,12 @@ also finish with a warning when no data is at risk. Repair restores any service
 it stopped, leaves migrations pending, and names the next repair action. Errors
 after repair writes begin, a live or unverified Gateway, unreadable state, active migration writes, unsettled
 cleanup, invalid configuration, and failed required readiness checks still exit nonzero.
+
+If a required repair phase exceeds its deadline, repair exits with code 1 and JSON reports
+`status: "failed"` with the `stuckPhase`. That result remains available after
+service restoration, including when the Gateway is still starting or restoration
+also fails. A startup warning after otherwise successful Doctor repair does not
+clear a repair phase timeout.
 
 Recorded pending-migration warnings stop appearing after the migration owner
 records completion. Unrelated warnings and later or reintroduced obligations

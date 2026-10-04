@@ -1,8 +1,14 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { resolveStateDir } from "../../config/paths.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import { resolveGatewayService, type GatewayService } from "../../daemon/service.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import {
+  readUpdateStateSchemaVersions,
+  resolveUpdateStateContentVersion,
+} from "../../infra/update-candidate-state.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   getUpdateRun,
@@ -13,6 +19,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   renderRestartDiagnostics,
@@ -39,6 +46,7 @@ import {
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
 import type { OriginalManagedServiceRuntime } from "./update-command-service-context-types.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   revalidateManagedGatewayServiceAfterUpdate,
   type PreManagedServiceStop,
@@ -192,6 +200,11 @@ export async function admitMigratedGatewayRecovery(
     | "preManagedServiceStop"
     | "packageTransaction"
     | "originalManagedServiceRuntime"
+    | "candidateSchemaVersions"
+    | "configSnapshot"
+    | "ownedManagedUpdateEnv"
+    | "packageUpdateNodeRunner"
+    | "updateStepTimeoutMs"
   >,
   result: UpdateRunResult,
   assertCurrent: () => void,
@@ -223,6 +236,96 @@ export async function admitMigratedGatewayRecovery(
     throw new UpdateCommandRecoveryPendingError(
       "Migrated Gateway runtime identity is unavailable.",
     );
+  }
+  const candidate = params.candidateSchemaVersions;
+  if (candidate) {
+    const env =
+      params.ownedManagedUpdateEnv ??
+      params.preManagedServiceStop.serviceEnv ??
+      params.opts.run?.env ??
+      process.env;
+    const sharedPath = resolveOpenClawStateSqlitePath(env);
+    const inspect = async () => {
+      const databases = await readUpdateStateSchemaVersions({
+        stateDir: resolveStateDir(env),
+        config: params.configSnapshot.config,
+        env,
+        root,
+        nodeRunner: params.packageUpdateNodeRunner,
+        timeoutMs: params.updateStepTimeoutMs,
+      });
+      assertCurrent();
+      return databases.flatMap((database) => {
+        const observed = resolveUpdateStateContentVersion(database);
+        const expected = database.path === sharedPath ? candidate.state : candidate.agent;
+        return observed !== null && observed !== expected
+          ? [{ ...database, observed, expected }]
+          : [];
+      });
+    };
+    const startedAt = Date.now();
+    try {
+      let pending = await inspect();
+      if (pending.length && pending.every((database) => database.observed < database.expected)) {
+        // Settlement proves the old Doctor stopped, not that its migrations finished.
+        // Doctor retains exclusive maintenance and verified backups for this forward repair.
+        const { runUpdateFinalizationDoctorInFreshProcess } =
+          await import("./update-command-fresh-doctor.js");
+        assertCurrent();
+        await withOwnedManagedUpdateEnv(env, () =>
+          runUpdateFinalizationDoctorInFreshProcess({
+            phase: "pre-plugin",
+            root,
+            opts: params.opts,
+            yes: params.opts.yes === true,
+            json: params.opts.json === true,
+            nodeRunner: params.packageUpdateNodeRunner,
+            timeoutMs: params.updateStepTimeoutMs,
+            assertCurrent,
+            onDoctorStep: (step) => result.steps.push(step),
+          }),
+        );
+        assertCurrent();
+        pending = await inspect();
+        if (!pending.length) {
+          result.steps.push({
+            name: "gateway migration recovery",
+            command: "openclaw doctor --fix",
+            cwd: root,
+            durationMs: Date.now() - startedAt,
+            exitCode: 0,
+            stdoutTail: "Required database migrations completed before Gateway recovery.",
+          });
+        }
+      }
+      if (pending.length) {
+        throw new Error(
+          pending
+            .map(
+              (database) =>
+                `${database.path}: expected schema ${database.expected}, found ${database.observed}`,
+            )
+            .join("; "),
+        );
+      }
+    } catch (error) {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      assertCurrent();
+      const message = `Run \`${formatCliCommand("openclaw doctor --fix", env)}\`, then \`${formatCliCommand("openclaw gateway start", env)}\`. Gateway migration recovery did not finish: ${formatErrorMessage(error)}.`;
+      result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+      result.steps.push({
+        name: "gateway migration recovery",
+        command: "openclaw doctor --fix",
+        cwd: root,
+        durationMs: Date.now() - startedAt,
+        exitCode: 1,
+        stderrTail: message,
+      });
+      defaultRuntime.error(message);
+      return false;
+    }
   }
   // Preserve later writes; the installed candidate's native startup still owns state admission.
   result.recovery = { serviceRestartSafe: true, version, ...(buildId ? { buildId } : {}) };

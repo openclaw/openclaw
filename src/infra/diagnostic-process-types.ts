@@ -1,9 +1,12 @@
+import type { HeapSpaceInfo } from "node:v8";
+
 export type DiagnosticMemoryUsage = {
   rssBytes: number;
   heapTotalBytes: number;
   heapUsedBytes: number;
   externalBytes: number;
   arrayBuffersBytes: number;
+  heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
@@ -41,6 +44,8 @@ export type DiagnosticMemoryUsage = {
 export type DiagnosticChildProcessSpawnFields = {
   type: "diagnostic.child_process.spawn";
   family: string;
+  /** Bounded Git owner/operation; unknown for unattributed Git and none for other families. */
+  operation?: string;
   count: number;
   intervalMs: number;
 };

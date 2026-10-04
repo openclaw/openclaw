@@ -9,22 +9,8 @@ import {
   resolvePluginSetupRegistry,
 } from "../plugins/setup-registry.js";
 import { resolveRuntimeTextTransforms } from "../plugins/text-transforms.runtime.js";
-import type {
-  CliBackendNormalizeConfigContext,
-  CliBundleMcpMode,
-  CliBackendPlugin,
-} from "../plugins/types.js";
+import type { CliBackendNormalizeConfigContext, CliBackendPlugin } from "../plugins/types.js";
 import { mergePluginTextTransforms } from "./plugin-text-transforms.js";
-
-const defaultCliBackendsDeps = {
-  resolvePluginSetupCliBackend,
-  resolvePluginSetupRegistry,
-  resolveRuntimeCliBackends,
-};
-
-type CliBackendsDeps = typeof defaultCliBackendsDeps;
-
-let cliBackendsDeps: CliBackendsDeps = defaultCliBackendsDeps;
 
 /** Fully merged CLI backend definition used by agent runner execution. */
 export type ResolvedCliBackend = Pick<
@@ -50,6 +36,7 @@ export type ResolvedCliBackend = Pick<
   | "isolatesInstructionsWithExactTools"
   | "projectNativeToolAuthority"
   | "nativeToolMode"
+  | "hostOwnedTools"
   | "sideQuestionToolMode"
   | "runtimeArtifact"
 > & {
@@ -71,23 +58,6 @@ type CliRuntimeModelBackendBinding = {
   runtime: string;
   pluginId?: string;
 };
-
-function normalizeBundleMcpMode(
-  mode: CliBundleMcpMode | undefined,
-  enabled: boolean,
-): CliBundleMcpMode | undefined {
-  if (!enabled) {
-    return undefined;
-  }
-  return mode ?? "claude-config-file";
-}
-
-function resolveRegisteredBackend(provider: string) {
-  const normalized = normalizeProviderId(provider);
-  return cliBackendsDeps
-    .resolveRuntimeCliBackends()
-    .find((entry) => normalizeProviderId(entry.id) === normalized);
-}
 
 function resolveCliBackendModelProvider(
   backend: Pick<CliBackendPlugin, "modelProvider">,
@@ -121,14 +91,14 @@ export function listCliRuntimeModelBackendBindings(
   } = {},
 ): CliRuntimeModelBackendBinding[] {
   const bindings = new Map<string, CliRuntimeModelBackendBinding>();
-  for (const backend of cliBackendsDeps.resolveRuntimeCliBackends("metadata")) {
+  for (const backend of resolveRuntimeCliBackends("metadata")) {
     addCliRuntimeModelBinding(bindings, {
       backend,
       ...(backend.pluginId ? { pluginId: backend.pluginId } : {}),
     });
   }
   if (params.includeSetupRegistry === true) {
-    for (const entry of cliBackendsDeps.resolvePluginSetupRegistry({
+    for (const entry of resolvePluginSetupRegistry({
       config: params.config,
       env: params.env,
     }).cliBackends) {
@@ -181,7 +151,7 @@ export function resolveCliRuntimeCanonicalProvider(params: {
   if (params.includeSetupRegistry !== true) {
     return undefined;
   }
-  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+  const setupBackend = resolvePluginSetupCliBackend({
     backend: runtime,
     config: params.config,
     env: params.env,
@@ -212,7 +182,7 @@ export function resolveCliRuntimeModelBackendBinding(params: {
   if (!includeSetupRegistry) {
     return undefined;
   }
-  const setupBackend = cliBackendsDeps.resolvePluginSetupCliBackend({
+  const setupBackend = resolvePluginSetupCliBackend({
     backend: runtime,
     config: params.config,
     env: params.env,
@@ -244,10 +214,8 @@ export function isCliRuntimeModelBackendForProvider(params: {
 export function resolveCliBackendLiveTest(provider: string): ResolvedCliBackendLiveTest | null {
   const normalized = normalizeProviderId(provider);
   const entry =
-    cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized }) ??
-    cliBackendsDeps
-      .resolveRuntimeCliBackends()
-      .find((backend) => normalizeProviderId(backend.id) === normalized);
+    resolvePluginSetupCliBackend({ backend: normalized }) ??
+    resolveRuntimeCliBackends().find((backend) => normalizeProviderId(backend.id) === normalized);
   if (!entry) {
     return null;
   }
@@ -280,9 +248,10 @@ export function resolveCliBackendConfig(
     ...(cfg ? { config: cfg } : {}),
   };
   const runtimeTextTransforms = resolveRuntimeTextTransforms();
-  const registered = resolveRegisteredBackend(normalized);
-  const backend =
-    registered ?? cliBackendsDeps.resolvePluginSetupCliBackend({ backend: normalized })?.backend;
+  const registered = resolveRuntimeCliBackends().find(
+    (entry) => normalizeProviderId(entry.id) === normalized,
+  );
+  const backend = registered ?? resolvePluginSetupCliBackend({ backend: normalized })?.backend;
   if (!backend) {
     return null;
   }
@@ -301,7 +270,7 @@ export function resolveCliBackendConfig(
     ...(modelProvider ? { modelProvider } : {}),
     config: { ...config, command },
     bundleMcp,
-    bundleMcpMode: normalizeBundleMcpMode(backend.bundleMcpMode, bundleMcp),
+    bundleMcpMode: bundleMcp ? (backend.bundleMcpMode ?? "claude-config-file") : undefined,
     ...(registered ? { pluginId: registered.pluginId } : {}),
     transformSystemPrompt: backend.transformSystemPrompt,
     textTransforms: mergePluginTextTransforms(runtimeTextTransforms, backend.textTransforms),
@@ -320,24 +289,8 @@ export function resolveCliBackendConfig(
     isolatesInstructionsWithExactTools: backend.isolatesInstructionsWithExactTools,
     projectNativeToolAuthority: backend.projectNativeToolAuthority,
     nativeToolMode: backend.nativeToolMode,
+    hostOwnedTools: backend.hostOwnedTools,
     sideQuestionToolMode: backend.sideQuestionToolMode,
     runtimeArtifact: backend.runtimeArtifact,
   };
-}
-
-/** Test-only dependency controls for CLI backend registry resolution. */
-const testing = {
-  resetDepsForTest(): void {
-    cliBackendsDeps = defaultCliBackendsDeps;
-  },
-  setDepsForTest(deps: Partial<CliBackendsDeps>): void {
-    cliBackendsDeps = {
-      ...defaultCliBackendsDeps,
-      ...deps,
-    };
-  },
-} as const;
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.cliBackendsTestApi")] = testing;
 }

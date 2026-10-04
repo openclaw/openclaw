@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { mapRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { mapRetainedOperation } from "./retained-operation.js";
 import {
   cleanupSnapshotOperations,
   retainSnapshotTempDirectory,

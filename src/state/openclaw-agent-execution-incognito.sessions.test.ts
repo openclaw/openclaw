@@ -291,7 +291,7 @@ it.each(["lost reply", "lost receipt", "revoked disclosure"] as const)(
                     return result;
                   }
                   executed++;
-                  expect(native?.committed).toMatchObject({ facts: { sessionKey } });
+                  expect(native?.committed).toMatchObject({ facts: [{ sessionKey }] });
                   expect(native?.settlement?.kind).toBe("completed");
                   if (fault === "revoked disclosure") {
                     allowed = false;

@@ -99,9 +99,7 @@ actor PortGuardian {
         do {
             let recordStore = try self.requireRecordStore()
             _ = try recordStore.deleteIfMatches(receipt)
-            if self.ownRecords[receipt.pid] == receipt {
-                self.ownRecords.removeValue(forKey: receipt.pid)
-            }
+            self.relinquishRecord(receipt)
         } catch {
             // Callers remove only after the child exited. Keep the SQLite row for
             // retry, but stop protecting its in-memory receipt from later sweeps.
@@ -152,7 +150,8 @@ actor PortGuardian {
         do {
             recordStore = try self.requireRecordStore()
         } catch {
-            self.logger.error("PortGuardian persistence unavailable; orphan reap skipped: " +
+            self.logger.error("orphan tunnel reap skipped; shared PortGuardian ledger " +
+                "\(PortGuardianRecordStore.liveDatabaseURL.path, privacy: .public) unavailable: " +
                 "\(error.localizedDescription, privacy: .public)")
             return
         }
@@ -182,9 +181,7 @@ actor PortGuardian {
         do {
             let deleted = try Set(recordStore.deleteIfMatches(removals))
             for record in deleted {
-                if self.ownRecords[record.pid] == record {
-                    self.ownRecords.removeValue(forKey: record.pid)
-                }
+                self.relinquishRecord(record)
                 self.logger.info(
                     "retired SSH tunnel receipt (pid \(record.pid, privacy: .public), " +
                         "local port \(record.port, privacy: .public))")
@@ -366,9 +363,7 @@ actor PortGuardian {
 
         var summary: String {
             switch self.status {
-            case let .ok(text): text
-            case let .missing(text): text
-            case let .interference(text, _): text
+            case let .ok(text), let .missing(text), let .interference(text, _): text
             }
         }
     }
@@ -548,42 +543,28 @@ actor PortGuardian {
 
         let tunnelUnhealthy = mode == .remote && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
-            var expected = okPredicate(listener)
-            if tunnelUnhealthy, expected { expected = false }
-            return ReportListener(
+            ReportListener(
                 pid: listener.pid,
                 command: listener.command,
                 fullCommand: listener.fullCommand,
                 user: listener.user,
-                expected: expected)
+                expected: okPredicate(listener) && !tunnelUnhealthy)
         }
 
         let offenders = reportListeners.filter { !$0.expected }
-        if tunnelUnhealthy {
-            let list = listeners.map { "\($0.command) (\($0.pid))" }.joined(separator: ", ")
-            let reason = "Port \(port) is served by \(list), but the SSH tunnel is unhealthy."
-            return .init(
-                port: port,
-                expected: expectedDesc,
-                status: .interference(reason, offenders: offenders),
-                listeners: reportListeners)
+        let listed = tunnelUnhealthy || offenders.isEmpty ? reportListeners : offenders
+        let list = listed.map { "\($0.command) (\($0.pid))" }.joined(separator: ", ")
+        let status: PortReport.Status = if tunnelUnhealthy {
+            .interference("Port \(port) is served by \(list), but the SSH tunnel is unhealthy.", offenders: offenders)
+        } else if offenders.isEmpty {
+            .ok("Port \(port) is served by \(list).")
+        } else {
+            .interference("Port \(port) is held by \(list), expected \(expectedDesc).", offenders: offenders)
         }
-        if offenders.isEmpty {
-            let list = listeners.map { "\($0.command) (\($0.pid))" }.joined(separator: ", ")
-            let okText = "Port \(port) is served by \(list)."
-            return .init(
-                port: port,
-                expected: expectedDesc,
-                status: .ok(okText),
-                listeners: reportListeners)
-        }
-
-        let list = offenders.map { "\($0.command) (\($0.pid))" }.joined(separator: ", ")
-        let reason = "Port \(port) is held by \(list), expected \(expectedDesc)."
         return .init(
             port: port,
             expected: expectedDesc,
-            status: .interference(reason, offenders: offenders),
+            status: status,
             listeners: reportListeners)
     }
 
@@ -619,9 +600,10 @@ actor PortGuardian {
     }
 
     private nonisolated static func openRecordStore() throws -> PortGuardianRecordStore {
-        guard !self.hasLegacyOpenClawAppProcess() else {
+        if let application = self.legacyOpenClawAppProcess() {
             throw PortGuardianStoreError(
-                "Quit older OpenClaw app copies before opening the SQLite PortGuardian ledger")
+                "Quit older OpenClaw app copies (pid \(application.processIdentifier), " +
+                    "\(application.bundleIdentifier ?? "unknown")) before opening the SQLite PortGuardian ledger")
         }
         let legacyURL = PortGuardianRecordStore.liveLegacyRecordURL
         guard FileManager.default.fileExists(atPath: legacyURL.path) else {
@@ -640,9 +622,13 @@ actor PortGuardian {
     }
 
     private nonisolated static func requirePostSpawnCompatibility() throws {
-        guard !self.hasLegacyOpenClawAppProcess(),
-              !FileManager.default.fileExists(atPath: PortGuardianRecordStore.liveLegacyRecordURL.path)
-        else {
+        if let application = self.legacyOpenClawAppProcess() {
+            throw PortGuardianStoreError(
+                "Older OpenClaw app (pid \(application.processIdentifier), " +
+                    "\(application.bundleIdentifier ?? "unknown")) appeared after tunnel preflight; " +
+                    "SSH launch cancelled")
+        }
+        guard !FileManager.default.fileExists(atPath: PortGuardianRecordStore.liveLegacyRecordURL.path) else {
             throw PortGuardianStoreError(
                 "Older OpenClaw storage appeared after tunnel preflight; SSH launch cancelled")
         }
@@ -686,9 +672,9 @@ actor PortGuardian {
 
     /// Old app builds can create the JSON ledger after startup. The signed marker
     /// distinguishes those writers without blocking aligned copies.
-    private nonisolated static func hasLegacyOpenClawAppProcess() -> Bool {
+    private nonisolated static func legacyOpenClawAppProcess() -> NSRunningApplication? {
         let currentPID = ProcessInfo.processInfo.processIdentifier
-        return NSWorkspace.shared.runningApplications.contains { application in
+        return NSWorkspace.shared.runningApplications.first { application in
             guard application.processIdentifier != currentPID else { return false }
             return self.usesLegacyPortGuardianStorage(
                 bundleIdentifier: application.bundleIdentifier,

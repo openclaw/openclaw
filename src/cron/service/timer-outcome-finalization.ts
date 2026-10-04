@@ -1,4 +1,4 @@
-/** Finalizes cron receipts and active markers after timer outcome persistence. */
+/** Finalizes receipts, runtime rows, and active markers for every cron execution. */
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { clearCronJobActive, isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import {
@@ -8,6 +8,7 @@ import {
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
 import { locked } from "./locked.js";
+import { clearManualCronJobActive, maybeNotifyManualIsolatedSetupTimeout } from "./ops-shared.js";
 import { releaseQueuedCronRun, supersedeActivatedCronRun } from "./run-admission.js";
 import { finalizeCronRuntimeRows, type CronFinalizationReceipt } from "./run-finalization.js";
 import { recordQuietCronEvaluation } from "./run-history.js";
@@ -17,13 +18,19 @@ import { recomputeUnownedCronSchedules } from "./schedule-maintenance.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 import { ensureLoaded, runPostPersistCronNotifications } from "./store.js";
 import type { TimedCronRunOutcome } from "./timer-execution-timeout.js";
-import { emitCronOutcomeEventForJob, recordCronOutcomeForJob } from "./timer-outcome-events.js";
+import {
+  emitCronOutcomeEventForJob,
+  emitCronOutcomeForJob,
+  emitMissingRequestedCronRunTerminal,
+  recordCronOutcomeForJob,
+} from "./timer-outcome-events.js";
 import { applyOutcomeToAuthoritativeJob, applyOutcomeToStoredJob } from "./timer-outcomes.js";
 
 type CompletedCronRunOutcomeFinalizationOptions = {
   clearOnFailure?: boolean;
   discardWhenStopped?: boolean;
   repairFutureCronNextRunAtMs?: boolean;
+  onRequestedRunFinalized?: () => void;
 };
 
 /** Coalesces terminal cron writes without holding an execution admission slot. */
@@ -111,6 +118,8 @@ export async function finalizeCompletedCronRunOutcomes(
 
   let finalizedOutcomes: TimedCronRunOutcome[] = [];
   let finalizationSucceeded = false;
+  const emittedRequests = new Set<TimedCronRunOutcome>();
+  const missingRequestedJobs = new Set<TimedCronRunOutcome>();
   const canPublish = (outcome: TimedCronRunOutcome) =>
     !(state.stopped && opts?.discardWhenStopped) &&
     isCronActiveJobMarkerCurrent(outcome.activeJobMarker);
@@ -120,11 +129,20 @@ export async function finalizeCompletedCronRunOutcomes(
       // Payload outcomes survive a failed row write as recovery facts. Quiet
       // evaluations have no payload outcome and finalize only after the commit.
       for (const outcome of outcomes) {
+        if (
+          outcome.request &&
+          (outcome.activeJobMarker?.jobRemoved === true ||
+            !state.store?.jobs.some((job) => job.id === outcome.jobId))
+        ) {
+          missingRequestedJobs.add(outcome);
+          continue;
+        }
         if (outcome.status !== "ok" || outcome.triggerEval?.fired !== false) {
           const taskJob = structuredClone(
             state.store?.jobs.find((job) => job.id === outcome.jobId) ?? outcome.job,
           );
           applyOutcomeToAuthoritativeJob(state, taskJob, outcome, {
+            request: outcome.request,
             deferredNotifications: [],
           });
           await recordCronOutcomeForJob(state, taskJob, outcome);
@@ -179,6 +197,7 @@ export async function finalizeCompletedCronRunOutcomes(
             }
             if (
               applyOutcomeToAuthoritativeJob(state, job, outcome, {
+                request: outcome.request,
                 deferredNotifications: postPersistNotifications,
                 triggerStateRetired:
                   outcome.runReceipt && retiredTriggerReceiptIds.has(outcome.runReceipt.receiptId),
@@ -205,7 +224,10 @@ export async function finalizeCompletedCronRunOutcomes(
       );
       for (const outcome of finalizedOutcomes) {
         if (outcome.status === "ok" && outcome.triggerEval?.fired === false) {
-          await recordQuietCronEvaluation(state, outcome);
+          await recordQuietCronEvaluation(state, {
+            ...outcome,
+            job: outcome.request?.executionJob ?? outcome.job,
+          });
         }
         if (!canPublish(outcome)) {
           // Observe retired rows without publishing their schedule changes when
@@ -227,7 +249,15 @@ export async function finalizeCompletedCronRunOutcomes(
         if (!publishedJobIds.has(plan.outcome.jobId)) {
           continue;
         }
-        if (plan.job) {
+        if (plan.outcome.request) {
+          if (
+            plan.job &&
+            !(plan.outcome.status === "ok" && plan.outcome.triggerEval?.fired === false)
+          ) {
+            await emitCronOutcomeForJob(state, plan.job, plan.outcome);
+            emittedRequests.add(plan.outcome);
+          }
+        } else if (plan.job) {
           emitCronOutcomeEventForJob(state, plan.job, plan.outcome);
         } else {
           await applyOutcomeToStoredJob(state, plan.outcome, {
@@ -243,12 +273,20 @@ export async function finalizeCompletedCronRunOutcomes(
       }
       publishCronRuntimeRows(state);
       try {
-        await recomputeUnownedCronSchedules(
-          state,
-          opts?.repairFutureCronNextRunAtMs === false
+        const requestOutcome = finalizedOutcomes.find((outcome) => outcome.request);
+        await recomputeUnownedCronSchedules(state, {
+          ...(opts?.repairFutureCronNextRunAtMs === false
             ? { repairFutureCronNextRunAtMs: false }
-            : undefined,
-        );
+            : {}),
+          ...(requestOutcome
+            ? {
+                recomputeExpired: true,
+                ...(requestOutcome.request?.preserveCadence
+                  ? { preserveExpiredPacedNextRunJobId: requestOutcome.jobId }
+                  : {}),
+              }
+            : {}),
+        });
       } catch (error) {
         state.deps.log.warn(
           { err: String(error) },
@@ -258,6 +296,26 @@ export async function finalizeCompletedCronRunOutcomes(
     });
 
     finalizationSucceeded ||= finalizedOutcomes.length > 0;
+    for (const outcome of outcomes) {
+      if (!outcome.request) {
+        continue;
+      }
+      const missingJob =
+        outcome.activeJobMarker?.jobRemoved === true || missingRequestedJobs.has(outcome);
+      if (finalizedOutcomes.includes(outcome) && canPublish(outcome)) {
+        if (!missingJob) {
+          maybeNotifyManualIsolatedSetupTimeout(state, {
+            jobId: outcome.jobId,
+            job: outcome.request.executionJob,
+            isolatedAgentSetupTimeout: outcome.isolatedAgentSetupTimeout,
+          });
+        }
+        opts?.onRequestedRunFinalized?.();
+      }
+      if (!emittedRequests.has(outcome)) {
+        await emitMissingRequestedCronRunTerminal(state, outcome, missingJob);
+      }
+    }
     return finalizedOutcomes;
   } catch (error) {
     if (error instanceof CronRunReceiptRevisionError) {
@@ -290,6 +348,7 @@ export async function finalizeCompletedCronRunOutcomes(
             );
           }
         }
+        await emitMissingRequestedCronRunTerminal(state, stale);
         const remaining = outcomes.filter((outcome) => outcome !== stale);
         return await finalizeCompletedCronRunOutcomes(state, remaining, opts);
       }
@@ -301,7 +360,11 @@ export async function finalizeCompletedCronRunOutcomes(
         releaseQueuedCronRun(state, outcome.jobId, outcome.reservationIdentity);
       }
       if (opts?.clearOnFailure !== false || finalizationSucceeded) {
-        clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
+        if (outcome.request) {
+          clearManualCronJobActive(state, outcome.jobId, outcome.activeJobMarker);
+        } else {
+          clearCronJobActive(outcome.jobId, outcome.activeJobMarker);
+        }
       }
       if (outcome.runReceipt) {
         releaseLocalCronRunReceiptOwnership(outcome.runReceipt);

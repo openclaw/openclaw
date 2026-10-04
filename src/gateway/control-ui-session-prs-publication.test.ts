@@ -26,6 +26,7 @@ it("reconciles a fourth merged PR without expanding or poisoning displayed PRs",
   vi.spyOn(gitHubPublicApi, "resolveGitHubApiCredentialScope").mockReturnValue({
     token: undefined,
     cacheScope: "fixture",
+    apiBaseUrl: "https://api.github.com",
   });
   const items = [5, 4, 3].map((number) => pullListItem({ number, state: "closed" }));
   items.push(

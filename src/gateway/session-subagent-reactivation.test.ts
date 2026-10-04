@@ -90,6 +90,7 @@ describe("reactivateCompletedSubagentSession", () => {
     expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
       previousRunId: "run-current-ended",
       nextRunId: "run-next",
+      preserveCompletedRun: true,
       assertCurrent: expect.any(Function),
       runTimeoutSeconds: 0,
       gatewayContextResolver: resolveGatewayContext,
@@ -139,6 +140,7 @@ describe("reactivateCompletedSubagentSession", () => {
     expect(replaceSubagentRunAfterSteerMock).toHaveBeenCalledWith({
       previousRunId: "run-prev-ended",
       nextRunId: "run-next",
+      preserveCompletedRun: true,
       assertCurrent: expect.any(Function),
       runTimeoutSeconds: 0,
       task: "  follow-up prompt text  ",

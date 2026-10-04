@@ -26,7 +26,6 @@ import {
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
-import { WINDOWS_NODE_CI_ADVISORY } from "../../scripts/full-release-validation-policy.mjs";
 import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
@@ -2922,12 +2921,15 @@ describe("ci workflow guards", () => {
       const screenshots = runCiManifestFixture({
         ...common,
         eventName: "pull_request",
-        scopeEnv: { OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true" },
+        scopeEnv: {
+          OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
+          OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS: "true",
+        },
       });
       expect(screenshots.status, screenshots.output).toBe(0);
       expect(Number(screenshots.outputs.pr_job_count)).toBe(
         emittedHostedRows(
-          { ...screenshots.outputs, run_ios_screenshots: "true" },
+          { ...screenshots.outputs, run_ios_screenshots: "true", run_android_screenshots: "true" },
           { eventName: "pull_request" },
           true,
         ).filter((job) => !["ci-gate", "pr-fail-fast"].includes(job)).length,
@@ -3377,12 +3379,17 @@ describe("ci workflow guards", () => {
           OPENCLAW_CI_HEAD_REPOSITORY: headRepository,
           OPENCLAW_CI_RUN_MACOS_NODE: "true",
           OPENCLAW_CI_RUN_IOS_SCREENSHOTS: "true",
+          OPENCLAW_CI_RUN_ANDROID_SCREENSHOTS: "true",
         },
       });
       expect(manifest.status, manifest.output).toBe(0);
       expect(manifest.outputs.hybrid_hosted_offload).toBe("true");
       const context = { eventName, runnerProfile, headRepository };
-      const outputs = { ...manifest.outputs, run_ios_screenshots: "true" };
+      const outputs = {
+        ...manifest.outputs,
+        run_ios_screenshots: "true",
+        run_android_screenshots: "true",
+      };
       const base = emittedHostedRows({ ...outputs, hybrid_hosted_offload: "false" }, context);
       expect(Number(manifest.outputs.hybrid_hosted_base_rows)).toBe(base.length);
       expect(Number(manifest.outputs.hybrid_hosted_total_rows)).toBe(
@@ -3391,6 +3398,7 @@ describe("ci workflow guards", () => {
       expect(base.filter((name) => name === "macos-node")).toHaveLength(3);
       expect(base.filter((name) => name === "ios-screenshot-shard")).toHaveLength(2);
       expect(base.filter((name) => name === "ios-screenshot-evidence")).toHaveLength(1);
+      expect(base.filter((name) => name === "android-screenshots")).toHaveLength(1);
       expect(base).not.toContain("ci-gate");
       expect(base).not.toContain("check-lint-hosted-core-shard");
       expect(base.filter((name) => name === "check-lint-hosted-extension-shard")).toHaveLength(
@@ -3969,16 +3977,13 @@ describe("ci workflow guards", () => {
     );
     expect(manifestRows.every((row) => row.runtime === "node")).toBe(true);
     for (const matrix of [...plannedRows, ...manifestRows]) {
-      const jobName = evaluateWorkflowExpression(
-        workflow.jobs[WINDOWS_NODE_CI_ADVISORY.aggregateJob].name,
-        {
-          eventName: "workflow_dispatch",
-          repository: "openclaw/openclaw",
-          runAttempt: 1,
-          matrix,
-        },
-      );
-      expect(jobName).toMatch(WINDOWS_NODE_CI_ADVISORY.jobNamePattern);
+      const jobName = evaluateWorkflowExpression(workflow.jobs["checks-windows"].name, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        matrix,
+      });
+      expect(jobName).toMatch(/^checks-windows-node-.+$/u);
     }
     expect(runStep.run).toContain('scripts?.["test:windows:ci:1"]');
     expect(runStep.run).toContain('scripts?.["test:windows:ci:2"]');
@@ -5611,6 +5616,46 @@ describe("ci workflow guards", () => {
         "blacksmith-16vcpu-ubuntu-2404",
       );
     }
+    const typeRunner = workflow.jobs["check-test-types-hosted-core-shard"]["runs-on"];
+    const lintRunner = workflow.jobs["check-lint-hosted-core-shard"]["runs-on"];
+    for (const runnerBackend of ["", "blacksmith", "hybrid"] as const) {
+      for (const authorAssociation of ["NONE", "CONTRIBUTOR", "OWNER"]) {
+        const fork = {
+          ...plannerContext,
+          runnerBackend,
+          runnerProfile: "github" as const,
+          headRepository: "contributor/openclaw",
+          authorAssociation,
+        };
+        for (const runner of [plannerRunner, typeRunner, lintRunner]) {
+          expect(evaluateWorkflowExpression(runner, fork)).toBe("blacksmith-16vcpu-ubuntu-2404");
+          for (const override of [
+            { runnerBackend: "github" },
+            { runAttempt: 2 },
+            { eventName: "workflow_dispatch" },
+            { repository: "contributor/openclaw" },
+          ] as const) {
+            expect(evaluateWorkflowExpression(runner, { ...fork, ...override })).toBe(
+              "ubuntu-24.04",
+            );
+          }
+        }
+        // Frozen defaults retain their historical hosted route; hybrid owns its own layout.
+        if (runnerBackend !== "hybrid") {
+          expect(evaluateWorkflowExpression(typeRunner, { ...fork, frozenTarget: true })).toBe(
+            "ubuntu-24.04",
+          );
+        }
+        expect(evaluateWorkflowExpression(lintRunner, { ...fork, frozenTarget: true })).toBe(
+          "ubuntu-24.04",
+        );
+        for (const stripe of [1, 2, 3, 4, 5]) {
+          expect(evaluateWorkflowExpression(lintRunner, { ...fork, matrix: { stripe } })).toBe(
+            "blacksmith-16vcpu-ubuntu-2404",
+          );
+        }
+      }
+    }
     const qualification = {
       ...plannerContext,
       eventName: "workflow_dispatch" as const,
@@ -5628,10 +5673,8 @@ describe("ci workflow guards", () => {
     ).toEqual({ group: "test-group", labels: "blacksmith-16vcpu-ubuntu-2404" });
     for (const override of [
       { runnerBackend: "github" },
-      { runnerBackend: "blacksmith" },
       { runnerBackend: "runson" },
       { preflightOutputs: { node_runner_backend: "runson" } },
-      { headRepository: "contributor/openclaw" },
       { repository: "contributor/openclaw" },
       { runAttempt: 2 },
       { frozenTarget: true },
@@ -7726,6 +7769,7 @@ describe("ci workflow guards", () => {
         PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}`,
         STARTUP_CORPUS_ARGS: argsPath,
         STARTUP_CORPUS_NODE: testNodeExecPath,
+        FORCE_COLOR: "1",
         OPENCLAW_CI_STARTUP_CORPUS_TEST_FILES_JSON: String(
           evaluateWorkflowExpression(inventoryExpression, context),
         ),
@@ -8159,6 +8203,65 @@ describe("ci workflow guards", () => {
       ).toContain("test/scripts/changed-path-facts.test.ts");
     },
   );
+
+  it.each([
+    ["apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt", true],
+    ["apps/android/app/src/play/java/ai/openclaw/app/Play.kt", true],
+    ["apps/android/app/src/debug/java/ai/openclaw/app/ScreenshotFixtures.kt", true],
+    ["apps/android/wear/src/main/java/ai/openclaw/wear/MainActivity.kt", true],
+    ["apps/android/wear-shared/src/main/java/ai/openclaw/wear/State.kt", true],
+    ["apps/android/gradle/libs.versions.toml", true],
+    ["apps/android/app/build.gradle.kts", true],
+    ["apps/android/fastlane/Fastfile", true],
+    ["scripts/android-screenshots.sh", true],
+    ["scripts/android-sips-linux.sh", true],
+    [".github/actions/setup-android-toolchain/action.yml", true],
+    [".github/workflows/ci.yml", true],
+    ["scripts/ci-changed-scope.mjs", true],
+    ["packages/mermaid-renderer/src/index.ts", true],
+    ["apps/shared/mermaid/assets/index.html", true],
+    ["packages/gateway-protocol/src/schema.ts", true],
+    ["scripts/protocol-gen-kotlin.ts", true],
+    ["scripts/android-app-i18n.ts", true],
+    ["apps/.i18n/native/en-US.json", true],
+    ["package.json", true],
+    ["pnpm-lock.yaml", true],
+    ["apps/android/app/src/test/java/ai/openclaw/app/StateTest.kt", false],
+    ["apps/android/wear/src/test/java/ai/openclaw/wear/StateTest.kt", false],
+    ["apps/android/benchmark/build.gradle.kts", false],
+    ["apps/android/fastlane/metadata/android/en-US/full_description.txt", false],
+    ["apps/android/fastlane/metadata/android/en-US/images/icon.png", false],
+    ["apps/android/README.md", false],
+    ["docs/ci.md", false],
+    ["apps/ios/Sources/Main.swift", false],
+    ["src/channels/example.ts", false],
+  ] as const)("routes Android capture inputs through preflight: %s", (changedPath, selected) => {
+    const workflow = readCiWorkflow();
+    const scopeOutputs = runCiChangedScopeFixture([changedPath]);
+    const runScreenshots = evaluateWorkflowExpression(
+      workflow.jobs.preflight.outputs.run_android_screenshots,
+      {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        steps: { changed_scope: { outputs: scopeOutputs } },
+      },
+    );
+    expect(runScreenshots).toBe(String(selected));
+    expect(
+      evaluateWorkflowExpression(workflow.jobs["android-screenshots"].if, {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        preflightOutputs: {
+          validation_tier: "pr",
+          release_scope: "full",
+          compatibility_target: "false",
+          run_android_screenshots: String(runScreenshots),
+        },
+      }),
+    ).toBe(selected);
+  });
 
   it.each<{
     label: string;
@@ -11250,10 +11353,11 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions ripgrep for real filesystem contract selections", () => {
+  it("provisions ripgrep for filesystem and SQLite ratchet selections", () => {
     const contract = "src/agents/filesystem-tools-output-contract.test.ts";
     const nativeTools = "src/agents/sessions/tools/index.test.ts";
     const bytePaths = "src/agents/sessions/tools/grep.byte-path.test.ts";
+    const sqliteRatchet = "test/scripts/check-database-worker-ratchet.test.ts";
     const unrelated = "src/agents/run-wait.test.ts";
     const selections = [
       { targets: [contract] },
@@ -11264,6 +11368,10 @@ describe("ci workflow guards", () => {
       { includePatterns: [bytePaths] },
       { groups: [{ shard_name: "agentic-agents-support", targets: [bytePaths] }] },
       { groups: [{ shard_name: "agentic-agents-support", includePatterns: [bytePaths] }] },
+      { targets: [sqliteRatchet] },
+      { includePatterns: [sqliteRatchet] },
+      { includePatterns: ["test/scripts/check-*-ratchet.test.ts"] },
+      { groups: [{ shard_name: "core-tooling-1", includePatterns: [sqliteRatchet] }] },
       { includePatterns: [unrelated] },
       { shardName: "agentic-agents-core-runtime" },
       { shardName: "agentic-agents-support" },
@@ -11293,6 +11401,10 @@ describe("ci workflow guards", () => {
       expectDefined(result.outputs.checks_node_core_nondist_matrix, "non-dist Node matrix"),
     ) as { include: { requires_ripgrep?: boolean }[] };
     expect(matrix.include.map((row) => Boolean(row.requires_ripgrep))).toEqual([
+      true,
+      true,
+      true,
+      true,
       true,
       true,
       true,
@@ -11403,6 +11515,7 @@ describe("ci workflow guards", () => {
       "ios-screenshot-shard",
       "ios-screenshot-evidence",
       "android",
+      "android-screenshots",
       "android-access-native",
       "docker-seed-e2e",
       "published-driver-update",
@@ -11687,6 +11800,51 @@ describe("ci workflow guards", () => {
       expected: { "control-ui-performance": false },
     },
     {
+      label: "Android capture on relevant PR",
+      context: { eventName: "pull_request", preflightOutputs: { run_android_screenshots: "true" } },
+      expected: { "android-screenshots": true },
+    },
+    {
+      label: "Android capture outside PR scope",
+      context: {
+        eventName: "pull_request",
+        preflightOutputs: { run_android_screenshots: "false" },
+      },
+      expected: { "android-screenshots": false },
+    },
+    {
+      label: "Android capture on ordinary manual CI",
+      context: { preflightOutputs: { run_android_screenshots: "false" } },
+      expected: { "android-screenshots": true },
+    },
+    {
+      label: "Android capture excludes hourly main",
+      context: {
+        eventName: "schedule",
+        preflightOutputs: { validation_tier: "main", run_android_screenshots: "true" },
+      },
+      expected: { "android-screenshots": false },
+    },
+    {
+      label: "Android capture excludes compatibility targets",
+      context: {
+        preflightOutputs: { compatibility_target: "true", run_android_screenshots: "true" },
+      },
+      expected: { "android-screenshots": false },
+    },
+    {
+      label: "Android capture excludes npm release scope",
+      context: {
+        preflightOutputs: { release_scope: "npm-stable", run_android_screenshots: "true" },
+      },
+      expected: { "android-screenshots": false },
+    },
+    {
+      label: "Android release gate without capture inputs",
+      context: { releaseGate: true, preflightOutputs: { run_android_screenshots: "false" } },
+      expected: { "android-screenshots": false },
+    },
+    {
       label: "hourly main excludes screenshots even with screenshot scope",
       context: { eventName: "schedule", preflightOutputs: { validation_tier: "main" } },
       expected: { "ios-build": true, "ios-screenshot-shard": false },
@@ -11754,6 +11912,14 @@ describe("ci workflow guards", () => {
     );
     const outcome = runCiGateFixture(renderCiGateEnvironment(context, results));
     expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(0);
+    if (expected["android-screenshots"]) {
+      for (const terminal of ["failure", "cancelled", "skipped"]) {
+        const failedCapture = runCiGateFixture(
+          renderCiGateEnvironment(context, { ...results, "android-screenshots": terminal }),
+        );
+        expect(failedCapture.status, failedCapture.stdout).toBe(1);
+      }
+    }
     if (expected["ios-build"]) {
       for (const terminal of ["failure", "cancelled", "skipped"]) {
         const missingSmoke = runCiGateFixture(
@@ -11839,90 +12005,23 @@ describe("ci workflow guards", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    ["workflow_dispatch", "full-release-validation-123", 0],
-    ["workflow_dispatch", "", 1],
-    ["workflow_dispatch", "manual-full-release-validation-123", 1],
-    ["pull_request", "full-release-validation-123", 1],
-    ["push", "full-release-validation-123", 1],
-    ["schedule", "full-release-validation-123", 1],
-  ] as const)(
-    "ci-gate limits windows-node-ci advisory to FRV: %s %s",
-    (eventName, dispatchId, exit) => {
-      const gate = readCiWorkflow().jobs["ci-gate"];
-      const step = gate.steps.find(
-        (candidate: WorkflowStep) => candidate.name === "Verify selected CI lanes",
-      );
-      const context = {
-        eventName,
-        dispatchId,
-        repository: "openclaw/openclaw",
-        runAttempt: 1,
-      };
-      const summary = path.join(tempDirs.make("ci-gate-advisory-"), "summary.md");
-      const outcome = runCiGateFixture(
-        `preflight=success|true\n${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=failure|true`,
-        {
-          FRV_WINDOWS_NODE_ADVISORY: String(
-            evaluateWorkflowExpression(step.env.FRV_WINDOWS_NODE_ADVISORY, context),
-          ),
-          GITHUB_STEP_SUMMARY: summary,
-        },
-      );
-      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(exit);
-      if (exit === 0) {
-        expect(outcome.stdout).toContain(`::notice title=${WINDOWS_NODE_CI_ADVISORY.id} advisory`);
-        expect(readFileSync(summary, "utf8")).toContain(
-          `Advisory class \`${WINDOWS_NODE_CI_ADVISORY.id}\``,
-        );
-        expect(evaluateWorkflowExpression(gate.if, { ...context, cancelled: true })).toBe(false);
-      } else {
-        expect(outcome.stdout).toContain("::error title=CI job did not succeed");
-        expect(existsSync(summary)).toBe(false);
-      }
-    },
-  );
-
   it.skipIf(process.platform === "win32")(
-    "ci-gate keeps every other failed lane blocking alongside windows-node-ci advisory",
+    "ci-gate ignores the retired FRV Windows advisory environment and blocks the failed aggregate",
     () => {
-      const gate = readCiWorkflow().jobs["ci-gate"];
-      const summary = path.join(tempDirs.make("ci-gate-advisory-"), "summary.md");
-      const jobs: string[] = gate.needs;
-      for (const job of jobs.filter((name) => name !== WINDOWS_NODE_CI_ADVISORY.aggregateJob)) {
-        const outcome = runCiGateFixture(
-          `${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=failure|true\n${job}=failure|true`,
-          { FRV_WINDOWS_NODE_ADVISORY: "true", GITHUB_STEP_SUMMARY: summary },
-        );
-        expect(outcome.status, `${job}: ${outcome.stdout}\n${outcome.stderr}`).toBe(1);
-        expect(outcome.stdout.split("\n")).toContain(`${job}: failure (selected=true)`);
-        expect(outcome.stdout).toContain(`${job} finished with failure (selected=true)`);
-      }
+      const outcome = runCiGateFixture("preflight=success|true\nchecks-windows=failure|true", {
+        FRV_WINDOWS_NODE_ADVISORY: "true",
+      });
+      expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(1);
+      expect(outcome.stdout).toContain("::error title=CI job did not succeed");
+      expect(outcome.stdout).not.toContain("::notice");
     },
   );
-
-  it.skipIf(process.platform === "win32").each([
-    ["skipped", "true"],
-    ["cancelled", "true"],
-    ["failure", "false"],
-    ["failure", ""],
-    ["failure", "true|"],
-    ["failure=", "true"],
-  ])("ci-gate rejects non-advisory Windows results %s selected=%s", (result, selected) => {
-    const outcome = runCiGateFixture(
-      `${WINDOWS_NODE_CI_ADVISORY.aggregateJob}=${result}|${selected}`,
-      { FRV_WINDOWS_NODE_ADVISORY: "true" },
-    );
-    expect(outcome.status, `${outcome.stdout}\n${outcome.stderr}`).toBe(1);
-    expect(outcome.stdout).toContain("::error title=CI job did not succeed");
-    expect(outcome.stdout).not.toContain("::notice");
-  });
 
   it.each([
     ["", true],
     ["manual-full-ci", true],
     ["full-release-validation-123", false],
-  ] as const)("full-CI receipt excludes advisory FRV dispatch %s", (dispatchId, expected) => {
+  ] as const)("full-CI receipt excludes FRV child dispatch %s", (dispatchId, expected) => {
     const receipt = readCiWorkflow().jobs["ci-gate"].steps.find(
       (step: WorkflowStep) => step.name === "Confirm validated workflow revision",
     );

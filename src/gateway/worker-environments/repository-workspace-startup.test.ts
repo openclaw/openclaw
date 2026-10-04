@@ -45,6 +45,7 @@ let nodeDatabasePath: string | undefined;
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const pathname of [nodeDatabasePath, databasePath]) {
     if (pathname) {
       await closeOpenClawStateDatabaseByPathAsync(pathname);

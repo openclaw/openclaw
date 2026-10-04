@@ -92,13 +92,6 @@ function formatRequestedSource(params: {
     : `${params.sourcePath}.${params.field}`;
 }
 
-function formatModeSource(params: { sourcePath: string; configPath: string }): string {
-  if (params.sourcePath === "__default__") {
-    return "derived from OpenClaw defaults";
-  }
-  return `${params.sourcePath === "scope" ? params.configPath : params.sourcePath}.mode`;
-}
-
 type ExecPolicyField = "security" | "ask" | "askFallback";
 type ExecPolicyHostDefaults = Pick<
   Required<ExecApprovalsDefaults>,
@@ -132,10 +125,7 @@ function resolveRequestedPolicy(params: {
       security: DEFAULT_REQUESTED_SECURITY,
       ask: DEFAULT_REQUESTED_ASK,
     });
-    const source = formatModeSource({
-      sourcePath: params.scopeExecConfig?.mode ? "scope" : "tools.exec",
-      configPath: params.configPath,
-    });
+    const source = `${params.scopeExecConfig?.mode ? params.configPath : "tools.exec"}.mode`;
     return {
       mode: policy.mode,
       modeSource: source,
@@ -145,64 +135,39 @@ function resolveRequestedPolicy(params: {
       askSource: source,
     };
   }
-  if (hasLegacyExecPolicyOverride(params.scopeExecConfig) && params.globalExecConfig?.mode) {
-    const inherited = resolveExecModePolicy({
-      mode: params.globalExecConfig.mode,
-      security: DEFAULT_REQUESTED_SECURITY,
-      ask: DEFAULT_REQUESTED_ASK,
-    });
-    const inheritedSource = formatModeSource({
-      sourcePath: "tools.exec",
-      configPath: params.configPath,
-    });
-    const scopeSecuritySource = formatRequestedSource({
-      sourcePath: params.configPath,
-      field: "security",
-      defaultValue: DEFAULT_REQUESTED_SECURITY,
-    });
-    const scopeAskSource = formatRequestedSource({
-      sourcePath: params.configPath,
-      field: "ask",
-      defaultValue: DEFAULT_REQUESTED_ASK,
-    });
-    const security = params.scopeExecConfig?.security ?? inherited.security;
-    const ask = params.scopeExecConfig?.ask ?? inherited.ask;
-    const securitySource =
-      params.scopeExecConfig?.security !== undefined ? scopeSecuritySource : inheritedSource;
-    const askSource = params.scopeExecConfig?.ask !== undefined ? scopeAskSource : inheritedSource;
-    return {
-      mode: resolveExecModeFromPolicy({ security, ask }),
-      modeSource:
-        securitySource === askSource
-          ? `derived from ${securitySource}`
-          : `derived from ${securitySource} and ${askSource}`,
-      security,
-      securitySource,
-      ask,
-      askSource,
-    };
-  }
-
+  const inherited = params.globalExecConfig?.mode
+    ? resolveExecModePolicy({
+        mode: params.globalExecConfig.mode,
+        security: DEFAULT_REQUESTED_SECURITY,
+        ask: DEFAULT_REQUESTED_ASK,
+      })
+    : undefined;
   const security = resolveRequestedField<ExecSecurity>({
     scopeValue: params.scopeExecConfig?.security,
-    globalValue: params.globalExecConfig?.security,
+    globalValue: inherited?.security ?? params.globalExecConfig?.security,
     fallback: DEFAULT_REQUESTED_SECURITY,
   });
   const ask = resolveRequestedField<ExecAsk>({
     scopeValue: params.scopeExecConfig?.ask,
-    globalValue: params.globalExecConfig?.ask,
+    globalValue: inherited?.ask ?? params.globalExecConfig?.ask,
     fallback: DEFAULT_REQUESTED_ASK,
   });
-  const securitySource = formatRequestedSource({
-    sourcePath: security.sourcePath === "scope" ? params.configPath : security.sourcePath,
-    field: "security",
-    defaultValue: DEFAULT_REQUESTED_SECURITY,
-  });
-  const askSource = formatRequestedSource({
-    sourcePath: ask.sourcePath === "scope" ? params.configPath : ask.sourcePath,
-    field: "ask",
-    defaultValue: DEFAULT_REQUESTED_ASK,
-  });
+  const securitySource =
+    inherited && security.sourcePath === "tools.exec"
+      ? "tools.exec.mode"
+      : formatRequestedSource({
+          sourcePath: security.sourcePath === "scope" ? params.configPath : security.sourcePath,
+          field: "security",
+          defaultValue: DEFAULT_REQUESTED_SECURITY,
+        });
+  const askSource =
+    inherited && ask.sourcePath === "tools.exec"
+      ? "tools.exec.mode"
+      : formatRequestedSource({
+          sourcePath: ask.sourcePath === "scope" ? params.configPath : ask.sourcePath,
+          field: "ask",
+          defaultValue: DEFAULT_REQUESTED_ASK,
+        });
   return {
     mode: resolveExecModeFromPolicy({ security: security.value, ask: ask.value }),
     modeSource:

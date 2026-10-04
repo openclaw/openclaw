@@ -27,7 +27,7 @@ it("admits public source without a native CLI and fences later configured identi
   const commit = "a".repeat(40);
   const tree = "b".repeat(40);
   const repositoryUrl = "https://github.com/acme/public-project.git";
-  const config = { agents: { list: [{ id: "public-source", workspace: root }] } };
+  const config = { agents: { entries: { "public-source": { workspace: root } } } };
   // Only HTTP is substituted: identity selection, missing CLI execution,
   // configuration absence and durable agent ownership use their real owners.
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {

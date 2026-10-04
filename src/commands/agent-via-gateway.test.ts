@@ -15,15 +15,21 @@ import {
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { agentCliCommand, agentViaGatewayTesting } from "./agent-via-gateway.js";
-import { createLocalGatewayLockOptions } from "./agent-via-gateway.test-support.js";
+import {
+  createExplicitSystemAgentConfig,
+  createGatewayClosedError,
+  createGatewayNormalCloseError,
+  createGatewayTimeoutError,
+  createLocalGatewayLockOptions,
+} from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
 const loadConfig = vi.hoisted(() => vi.fn());
@@ -81,7 +87,6 @@ function mockConfig(storePath: string, overrides?: Partial<OpenClawConfig>) {
         ...overrides?.agents?.defaults,
       },
       ...(overrides?.agents?.ownership ? { ownership: overrides.agents.ownership } : {}),
-      ...(overrides?.agents?.list ? { list: overrides.agents.list } : {}),
       ...(overrides?.agents?.entries ? { entries: overrides.agents.entries } : {}),
     },
     session: {
@@ -241,50 +246,6 @@ async function waitForGatewayCall(expectedCalls = 1) {
 function mockMessages(mock: unknown): string[] {
   const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
   return calls.map(([message]) => String(message));
-}
-
-function createGatewayTimeoutError() {
-  const err = new Error("gateway timeout after 90000ms");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "timeout",
-    timeoutMs: 90_000,
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayClosedError() {
-  const err = new Error("gateway closed (1006 abnormal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1006,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
-}
-
-function createGatewayNormalCloseError() {
-  const err = new Error("gateway closed (1000 normal closure): no close reason");
-  err.name = "GatewayTransportError";
-  return Object.assign(err, {
-    kind: "closed",
-    code: 1000,
-    reason: "no close reason",
-    connectionDetails: {
-      url: "ws://127.0.0.1:18789",
-      urlSource: "local loopback",
-      message: "Gateway target: ws://127.0.0.1:18789",
-    },
-  });
 }
 
 vi.mock("../config/gateway-dispatch-config.js", () => ({
@@ -497,7 +458,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
         expect(jsonRuntime.writeJson).toHaveBeenCalledOnce();
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -589,7 +550,7 @@ describe("agentCliCommand", () => {
           ...remoteGatewayConfig,
           agents: {
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         },
       );
@@ -632,10 +593,10 @@ describe("agentCliCommand", () => {
           sessionKey: "agent:ops:work",
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { mainKey: "work", scope: "per-sender" },
-      },
+      }).config,
     );
   });
 
@@ -652,10 +613,10 @@ describe("agentCliCommand", () => {
           sessionKey: undefined,
         });
       },
-      {
+      createCanonicalAgentConfigFixture({
         agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
         session: { scope: "global" },
-      },
+      }).config,
     );
   });
 
@@ -676,28 +637,16 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
         session: { scope: "global" },
       },
     );
   });
 
-  it("dispatches a retained-owner global session through --local", async () => {
+  it("dispatches a persisted-owner global session through --local", async () => {
     await withTempStore(
       async () => {
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
         mockLocalAgentReply();
 
         await agentCliCommand({ message: "hi", local: true, sessionKey: "global" }, runtime);
@@ -709,7 +658,11 @@ describe("agentCliCommand", () => {
         );
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
         session: { scope: "global" },
       },
     );
@@ -719,19 +672,6 @@ describe("agentCliCommand", () => {
     await withTempStore(
       async () => {
         vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://gateway.example.test");
-        const cfg = retainLegacyDefaultAgentId(
-          {
-            ...loadRuntimeConfig(),
-            gateway: { mode: "remote" },
-            agents: {
-              ...loadRuntimeConfig().agents,
-              ownership: "explicit",
-              list: [{ id: "ops" }, { id: "research" }],
-            },
-          },
-          "ops",
-        );
-        loadRuntimeConfig.mockReturnValue(cfg);
         mockLocalAgentReply();
 
         await agentCliCommand({ message: "hi", local: true }, runtime);
@@ -746,7 +686,12 @@ describe("agentCliCommand", () => {
         );
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        gateway: { mode: "remote" },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "ops" } },
+          entries: { ops: {}, research: {} },
+        },
         session: { scope: "global" },
       },
     );
@@ -760,7 +705,7 @@ describe("agentCliCommand", () => {
           agents: {
             ...loadRuntimeConfig().agents,
             ownership: "explicit",
-            list: [{ id: "ops" }, { id: "research" }],
+            entries: { ops: {}, research: {} },
           },
         });
 
@@ -770,7 +715,7 @@ describe("agentCliCommand", () => {
         expect(agentCommand).not.toHaveBeenCalled();
       },
       {
-        agents: { list: [{ id: "ops" }, { id: "research" }] },
+        agents: { entries: { ops: {}, research: {} } },
         session: { scope: "global" },
       },
     );
@@ -1173,7 +1118,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBe("ops");
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1196,7 +1141,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBe("ops");
         expect(params.sessionKey).toBe("agent:OPS:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1216,7 +1161,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1249,7 +1194,7 @@ describe("agentCliCommand", () => {
         expect(params.sessionId).toBe("existing-main-session");
         expect(params.sessionKey).toBe("agent:ops:incident-42");
       },
-      { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+      { agents: { entries: { main: {}, ops: {} } } },
     );
   });
 
@@ -1271,7 +1216,7 @@ describe("agentCliCommand", () => {
           expect(params.agentId).toBe("ops");
           expect(params.sessionKey).toBe(sessionKey);
         },
-        { agents: { list: [{ id: "main" }, { id: "ops" }] } },
+        { agents: { entries: { main: {}, ops: {} } } },
       );
     },
   );
@@ -1292,7 +1237,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("global");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1314,7 +1259,7 @@ describe("agentCliCommand", () => {
         agents: {
           ownership: "explicit",
           defaults: { sessionStore: { agentId: "ops" } },
-          list: [{ id: "ops" }, { id: "research" }],
+          entries: { ops: {}, research: {} },
         },
       },
     );
@@ -1336,7 +1281,7 @@ describe("agentCliCommand", () => {
         expect(params.agentId).toBeUndefined();
         expect(params.sessionKey).toBe("unknown");
       },
-      { agents: { list: [{ id: "ops", default: true }, { id: "main" }] } },
+      createExplicitSystemAgentConfig("ops", ["ops", "main"]),
     );
   });
 
@@ -1545,7 +1490,7 @@ describe("agentCliCommand", () => {
         });
       },
       {
-        agents: { list: [{ id: "main" }, { id: "ops" }] },
+        agents: { entries: { main: {}, ops: {} } },
         session: { dmScope: "per-channel-peer" },
       },
     );

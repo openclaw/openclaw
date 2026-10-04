@@ -2,6 +2,7 @@ import type { z } from "zod";
 import type {
   ChannelPreviewStreamingConfigSchema,
   ChannelStreamingProgressSchema,
+  ChannelThreadBindingsSchema,
   UnifiedStreamingModeSchema,
 } from "./zod-schema.channel-messaging-common.js";
 import type {
@@ -64,10 +65,7 @@ export type ChannelStreamingConfig<
 export type ChannelDeliveryStreamingConfig = z.input<typeof ChannelDeliveryStreamingConfigSchema>;
 
 /** Streaming subset used by channels that render visible preview/progress replies. */
-export type ChannelPreviewStreamingConfig = Pick<
-  ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "progress" | "block"
->;
+export type ChannelPreviewStreamingConfig = SchemaChannelStreamingConfig;
 
 export type MarkdownConfig = NonNullable<z.input<typeof MarkdownConfigSchema>>;
 export type MarkdownTableMode = NonNullable<MarkdownConfig["tables"]>;
@@ -78,7 +76,7 @@ type SessionSchemaInput = NonNullable<z.input<typeof SessionSchema>>;
 export type SessionResetConfig = NonNullable<SessionSchemaInput["reset"]>;
 export type SessionResetMode = NonNullable<SessionResetConfig["mode"]>;
 
-export type SessionThreadBindingsConfig = NonNullable<SessionSchemaInput["threadBindings"]>;
+export type SessionThreadBindingsConfig = z.input<typeof ChannelThreadBindingsSchema>;
 
 export type SessionConfig = SessionSchemaInput;
 

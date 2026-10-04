@@ -34,6 +34,9 @@ extension ManagedNodeGatewayMigration {
             error installError: String?,
             capture: () async throws -> ServiceCustody) async throws
         {
+            if let installError, installError.contains(GatewayLaunchAgentManager.runtimePinSelectionChanged) {
+                throw Failure(message: installError)
+            }
             do { self.installed = try await capture() } catch {
                 if let installError { throw Failure(message: installError) }
                 throw error

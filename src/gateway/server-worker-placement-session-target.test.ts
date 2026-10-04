@@ -44,7 +44,7 @@ test.each([
     await withStateDirEnv("full-target-recovery-probe-", async () => {
       const profile = { provider: "full-target-probe", settings: { region: "synthetic" } };
       const individual: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         cloudWorkers: { profiles: { development: profile } },
       };
       setRuntimeConfigSnapshot(individual, individual);
@@ -108,7 +108,7 @@ test.each([
         ...identity,
         executionMode: "worker-turn",
       });
-      const captured = placements.transition({
+      const captured = await placements.transition({
         sessionId: identity.sessionId,
         from: "requested",
         to: "provisioning",
@@ -231,7 +231,7 @@ test.each([
 
 test("rejects stale repository selection and refreshes the accepted checkpoint after drain", async () => {
   await withStateDirEnv("worker-repository-selection-", async () => {
-    const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config, config);
     const storePath = resolveSessionStorePathCore(undefined, { agentId: REQUEST.agentId });
     const repositories = getSessionRepositoryWorkspaceStore();
@@ -324,12 +324,12 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
     });
     const reclaimed = await barriers.runReclaimBarrier({
       ...REQUEST,
-      begin: () => {
+      begin: async () => {
         const current = placements.get(REQUEST.sessionId);
         if (current?.state !== "active") {
           throw new Error("Expected active placement before reclaim");
         }
-        const result = placements.startDrain({
+        const result = await placements.startDrain({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
@@ -345,13 +345,13 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
         if (current.state !== "draining") {
           throw new Error("Expected a newly drained placement");
         }
-        const reconciling = placements.startReconcile({
+        const reconciling = await placements.startReconcile({
           sessionId: current.sessionId,
           environmentId: current.environmentId,
           ownerEpoch: current.activeOwnerEpoch,
           expectedGeneration: current.generation,
         });
-        const result = placements.transition({
+        const result = await placements.transition({
           sessionId: current.sessionId,
           from: "reconciling",
           to: "reclaimed",
@@ -371,7 +371,7 @@ test("rejects stale repository selection and refreshes the accepted checkpoint a
 
 test("resolves consecutive placement workspaces without decoding unrelated session payloads", async () => {
   await withStateDirEnv("worker-exact-target-", async () => {
-    const config: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
     setRuntimeConfigSnapshot(config, config);
     const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
     const keys = ["agent:main:placement-a", "agent:main:placement-b"] as const;

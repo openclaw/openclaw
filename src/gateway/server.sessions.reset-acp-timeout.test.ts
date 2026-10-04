@@ -9,7 +9,7 @@ import {
 } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
-import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
+import { drainSystemEventEntries, peekSystemEvents } from "../infra/system-events.js";
 import {
   acknowledgeSessionStateNotices,
   recordSessionStateEvent,
@@ -134,11 +134,17 @@ test.each(["source", "source-and-acp", "acp", "committed-callback"])(
         summary: "human message via test",
       });
     expect(
-      registerSessionStateWatch({ watcherSessionKey: sessionKey, targetSessionKey: childKey }),
+      await registerSessionStateWatch({
+        watcherSessionKey: sessionKey,
+        targetSessionKey: childKey,
+      }),
     ).toBe(true);
     recordChildActivity();
-    expect(drainSystemEvents(sessionKey)).toHaveLength(1);
-    acknowledgeSessionStateNotices(sessionKey, [childKey]);
+    const drained = drainSystemEventEntries(sessionKey);
+    expect(drained).toHaveLength(1);
+    await acknowledgeSessionStateNotices(sessionKey, [
+      { targetSessionKey: childKey, watcherStorePath: drained[0]?.sessionStorePath ?? null },
+    ]);
     prepareFreshSession.mockImplementation(async () => {
       events.push("runtime-preparation");
       if (postCommitFails) {

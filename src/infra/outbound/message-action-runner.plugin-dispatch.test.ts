@@ -488,6 +488,25 @@ describe("runMessageAction plugin dispatch", () => {
     );
   });
 
+  it("reports an unsupported action for a loaded channel without action handlers", async () => {
+    setTestPlugin(
+      createChannelTestPluginBase({
+        id: "sendonly",
+        config: createAlwaysConfiguredPluginConfig({}),
+      }),
+      "sendonly",
+    );
+    await expect(
+      runMessageAction({
+        cfg: {},
+        action: "read",
+        dryRun: false,
+        conversationReadOrigin: "direct-operator",
+        params: { channel: "sendonly", target: "channel:peer", messageId: "task-1", limit: 1 },
+      }),
+    ).rejects.toThrow("Message action read not supported for channel sendonly.");
+  });
+
   describe("presentation parsing", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({ ok: true, presentation: params.presentation ?? null }),

@@ -16,6 +16,7 @@ export const nativeLoaderPluginTestFiles = [
   "src/plugins/manifest-registry.test.ts",
   "src/plugins/plugin-module-generation.interop.test.ts",
   "src/plugins/plugin-module-generation.test.ts",
+  "src/plugins/plugin-module-loader-cache.source-prescan.test.ts",
   "src/plugins/plugin-runtime-artifact-resolution.test.ts",
   "src/plugins/plugin-sdk-native-resolver.test.ts",
   "src/plugins/public-surface-loader.test.ts",

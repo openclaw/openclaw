@@ -106,8 +106,7 @@ function appendWhatsAppQaAgents(
       entries[agentId] = buildWhatsAppQaScenarioAgent(agentId);
     }
   }
-  const needsExplicitOwnership =
-    Object.keys(entries).length > 1 && !Object.values(entries).some((entry) => entry.default);
+  const needsExplicitOwnership = Object.keys(entries).length > 1;
   const soleAgentId = originalIds.length === 1 ? originalIds[0] : undefined;
   const defaults = { ...agents?.defaults };
   if (needsExplicitOwnership && soleAgentId) {

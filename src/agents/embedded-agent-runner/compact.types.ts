@@ -69,6 +69,10 @@ export type CompactEmbeddedAgentSessionParams = Pick<
   /** Explicit session owner captured before fallback agent resolution. */
   contextEngineAgentId?: string;
   runId?: string;
+  /** Host-resolved memory partition inherited from the compacted session. */
+  memoryAudience?: import("../../plugins/memory-provider-types.js").MemoryAudience;
+  /** Host-resolved sandbox fact paired with the compacted session authority. */
+  memorySandboxed?: boolean;
   /** Trusted sender id from inbound context for scoped message-tool discovery. */
   senderId?: string;
   senderName?: string;
@@ -132,12 +136,4 @@ export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
 > & {
   /** Deprecated file-backed artifact target. Prefer sessionTarget for new callers. */
   sessionFile?: string;
-};
-
-export type CompactionMessageMetrics = {
-  messages: number;
-  historyTextChars: number;
-  toolResultChars: number;
-  estTokens?: number;
-  contributors: Array<{ role: string; chars: number; tool?: string }>;
 };

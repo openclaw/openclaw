@@ -12,6 +12,7 @@ import { createCronStreamWatchers } from "./cron-stream-watchers.js";
 export function job(overrides: Partial<CronJob> = {}): CronJob {
   const base: CronJob = {
     id: "stream-job",
+    agentId: "main",
     name: "stream job",
     enabled: true,
     createdAtMs: 1,

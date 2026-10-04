@@ -325,15 +325,19 @@ setLoggerOverride({ file: ${JSON.stringify(path.join(logs, "openclaw.log"))} });
           stateDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
         },
       });
-      for (const [id, sourcePath] of [
-        ["tui-last-session", tuiPath],
-        ["exec-approvals", execPath],
-      ]) {
+      const stateDatabase = {
+        kind: "sqlite",
+        path: path.join(stateDir, "state", "openclaw.sqlite"),
+      } as const;
+      for (const [id, source] of [
+        ["tui-last-session", [{ kind: "path", path: tuiPath }]],
+        ["exec-approvals", [{ kind: "path", path: execPath }, stateDatabase]],
+      ] as const) {
         expect(plan.steps.find((step) => step.id === id)).toMatchObject({
           outcome: unknownPlugin ? "deferred" : "planned",
           requiredness: "required",
-          source: [{ kind: "path", path: sourcePath }],
-          target: [{ kind: "sqlite", path: path.join(stateDir, "state", "openclaw.sqlite") }],
+          source,
+          target: [stateDatabase],
           ...(unknownPlugin ? { refusal: { code: "blocked-by-prior-refusal" } } : {}),
         });
       }

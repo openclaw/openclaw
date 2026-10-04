@@ -16,23 +16,21 @@ export type SessionManagerMocks = {
   getEntries: UnknownMock;
   getBranch: UnknownMock;
   getBoundaryCount: UnknownMock;
-  branch: UnknownMock;
-  resetLeaf: UnknownMock;
+  branchAsync: UnknownMock;
+  resetLeafAsync: UnknownMock;
   buildSessionContext: Mock<() => { messages: AgentMessage[] }>;
   appendThinkingLevelChange: UnknownMock;
   appendModelChange: UnknownMock;
-  appendCustomEntry: UnknownMock;
   appendCustomEntryAsync: UnknownMock;
-  appendMessage: UnknownMock;
-  appendMessageAsync: (...args: unknown[]) => Promise<unknown>;
-  appendSessionInfo: UnknownMock;
-  appendLabelChange: UnknownMock;
+  appendMessageAsync: UnknownMock;
+  appendSessionInfoAsync: UnknownMock;
+  appendLabelChangeAsync: UnknownMock;
   flushPendingPersistence: UnknownMock;
-  flushPendingToolResults: UnknownMock;
+  flushPendingToolResultsAsync: UnknownMock;
   clearPendingToolResults: UnknownMock;
-  reloadPersistedTranscript: UnknownMock;
+  reloadPersistedTranscriptAsync: UnknownMock;
   clearNextUserMessagePersistenceSuppression: UnknownMock;
-  removeTrailingEntries: UnknownMock;
+  removeTrailingEntriesAsync: UnknownMock;
 };
 
 export function readMockSessionCacheTtlTimestamp(
@@ -82,17 +80,16 @@ export function resetSessionManagerMocks(
   sessionManager.getEntries.mockReset().mockReturnValue([]);
   sessionManager.getBranch.mockReset().mockReturnValue([]);
   sessionManager.getBoundaryCount.mockReset().mockReturnValue(0);
-  sessionManager.branch.mockReset();
-  sessionManager.resetLeaf.mockReset();
+  sessionManager.branchAsync.mockReset();
+  sessionManager.resetLeafAsync.mockReset();
   sessionManager.clearNextUserMessagePersistenceSuppression.mockReset();
   sessionManager.buildSessionContext.mockReset().mockReturnValue({ messages });
   sessionManager.appendThinkingLevelChange.mockReset();
   sessionManager.appendModelChange.mockReset();
-  sessionManager.appendCustomEntry.mockReset();
   sessionManager.appendCustomEntryAsync.mockReset();
-  sessionManager.appendMessage.mockReset();
-  sessionManager.appendSessionInfo.mockReset();
-  sessionManager.appendLabelChange.mockReset();
+  sessionManager.appendMessageAsync.mockReset();
+  sessionManager.appendSessionInfoAsync.mockReset();
+  sessionManager.appendLabelChangeAsync.mockReset();
   sessionManager.flushPendingPersistence.mockReset();
-  sessionManager.reloadPersistedTranscript.mockReset();
+  sessionManager.reloadPersistedTranscriptAsync.mockReset();
 }

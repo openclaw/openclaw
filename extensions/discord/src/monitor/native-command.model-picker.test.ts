@@ -58,6 +58,19 @@ type PickerButtonData = Parameters<PickerButton["run"]>[1];
 type PickerSelectInteraction = Parameters<PickerSelect["run"]>[0];
 type PickerSelectData = Parameters<PickerSelect["run"]>[1];
 
+type SerializedPickerPayload = {
+  components?: Array<{
+    components?: Array<{
+      components?: Array<{
+        label?: string;
+        custom_id?: string;
+        disabled?: boolean;
+        options?: Array<{ label: string; value: string }>;
+      }>;
+    }>;
+  }>;
+};
+
 type MockInteraction = {
   user: { id: string; username: string; globalName: string };
   channel: { type: ChannelType; id: string; name?: string; parentId?: string };
@@ -386,7 +399,7 @@ describe("Discord model picker interactions", () => {
       serializePayload(failedRefresh.editReply.mock.calls[0]![0]!),
     );
     expect(failedPayload).toContain("Some models could not be refreshed.");
-    expect(failedPayload).toContain('"value":"gpt-4.1"');
+    expect(failedPayload).toContain('"label":"gpt-4.1"');
 
     delete data.refreshWarning;
     const recovered = await runSubmitButton(context, componentData, dispatchSpy);
@@ -395,7 +408,7 @@ describe("Discord model picker interactions", () => {
       serializePayload(recovered.editReply.mock.calls[0]![0]!),
     );
     expect(recoveredPayload).not.toContain("Some models could not be refreshed.");
-    expect(recoveredPayload).toContain('"value":"gpt-4.1"');
+    expect(recoveredPayload).toContain('"label":"gpt-4.1"');
     expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
@@ -749,6 +762,113 @@ describe("Discord model picker interactions", () => {
     expect(
       JSON.stringify(firstMockArg(legacyInteraction.editReply, "interaction.editReply")),
     ).toContain("Available models changed. Open /models and choose again.");
+  });
+
+  it.each(["pick", "model"] as const)(
+    "keeps full long model identity through %s selection and rendered Submit",
+    async (action) => {
+      const model = `${"a".repeat(100)}x`;
+      const sibling = `${"a".repeat(100)}y`;
+      const pickerData = createModelsProviderData({ ollama: [model, sibling] });
+      const { context, dispatchSpy, submit } = prepareModelPicker(pickerData);
+      const rendered = serializePayload(
+        renderDiscordModelPickerModelsView({
+          command: "model",
+          userId: "owner",
+          data: pickerData,
+          provider: "ollama",
+        }),
+      ) as SerializedPickerPayload;
+      const modelSelect = rendered.components?.[0]?.components
+        ?.flatMap((row) => row.components ?? [])
+        .find((component) => component.options?.some((option) => option.label === "a".repeat(100)));
+      expect(modelSelect?.options?.map((option) => option.value)).toEqual([
+        modelPickerModule.createDiscordModelPickerModelToken("ollama", model),
+        modelPickerModule.createDiscordModelPickerModelToken("ollama", sibling),
+      ]);
+      const selectData = parseCustomId(modelSelect?.custom_id ?? "").data;
+      const selection = await runModelSelect({
+        context,
+        dispatchCommandInteraction: dispatchSpy,
+        data: action === "model" ? { ...selectData, a: "model" } : selectData,
+        values: [
+          action === "model"
+            ? model
+            : modelPickerModule.createDiscordModelPickerModelToken("ollama", model),
+        ],
+      });
+      expect(dispatchSpy).not.toHaveBeenCalled();
+      const pending = serializePayload(
+        selection.editReply.mock.calls[0]![0]!,
+      ) as SerializedPickerPayload;
+      expect(JSON.stringify(pending)).toContain(`Selected: ollama/${model}`);
+      const submitButton = pending.components?.[0]?.components
+        ?.flatMap((row) => row.components ?? [])
+        .find((component) => component.label === "Submit");
+      expect(submitButton?.disabled).not.toBe(true);
+      const submitData = parseCustomId(submitButton?.custom_id ?? "").data;
+      expect(submitData.m).toBe(
+        modelPickerModule.createDiscordModelPickerModelToken("ollama", model),
+      );
+      // A positional index would now target a different model.
+      mockPickerData(createModelsProviderData({ ollama: ["0-new", sibling, model] }));
+      await submit(submitData);
+      expectDispatchedModelSelection({ dispatchSpy, model: `ollama/${model}` });
+    },
+  );
+
+  it("rejects a compact token shared by multiple catalog entries", async () => {
+    const model = "a".repeat(101);
+    const { context, dispatchSpy } = prepareModelPicker(
+      createModelsProviderData({ openai: [model, `${model}b`] }),
+    );
+    const token = "samehash";
+    vi.spyOn(modelPickerModule, "createDiscordModelPickerModelToken").mockReturnValue(token);
+    const selection = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+      data: { cmd: "model", act: "pick", view: "models", u: "owner", p: "openai" },
+      values: [token],
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(firstMockArg(selection.editReply, "ambiguous model"))).toContain(
+      "Available models changed. Open /models and choose again.",
+    );
+  });
+
+  it("rejects a token-valued model missing from the current catalog", async () => {
+    const model = "a".repeat(101);
+    const { context, dispatchSpy } = prepareModelPicker(
+      createModelsProviderData({ ollama: ["other"] }),
+    );
+    const selection = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+      data: { cmd: "model", act: "pick", view: "models", u: "owner", p: "ollama" },
+      values: [modelPickerModule.createDiscordModelPickerModelToken("ollama", model)],
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(firstMockArg(selection.editReply, "removed model"))).toContain(
+      "Available models changed. Open /models and choose again.",
+    );
+  });
+
+  it("keeps hash-looking legacy model values distinct from token selections", async () => {
+    const model = "a".repeat(101);
+    const rawId = modelPickerModule.createDiscordModelPickerModelToken("ollama", model);
+    const { context, dispatchSpy } = prepareModelPicker(
+      createModelsProviderData({ ollama: [model, rawId] }),
+    );
+    const selection = await runModelSelect({
+      context,
+      dispatchCommandInteraction: dispatchSpy,
+      data: { cmd: "model", act: "model", view: "models", u: "owner", p: "ollama" },
+      values: [rawId],
+    });
+    expect(JSON.stringify(firstMockArg(selection.editReply, "legacy model"))).toContain(
+      `Selected: ollama/${rawId}`,
+    );
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 
   it("requires submit and retains Gateway ownership through the /model pipeline", async () => {

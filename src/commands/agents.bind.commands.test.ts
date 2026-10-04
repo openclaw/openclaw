@@ -13,10 +13,9 @@ import { baseConfigSnapshot } from "./test-runtime-config-helpers.js";
 const pluginRegistryMocks = vi.hoisted(() => ({
   listPluginContributionIds: vi.fn(() => ["external-chat"]),
 }));
-vi.mock("../agents/agent-scope.js", () => ({
-  listAgentEntries: (cfg: OpenClawConfig) => cfg.agents?.list ?? [],
-  resolveDefaultAgentId: (cfg: OpenClawConfig) =>
-    cfg.agents?.list?.find((agent) => agent.default)?.id ?? "main",
+vi.mock("../agents/agent-scope.js", async () => ({
+  listAgentEntries: (await import("../agents/agent-roster.js")).listAgentEntries,
+  resolveDefaultAgentId: () => "main",
 }));
 vi.mock("../config/bindings.js", () => ({
   isRouteBinding: (binding: { match?: unknown }) => Boolean(binding.match),
@@ -61,7 +60,7 @@ const route = (channel: string, accountId?: string, agentId = "main") => ({
   match: { channel, ...(accountId ? { accountId } : {}) },
 });
 const conflictConfig: OpenClawConfig = {
-  agents: { list: [{ id: "ops", workspace: "/tmp/ops" }] },
+  agents: { entries: { ops: { workspace: "/tmp/ops" } } },
   bindings: [route("telegram", "ops")],
 };
 const jsonRuntime = () => ({ ...runtime, writeStdout: vi.fn(), writeJson: vi.fn() });

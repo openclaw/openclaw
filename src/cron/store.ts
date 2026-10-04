@@ -9,6 +9,8 @@ import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js"
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { runCronRuntimeMutation } from "./service/runtime-mutation.js";
+import { invalidateCronJobNames, publishCronJobNames } from "./store/job-name.js";
+import { readCronJobNamesInDatabase } from "./store/job-name.kernel.js";
 import { cronStoreKey } from "./store/key.js";
 import { restoreCronLoadError } from "./store/load-error.js";
 import { resolveCronJobsStorePath } from "./store/paths.js";
@@ -40,7 +42,7 @@ import type { CronStoreFile } from "./types.js";
 export { resolveCronJobsStorePath, resolveCronJobsStorePathFromConfig } from "./store/paths.js";
 export { loadCronJobsStoreWithConfigJobsReadOnly } from "./store/read-only.js";
 export { CronJobsStoreChangedError } from "./store/save-error.js";
-export type { CronConfigJobRuntimeEntry, LoadedCronStore } from "./store/types.js";
+export type { LoadedCronStore } from "./store/types.js";
 export type { CronQuarantinedJob, QuarantinedCronConfigJob } from "./types-shared.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
 
@@ -57,6 +59,7 @@ export function getCronJobsStoreRevision(storePath: string): number {
 }
 
 export function noteCronJobsStoreCommit(storeKey: string): void {
+  invalidateCronJobNames(storeKey);
   // A bounded monotonic fact invalidates sibling service snapshots without
   // polling SQLite or discarding the current scheduler's transient run state.
   cronStoreRevisions.delete(storeKey);
@@ -122,6 +125,14 @@ export async function removeStaleCronJobFamilyRows(
     prepare: () => ({ value: {}, assertCurrent() {} }),
     publish: (outcome) => {
       removed = outcome.removed;
+      if (removed > 0) {
+        invalidateCronJobNames();
+      }
+    },
+    onSettled(outcome) {
+      if (outcome === "unknown") {
+        invalidateCronJobNames();
+      }
     },
   });
   return removed;
@@ -139,11 +150,6 @@ type SaveCronStoreOptions = {
 type SaveCronJobsStoreOptions = CronStoreSaveOptions & {
   transactionHooks?: CronStoreTransactionHooks;
 };
-
-type CronStoreReplacementOptions = Pick<
-  SaveCronJobsStoreOptions,
-  "deleteQuarantineEntries" | "preserveRuntimeState" | "quarantine"
->;
 
 type CronStoreCommit<Value> = {
   value: Value;
@@ -168,6 +174,7 @@ function commitCronStoreNative<Value>(
   hooks: CronStoreTransactionHooks | undefined,
   operationLabel?: string,
 ): CronStoreCommit<Value> {
+  const context = captureOpenClawStateWorkerContext();
   const observedRevision = getCronJobsStoreRevision(storeKey);
   let committed = false;
   try {
@@ -180,13 +187,22 @@ function commitCronStoreNative<Value>(
         deferSqlitePostCommitPublication(database.db, () => {
           committed = true;
         });
-        return { value, ...readCronStoreFingerprints(database.db, storeKey) };
+        return {
+          value,
+          names: readCronJobNamesInDatabase(database.db, undefined, storeKey),
+          ...readCronStoreFingerprints(database.db, storeKey),
+        };
       },
       {},
       operationLabel ? { operationLabel } : undefined,
     );
+    const revision = publishCronStoreSaveRevision(storeKey, observedRevision);
+    // Nested Doctor transactions have no acknowledged commit until their outer scope settles.
+    if (committed && revision !== STALE_CRON_STORE_REVISION) {
+      publishCronJobNames(storeKey, context, result.names);
+    }
     hooks?.afterCommit?.();
-    return { ...result, revision: publishCronStoreSaveRevision(storeKey, observedRevision) };
+    return { ...result, revision };
   } catch (error) {
     if (committed) {
       noteCronJobsStoreCommit(storeKey);
@@ -214,6 +230,9 @@ async function saveCronStoreWithWorker<Value>(
           : observedRevision;
       if (!result.ok) {
         throw restoreCronSaveError(result.error);
+      }
+      if (revision !== STALE_CRON_STORE_REVISION) {
+        publishCronJobNames(storeKey, context, result.names);
       }
       return {
         value: result.value,
@@ -326,29 +345,6 @@ export async function saveCronJobsStore(
   opts?: SaveCronJobsStoreOptions,
 ): Promise<void> {
   await saveCronJobsStoreWithRevision(storePath, store, opts);
-}
-
-/** Atomically acquire doctor migration metadata and replace cron rows only for the winner. */
-export async function saveCronJobsStoreWithMetadata(
-  storePath: string,
-  store: CronStoreFile,
-  acquireMetadata: (db: DatabaseSync) => boolean,
-  opts?: CronStoreReplacementOptions,
-): Promise<boolean> {
-  const resolvedStorePath = path.resolve(storePath);
-  const storeKey = cronStoreKey(resolvedStorePath);
-  assertCronStoreCanPersist(store);
-  const committed = runOpenClawStateWriteTransaction((database) => {
-    if (!acquireMetadata(database.db)) {
-      return false;
-    }
-    saveCronStoreInDatabase(database, storeKey, store, { ...opts, stateOnly: false });
-    return true;
-  });
-  if (committed) {
-    noteCronJobsStoreCommit(storeKey);
-  }
-  return committed;
 }
 
 // Public plugin SDK seam; core callers use the SQLite-backed cron-jobs names above.

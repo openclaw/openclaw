@@ -1,4 +1,4 @@
-import type { SkillFileHost } from "../loading/skill-file-host.js";
+import type { SkillFileHost } from "../skill-file-host.js";
 import type { ExplicitSkillSelection, SkillCommandSpec } from "../types.js";
 
 const fileHosts = new WeakMap<SkillCommandSpec, SkillFileHost>();

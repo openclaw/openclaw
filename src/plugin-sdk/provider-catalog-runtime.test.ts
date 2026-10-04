@@ -11,6 +11,7 @@ import {
   createScheduledGatewayRunner,
   fenceScheduledGatewayContextResolver,
 } from "../gateway/scheduled-run-gateway-context.js";
+import { createPluginRuntimeCapabilityLease } from "../plugins/capability-lease.js";
 import {
   LegacyPluginSdkResourceHost,
   bindLegacyPluginSdkResourceHost,
@@ -21,6 +22,7 @@ import {
   resetPluginLoaderTestStateForTest,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
@@ -30,12 +32,18 @@ import {
   withPluginRuntimeGatewayRequestScope,
   withPluginRuntimeRegistryScope,
 } from "../plugins/runtime/gateway-request-scope.js";
+import { createPluginServiceSchedulerRunner } from "../plugins/service-scheduler-context.js";
+import { createPluginServiceScheduler } from "../plugins/service-scheduler.js";
 import {
   AsyncWorkScope,
   captureAsyncWorkTracker,
   trackAsyncWork,
 } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 
 afterEach(() => resetPluginLoaderTestStateForTest());
 afterAll(cleanupPluginLoaderFixturesForTest);
@@ -171,6 +179,8 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   return {
     id,
     state,
+    config,
+    env,
     load: () => acquirePluginRegistryForInspection({ config, env }),
     loadRaw: () => loadPluginRegistryHandle({ config, env }),
     resolve(registry: PluginRegistry, host: LegacyPluginSdkResourceHost, providerRefs?: string[]) {
@@ -195,6 +205,78 @@ function readProvider(
 ): boolean | undefined {
   return provider.isCacheTtlEligible?.({ provider: provider.id, modelId: "synthetic-model" });
 }
+
+it.each([false, true])(
+  "retires bare provider resources with the scheduled CLI owner, ambient RPC=%s",
+  async (ambientRpc) => {
+    const fixture = nativeProviderFixture();
+    const inspection = await fixture.load();
+    const clock = createGatewaySchedulerClock();
+    const gateway = createTestGatewayScheduler(clock.clock);
+    const host = new LegacyPluginSdkResourceHost();
+    const foreign = new LegacyPluginSdkResourceHost();
+    host.bindScheduler(gateway);
+    const lease = createPluginRuntimeCapabilityLease("scheduled CLI fixture");
+    const record = inspection.registry.plugins.find((entry) => entry.id === fixture.id);
+    if (!record) {
+      throw new Error("Fixture provider did not register");
+    }
+    const createScheduler = () =>
+      createPluginServiceScheduler(
+        gateway,
+        createPluginServiceSchedulerRunner({
+          registry: inspection.registry,
+          record,
+          instance: getPluginInstance(record),
+          lease,
+        }),
+      ).scheduler;
+    const foreignResolver = () => undefined;
+    bindLegacyPluginSdkResourceHost(foreignResolver, foreign);
+    const scheduler = host.run(() =>
+      ambientRpc
+        ? withPluginRuntimeGatewayRequestScope(
+            { resolveGatewayContext: foreignResolver, isWebchatConnect: () => false },
+            createScheduler,
+          )
+        : createScheduler(),
+    );
+    let providers: ReturnType<typeof resolvePluginProviders> = [];
+    scheduler.schedule({
+      id: "provider-borrow",
+      delayMs: 1,
+      run: () => {
+        providers = resolvePluginProviders({
+          config: fixture.config,
+          env: fixture.env,
+          onlyPluginIds: [fixture.id],
+        });
+      },
+    });
+    try {
+      await foreign.run(() => clock.advanceBy(1));
+      expect(providers).toHaveLength(1);
+      await inspection.release();
+      await foreign.close();
+      expect(readProvider(providers[0]!)).toBe(true);
+      expect(fixture.state.disposals).toBe(0);
+      await scheduler.stop();
+      await host.close();
+      expect(fixture.state.disposals).toBe(1);
+      expect(fixture.state.database?.isOpen).toBe(false);
+    } finally {
+      await scheduler.stop();
+      lease.revoke();
+      await Promise.allSettled([
+        host.close(),
+        foreign.close(),
+        inspection.release(),
+        gateway.stop(),
+      ]);
+      fixture.cleanup();
+    }
+  },
+);
 
 it("keeps the shipped provider callback usable after inspection release", async () => {
   const fixture = nativeProviderFixture();

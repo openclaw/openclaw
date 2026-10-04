@@ -49,14 +49,6 @@ export type VapidKeyPair = {
   subject: string;
 };
 
-export function createWebPushVapidKeyPair(
-  publicKey: string,
-  privateKey: string,
-  subject: string,
-): VapidKeyPair {
-  return { publicKey, privateKey, subject };
-}
-
 export type WebPushDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "config_machine_state"

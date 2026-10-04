@@ -13,11 +13,19 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fileLocks from "../infra/file-lock.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
+import {
+  resolveAuthProfileDatabaseOwnerId,
+  resolveAuthProfileDatabasePath,
+} from "./auth-profiles/sqlite.js";
+import { removePersistedPluginModelCatalogCredentials } from "./plugin-model-catalog-credentials.js";
+import * as pluginModelCatalogExecution from "./plugin-model-catalog-execution.js";
 import {
   decodePluginModelCatalogRelativePathPluginId,
   encodePluginModelCatalogRelativePath,
@@ -107,6 +115,108 @@ describe("SQLite-backed plugin model catalogs", () => {
       { pluginId: "zai", contents: zai },
     ]);
     expect(existsSync(legacyPath)).toBe(true);
+  });
+
+  it("skips catalog mutation for unrelated credentials and observes a later matching publication", async () => {
+    const agentDir = createAgentDir();
+    const relativePath = encodePluginModelCatalogRelativePath("zai");
+    const unrelated = catalogContents("zai", "unrelated-provider-test-key");
+    const removedKey = "removed-provider-test-key";
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: { [relativePath]: unrelated },
+    });
+    const candidate = {
+      agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
+      databasePath: resolveAuthProfileDatabasePath(agentDir),
+    };
+    const removal = { candidates: [candidate], credentials: new Set([removedKey]) };
+    const before = readCatalogCacheRow(agentDir, "zai");
+    const worker = vi.spyOn(pluginModelCatalogExecution, "withPluginModelCatalogWorker");
+    try {
+      await removePersistedPluginModelCatalogCredentials(removal);
+      expect(worker.mock.calls.length).toBe(0);
+      expect(readCatalogCacheRow(agentDir, "zai")).toEqual(before);
+
+      await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: { [relativePath]: catalogContents("zai", removedKey) },
+      });
+      worker.mockClear();
+      await removePersistedPluginModelCatalogCredentials(removal);
+      expect(worker.mock.calls.length).toBe(1);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "zai", contents: catalogContents("zai") },
+      ]);
+    } finally {
+      worker.mockRestore();
+    }
+  });
+
+  it("waits for an uncommitted catalog publication before skipping a clean catalog", async () => {
+    const agentDir = createAgentDir();
+    const removedKey = "synthetic-uncommitted-credential";
+    await replacePersistedPluginModelCatalogs({
+      agentDir,
+      pluginCatalogWrites: {
+        [encodePluginModelCatalogRelativePath("zai")]: catalogContents("zai"),
+      },
+    });
+    const databasePath = resolveAuthProfileDatabasePath(agentDir);
+    const database = new DatabaseSync(databasePath);
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    const waiting = createDeferredCore();
+    const publishing = pluginModelCatalogExecution.withPluginModelCatalogPublicationLocks(
+      [databasePath],
+      async () => {
+        // Model a writer that validated auth before logout but has not committed its catalog.
+        database.exec("BEGIN IMMEDIATE");
+        try {
+          database
+            .prepare("UPDATE cache_entries SET value_json = ? WHERE scope = ? AND key = ?")
+            .run(catalogContents("zai", removedKey), "plugin-model-catalog-v1", "zai");
+          started.resolve();
+          await finish.promise;
+          database.exec("COMMIT");
+        } finally {
+          if (database.isTransaction) {
+            database.exec("ROLLBACK");
+          }
+        }
+      },
+    );
+    await started.promise;
+    const lock = fileLocks.withFileLock;
+    const locking = vi
+      .spyOn(fileLocks, "withFileLock")
+      .mockImplementation((pathname, options, run) => {
+        waiting.resolve();
+        return lock(pathname, options, run);
+      });
+    const removing = removePersistedPluginModelCatalogCredentials({
+      candidates: [{ agentId: resolveAuthProfileDatabaseOwnerId(agentDir), databasePath }],
+      credentials: new Set([removedKey]),
+    });
+    try {
+      expect(
+        await Promise.race([
+          waiting.promise.then(() => "waiting"),
+          removing.then(() => "completed"),
+        ]),
+      ).toBe("waiting");
+      finish.resolve();
+      await publishing;
+      await removing;
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "zai", contents: catalogContents("zai") },
+      ]);
+    } finally {
+      finish.resolve();
+      await Promise.allSettled([publishing, removing]);
+      locking.mockRestore();
+      database.close();
+    }
   });
 
   it("removes generated model rows whose API semantics cannot be derived", async () => {

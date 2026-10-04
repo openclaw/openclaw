@@ -5,12 +5,16 @@ import type {
   WorkerGatewayToolUpdateFrame,
   WorkerToolSurface,
 } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type { WorkerInferenceContext } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 
 export type WorkerGatewayToolSink = { send(frame: WorkerGatewayToolUpdateFrame): void };
 
 export type WorkerGatewayToolRuntime = {
   getSurface(identity: WorkerConnectionIdentity): Promise<WorkerToolSurface>;
+  getModelTools(
+    identity: WorkerConnectionIdentity,
+  ): Promise<NonNullable<WorkerInferenceContext["tools"]>>;
   invoke(
     identity: WorkerConnectionIdentity,
     request: WorkerGatewayToolInvokeParams,

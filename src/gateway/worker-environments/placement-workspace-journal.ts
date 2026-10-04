@@ -177,22 +177,9 @@ export function createPlacementWorkspaceJournalOps(
   return {
     pruneOrphanedWorkspaceReconciliations(): WorkspaceJournalMutation {
       return write((db) => {
-        const rows = executeSqliteQuerySync(
-          db,
-          query(db)
-            .selectFrom("worker_workspace_reconciliations")
-            .select(["session_id", "environment_id", "owner_epoch", "placement_generation"])
-            .orderBy("session_id"),
-        ).rows;
         const pruned: WorkerWorkspaceJournalOwner[] = [];
         const changes: WorkspaceJournalChange[] = [];
-        for (const row of rows) {
-          const owner = {
-            sessionId: row.session_id,
-            environmentId: row.environment_id,
-            ownerEpoch: row.owner_epoch,
-            placementGeneration: row.placement_generation,
-          };
+        for (const owner of listWorkspaceReconciliationOwners(db)) {
           const placement = find(db, owner.sessionId);
           const stillOwned = isCurrentJournalOwner(db, placement, owner);
           const retainedFailedOwner =

@@ -1,8 +1,8 @@
 // Line plugin module converts pre-drain spool rows to the canonical queue contract.
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  errorText,
   eventIdFor,
   laneKeyFor,
   legacyEventIdFor,
@@ -110,7 +110,7 @@ export async function migrateLineLegacySpoolRows(
         result.recovered += 1;
       }
     } catch (error) {
-      result.failures.push(`row ${row.id}: ${errorText(error)}`);
+      result.failures.push(`row ${row.id}: ${coerceErrorMessage(error)}`);
     }
   }
   const pending = await queue.listPending({ limit: "all", orderBy: "received" });
@@ -130,7 +130,7 @@ export async function migrateLineLegacySpoolRows(
     } catch (error) {
       await queue.fail(record.id, {
         reason: LINE_WEBHOOK_SPOOL_INVALID_EVENT_REASON,
-        message: errorText(error),
+        message: coerceErrorMessage(error),
       });
       result.deadLettered += 1;
       continue;
@@ -160,7 +160,7 @@ export async function migrateLineLegacySpoolRows(
     } catch (error) {
       // One failed rewrite must not abandon the remaining rows; the leftover row
       // stays pending and the idempotent migration retries it on the next run.
-      result.failures.push(`row ${record.id}: ${errorText(error)}`);
+      result.failures.push(`row ${record.id}: ${coerceErrorMessage(error)}`);
     }
   }
   return result;

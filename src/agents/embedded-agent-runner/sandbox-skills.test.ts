@@ -5,9 +5,9 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { recordExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/loading/skill-file-host.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,

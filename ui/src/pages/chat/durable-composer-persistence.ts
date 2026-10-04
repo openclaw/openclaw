@@ -1,3 +1,4 @@
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
@@ -90,24 +91,6 @@ export function chatAttachmentDraftSignature(
       attachment.selectionAnnotation ?? null,
     ]),
   ]);
-}
-
-export function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Blob read failed")), {
-      once: true,
-    });
-    reader.addEventListener(
-      "load",
-      () =>
-        typeof reader.result === "string"
-          ? resolve(reader.result)
-          : reject(new Error("Blob read returned no data")),
-      { once: true },
-    );
-    reader.readAsDataURL(blob);
-  });
 }
 
 export function captureDurableChatAttachments(

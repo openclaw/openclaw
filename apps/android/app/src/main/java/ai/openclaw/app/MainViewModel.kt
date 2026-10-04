@@ -18,7 +18,6 @@ import ai.openclaw.app.chat.ChatTranscriptAnchorState
 import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.MessageSpeechState
-import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.chat.SessionBranch
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
@@ -545,8 +544,6 @@ class MainViewModel private constructor(
     runtimeState(initial = GatewayNodeCapabilityApproval.Loading) { it.nodeCapabilityApproval }
   val nodeApprovalAction: StateFlow<GatewayNodeApprovalActionState> =
     runtimeState(initial = GatewayNodeApprovalActionState()) { it.nodeApprovalAction }
-  val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
-  val gatewayConnectionProblem: StateFlow<GatewayConnectionProblem?> = runtimeState(initial = null) { it.gatewayConnectionProblem }
   val gatewayConnectionDisplay: StateFlow<GatewayConnectionDisplay> =
     runtimeState(initial = GatewayConnectionDisplay(false, "Offline", null)) { it.gatewayConnectionDisplay }
   val operatorAdminScopeAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.operatorAdminScopeAvailable }
@@ -959,12 +956,7 @@ class MainViewModel private constructor(
     ensureRuntime().setNotificationForwardingMode(mode)
   }
 
-  fun setNotificationForwardingPackagesCsv(csv: String) {
-    val packages =
-      csv
-        .split(',')
-        .map { it.trim() }
-        .filter { it.isNotEmpty() }
+  fun setNotificationForwardingPackages(packages: List<String>) {
     ensureRuntime().setNotificationForwardingPackages(packages)
   }
 
@@ -1187,7 +1179,7 @@ class MainViewModel private constructor(
     viewModelScope.launch {
       try {
         val accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = pending.owner,
             message = prompt,
             thinking = thinking,
@@ -1781,16 +1773,22 @@ class MainViewModel private constructor(
   suspend fun renameChatSessionGroup(
     from: String,
     to: String,
+    expectedGatewayStableId: String?,
   ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     val stored = prefs.sessionCustomGroups.value
     // Web semantics: replace a stored name in place, otherwise remember the new name.
     prefs.setSessionCustomGroups(if (from in stored) stored.map { if (it == from) to else it } else stored + to)
-    ensureRuntime().chat.renameSessionGroup(from = from, to = to)
+    ensureRuntime().chat.renameSessionGroup(from = from, to = to, expectedGatewayId = expectedGatewayStableId)
   }
 
-  suspend fun deleteChatSessionGroup(group: String) {
+  suspend fun deleteChatSessionGroup(
+    group: String,
+    expectedGatewayStableId: String?,
+  ) {
+    if (activeGatewayStableId.value != expectedGatewayStableId) return
     prefs.setSessionCustomGroups(prefs.sessionCustomGroups.value.filterNot { it == group })
-    ensureRuntime().chat.dissolveSessionGroup(group)
+    ensureRuntime().chat.dissolveSessionGroup(group, expectedGatewayId = expectedGatewayStableId)
   }
 
   suspend fun forkChatSession(
@@ -2125,21 +2123,6 @@ class MainViewModel private constructor(
     ensureRuntime().chat.skipQuestion(prompt)
   }
 
-  internal suspend fun sendChatForOwnerAwaitAcceptance(
-    owner: ChatComposerOwner,
-    message: String,
-    thinking: String,
-    attachments: List<OutgoingAttachment>,
-    idempotencyKey: String,
-  ): Boolean =
-    ensureRuntime().sendChatForOwnerAwaitAcceptance(
-      owner = owner,
-      message = message,
-      thinking = thinking,
-      attachments = attachments,
-      idempotencyKey = idempotencyKey,
-    )
-
   /** Admission outlives the composing Activity; accepted payloads clear by owner and snapshot. */
   internal fun beginChatComposerSend(
     owner: ChatComposerOwner,
@@ -2153,7 +2136,7 @@ class MainViewModel private constructor(
       var accepted: Boolean? = null
       try {
         accepted =
-          sendChatForOwnerAwaitAcceptance(
+          ensureRuntime().sendChatForOwnerAwaitAcceptance(
             owner = request.owner,
             message = request.message,
             thinking = thinking,

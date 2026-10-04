@@ -22,7 +22,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerEmbeddedHistoryProjectionTests } from "./embedded-backend.history.test-support.js";
 import type { EmbeddedTuiBackend as EmbeddedTuiBackendType } from "./embedded-backend.js";
-import { registerEmbeddedBackendStreamTests } from "./embedded-backend.stream.test-support.js";
+import {
+  captureBackendEvents,
+  registerEmbeddedBackendStreamTests,
+} from "./embedded-backend.stream.test-support.js";
 import {
   registerEmbeddedModelCatalogTests,
   withEmbeddedModelCatalogOwnerFixture,
@@ -207,10 +210,6 @@ vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveAgentDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}/agent`,
   resolveAgentWorkspaceDir: (_cfg: unknown, agentId: string) => `/tmp/openclaw-agent-${agentId}`,
-  resolveDefaultAgentId: (cfg?: {
-    agents?: { list?: Array<{ id?: string; default?: boolean }> };
-  }) =>
-    cfg?.agents?.list?.find((agent) => agent.default)?.id ?? cfg?.agents?.list?.[0]?.id ?? "main",
   resolveSessionAgentId: (params: { sessionKey?: string; agentId?: string }) =>
     params.agentId ?? /^agent:([^:]+):/.exec(params.sessionKey ?? "")?.[1] ?? "main",
 }));
@@ -394,14 +393,6 @@ function emitRegisteredAgentEvent(evt: unknown) {
   if (registeredListener) {
     notifyListeners([registeredListener], evt);
   }
-}
-
-function captureBackendEvents(backend: EmbeddedTuiBackendType) {
-  const events: Array<{ event: string; payload: unknown }> = [];
-  backend.onEvent = ({ event, payload }) => {
-    events.push({ event, payload });
-  };
-  return events;
 }
 
 function sendMainChat(backend: EmbeddedTuiBackendType, message: string, runId: string) {
@@ -924,6 +915,10 @@ describe("EmbeddedTuiBackend", () => {
     createSessionRowProjectionMock,
     listProjectedSessionsMock,
     runSessionStartupMigrationMock,
+    getRuntimeConfigMock,
+    refreshPreparedModelRuntimeSnapshotsMock,
+    agentCommandFromIngressMock,
+    unregisterConfigWriteListenerMock,
     flushMicrotasks,
   });
 
@@ -968,30 +963,9 @@ describe("EmbeddedTuiBackend", () => {
     });
   });
 
-  it("publishes the configured runtime before admitting the first local turn", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    getRuntimeConfigMock.mockReturnValue(initialConfig);
-    const publication = deferred<void>();
-    refreshPreparedModelRuntimeSnapshotsMock.mockReturnValueOnce(publication.promise);
-
-    const backend = new EmbeddedTuiBackend();
-    backend.start();
-
-    const send = sendMainChat(backend, "hello", "run-waits-for-published-runtime");
-    await flushMicrotasks();
-
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(initialConfig);
-    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
-
-    publication.resolve();
-    await send;
-    await vi.waitFor(() => expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1));
-    await backend.stop();
-  });
-
   it("queues config runtime publication ahead of later local turns and unregisters on stop", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
-    const nextConfig = { agents: { list: [{ id: "main" }], defaults: { model: "openai/next" } } };
+    const initialConfig = { agents: { entries: { main: {} } } };
+    const nextConfig = { agents: { entries: { main: {} }, defaults: { model: "openai/next" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
 
     const backend = new EmbeddedTuiBackend();
@@ -1017,7 +991,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("forwards overlapping config publications immediately for runtime latest-wins coalescing", async () => {
-    const initialConfig = { agents: { list: [{ id: "main" }] } };
+    const initialConfig = { agents: { entries: { main: {} } } };
     const middleConfig = { agents: { defaults: { model: "openai/middle" } } };
     const latestConfig = { agents: { defaults: { model: "openai/latest" } } };
     getRuntimeConfigMock.mockReturnValue(initialConfig);
@@ -1456,7 +1430,7 @@ describe("EmbeddedTuiBackend", () => {
   });
 
   it("loads runtime plugins for the send-path workspace before returning embedded history", async () => {
-    const cfg = { agents: { list: [{ id: "main" }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     loadSessionEntryMock.mockReturnValue({
       cfg,
       agentId: "main",
@@ -2870,9 +2844,12 @@ describe("EmbeddedTuiBackend", () => {
     await flushMicrotasks();
   });
 
-  it("does not abort selected-global run ids across default-agent boundaries", async () => {
+  it("does not abort selected-global run ids across explicit agent boundaries", async () => {
     getRuntimeConfigMock.mockReturnValue({
-      agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+      agents: {
+        ownership: "explicit",
+        entries: { main: {}, work: {} },
+      },
     });
     const defaultRun = deferred<EmbeddedAgentResult>();
     const workRun = deferred<EmbeddedAgentResult>();
@@ -2896,6 +2873,7 @@ describe("EmbeddedTuiBackend", () => {
     backend.start();
     await backend.sendChat({
       sessionKey: "global",
+      agentId: "main",
       message: "default",
       runId: "run-local-default-global",
     });
@@ -2916,6 +2894,7 @@ describe("EmbeddedTuiBackend", () => {
     await expect(
       backend.abortChat({
         sessionKey: "global",
+        agentId: "main",
         runId: "run-local-work-global",
       }),
     ).resolves.toEqual({ ok: true, aborted: false, runIds: [] });
@@ -3296,7 +3275,6 @@ describe("EmbeddedTuiBackend", () => {
     createPendingReply: () => deferred<EmbeddedAgentResult>(),
     prepareReply: (reply) => agentCommandFromIngressMock.mockReturnValueOnce(reply),
     emitAgentEvent: (event) => registeredListener?.(event),
-    captureBackendEvents,
     flushMicrotasks,
     embeddedEventTimestamp,
   });

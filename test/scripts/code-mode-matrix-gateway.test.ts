@@ -1639,11 +1639,14 @@ describe("Gateway matrix interview evidence", () => {
     { scenario: "unrelated-run-id", accepted: false },
     { scenario: "never-terminal", accepted: false },
     { scenario: "unrelated-expiry-text", accepted: false },
+    { scenario: "other-session-call-outcome", accepted: false },
+    { scenario: "other-session-wait", accepted: false },
+    { scenario: "other-session-wait-outcome", accepted: false },
   ] as const)(
     "requires correlated terminal expiry evidence through $scenario",
     ({ scenario, accepted }) => {
       const taskTrace = collectGatewayMatrixTrace(invoiceEvidence().events);
-      const events: unknown[] = [
+      const events: Record<string, unknown>[] = [
         assistantCall(
           "probe",
           scenario === "uncaught-expiry"
@@ -1683,6 +1686,14 @@ describe("Gateway matrix interview evidence", () => {
             : { status: "completed", value: expired },
           scenario === "uncaught-expiry",
         );
+      }
+      for (const [index, event] of events.entries()) {
+        event.matrixSessionKey =
+          (scenario === "other-session-call-outcome" && index === 1) ||
+          (scenario === "other-session-wait" && index >= 2) ||
+          (scenario === "other-session-wait-outcome" && index === events.length - 1)
+            ? "child-session"
+            : "root-session";
       }
       const checks = evaluateGatewayMatrixInterview(
         "invoices-auto-retention",

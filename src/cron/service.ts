@@ -85,6 +85,11 @@ export class CronService implements CronServiceContract {
     lifecycleOps.stop(this.state);
   }
 
+  /** Joins stopped timer generations from outside their callbacks. */
+  async waitForIdle(): Promise<void> {
+    await this.state.schedulerDrain;
+  }
+
   pauseScheduling() {
     lifecycleOps.pauseScheduling(this.state);
   }

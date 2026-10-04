@@ -62,7 +62,7 @@ it("reuses committed row facts when a changed model catalog updates session list
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
       plugins: { enabled: false },
@@ -173,7 +173,7 @@ it("retains session facts on identity-scope changes and refreshes changes that a
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     let cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { model: "unit-test/original" },
       },
       plugins: { enabled: false },

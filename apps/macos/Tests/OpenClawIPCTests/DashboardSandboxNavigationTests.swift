@@ -354,7 +354,7 @@ struct DashboardSandboxNavigationTests {
             windowAutosaveName: "",
             requestBrowserProfileImportOffer: { _ in false })
         defer { controller.closeDashboard() }
-        controller.loadInBackground(url: dashboardURL, auth: controller.auth)
+        controller.update(url: dashboardURL, auth: controller.auth)
         var rendered = false
         try await TestWait.state("sandbox inner document handshake") {
             rendered = await (try? controller.webView.evaluateJavaScript(

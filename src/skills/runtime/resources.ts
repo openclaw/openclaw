@@ -34,7 +34,6 @@ import {
   skillLibraryRevisionDir,
   SkillTreeDirectoryError,
 } from "../library/bundle.js";
-import { SkillLibraryError } from "../library/errors.js";
 import { readSkillLibrarySelectionManifests } from "../library/selection-read.js";
 import {
   captureSkillLibrarySelection,
@@ -42,16 +41,18 @@ import {
 } from "../library/selection.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { createSyntheticSourceInfo, type Skill } from "../loading/skill-contract.js";
+import { shouldSyncSkillPath } from "../loading/skill-paths.js";
+import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
 import {
   copySkillFileHost,
   recordSkillFileHost,
   resolveSkillFileHost,
-} from "../loading/skill-file-host.js";
-import { shouldSyncSkillPath } from "../loading/skill-paths.js";
-import { formatSkillsForPromptBounded } from "../loading/skill-prompt-limits.js";
-import { resolveSkillReadPath } from "../loading/workspace-skill-read-path.js";
+} from "../skill-file-host.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import type { ExplicitSkillSelection, SkillSnapshot, SkillResourceSourceReader } from "../types.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 import { resolveSkillResourceCandidates } from "./resource-candidates.js";
+import { SkillResourceDeliveryLimitError } from "./resource-delivery-error.js";
 import { copySkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
 const log = createSubsystemLogger("skills/resources");
@@ -317,9 +318,7 @@ export async function prepareSkillResourceDelivery(
     }
     total += bundle.files.reduce((sum, file) => sum + file.sizeBytes, 0);
     if (total > SKILL_LIBRARY_MAX_BUNDLE_BYTES) {
-      throw new Error(
-        "Selected skill resources exceed the worker delivery limit (8 MiB). Select fewer skills before retrying.",
-      );
+      throw new SkillResourceDeliveryLimitError();
     }
     const sourcePath =
       resolveSkillFileHost(skill) === "workspace" &&

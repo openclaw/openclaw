@@ -59,6 +59,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
   let current: ReturnType<typeof createStore>["current"];
 
   beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
     stubGatewayStoreTestGlobals();
     store = createStore();
     ({ gateway, current } = store);
@@ -166,8 +167,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
     expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBe("replacement-build");
   });
 
-  it("retires automatic build recovery when the connection stops between probes", async () => {
+  it.each(["initial jitter", "probe retry"])("retires build recovery during %s", async (phase) => {
     vi.useFakeTimers();
+    vi.mocked(Math.random).mockReturnValue(phase === "initial jitter" ? 0.5 : 0);
     const { replace, fetchMock } = stubBuildReloadDocument();
     fetchMock
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
@@ -179,7 +181,7 @@ describe("createApplicationGateway authentication diagnostics", () => {
 
     await vi.advanceTimersByTimeAsync(30_000);
     expect(replace).not.toHaveBeenCalled();
-    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(phase === "initial jitter" ? 0 : 1);
     expect(sessionStorage.getItem(RELOAD_GUARD_KEY)).toBeNull();
   });
 

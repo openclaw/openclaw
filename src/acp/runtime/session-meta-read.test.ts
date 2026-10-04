@@ -37,55 +37,89 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
 });
 
-it("joins cold config, main aliases, and complete session fields without host SQL", async () => {
-  await withOpenClawTestState({ label: "acp-singular-cold" }, async (state) => {
-    const storePath = state.path("custom.sqlite");
-    const cfg = {
-      agents: { ownership: "explicit" as const, entries: { main: {} } },
-      session: { store: storePath },
-    };
-    await state.writeConfig(cfg);
-    const sessionKey = "agent:main:main";
-    await replaceSessionEntry(
-      { agentId: "main", storePath, sessionKey, env: state.env },
-      {
+it.each(["cold-file", "incognito"] as const)(
+  "joins the %s session with its current metadata through the owning storage route",
+  async (storage) => {
+    await withOpenClawTestState({ label: `acp-singular-${storage}` }, async (state) => {
+      const incognito = storage === "incognito";
+      const storePath = incognito ? undefined : state.path("custom.sqlite");
+      const cfg = {
+        agents: { ownership: "explicit" as const, entries: { main: {} } },
+        ...(storePath ? { session: { store: storePath } } : {}),
+      };
+      await state.writeConfig(cfg);
+      const sessionKey = incognito ? "agent:main:dashboard:incognito-private" : "agent:main:main";
+      const entry = {
         sessionId: "session",
         lifecycleRevision: "original",
         updatedAt: 100,
         skillsSnapshot: { prompt: "Saved instructions", skills: [{ name: "fixture" }] },
-      },
-    );
-    writeAcpSessionMetaForMigration({
-      env: state.env,
-      sessionKey: buildAcpDatabaseSessionKey(sessionKey, "main"),
-      lifecycleRevision: "original",
-      meta,
-    });
-    await closeOpenClawAgentDatabasesAsync();
-    await closeOpenClawStateDatabaseAsync();
-    resetConfigRuntimeState();
-    const sql = observeMainThreadSql();
-    try {
-      const result = await readAcpSessionEntryAsync({ sessionKey: " main ", agentId: "main" });
-      expect(result).toMatchObject({
-        sessionKey: "main",
-        storeSessionKey: sessionKey,
-        agentId: "main",
-        storePath,
-        entry: {
-          sessionId: "session",
-          lifecycleRevision: "original",
-          skillsSnapshot: { prompt: "Saved instructions", skills: [{ name: "fixture" }] },
-        },
-        acp: meta,
+      };
+      await replaceSessionEntry({ agentId: "main", storePath, sessionKey, env: state.env }, entry);
+      const databaseKey = buildAcpDatabaseSessionKey(sessionKey, "main");
+      writeAcpSessionMetaForMigration({
+        env: state.env,
+        sessionKey: databaseKey,
+        lifecycleRevision: "original",
+        meta,
       });
-      expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
-      sql.expectIdle();
-    } finally {
-      sql.restore();
-    }
-  });
-});
+      if (incognito) {
+        const read = storeReads.readSessionEntryFromStore;
+        vi.spyOn(storeReads, "readSessionEntryFromStore").mockImplementationOnce((input) => {
+          const result = read(input);
+          queueMicrotask(() => {
+            writeAcpSessionMetaForMigration({
+              env: state.env,
+              sessionKey: databaseKey,
+              lifecycleRevision: "replacement",
+              meta: { ...meta, runtimeSessionName: "replacement-runtime" },
+            });
+          });
+          return result;
+        });
+      } else {
+        await closeOpenClawAgentDatabasesAsync();
+        await closeOpenClawStateDatabaseAsync();
+        resetConfigRuntimeState();
+      }
+      const sql = observeMainThreadSql();
+      try {
+        const result = await readAcpSessionEntryAsync(
+          incognito
+            ? { cfg, env: state.env, sessionKey }
+            : { sessionKey: " main ", agentId: "main" },
+        );
+        expect(result).toMatchObject({
+          sessionKey: incognito ? sessionKey : "main",
+          storeSessionKey: sessionKey,
+          agentId: "main",
+          ...(storePath ? { storePath } : {}),
+          entry: {
+            sessionId: entry.sessionId,
+            lifecycleRevision: entry.lifecycleRevision,
+            skillsSnapshot: entry.skillsSnapshot,
+          },
+          acp: meta,
+        });
+        if (incognito) {
+          expect(
+            fs.existsSync(
+              resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+            ),
+          ).toBe(false);
+          expect(
+            fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env })),
+          ).toBe(false);
+        } else {
+          expect(await readAcpSessionMetaAsync({ sessionKey, agentId: "main" })).toEqual(meta);
+          sql.expectIdle();
+        }
+      } finally {
+        sql.restore();
+      }
+    });
+  },
+);
 
 it("preserves missing-entry alias precedence and unreadable-store results without creating stores", async () => {
   await withOpenClawTestState({ label: "acp-singular-missing" }, async (state) => {
@@ -211,44 +245,3 @@ it.each(["caller", "store", "config"] as const)(
     });
   },
 );
-
-it("keeps the native incognito join together without creating an agent file", async () => {
-  await withOpenClawTestState({ label: "acp-singular-incognito" }, async (state) => {
-    const sessionKey = "agent:main:dashboard:incognito-private";
-    const cfg = { agents: { ownership: "explicit" as const, entries: { main: {} } } };
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey, env: state.env },
-      { sessionId: "private", lifecycleRevision: "original", updatedAt: 100 },
-    );
-    const databaseKey = buildAcpDatabaseSessionKey(sessionKey, "main");
-    writeAcpSessionMetaForMigration({
-      env: state.env,
-      sessionKey: databaseKey,
-      lifecycleRevision: "original",
-      meta,
-    });
-    const read = storeReads.readSessionEntryFromStore;
-    vi.spyOn(storeReads, "readSessionEntryFromStore").mockImplementationOnce((input) => {
-      const result = read(input);
-      queueMicrotask(() => {
-        writeAcpSessionMetaForMigration({
-          env: state.env,
-          sessionKey: databaseKey,
-          lifecycleRevision: "replacement",
-          meta: { ...meta, runtimeSessionName: "replacement-runtime" },
-        });
-      });
-      return result;
-    });
-    expect(await readAcpSessionEntryAsync({ cfg, env: state.env, sessionKey })).toMatchObject({
-      entry: { lifecycleRevision: "original" },
-      acp: { runtimeSessionName: "original-runtime" },
-    });
-    expect(
-      fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env })),
-    ).toBe(false);
-    expect(fs.existsSync(resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }))).toBe(
-      false,
-    );
-  });
-});

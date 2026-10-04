@@ -20,6 +20,10 @@ is instructed to inspect interrupted actions before deciding whether to repeat
 them. A retry status shows the wait and attempt count. Cancellation remains
 available. No additional configuration is required.
 
+Anthropic streaming errors retain their structured error type, so rate limits,
+overload, and authentication failures follow the same recovery policy even when
+the provider's message is generic.
+
 Thinking-level recovery applies only when the provider identifies a reasoning or
 thinking parameter. Model/account restrictions and unrelated unsupported options
 keep their original failure classification and follow the configured fallback

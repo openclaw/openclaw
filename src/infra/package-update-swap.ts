@@ -61,12 +61,6 @@ import {
 import { isFailedUpdateStep } from "./update-run-step.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
-export { PackageUpdateActivationError } from "./package-update-swap-contract.js";
-export type {
-  PackageUpdateTransaction,
-  StagedPackageInstall,
-} from "./package-update-swap-contract.js";
-
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
 export async function swapStagedPackageInstall(

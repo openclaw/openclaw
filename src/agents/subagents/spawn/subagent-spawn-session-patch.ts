@@ -19,6 +19,7 @@ import { resolveUserPath } from "../../../utils.js";
 import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
+import { captureSpawnParentLineage } from "./spawn-parent-lineage.js";
 import type { SpawnSubagentParams } from "./subagent-spawn-contract.js";
 import { type resolveSubagentModelAndThinkingPlan, splitModelRef } from "./subagent-spawn-plan.js";
 import {
@@ -31,11 +32,14 @@ import {
 
 export async function createInitialSubagentSession(params: {
   cfg: OpenClawConfig;
+  requesterAgentId: string;
   targetAgentId: string;
   childSessionKey: string;
   label?: string;
   incognito: boolean;
   requesterInternalKey: string;
+  senderIsOwner?: boolean;
+  expectedParentSessionId?: string;
   assertActive?: () => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
@@ -115,6 +119,7 @@ export async function createInitialSubagentSession(params: {
     const parentTarget = await resolveGatewaySessionStoreTargetInWorker({
       cfg: params.cfg,
       key: params.requesterInternalKey,
+      agentId: params.requesterAgentId,
       assertActive: params.assertActive,
     });
     const parentStorePath = parentTarget.readSource?.path ?? parentTarget.storePath;
@@ -124,21 +129,30 @@ export async function createInitialSubagentSession(params: {
       storePath: parentStorePath,
     });
     params.assertActive?.();
-    const parentEntry = await withSessionEntryReadOnlyInWorker(
-      {
-        agentId: parentTarget.agentId,
-        storePath: parentStorePath,
-        sessionKey: parentTarget.canonicalKey,
-      },
-      () => params.assertActive?.(),
-      async (read) => {
-        if (!read.ok) {
-          throw read.error;
-        }
-        return read.value;
-      },
-    );
+    // Parent rows are read on the session read worker, never on the Gateway thread.
+    const readParentEntry = () =>
+      withSessionEntryReadOnlyInWorker(
+        {
+          agentId: parentTarget.agentId,
+          storePath: parentStorePath,
+          sessionKey: parentTarget.canonicalKey,
+        },
+        () => params.assertActive?.(),
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value;
+        },
+      );
+    const parentEntry = await readParentEntry();
     params.assertActive?.();
+    const parentLineage = captureSpawnParentLineage({
+      parentEntry,
+      expectedParentSessionId: params.expectedParentSessionId,
+      senderIsOwner: params.senderIsOwner,
+      readParentEntry,
+    });
     // Spawn owns a fresh child lifecycle. Cleanup freezes both fields before
     // launch so it cannot delete a reset successor that reuses the session id.
     const childSessionIdentity = {
@@ -207,8 +221,9 @@ export async function createInitialSubagentSession(params: {
       initialChildSessionPatch.projectId = projectId;
       initialChildSessionPatch.pendingWorktree = preparedWorktree.pendingWorktree;
     }
-    const commit = (assertSourceCurrent?: () => void) =>
-      upsertSessionEntryCore(
+    const commit = async (assertSourceCurrent?: () => void) => {
+      await parentLineage.assertParentUnchanged();
+      return await upsertSessionEntryCore(
         {
           storePath: target.readSource?.path ?? target.storePath,
           sessionKey: target.canonicalKey,
@@ -230,6 +245,8 @@ export async function createInitialSubagentSession(params: {
               }
             : {}),
           ...childSessionIdentity,
+          // Stamp after all request patches so model input cannot create a grant.
+          ...parentLineage.receipt,
           ...(parentEntry?.skillLibrarySelections
             ? {
                 skillLibrarySelections: parentEntry.skillLibrarySelections.map((selection) => ({
@@ -272,6 +289,7 @@ export async function createInitialSubagentSession(params: {
           },
         },
       );
+    };
     const entry = preparedWorktree?.withCommit
       ? await preparedWorktree.withCommit(commit)
       : await commit();

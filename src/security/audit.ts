@@ -2,15 +2,11 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import {
-  hasAgentRosterProperty,
-  listAgentEntries,
-  tryResolveLegacyCompatibilityAgentId,
-} from "../agents/agent-scope-config.js";
+import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
@@ -38,6 +34,7 @@ import {
 import { listRiskyConfiguredSafeBins } from "../infra/exec-safe-bin-semantics.js";
 import { resolvePluginControlPlaneWorkspace } from "../plugins/control-plane-workspace.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { collectAgentRosterFindings } from "./audit-agent-roster.js";
 import { collectDeepCodeSafetyFindings } from "./audit-deep-code-safety.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import {
@@ -823,37 +820,6 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
   }
 
   return findings;
-}
-
-function collectAgentRosterFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
-  const agents = listAgentEntries(cfg);
-  // A missing roster is the supported pre-roster compatibility state and is
-  // materialized by config loading. An explicitly authored empty roster is invalid.
-  if (agents.length === 0 && !hasAgentRosterProperty(cfg)) {
-    return [];
-  }
-  const defaultCount = agents.filter((agent) => agent?.default === true).length;
-  const explicitOwnership = cfg.agents?.ownership === "explicit";
-  // Mirror runtime default resolution: explicit fleets are ownerless by design,
-  // otherwise the roster is valid exactly when the canonical resolver finds an
-  // owner (sole agent, one legacy marker, or a retained migration owner).
-  const resolvable = explicitOwnership
-    ? defaultCount === 0
-    : tryResolveLegacyCompatibilityAgentId(cfg) !== undefined;
-  if (resolvable) {
-    return [];
-  }
-  return [
-    {
-      checkId: "config.agent_roster.invalid_default_count",
-      severity: "warn",
-      title: "Agent roster has an invalid default selection",
-      detail: explicitOwnership
-        ? `Expected no agents.entries default=true entries with agents.ownership=explicit, found ${defaultCount}.`
-        : `Expected a resolvable default agent (sole entry, one default=true marker, or agents.ownership=explicit); found ${defaultCount} default markers across ${agents.length} configured agents.`,
-      remediation: "Run `openclaw doctor --fix` to repair the authored agent roster.",
-    },
-  ];
 }
 
 function formatNamesPreview(names: readonly string[]): string {

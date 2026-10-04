@@ -9,18 +9,28 @@ export function applyPluginDoctorCompatibilitySequence(
   entries: Iterable<{
     pluginId: string;
     normalizeCompatibilityConfig?: PluginDoctorCompatibilityNormalizer;
+    transform?: (
+      mutation: ReturnType<PluginDoctorCompatibilityNormalizer>,
+    ) => ReturnType<PluginDoctorCompatibilityNormalizer>;
   }>,
 ): { config: OpenClawConfig; changes: string[]; warnings?: string[] } {
   let next = config;
   const changes: string[] = [];
   const warnings: string[] = [];
-  for (const { pluginId, normalizeCompatibilityConfig } of entries) {
+  for (const { pluginId, normalizeCompatibilityConfig, transform } of entries) {
     if (!normalizeCompatibilityConfig) {
       continue;
     }
     const candidate = cloneConfigWithResolutionFacts(next);
     try {
-      const mutation = normalizeCompatibilityConfig({ cfg: candidate });
+      const normalized = normalizeCompatibilityConfig({ cfg: candidate });
+      // Follow-on repairs must not publish edits the hook declined to report.
+      const reported = {
+        ...normalized,
+        config: normalized?.changes.length ? normalized.config : next,
+        changes: normalized?.changes ?? [],
+      };
+      const mutation = transform ? transform(reported) : reported;
       if (mutation?.changes.length) {
         next = mutation.config;
         changes.push(...mutation.changes);

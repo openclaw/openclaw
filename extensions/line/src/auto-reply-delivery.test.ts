@@ -330,7 +330,7 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("sanitizes internal traces on the inbound auto-reply path", async () => {
-    const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
+    const processLineMessage = vi.fn((text: string) => [{ type: "text" as const, text }]);
     const { replyMessageLine } = createDeps({ processLineMessage });
     const text = [
       "Done.",
@@ -357,7 +357,7 @@ describe("deliverLineAutoReply", () => {
   });
 
   it("suppresses an internal-only auto-reply without consuming the reply token", async () => {
-    const processLineMessage = vi.fn((text: string) => ({ text, flexMessages: [] }));
+    const processLineMessage = vi.fn((text: string) => [{ type: "text" as const, text }]);
     const { replyMessageLine, pushMessagesLine } = createDeps({ processLineMessage });
 
     const result = await deliverLineAutoReply({
@@ -441,10 +441,10 @@ describe("deliverLineAutoReply", () => {
     const { replyMessageLine } = createDeps({
       ...(extracted
         ? {
-            processLineMessage: (text) => ({
-              text,
-              flexMessages: [{ type: "flex", altText, contents: { type: "bubble" } }],
-            }),
+            processLineMessage: (text) => [
+              { type: "text", text },
+              { type: "flex", message: { type: "flex", altText, contents: { type: "bubble" } } },
+            ],
           }
         : {}),
       createFlexMessage: createProviderFlexMessage,
@@ -495,7 +495,7 @@ describe("deliverLineAutoReply", () => {
       quickReplies: ["A"],
     };
     const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -527,14 +527,11 @@ describe("deliverLineAutoReply", () => {
     // LINE hides quick replies as soon as a newer message arrives, so pinning
     // them to the last reply-token slot loses the buttons behind the overflow
     // push that follows.
-    const processLineMessage: LineAutoReplyDeps["processLineMessage"] = () => ({
-      text: "",
-      flexMessages: [1, 2, 3, 4, 5, 6].map((n) => ({
+    const processLineMessage: LineAutoReplyDeps["processLineMessage"] = () =>
+      [1, 2, 3, 4, 5, 6].map((n) => ({
         type: "flex",
-        altText: `B${n}`,
-        contents: { type: "bubble" },
-      })),
-    });
+        message: { type: "flex", altText: `B${n}`, contents: { type: "bubble" } },
+      }));
     const lineData = { quickReplies: ["A"] };
     const { replyMessageLine, pushMessagesLine } = createDeps({ processLineMessage });
 
@@ -743,7 +740,7 @@ describe("deliverLineAutoReply", () => {
       previewImageUrl: "https://example.com/preview.jpg",
     };
     const { replyMessageLine, buildMediaMessage } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -780,7 +777,7 @@ describe("deliverLineAutoReply", () => {
     // audio or video URL reached LINE as an empty image bubble. The leaf reads
     // the URL itself, so overriding the kind here is what hid the real one.
     const { buildMediaMessage, replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -843,7 +840,7 @@ describe("deliverLineAutoReply", () => {
   it("rejects a media-only build failure instead of reporting an empty delivery", async () => {
     const lineData = { mediaKind: "video" as const };
     const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -869,7 +866,7 @@ describe("deliverLineAutoReply", () => {
     mediaUrl.password = ["line", "fixture"].join("-");
     mediaUrl.searchParams.set("auth", ["line", "query"].join("-"));
     const { replyMessageLine, pushMessagesLine } = createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
     });
 
@@ -892,7 +889,7 @@ describe("deliverLineAutoReply", () => {
     const lineData = { mediaKind: "video" as const };
     const failure = { code: "invalid_media" };
     createDeps({
-      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      processLineMessage: () => [],
       chunkMarkdownText: () => [],
       buildMediaMessage: vi.fn(async () => {
         // oxlint-disable-next-line typescript/only-throw-error -- dependency callbacks may reject unknown values; this proves the delivery boundary normalizes them.

@@ -46,33 +46,40 @@ afterEach(() => {
   resetPluginRuntimeStateForTest();
 });
 
-it("retains the exact memory shutdown loader before installed artifacts rotate", async () => {
-  const registry = createEmptyPluginRegistry();
-  const record = createPluginRecord({
-    id: "memory-preload",
-    source: "fixture",
-    origin: "config",
-    enabled: true,
-    configSchema: false,
-  });
-  registry.plugins.push(record);
-  registry.memoryCapabilities.push({
-    pluginId: record.id,
-    capability: {
-      runtime: {
-        getMemorySearchManager: async () => ({ manager: null }),
-        resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
-      },
-    },
-  });
-  setActivePluginRegistry(registry);
-  const owner = createPluginRegistryOwner(registry);
-  await prepareActivePluginRegistryShutdown();
-  const preparedImports = state.imports;
-  expect(preparedImports).toBeGreaterThan(0);
-  // Reject importer entry itself, even if Vitest has an incidental module cached.
-  state.rotated = true;
-  await expect(owner.close()).resolves.toEqual({ memoryErrors: [], pluginFailures: [] });
-  expect(state.closeMemory).toHaveBeenCalledOnce();
-  expect(state.imports).toBe(preparedImports);
-});
+it.each(["legacy", "provider"] as const)(
+  "retains the %s memory shutdown loader before installed artifacts rotate",
+  async (runtimeKind) => {
+    state.closeMemory.mockClear();
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({
+      id: "memory-preload",
+      source: "fixture",
+      origin: "config",
+      enabled: true,
+      configSchema: false,
+    });
+    registry.plugins.push(record);
+    registry.memoryCapabilities.push({
+      pluginId: record.id,
+      capability:
+        runtimeKind === "provider"
+          ? { providerRuntime: { open: async () => ({ provider: null }) } }
+          : {
+              runtime: {
+                getMemorySearchManager: async () => ({ manager: null }),
+                resolveMemoryBackendConfig: () => ({ backend: "builtin" }),
+              },
+            },
+    });
+    setActivePluginRegistry(registry);
+    const owner = createPluginRegistryOwner(registry);
+    await prepareActivePluginRegistryShutdown();
+    const preparedImports = state.imports;
+    expect(preparedImports).toBeGreaterThan(0);
+    // Reject importer entry itself, even if Vitest has an incidental module cached.
+    state.rotated = true;
+    await expect(owner.close()).resolves.toEqual({ memoryErrors: [], pluginFailures: [] });
+    expect(state.closeMemory).toHaveBeenCalledOnce();
+    expect(state.imports).toBe(preparedImports);
+  },
+);

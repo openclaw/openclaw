@@ -1,16 +1,23 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
+import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { checkTouchedTextModelRefs as checkTouchedTextModelRefsRaw } from "./config-model-validation.js";
 
-const checkTouchedTextModelRefs: typeof checkTouchedTextModelRefsRaw = (params) =>
+const checkTouchedTextModelRefs = ({
+  config,
+  previousConfig,
+  ...params
+}: Omit<Parameters<typeof checkTouchedTextModelRefsRaw>[0], "config" | "previousConfig"> & {
+  config: unknown;
+  previousConfig?: unknown;
+}) =>
   checkTouchedTextModelRefsRaw({
     ...params,
-    config: migratePersistedImplicitMainRoster(params.config).config as OpenClawConfig,
-    ...(params.previousConfig
+    config: createCanonicalAgentConfigFixture(config).config,
+    ...(previousConfig
       ? {
-          previousConfig: migratePersistedImplicitMainRoster(params.previousConfig)
-            .config as OpenClawConfig,
+          previousConfig: createCanonicalAgentConfigFixture(previousConfig).config,
         }
       : {}),
   });
@@ -323,7 +330,7 @@ describe("config model validation", () => {
   it("ignores a nonempty array in the agent-entry map draft", async () => {
     const config = { agents: { entries: [{ model: "missing/model" }] } };
     const result = await checkTouchedTextModelRefs({
-      config: config as unknown as OpenClawConfig,
+      config,
       touchedPaths: [["agents", "entries"]],
       resolveModelRef,
     });
@@ -415,7 +422,7 @@ describe("config model validation", () => {
           },
           models: { "gpt-5": { alias: "legacy/" } },
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
 
@@ -432,7 +439,7 @@ describe("config model validation", () => {
               fallbacks: ["legacy/"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       touchedPaths: [["agents", "defaults", "model", "primary"]],
@@ -455,7 +462,7 @@ describe("config model validation", () => {
             fallbacks: ["backup"],
           },
         },
-        entries: { ops: { default: true, model: { fallbacks: ["agent-backup"] } } },
+        entries: { ops: { model: { fallbacks: ["agent-backup"] } } },
       },
     };
 
@@ -485,29 +492,31 @@ describe("config model validation", () => {
   });
 
   it("revalidates fallbacks when roster repair also changes an ambiguous default provider", async () => {
+    const config: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: { primary: "provider-b/main", fallbacks: ["backup"] },
+        },
+        entries: {
+          main: { default: true },
+          ops: {},
+        },
+      },
+    };
+    const previousConfig: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        defaults: {
+          model: { primary: "provider-a/main", fallbacks: ["backup"] },
+        },
+        entries: {
+          main: { default: true },
+          ops: { default: true },
+        },
+      },
+    };
     const result = await checkTouchedTextModelRefs({
-      config: {
-        agents: {
-          defaults: {
-            model: { primary: "provider-b/main", fallbacks: ["backup"] },
-          },
-          entries: {
-            main: { default: true },
-            ops: {},
-          },
-        },
-      },
-      previousConfig: {
-        agents: {
-          defaults: {
-            model: { primary: "provider-a/main", fallbacks: ["backup"] },
-          },
-          entries: {
-            main: { default: true },
-            ops: { default: true },
-          },
-        },
-      },
+      config,
+      previousConfig,
       touchedPaths: [
         ["agents", "defaults", "model", "primary"],
         ["agents", "entries", "ops", "default"],
@@ -524,6 +533,7 @@ describe("config model validation", () => {
   it("validates touched fallback and per-agent model refs", async () => {
     const config: OpenClawConfig = {
       agents: {
+        ownership: "explicit",
         defaults: {
           model: {
             primary: "openai/gpt-5.4-mini",
@@ -531,7 +541,7 @@ describe("config model validation", () => {
           },
         },
         entries: {
-          main: { default: true },
+          main: {},
           ops: { model: { primary: "google/gemini-3.1-pro-preview" } },
         },
       },
@@ -564,12 +574,13 @@ describe("config model validation", () => {
   });
 
   it("uses list index paths for list-shaped agent model refs", async () => {
-    const result = await checkTouchedTextModelRefsRaw({
-      config: {
-        agents: {
-          list: [{ id: "ops", default: true, model: "provider-a/model" }],
-        },
+    const config: OpenClawConfigWithLegacyRoster = {
+      agents: {
+        list: [{ id: "ops", default: true, model: "provider-a/model" }],
       },
+    };
+    const result = await checkTouchedTextModelRefsRaw({
+      config,
       touchedPaths: [["agents", "list", "0", "model"]],
       resolveModelRef,
     });
@@ -611,7 +622,7 @@ describe("config model validation", () => {
           model: { primary: "openai/gpt-5.4-mini" },
           workspace: "/tmp/next-workspace",
         },
-        entries: { main: { default: true } },
+        entries: { main: {} },
       },
     };
 
@@ -620,7 +631,7 @@ describe("config model validation", () => {
       previousConfig: {
         agents: {
           defaults: { model: { primary: "openai/gpt-5.4-mini" } },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       touchedPaths: [["agents", "defaults"]],
@@ -636,7 +647,7 @@ describe("config model validation", () => {
       config: {
         agents: {
           entries: {
-            beta: { default: true, model: "provider-a/model" },
+            beta: { model: "provider-a/model" },
             alpha: { model: "provider-b/model" },
           },
         },
@@ -644,7 +655,7 @@ describe("config model validation", () => {
       previousConfig: {
         agents: {
           entries: {
-            alpha: { default: true, model: "provider-a/model" },
+            alpha: { model: "provider-a/model" },
             beta: { model: "provider-b/model" },
           },
         },
@@ -660,12 +671,12 @@ describe("config model validation", () => {
   it("does not revalidate a retained agent model when another entry is removed", async () => {
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { entries: { beta: { default: true, model: "provider-b/model" } } },
+        agents: { entries: { beta: { model: "provider-b/model" } } },
       },
       previousConfig: {
         agents: {
           entries: {
-            alpha: { default: true, model: "provider-a/model" },
+            alpha: { model: "provider-a/model" },
             beta: { model: "provider-b/model" },
           },
         },
@@ -681,10 +692,10 @@ describe("config model validation", () => {
   it("revalidates a per-agent model when its entry key changes", async () => {
     const result = await checkTouchedTextModelRefs({
       config: {
-        agents: { entries: { next: { default: true, model: "provider-a/model" } } },
+        agents: { entries: { next: { model: "provider-a/model" } } },
       },
       previousConfig: {
-        agents: { entries: { current: { default: true, model: "provider-a/model" } } },
+        agents: { entries: { current: { model: "provider-a/model" } } },
       },
       touchedPaths: [["agents", "entries"]],
       resolveModelRef,
@@ -713,7 +724,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { ops: { default: true } },
+          entries: { ops: {} },
         },
       },
       previousConfig: {
@@ -724,7 +735,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { ops: { default: true, model: "provider-b/override" } },
+          entries: { ops: { model: "provider-b/override" } },
         },
       },
       touchedPaths: [["agents", "entries", "ops", "model"]],
@@ -760,7 +771,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { ops: { default: true, workspace: "/tmp/ops" } },
+          entries: { ops: { workspace: "/tmp/ops" } },
         },
       },
       previousConfig: {
@@ -771,7 +782,7 @@ describe("config model validation", () => {
               fallbacks: ["provider-a/backup"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       touchedPaths: [["agents", "entries", "ops", "workspace"]],
@@ -787,13 +798,13 @@ describe("config model validation", () => {
       config: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          entries: { ops: { default: true, model: { fallbacks: ["provider-b/next"] } } },
+          entries: { ops: { model: { fallbacks: ["provider-b/next"] } } },
         },
       },
       previousConfig: {
         agents: {
           defaults: { model: { primary: "provider-a/default" } },
-          entries: { ops: { default: true, model: { fallbacks: ["provider-b/current"] } } },
+          entries: { ops: { model: { fallbacks: ["provider-b/current"] } } },
         },
       },
       touchedPaths: [["agents", "entries", "ops", "model", "fallbacks"]],
@@ -813,14 +824,18 @@ describe("config model validation", () => {
   });
 
   it("leaves malformed roster drafts to schema validation", async () => {
-    for (const entries of [
-      [] as never,
-      { bad: null } as never,
-      { main: { default: true }, ops: { default: true } },
-    ]) {
+    const ambiguousConfig: OpenClawConfigWithLegacyRoster = {
+      agents: { entries: { main: { default: true }, ops: { default: true } } },
+    };
+    const configs: Record<string, unknown>[] = [
+      { agents: { entries: [] } },
+      { agents: { entries: { bad: null } } },
+      ambiguousConfig,
+    ];
+    for (const config of configs) {
       await expect(
         checkTouchedTextModelRefsRaw({
-          config: { agents: { entries } },
+          config,
           touchedPaths: [["agents", "entries"]],
           resolveModelRef,
         }),

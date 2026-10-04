@@ -1,30 +1,21 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
-let restoreI18n: (() => Promise<void>) | undefined;
-
-beforeEach(() => vi.resetModules());
-afterEach(async () => {
-  await restoreI18n?.();
-});
+const loadI18n = useLazyEnglishTest();
 
 describe("Browser English loading", () => {
   it.each([
     { surface: "annotation", load: () => import("../components/browser/browser-annotation.ts") },
-    { surface: "surface", load: () => import("../components/browser/browser-panel-surface.ts") },
     {
       surface: "controller",
       load: () => import("../components/browser/browser-panel-controller.ts"),
     },
     { surface: "client", load: () => import("../components/browser/browser-client.ts") },
-    { surface: "download", load: () => import("../components/browser/browser-panel-download.ts") },
     { surface: "toolbar", load: () => import("../components/browser/browser-panel-render.ts") },
   ])(
     "loads fallback copy from the standalone $surface without replacing siblings",
     async ({ load }) => {
-      const { captureI18nStateForTesting, createI18nManagerForTesting } =
-        await import("./lib/translate.test-support.ts");
-      restoreI18n = captureI18nStateForTesting();
-      const { en } = await import("./locales/en.ts");
+      const { en, manager } = await loadI18n();
       const browser = en.browser;
       const errors = browser.errors;
       const annotatePrompt = browser.annotatePrompt;
@@ -36,9 +27,6 @@ describe("Browser English loading", () => {
       expect(errors.downloadEmpty).toBeUndefined();
       expect(annotatePrompt.introUntitled).toBeUndefined();
 
-      const manager = createI18nManagerForTesting(async () => ({
-        common: { health: "Gesundheit" },
-      }));
       await manager.setLocale("de");
       await load();
 

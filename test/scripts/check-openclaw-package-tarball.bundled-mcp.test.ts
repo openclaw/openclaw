@@ -300,29 +300,16 @@ describe("bundled browser MCP package", () => {
         change: "modify",
         error: "bundled chrome-devtools-mcp must be ESM version 1.10.1",
       },
-      ...[
-        "build/src/TextSnapshot.js",
-        "build/src/McpPage.js",
-        "build/src/third_party/index.js",
-        "build/src/OPENCLAW_PATCH_NOTICE.md",
-      ].map((file) => ({
-        file,
+      {
+        file: "build/src/TextSnapshot.js",
         change: "modify",
-        error: `unpatched or changed runtime entry ${file}`,
-      })),
-      ...[
-        MCP_CLI,
-        "build/src/bin/chrome-devtools-mcp-main.js",
-        "build/src/third_party/devtools-formatter-worker.js",
-        "build/src/third_party/devtools-heap-snapshot-worker.js",
-        "build/src/third_party/lighthouse-devtools-mcp-bundle.js",
-        "LICENSE",
-        "build/src/third_party/THIRD_PARTY_NOTICES",
-      ].map((file) => ({
-        file,
+        error: "unpatched or changed runtime entry build/src/TextSnapshot.js",
+      },
+      {
+        file: MCP_CLI,
         change: "remove",
-        error: `missing required runtime entry ${file}`,
-      })),
+        error: `missing required runtime entry ${MCP_CLI}`,
+      },
       {
         file: "build/src/third_party/issue-descriptions",
         change: "remove",

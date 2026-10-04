@@ -61,29 +61,18 @@ export type ClawHubPackageSecurityTrust = {
   pending: boolean;
   stale: boolean;
 };
-export type ClawHubResolvedArtifact =
-  | {
-      source: "clawhub";
-      artifactKind: "legacy-zip";
-      packageName: string;
-      version: string;
-      downloadUrl?: string | null;
-      artifactSha256?: string | null;
-      scanState?: ClawHubArtifactScanState | null;
-      moderationState?: ClawHubArtifactModerationState | null;
-    }
-  | {
-      source: "clawhub";
-      artifactKind: "npm-pack";
-      packageName: string;
-      version: string;
-      downloadUrl?: string | null;
-      npmIntegrity: string;
-      npmShasum?: string | null;
-      artifactSha256?: string | null;
-      scanState?: ClawHubArtifactScanState | null;
-      moderationState?: ClawHubArtifactModerationState | null;
-    };
+export type ClawHubResolvedArtifact = {
+  source: "clawhub";
+  packageName: string;
+  version: string;
+  downloadUrl?: string | null;
+  artifactSha256?: string | null;
+  scanState?: ClawHubArtifactScanState | null;
+  moderationState?: ClawHubArtifactModerationState | null;
+} & (
+  | { artifactKind: "legacy-zip" }
+  | { artifactKind: "npm-pack"; npmIntegrity: string; npmShasum?: string | null }
+);
 export type ClawHubPackageArtifactResolverResponse = {
   package?: {
     name?: string | null;

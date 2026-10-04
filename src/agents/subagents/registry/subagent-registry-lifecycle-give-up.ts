@@ -11,11 +11,14 @@ import {
   type SubagentLifecycleEndedReason,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuspendPendingFinalDelivery } from "./subagent-registry-cleanup.js";
-import { logAnnounceGiveUp, safeRemoveAttachmentsDir } from "./subagent-registry-helpers.js";
+import {
+  logAnnounceGiveUp,
+  safeRemoveAttachmentsDir,
+  shouldRemoveSubagentAttachments,
+} from "./subagent-registry-helpers.js";
 import { retireSupersededCleanupIfNeeded } from "./subagent-registry-lifecycle-attempt.js";
 import { suspendPendingFinalDelivery } from "./subagent-registry-lifecycle-cleanup.js";
 import type { SubagentLifecycleAnnounceCleanupContext } from "./subagent-registry-lifecycle-context.js";
-import { emitCompletionEndedHookIfNeeded } from "./subagent-registry-lifecycle-delivery.js";
 import { commitSubagentLifecycleMutation } from "./subagent-registry-lifecycle-persistence.js";
 import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
 import { assertSubagentRegistryWriteSourceCurrent } from "./subagent-registry-persistence.js";
@@ -132,12 +135,13 @@ export async function finishSubagentCleanup(
   const { cleanup, cleanupGeneration, stateContext, isCurrent } = args;
   let entry = args.entry;
   let runId = entry.runId;
-  if (cleanup === "delete" || !entry.retainAttachmentsOnKeep) {
-    await safeRemoveAttachmentsDir(entry, isCurrent);
+  const sessionEffectsCurrent = () => isCurrent() && context.sessionEffectsHostCurrent(entry);
+  if (shouldRemoveSubagentAttachments(entry, cleanup) && sessionEffectsCurrent()) {
+    await safeRemoveAttachmentsDir(entry, sessionEffectsCurrent);
   }
   if (!isCurrent()) {
     if (cleanupGeneration !== undefined) {
-      await retireSupersededCleanupIfNeeded(context, runId, entry, cleanupGeneration);
+      await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
     }
     return;
   }
@@ -151,7 +155,7 @@ export async function finishSubagentCleanup(
   }
   const cleanupOwnerCurrent = () =>
     (cleanupGeneration === undefined || context.isCleanupGeneration(entry, cleanupGeneration)) &&
-    context.isEndedHookOwnerCurrent(runId, entry);
+    context.isCleanupOwnerCurrent(runId, entry);
   // Hook loading is best-effort; durable delivery and cleanup must already
   // be terminal before plugin code can fail or stall.
   await context.completeCleanupBookkeeping({
@@ -174,12 +178,16 @@ export async function finishSubagentCleanup(
     );
   };
   if (!(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent()) {
-    await emitCompletionEndedHookIfNeeded(
-      context.options,
-      entry,
-      completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE,
-      endedHookOwnerCurrent,
-      async () => !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
-    );
+    const reason = completionReason ?? entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+    if (context.options.shouldEmitEndedHookForRun({ entry, reason })) {
+      await context.options.emitSubagentEndedHookForRun({
+        entry,
+        reason,
+        sendFarewell: true,
+        isCurrent: endedHookOwnerCurrent,
+        prepareCurrent: async () =>
+          !(await context.shouldSuppressSessionEffects(entry)) && endedHookOwnerCurrent(),
+      });
+    }
   }
 }

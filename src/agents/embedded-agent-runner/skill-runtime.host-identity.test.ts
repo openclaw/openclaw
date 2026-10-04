@@ -3,9 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { recordSkillFileHost } from "../../skills/loading/skill-file-host.js";
 import { loadWorkspaceSkills } from "../../skills/loading/workspace-skill-loader.js";
-import { resolveWorkspaceSkillSourcePath } from "../../skills/loading/workspace-skill-read-path.js";
 import { bumpSkillsSnapshotVersion } from "../../skills/runtime/refresh-state.js";
 import {
   materializeSkillResources,
@@ -13,6 +11,8 @@ import {
   readSkillResourceFiles,
 } from "../../skills/runtime/resources.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
+import { recordSkillFileHost } from "../../skills/skill-file-host.js";
+import { resolveWorkspaceSkillSourcePath } from "../../skills/workspace-skill-read-path.js";
 import { createOpenClawCodingToolsInternal } from "../agent-tools.js";
 import { readCodeModeSkill } from "../code-mode-skills.js";
 import { getTextContent } from "../test-helpers/agent-tools-fs-helpers.js";

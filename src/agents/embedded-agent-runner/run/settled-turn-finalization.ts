@@ -83,10 +83,8 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
     sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
     sessionWriterFence?: SessionTranscriptWriterFence;
     harness: AgentHarness;
-    modelApi: Parameters<typeof resolveSettledTurnFinalizationRequest>[0]["modelApi"];
-    executionContract: Parameters<
-      typeof resolveSettledTurnFinalizationRequest
-    >[0]["executionContract"];
+    modelApi: string | undefined;
+    executionContract: string | undefined;
     hasTerminalToolPresentation: boolean;
     createAttemptControls: CreateAttemptControls;
     abortSignal: AbortSignal;

@@ -20,6 +20,7 @@ import {
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import {
+  aggregatePluginRuntimeCloseErrors,
   hasRetainedPluginRuntimeCloseError,
   PluginRuntimeCloseRetainedError,
 } from "../plugins/runtime-close-error.js";
@@ -191,7 +192,7 @@ export function ownPreparedPluginGeneration(
         result.status === "rejected" ? [result.reason] : [],
       );
       if (failures.length) {
-        throw new AggregateError(
+        throw aggregatePluginRuntimeCloseErrors(
           [...acquisitionFailures, ...failures],
           "Prepared plugin generation cleanup failed",
         );
@@ -233,11 +234,7 @@ export function publishPreparedPluginGeneration(
   const previous = publications.get(owner);
   const instances = new Set(
     [generation.pluginRegistry, generation.inboundPluginRegistry].flatMap((registry) =>
-      registry
-        ? [...collectRegistryInvocationInstances(registry)].filter(
-            (instance) => !instance.owner || instance.owner.record.status === "loaded",
-          )
-        : [],
+      registry ? Array.from(collectRegistryInvocationInstances(registry)) : [],
     ),
   );
   const cacheSignal = getPluginCacheRetirementSignal(

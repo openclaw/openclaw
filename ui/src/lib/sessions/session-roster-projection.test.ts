@@ -158,35 +158,30 @@ describe("event-driven session list refresh", () => {
       visitedRows = 0;
       const event = { type: "event" as const, event: "sessions.changed", payload };
       emitEvent(event);
+      const expected = expect.objectContaining({ label: payload.label, updatedAt: 2 });
       // Allow per-view reduction and decoration; repeated whole-roster preparation is quadratic.
       expect(visitedRows).toBeLessThanOrEqual(heldRowCount * 12);
-      expect(descriptor.row).toMatchObject({ label: payload.label, updatedAt: 2 });
+      expect(descriptor.row).toEqual(expected);
       for (const query of queries) {
         const result = sessions.listSnapshot(query).result;
         expect(result?.sessions).toHaveLength(rows.length);
-        expect(result?.sessions.find((row) => row.key === target.key)).toMatchObject({
-          label: payload.label,
-          updatedAt: 2,
-        });
+        expect(result?.sessions.find((row) => row.key === target.key)).toEqual(expected);
       }
       expect(eventDelivered).toHaveBeenCalledExactlyOnceWith(
         event,
         expect.objectContaining({
           applied: true,
-          admittedRow: expect.objectContaining({ label: payload.label, updatedAt: 2 }),
-          row: expect.objectContaining({ label: payload.label, updatedAt: 2 }),
+          admittedRow: expected,
+          row: expected,
         }),
       );
       expect(eventDelivered).toHaveReturnedWith({
-        descriptor: expect.objectContaining({ label: payload.label, updatedAt: 2 }),
-        rows: Array.from({ length: queries.length + 1 }, () =>
-          expect.objectContaining({ label: payload.label, updatedAt: 2 }),
-        ),
+        descriptor: expected,
+        rows: Array.from({ length: queries.length + 1 }, () => expected),
       });
-      expect(sessions.state.result?.sessions.find((row) => row.key === target.key)).toMatchObject({
-        label: payload.label,
-        updatedAt: 2,
-      });
+      expect(sessions.state.result?.sessions.find((row) => row.key === target.key)).toEqual(
+        expected,
+      );
       expect(observed).toHaveBeenCalled();
       expect(request).toHaveBeenCalledTimes(queries.length + 1);
     } finally {

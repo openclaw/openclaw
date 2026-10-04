@@ -1,3 +1,4 @@
+import { normalizeAuthProfileSecretRefs } from "../agents/auth-profiles/credential-normalize.js";
 import { removeProviderAuthProfilesWithLock as removeProviderAuthProfilesWithLockStrict } from "../agents/auth-profiles/profiles.js";
 import { updateAuthProfileStoreWithLock as updateAuthProfileStoreWithLockStrict } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -26,7 +27,15 @@ export async function updateAuthProfileStoreWithLockCompat(
   try {
     return await updateAuthProfileStoreWithLockStrict({
       ...params,
-      updater: (store) => params.updater(store),
+      updater: (store) => {
+        const changed = params.updater(store);
+        if (changed) {
+          for (const [profileId, credential] of Object.entries(store.profiles)) {
+            store.profiles[profileId] = normalizeAuthProfileSecretRefs(credential);
+          }
+        }
+        return changed;
+      },
     });
   } catch {
     return null;

@@ -37,7 +37,11 @@ export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
 
-type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
+type WsSendResult =
+  // In-process bootstrap responses have no encoded frame.
+  | { kind: "sent"; bytes?: number }
+  | { kind: "unavailable" }
+  | { kind: "serialization"; error: unknown };
 
 export type GatewayWsMessageHandlerParams = {
   socket: GatewayConnectionTransport;

@@ -1,3 +1,4 @@
+import type { TranscriptRedactionSnapshot } from "../../agents/transcript-redact-text.js";
 import type {
   SessionArtifactReadQuery,
   SessionArtifactReadResult,
@@ -14,7 +15,8 @@ import type {
   SessionTranscriptSummaryResult,
 } from "../../gateway/session-transcript-summary.js";
 import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
-import type { ConversationRecord } from "./conversation-registry.js";
+import type { ConversationRecord } from "./conversation-registry.types.js";
+import type { LegacyCompactionMetrics } from "./legacy-compaction-history.js";
 import type {
   SessionTranscriptDisplayDeltaResult,
   SessionTranscriptMessageByIdOptions,
@@ -44,18 +46,16 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   nextOffset?: number;
   hasMore?: boolean;
   totalMessages?: number;
-  completeSnapshot?: true;
 };
 
 export type ChatHistoryPage = {
-  encodedResponse?: ChatHistoryResponsePage<Uint8Array>;
+  encodedResponse?: ChatHistoryResponsePage<Uint8Array<ArrayBuffer>>;
   windowReset?: boolean;
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
   activity?: AgentHistoryActivity[];
   responseOffset?: number;
-  completeCliImport?: true;
   // Absent only for anchored (messageId) reads: the anchor may resolve a
   // reset-archive transcript that numeric offset cursors cannot address, so
   // anchored responses expose no paging metadata.
@@ -63,12 +63,13 @@ export type ChatHistoryPage = {
     offset: number;
     totalMessages: number;
     rawPageMessages: number;
-    exhausted?: true;
+    messageSequences?: Record<string, number>;
   };
 };
 
 export type ChatHistoryPageParams = {
   encodeResponse?: boolean;
+  compactionMetrics?: LegacyCompactionMetrics;
   entry: InternalSessionEntry | undefined;
   provider: string | undefined;
   sessionId: string | undefined;
@@ -81,6 +82,8 @@ export type ChatHistoryPageParams = {
   offset: number | undefined;
   messageId: string | undefined;
   ignoreCliSessionImports?: boolean;
+  cliHistoryHomeDir?: string;
+  cliHistoryRedaction?: TranscriptRedactionSnapshot;
 };
 
 type SessionHistoryTranscriptMeta = {

@@ -116,7 +116,7 @@ function matchesExternalOption(
 function buildInputOptions(
   options: InputOptionsArg,
   build?: { bundleAllDependencies?: boolean },
-): InputOptionsReturn {
+): Awaited<InputOptionsReturn> {
   if (process.env.OPENCLAW_BUILD_VERBOSE === "1") {
     return undefined;
   }
@@ -238,7 +238,7 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
+function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
@@ -268,11 +268,19 @@ function workerDeployBuildConfig(entry: Record<string, string>): UserConfig {
     fixedExtension: false,
     minify: { codegen: true, compress: true, mangle: { keepNames: true } },
     outExtensions: () => ({ js: ".mjs", dts: ".d.ts" }),
-    outputOptions: { codeSplitting: false, assetFileNames: "worker/[name][extname]" },
+    outputOptions: {
+      codeSplitting: split,
+      strictExecutionOrder: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
+      assetFileNames: "worker/[name][extname]",
+    },
     plugins: [createStateSchemaInlinePlugin(), createWorkerDeployBuildPlugin()],
     shims: true,
     sourcemap: OUTPUT_SOURCE_MAPS,
-    inputOptions: (options) => buildInputOptions(options, { bundleAllDependencies: true }),
+    inputOptions: (options) => ({
+      ...(buildInputOptions(options, { bundleAllDependencies: true }) ?? options),
+      ...(split ? { preserveEntrySignatures: "allow-extension" as const } : {}),
+    }),
   };
 }
 
@@ -408,6 +416,8 @@ function shouldAlwaysBundleDependency(id: string): boolean {
     id === "@openclaw/normalization-core" ||
     id.startsWith("@openclaw/normalization-core/") ||
     id === "@openclaw/retry" ||
+    id === "@openclaw/worker-runtime" ||
+    id.startsWith("@openclaw/worker-runtime/") ||
     id === "@openclaw/media-core" ||
     id.startsWith("@openclaw/media-core/") ||
     [
@@ -673,6 +683,11 @@ function buildUnifiedDistEntries(): Record<string, string> {
       ]),
     ),
     ...Object.fromEntries(
+      Object.entries(buildPackageDistEntriesFromExports("worker-runtime")).map(
+        ([entry, source]) => [`worker-runtime/${entry}`, source],
+      ),
+    ),
+    ...Object.fromEntries(
       Object.entries(buildPackageDistEntriesFromExports("media-core")).map(([entry, source]) => [
         `media-core/${entry}`,
         source,
@@ -855,6 +870,7 @@ const configs: UserConfig[] = [
   }),
   nodeWorkspacePackageBuildConfig("normalization-core"),
   nodeWorkspacePackageBuildConfig("retry"),
+  nodeWorkspacePackageBuildConfig("worker-runtime"),
   nodeWorkspacePackageBuildConfig("sdk", {
     deps: withExternalPackageSubpaths({
       neverBundle: [
@@ -971,7 +987,16 @@ const configs: UserConfig[] = [
     },
     false,
   ),
-  workerDeployBuildConfig({ "worker/worker": "src/worker/worker-deploy-entry.ts" }),
+  workerDeployBuildConfig(
+    {
+      "worker/worker": "src/worker/worker-deploy-entry.ts",
+      "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+    },
+    true,
+  ),
+  workerDeployBuildConfig({
+    "worker/code-mode-node.worker": "src/agents/code-mode-node.worker.ts",
+  }),
   workerDeployBuildConfig({
     "worker/file-tool-planning.worker": "src/worker/worker-deploy-file-tool-planning.ts",
   }),

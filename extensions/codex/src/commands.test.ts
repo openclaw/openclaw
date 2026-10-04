@@ -31,7 +31,6 @@ import {
   testCodexAppServerBindingStore,
 } from "./app-server/session-binding.test-helpers.js";
 import { createClientHarness } from "./app-server/test-support.js";
-import { withCodexAppServerThreadMutation } from "./app-server/thread-ownership.js";
 import { handleCodexCommand as dispatchCodexCommand } from "./command-dispatch.js";
 import type { CodexPluginsConfigBlock, CodexPluginsManagementIO } from "./command-plugin-config.js";
 import type { CodexControlRequestOptions, SafeCodexControlRequestFn } from "./command-rpc.js";
@@ -40,6 +39,7 @@ import {
   createCodexRuntimeContextOverrides,
   createDeps,
   createThreadResumeResponse,
+  holdCodexThreadQueue,
   expectedDiagnosticsTargetBlock,
   expectResultTextContains,
   mockArg,
@@ -1184,29 +1184,28 @@ describe("codex command", () => {
       { ...identity, sessionId: "session-old" },
       { threadId: "thread-existing", cwd: "/repo" },
     );
-    let releaseQueue!: () => void;
-    const queueBlocked = new Promise<void>((resolve) => {
-      releaseQueue = resolve;
-    });
-    const queue = withCodexAppServerThreadMutation("thread-resumed", () => queueBlocked);
+    const queue = holdCodexThreadQueue("thread-resumed");
     const codexControlRequest = createResumeControlRequest(
       createThreadResumeResponse({ threadId: "thread-resumed" }),
     );
     const command = runCommand("resume thread-resumed", { codexControlRequest }, context);
     try {
-      await vi.waitFor(() =>
-        expect(
-          testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-1" }),
-        ).toMatchObject({ threadId: "thread-existing" }),
-      );
+      const queuedResume = await queue.waitFor(command);
+      expect(queuedResume).toMatchObject({
+        threadId: "thread-resumed",
+        identity: { ...identity, sessionId: "session-1" },
+      });
+      expect(
+        testCodexAppServerBindingStore.read({ ...identity, sessionId: "session-1" }),
+      ).toMatchObject({ threadId: "thread-existing" });
       await upsertSessionEntry({
         storePath: context.sessionTarget.storePath,
         sessionKey: context.sessionKey,
         entry: { sessionId: "session-2", previousSessionId: "session-1", updatedAt: Date.now() },
       });
     } finally {
-      releaseQueue();
-      await Promise.allSettled([queue, command]);
+      await queue.release();
+      await command;
     }
     expect((await command).text).toContain("Codex session generation is no longer current");
     expect(codexControlRequest).not.toHaveBeenCalled();
@@ -1398,7 +1397,7 @@ describe("codex command", () => {
         agentId: "worker",
         sessionKey: "global",
         config: {
-          agents: { list: [{ id: "main", default: true }, { id: "worker" }] },
+          agents: { entries: { main: {}, worker: {} } },
           session: { store: storePath, scope: "global" },
         },
       },

@@ -701,9 +701,9 @@ test("sessions.create adopting an existing key does not restamp node provenance"
     });
     // Adoption is not a node creation: no `created` event may enter the journal.
     expect(
-      listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20).events.filter(
-        (event) => event.kind === "created",
-      ),
+      (
+        await listSessionStateEventsSince("agent:main:dashboard:adopted", "main", 0, 20)
+      ).events.filter((event) => event.kind === "created"),
     ).toEqual([]);
   } finally {
     chatSend.mockRestore();

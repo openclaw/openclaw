@@ -8,17 +8,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
-import {
-  resolveRuntimeWorkerArgv,
-  resolveRuntimeWorkerUrl,
-} from "../../infra/runtime-worker-url.js";
+import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as pidAlive from "../../shared/pid-alive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import * as worktreeCapacity from "./capacity.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
@@ -117,6 +113,38 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, created.id)?.snapshotRef).toBeTruthy();
     expect(getRegistryWorktree(env, manual.id)?.removedAt).toBeUndefined();
     expect(await fs.stat(manual.path)).toBeTruthy();
+  });
+
+  it("preserves orphan registry state when caller authority is revoked after path inspection", async () => {
+    const created = await materializeDownstreamFixture("revoked-orphan");
+    await git(repo, "worktree", "remove", created.path);
+    const before = getRegistryWorktree(env, created.id);
+    const exists = worktreeGit.worktreePathExists;
+    const revoked = new Error("caller authority revoked after path inspection");
+    let current = true;
+    const inspect = vi
+      .spyOn(worktreeGit, "worktreePathExists")
+      .mockImplementation(async (target) => {
+        const present = await exists(target);
+        if (target === created.path) {
+          current = false;
+        }
+        return present;
+      });
+    try {
+      await expect(
+        service.gc({
+          commitGuard: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+        }),
+      ).rejects.toBe(revoked);
+      expect(getRegistryWorktree(env, created.id)).toEqual(before);
+    } finally {
+      inspect.mockRestore();
+    }
   });
 
   it("garbage collects ignored dependency trees under the Git output cap and restores edits", async () => {
@@ -338,11 +366,8 @@ describe("ManagedWorktreeService garbage collection", () => {
 
     // Gateway cleanup runs on Node's main thread, whose stack limit differs from Vitest workers.
     const collected = await runNodeScript(
-      [
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(managedWorktreeGcEntrypoint),
-          resolveTestNodeExecPath(),
-        ),
+      (workerArgv) => [
+        ...workerArgv(resolveRuntimeWorkerUrl(managedWorktreeGcEntrypoint)),
         String(now),
       ],
       env,

@@ -66,11 +66,7 @@ function isProvenPreConnectFailure(error: unknown): boolean {
 // The chatbot API (method=chatbot) requires the Chat API user_id in the
 // user_ids array. We resolve via the user_list API and cache the result.
 
-interface ChatUser {
-  user_id: number;
-  username: string;
-  nickname: string;
-}
+type ChatUser = z.infer<typeof ChatUserSchema>;
 
 type ChatUserCacheEntry = {
   users: ChatUser[];
@@ -95,7 +91,7 @@ const ChatUserSchema = z
     username: z.string().optional(),
     nickname: z.string().optional(),
   })
-  .transform((user): ChatUser => ({
+  .transform((user) => ({
     user_id: user.user_id,
     username: user.username ?? "",
     nickname: user.nickname ?? "",

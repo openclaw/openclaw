@@ -1,8 +1,6 @@
 import crypto from "node:crypto";
-import {
-  isHostScopedAgentToolActive,
-  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
-} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isHostScopedAgentToolActive } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { AgentHarnessSessionRuntimeParamsV1 } from "openclaw/plugin-sdk/codex-mcp-projection";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import type { CodexAppServerClient } from "./client.js";
@@ -159,7 +157,7 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
   Pick<
-    EmbeddedRunAttemptParams,
+    AgentHarnessSessionRuntimeParamsV1,
     | "pluginHarnessToolPolicyRestricted"
     | "pluginHarnessToolPolicySafeDeniedTools"
     | "authoredContextTokenCap"
@@ -200,7 +198,7 @@ export function buildCodexThreadConfiguration(
 }
 
 export function buildThreadStartParams(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
 ): CodexThreadStartParams {
   const resolvedModelProvider = resolveCodexAppServerModelProvider({
@@ -238,7 +236,7 @@ export function buildThreadStartParams(
 }
 
 export function buildThreadResumeParams(
-  params: EmbeddedRunAttemptParams,
+  params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & {
     threadId: string;
     authProfileId?: string;
@@ -485,7 +483,7 @@ export function buildCodexRuntimeThreadConfigForRun(
 }
 
 export function buildCodexRingZeroThreadConfigPatch(
-  params: Pick<EmbeddedRunAttemptParams, "toolsAllow">,
+  params: Pick<AgentHarnessSessionRuntimeParamsV1, "toolsAllow">,
   hostSystemAgentActive = isHostScopedAgentToolActive("openclaw"),
   inheritedMcpServerNames: readonly string[] = [],
 ): JsonObject | undefined {

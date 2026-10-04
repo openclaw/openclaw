@@ -64,6 +64,7 @@ beforeEach(() => {
     return {
       runtime: await params.service.readRuntime(params.env ?? process.env),
       portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
+      outcome: mocks.restartedHealthy ? "ready" : "failed",
       healthy: mocks.restartedHealthy,
       staleGatewayPids: [],
       gatewayVersion: params.expectedVersion ?? null,

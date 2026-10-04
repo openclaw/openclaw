@@ -2,17 +2,17 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
-  ErrorCode,
   ListToolsResultSchema,
-  McpError,
   type CallToolResult,
   type Tool,
 } from "@modelcontextprotocol/sdk/types.js";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { logWarn } from "../logger.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { projectBundleMcpCatalogTools } from "./agent-bundle-mcp-catalog-projection.js";
 import {
   createCombinedSessionMcpRuntime,
   mergeMcpToolCatalogs,
@@ -26,7 +26,6 @@ import { loadSessionMcpConfig } from "./agent-bundle-mcp-runtime-config.js";
 import { sessionMcpRuntimeOwners } from "./agent-bundle-mcp-runtime-owner.js";
 import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
 import type {
-  McpCatalogTool,
   McpRequestOptions,
   McpServerCatalog,
   McpToolCatalog,
@@ -34,30 +33,25 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import { readMcpAppIcons, readMcpAppSettingsCapability } from "./mcp-app-extension-metadata.js";
 import { listAllMcpTools, MCP_CATALOG_LIST_LIMITS } from "./mcp-catalog-listing.js";
+import { bindMcpClientElicitation, MCP_ELICITATION_TIMEOUT_MS } from "./mcp-client-elicitation.js";
 import {
   connectMcpClient,
+  createMcpRequestLifecycle,
   disposeMcpClient,
   isMcpHttpSessionExpired,
   McpClientConnectTimeoutError,
 } from "./mcp-client-lifecycle.js";
-import {
-  normalizeMcpCodexToolAnnotations,
-  resolveProjectedMcpCodexToolApprovalMode,
-} from "./mcp-codex-tool-approval.js";
+import { resolveProjectedMcpCodexToolApprovalMode } from "./mcp-codex-tool-approval.js";
 import {
   applyMcpConnectionOverride,
   hashMcpResolvedConnections,
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
-import { redactMcpDiagnosticError } from "./mcp-error.js";
+import { isMcpMethodNotFoundError, redactMcpDiagnosticError } from "./mcp-error.js";
 import { createMcpJsonSchemaValidator } from "./mcp-json-schema-validator.js";
-import {
-  buildMcpClientCapabilities,
-  normalizeToolUiVisibility,
-  sanitizeMcpMetadataText,
-  summarizeServerCapabilities,
-} from "./mcp-metadata.js";
+import { buildMcpClientCapabilities, summarizeServerCapabilities } from "./mcp-metadata.js";
 import { collectMcpPaginatedItems } from "./mcp-pagination.js";
 import {
   connectWithMcpStartupBackoff,
@@ -82,6 +76,7 @@ type BundleMcpSession = {
   disposePromise?: Promise<void>;
   detachStderr?: () => void;
   toolMetadata?: McpToolCatalogMetadata;
+  withElicitation?: ReturnType<typeof bindMcpClientElicitation>;
 };
 
 const BUNDLE_MCP_FAILURE_THRESHOLD = 3;
@@ -106,14 +101,6 @@ type McpServerBackoffState = {
 };
 
 export { createMcpJsonSchemaValidator as createBundleMcpJsonSchemaValidator };
-
-function isMcpMethodNotFoundError(error: unknown): boolean {
-  if (isRecord(error) && error.code === ErrorCode.MethodNotFound) {
-    return true;
-  }
-  const message = String(error);
-  return message.includes("-32601") || /\b(?:method not found|unknown method)\b/i.test(message);
-}
 
 function hasConfiguredMcpRequestTimeout(rawServer: unknown): boolean {
   const record = asOptionalObjectRecord(rawServer);
@@ -544,42 +531,7 @@ function createServerMcpRuntime(
     await disposeSession(session);
     return true;
   };
-  const localRequestTimeouts = new WeakSet<object>();
-  const runMcpRequest = async <T>(
-    session: BundleMcpSession,
-    request: (signal: AbortSignal) => Promise<T>,
-    parentSignal?: AbortSignal,
-  ): Promise<T> => {
-    const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
-    const abortController = new AbortController();
-    const onParentAbort = () => abortController.abort(requestSignal?.reason);
-    if (requestSignal?.aborted) {
-      onParentAbort();
-    } else {
-      requestSignal?.addEventListener("abort", onParentAbort, { once: true });
-    }
-    const timeoutError = new McpError(ErrorCode.RequestTimeout, "Request timed out", {
-      timeout: session.requestTimeoutMs,
-    });
-    const timeout = setTimeout(() => {
-      localRequestTimeouts.add(timeoutError);
-      abortController.abort(timeoutError);
-    }, session.requestTimeoutMs);
-    timeout.unref?.();
-    try {
-      const signal = abortController.signal;
-      signal.throwIfAborted();
-      const result = await request(signal);
-      requestSignal?.throwIfAborted();
-      return result;
-    } catch (error) {
-      requestSignal?.throwIfAborted();
-      throw error;
-    } finally {
-      requestSignal?.removeEventListener("abort", onParentAbort);
-      clearTimeout(timeout);
-    }
-  };
+  const requests = createMcpRequestLifecycle(MCP_ELICITATION_TIMEOUT_MS);
   const runGuardedServerRequest = async <T>(
     session: BundleMcpSession,
     request: () => Promise<T>,
@@ -617,9 +569,7 @@ function createServerMcpRuntime(
         recycleReason = "expired HTTP session";
       } else if (tracksFailureBackoff && !requestSignal?.aborted) {
         const failures = recordServerToolFailure(session, nowMs);
-        const requestTimedOut =
-          error !== null && typeof error === "object" && localRequestTimeouts.has(error);
-        if (requestTimedOut && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
+        if (requests.didTimeout(error) && failures && failures >= BUNDLE_MCP_FAILURE_THRESHOLD) {
           recycleReason = "repeated request timeouts";
         }
       }
@@ -641,9 +591,9 @@ function createServerMcpRuntime(
   };
   const runGuardedMcpRequest = <T>(
     session: BundleMcpSession,
-    request: (signal: AbortSignal) => Promise<T>,
+    request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
     options?: McpRequestOptions,
-  ) => runGuardedServerRequest(session, () => runMcpRequest(session, request), options);
+  ) => runGuardedServerRequest(session, () => requests.run(session, request), options);
   const collectServerItems = (session: BundleMcpSession, kind: "prompts" | "resources") => {
     const callerSignal = getSessionMcpRequestSignal();
     return collectMcpPaginatedItems({
@@ -655,7 +605,7 @@ function createServerMcpRuntime(
         ? AbortSignal.any([lifecycleAbortController.signal, callerSignal])
         : lifecycleAbortController.signal,
       loadPage: ({ cursor, requestTimeoutMs: timeout, signal }) =>
-        runMcpRequest(
+        requests.run(
           session,
           async (requestSignal) => {
             const requestParams = cursor === undefined ? undefined : { cursor };
@@ -741,6 +691,7 @@ function createServerMcpRuntime(
         const createdSession: BundleMcpSession = {
           serverName,
           client,
+          ...(mcpAppsEnabled ? { withElicitation: bindMcpClientElicitation(client) } : {}),
           transport: resolved.transport,
           transportType: resolved.transportType,
           requestTimeoutMs: resolved.requestTimeoutMs,
@@ -827,6 +778,10 @@ function createServerMcpRuntime(
           serverName,
           safeServerName,
           launchSummary: launchDescription,
+          pluginId: loaded.pluginIdsByServer?.[serverName],
+          title: session.client.getServerVersion()?.title,
+          icons: readMcpAppIcons(session.client.getServerVersion()?.icons),
+          settings: readMcpAppSettingsCapability(session.client.getServerCapabilities()),
           toolCount: exposedTools.length,
           requestTimeoutMs: resolved.requestTimeoutMs,
           supportsParallelToolCalls: resolved.supportsParallelToolCalls,
@@ -846,53 +801,18 @@ function createServerMcpRuntime(
           ...(deniedToolNames.size > 0 ? { deniedToolNames: [...deniedToolNames].toSorted() } : {}),
           codexApprovalMode: resolveProjectedMcpCodexToolApprovalMode(serverName, rawServer),
         };
-        const toolEntries: McpCatalogTool[] = [];
-        const policyToolEntries: McpCatalogTool[] = [];
-        for (const [tool, excludedFromOpenClawCatalog, deniedBySession] of [
-          ...normalizedTools.tools.map((entry) => [entry, false, false] as const),
-          ...normalizedTools.deniedTools.map((entry) => [entry, false, true] as const),
-          ...normalizedTools.excludedTools.map(
-            (entry) => [entry, true, deniedToolNames.has(entry.name)] as const,
-          ),
-        ]) {
-          const toolName = tool.name;
-          const { _meta: metadata } = tool;
-          const uiMeta =
-            metadata?.ui && typeof metadata.ui === "object" && !Array.isArray(metadata.ui)
-              ? (metadata.ui as { resourceUri?: unknown; visibility?: unknown })
-              : undefined;
-          const rawResourceUri = uiMeta?.resourceUri ?? metadata?.["ui/resourceUri"];
-          const uiResourceUri =
-            typeof rawResourceUri === "string" && rawResourceUri.startsWith("ui://")
-              ? rawResourceUri
-              : undefined;
-          const uiVisibility = normalizeToolUiVisibility(uiMeta?.visibility);
-          const entry: McpCatalogTool = {
-            serverName,
-            safeServerName,
-            toolName,
-            title: tool.title,
-            description: sanitizeMcpMetadataText(tool.description),
-            inputSchema: tool.inputSchema,
-            fallbackDescription: `Provided by bundle MCP server "${serverName}" (${launchDescription}).`,
-            ...(uiResourceUri ? { uiResourceUri } : {}),
-            ...(uiVisibility ? { uiVisibility } : {}),
-            ...(excludedFromOpenClawCatalog ? { excludedFromOpenClawCatalog: true as const } : {}),
-            ...(deniedBySession ? { deniedBySession: true } : {}),
-            codexAnnotations: normalizeMcpCodexToolAnnotations(tool.annotations),
-          };
-          policyToolEntries.push(entry);
-          if (!entry.excludedFromOpenClawCatalog) {
-            toolEntries.push(entry);
-          }
-        }
+        const projectedTools = projectBundleMcpCatalogTools({
+          normalizedTools,
+          deniedToolNames,
+          serverName,
+          safeServerName,
+          launchDescription,
+        });
         return {
           version: 1,
           generatedAt: Date.now(),
           servers: { [serverName]: serverEntry },
-          tools: toolEntries.filter((tool) => !tool.deniedBySession),
-          policyTools: policyToolEntries,
-          sessionDeniedTools: toolEntries.filter((tool) => tool.deniedBySession),
+          ...projectedTools,
         };
       } catch (error) {
         const message = redactMcpDiagnosticError(error);
@@ -1003,6 +923,10 @@ function createServerMcpRuntime(
     ...(params.requesterConnect ? { requesterConnect: params.requesterConnect } : {}),
     // A runtime partition hosts either only static or only requester-scoped servers.
     isRequesterScopedServer: () => params.requesterScope !== undefined,
+    canReadLocalFiles: (name) =>
+      name === serverName &&
+      currentSession?.connected === true &&
+      currentSession.transportType === "stdio",
     mcpAppsEnabled,
     createdAt,
     get lastUsedAt() {
@@ -1038,16 +962,34 @@ function createServerMcpRuntime(
     markUsed() {
       lastUsedAt = Date.now();
     },
-    async callTool(requestedServer, toolName, input) {
+    async callTool(requestedServer, toolName, input, options) {
       const session = await getActiveSession(requestedServer);
       const validateResult = session.toolMetadata?.validatorForCall(toolName);
-      const result = (await runGuardedMcpRequest(session, (signal) =>
-        session.client.callTool(
-          { name: toolName, arguments: isRecord(input) ? input : {} },
-          undefined,
-          { timeout: session.requestTimeoutMs, signal },
-        ),
-      )) as CallToolResult;
+      const result = (await runGuardedMcpRequest(session, (signal, holdForHumanInput) => {
+        options?.assertCurrent?.();
+        const call = () =>
+          withGuardedFetchRequestAuthority(options?.assertCurrent, () =>
+            session.client.callTool(
+              {
+                name: toolName,
+                arguments: isRecord(input) ? input : {},
+                ...(options?._meta ? { _meta: options._meta } : {}),
+              },
+              undefined,
+              {
+                // The local deadline owns active work; the SDK bounds the total
+                // call, including one shared allowance for pending human input.
+                timeout:
+                  session.requestTimeoutMs +
+                  (session.withElicitation ? MCP_ELICITATION_TIMEOUT_MS : 0),
+                signal,
+              },
+            ),
+          );
+        return session.withElicitation
+          ? session.withElicitation(signal, call, holdForHumanInput)
+          : call();
+      })) as CallToolResult;
       validateResult?.(result);
       return result;
     },
@@ -1074,7 +1016,10 @@ function createServerMcpRuntime(
       return await runGuardedMcpRequest(
         session,
         (signal) =>
-          session.client.readResource({ uri }, { timeout: session.requestTimeoutMs, signal }),
+          session.client.readResource(
+            { uri, ...(options?._meta ? { _meta: options._meta } : {}) },
+            { timeout: session.requestTimeoutMs, signal },
+          ),
         options,
       );
     },

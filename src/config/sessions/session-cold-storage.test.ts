@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -30,7 +31,6 @@ import type { SqliteSessionReclamationDiagnostics } from "./session-accessor.sql
 import { readSessionTranscriptHistoryEvents } from "./session-accessor.sqlite-history.test-support.js";
 import { planSessionStateDeleteIfUnreferenced } from "./session-accessor.sqlite-lifecycle-state.js";
 import {
-  loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
   readTranscriptStatsSync,
@@ -53,6 +53,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
+import { loadTranscriptEvents } from "./session-transcript-events.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 
@@ -595,7 +596,13 @@ describe("cold transcript storage workers", () => {
         sessionId: historicalId,
       }),
     ).toBeNull();
-    await expect(loadTranscriptEvents(fixture.scope)).resolves.toEqual(events);
+    const hostSql = observeHostDataSql();
+    try {
+      await expect(loadTranscriptEvents(fixture.scope)).resolves.toEqual(events);
+      expect(hostSql.queries).toEqual([]);
+    } finally {
+      hostSql.restore();
+    }
     expect(fixture.snapshot()).toEqual(fixture.original);
   });
 
@@ -642,7 +649,7 @@ describe("cold transcript storage workers", () => {
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: fixture.scope.storePath,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },

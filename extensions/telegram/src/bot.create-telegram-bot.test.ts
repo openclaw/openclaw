@@ -8,6 +8,7 @@ import {
   buildPluginBindingApprovalCustomId,
   resolvePluginConversationBindingApproval,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { expectDefined as requireValue } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   clearPluginInteractiveHandlers,
@@ -252,13 +253,6 @@ async function withTelegramSpooledReplayUpdate<T>(
 async function flushTelegramTestMicrotasks() {
   await Promise.resolve();
   await Promise.resolve();
-}
-
-function requireValue<T>(value: T | null | undefined, label: string): T {
-  if (value == null) {
-    throw new Error(`expected ${label}`);
-  }
-  return value;
 }
 
 function makeGenericCallbackContext(params: { id: string; updateId?: number }) {
@@ -1022,7 +1016,9 @@ describe("createTelegramBot", () => {
         updateId: 442,
         messageId: 442,
         text: "F".repeat(611),
-        message: { forward_date: 1736380700 },
+        message: {
+          forward_origin: { type: "hidden_user", date: 1736380700, sender_user_name: "A" },
+        },
         replayUpdate: "full",
       });
       const forwardedParticipant = requireValue(
@@ -1192,14 +1188,14 @@ describe("createTelegramBot", () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
     const commitError = new Error("durable dispatch commit failed");
     const commitSpy = vi
       .spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay")
       .mockRejectedValueOnce(commitError);
-    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.turnAdoptionLifecycle;
-      queuedLifecycle?.onDeferred?.();
+      opts?.turnAdoptionLifecycle?.onDeferred?.();
+      queuedLifecycleReady.resolve(opts?.turnAdoptionLifecycle);
       return undefined;
     });
 
@@ -1216,9 +1212,8 @@ describe("createTelegramBot", () => {
       });
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-      await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
-      });
+      const queuedLifecycle = await queuedLifecycleReady.promise;
+      expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
 
       await expect(queuedLifecycle?.onAdopted?.()).rejects.toBe(commitError);
       await flushTelegramTestMicrotasks();
@@ -1242,6 +1237,7 @@ describe("createTelegramBot", () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queuedTurnReady = createDeferred<void>();
     const commitStarted = createDeferred<void>();
     const commitGate = createDeferred<void>();
     const commitSpy = vi
@@ -1267,6 +1263,7 @@ describe("createTelegramBot", () => {
         modelTurnRan = true;
         queuedLifecycle?.onSettled?.();
       };
+      queuedTurnReady.resolve();
       return undefined;
     });
 
@@ -1275,9 +1272,8 @@ describe("createTelegramBot", () => {
       const [firstParticipant, secondParticipant] = await createBufferedReplayPair(225);
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-      await vi.waitFor(() => {
-        expect(runQueuedTurn).toEqual(expect.any(Function));
-      });
+      await queuedTurnReady.promise;
+      expect(runQueuedTurn).toEqual(expect.any(Function));
 
       const queuedTurn = runQueuedTurn?.();
       await commitStarted.promise;
@@ -1314,13 +1310,13 @@ describe("createTelegramBot", () => {
     configureOpenDm({ debounceMs: INBOUND_DEBOUNCE_MS, timezone: "envelopeTimezone" });
 
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const queuedLifecycleReady = createDeferred<GetReplyOptions["turnAdoptionLifecycle"]>();
     const commitSpy = vi.spyOn(messageDispatchDedupe, "commitTelegramMessageDispatchReplay");
-    let queuedLifecycle: GetReplyOptions["turnAdoptionLifecycle"];
     let queuedAbortSignal: AbortSignal | undefined;
     replySpy.mockImplementationOnce(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      queuedLifecycle = opts?.turnAdoptionLifecycle;
       queuedAbortSignal = opts?.abortSignal;
-      queuedLifecycle?.onDeferred?.();
+      opts?.turnAdoptionLifecycle?.onDeferred?.();
+      queuedLifecycleReady.resolve(opts?.turnAdoptionLifecycle);
       return undefined;
     });
 
@@ -1329,9 +1325,8 @@ describe("createTelegramBot", () => {
       const [firstParticipant, secondParticipant] = await createBufferedReplayPair(223);
 
       takeLatestTimerCallback(INBOUND_DEBOUNCE_MS)();
-      await vi.waitFor(() => {
-        expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
-      });
+      const queuedLifecycle = await queuedLifecycleReady.promise;
+      expect(queuedLifecycle?.onAdopted).toEqual(expect.any(Function));
 
       const timeoutError = new Error("spooled replay timed out before admission");
       firstParticipant.settle({ kind: "failed-retryable", error: timeoutError });
@@ -1911,7 +1906,7 @@ describe("createTelegramBot", () => {
       messages: { inbound: { debounceMs: 0 } },
       commands: { native: true, ownerAllowFrom: ["9"] },
       channels: { telegram: { dmPolicy: "pairing" } },
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     });
 
     try {
@@ -2575,7 +2570,7 @@ describe("createTelegramBot", () => {
         },
       },
       agents: {
-        list: [{ id: "topic-a", default: true }, { id: "topic-b" }],
+        entries: { "topic-a": {}, "topic-b": {} },
       },
       bindings: [{ agentId: "topic-a", match: { channel: "telegram", accountId: "default" } }],
     });
@@ -2616,7 +2611,7 @@ describe("createTelegramBot", () => {
     const chatId = -100123456700;
     loadConfig.mockReturnValue({
       messages: { inbound: { debounceMs: 0 } },
-      agents: { list: [{ id: "channel-topic-agent" }] },
+      agents: { entries: { "channel-topic-agent": {} } },
       channels: {
         telegram: {
           groupPolicy: "allowlist",

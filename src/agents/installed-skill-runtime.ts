@@ -2,9 +2,9 @@ import {
   hasUnavailableSkillSecretOwners,
   isSkillSecretOwnerUnavailable,
 } from "../skills/loading/config.js";
-import { resolveSkillFileHost } from "../skills/loading/skill-file-host.js";
-import { resolveSkillReadPath } from "../skills/loading/workspace-skill-read-path.js";
+import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
+import { resolveSkillReadPath } from "../skills/workspace-skill-read-path.js";
 import { resolveCodeModeSkills, type CodeModeSkillReader } from "./code-mode-skills.js";
 import { MAX_SKILL_INSTRUCTION_BYTES, type InstalledSkill } from "./installed-skill-catalog.js";
 import type { SandboxContext } from "./sandbox/types.js";

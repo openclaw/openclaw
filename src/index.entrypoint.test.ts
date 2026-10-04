@@ -78,67 +78,62 @@ describe("legacy package executable entrypoint", () => {
     vi.unstubAllEnvs();
   });
 
-  it("handles root --version before CLI startup", async () => {
-    process.argv = ["node", "dist/index.js", "--version"];
-    vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(true);
+  it.each([
+    { mode: "version", args: ["--version"], main: true, handled: true, loadsFailure: false },
+    { mode: "CLI", args: ["status"], main: true, handled: false, loadsFailure: true },
+    { mode: "library", args: ["status"], main: false, handled: false, loadsFailure: false },
+  ])(
+    "loads only the modules needed for $mode",
+    async ({ mode, args, main, handled, loadsFailure }) => {
+      process.argv = ["node", "dist/index.js", ...args];
+      vi.mocked(isMainModule).mockReturnValue(main);
+      vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(handled);
+      const entry = await import("./index.js?legacy-entry-mode" as "./index.js");
+      expect(lifecycleImports.failureOutput).toHaveBeenCalledTimes(loadsFailure ? 1 : 0);
+      if (mode === "library") {
+        expect(typeof entry.loadConfig).toBe("function");
+      }
+      if (handled) {
+        const runMain = await import("./cli/run-main.js");
+        const exitFinalization = await import("./cli/one-shot-exit.js");
+        expect(tryHandleRootVersionFastPath).toHaveBeenCalledWith(process.argv);
+        expect(runMain.runCli).not.toHaveBeenCalled();
+        expect(exitFinalization.runCliWithExitFinalization).not.toHaveBeenCalled();
+      }
+    },
+  );
 
-    await import("./index.js?legacy-version-fast-path" as "./index.js");
-
-    const runMain = await import("./cli/run-main.js");
-    const exitFinalization = await import("./cli/one-shot-exit.js");
-    expect(tryHandleRootVersionFastPath).toHaveBeenCalledWith(process.argv);
-    expect(runMain.runCli).not.toHaveBeenCalled();
-    expect(exitFinalization.runCliWithExitFinalization).not.toHaveBeenCalled();
-    expect(lifecycleImports.failureOutput).not.toHaveBeenCalled();
-  });
-
-  it("loads CLI failure modules only after the version fast path declines", async () => {
-    process.argv = ["node", "dist/index.js", "status"];
-
-    await import("./index.js?legacy-cli-start" as "./index.js");
-
-    expect(lifecycleImports.failureOutput).toHaveBeenCalledOnce();
-  });
-
-  it("keeps library imports free of CLI failure modules", async () => {
-    vi.mocked(isMainModule).mockReturnValue(false);
-
-    const entry = await import("./index.js?legacy-library-entry" as "./index.js");
-
-    expect(typeof entry.loadConfig).toBe("function");
-    expect(lifecycleImports.failureOutput).not.toHaveBeenCalled();
-  });
-
-  it("completes pending lifecycle before loading the CLI entry graph", async () => {
+  it.each([
+    { args: ["status"], fails: false },
+    { args: ["update", "admit", "--help"], fails: false },
+    { args: ["update", "status"], fails: false },
+    { args: ["status"], fails: true },
+  ])("completes the lifecycle before CLI startup: $args, fails=$fails", async ({ args, fails }) => {
+    process.argv = ["node", "dist/index.js", ...args];
     const calls: string[] = [];
     vi.mocked(existsSync).mockImplementation((value) =>
       String(value).endsWith(".openclaw-lifecycle-pending"),
     );
     vi.mocked(completePendingPackageLifecycle).mockImplementation(async () => {
       calls.push("lifecycle");
+      if (fails) {
+        throw new Error("postinstall failed");
+      }
       return true;
     });
     vi.mocked(tryHandleRootVersionFastPath).mockImplementation(() => {
       calls.push("version");
       return false;
     });
-
-    await import("./index.js?pending-package-lifecycle" as "./index.js");
-
+    const entry = import("./index.js?pending-package-lifecycle" as "./index.js");
+    if (fails) {
+      await expect(entry).rejects.toThrow("package lifecycle is incomplete");
+      expect(tryHandleRootVersionFastPath).not.toHaveBeenCalled();
+    } else {
+      await entry;
+      expect(calls).toEqual(["lifecycle", "version"]);
+    }
     expect(completePendingPackageLifecycle).toHaveBeenCalledOnce();
-    expect(calls).toEqual(["lifecycle", "version"]);
-  });
-
-  it("does not load the CLI entry graph when lifecycle completion fails", async () => {
-    vi.mocked(existsSync).mockImplementation((value) =>
-      String(value).endsWith(".openclaw-lifecycle-pending"),
-    );
-    vi.mocked(completePendingPackageLifecycle).mockRejectedValue(new Error("postinstall failed"));
-
-    await expect(import("./index.js?failed-package-lifecycle" as "./index.js")).rejects.toThrow(
-      "package lifecycle is incomplete",
-    );
-    expect(tryHandleRootVersionFastPath).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -168,16 +163,4 @@ describe("legacy package executable entrypoint", () => {
       expect(exitFinalization.runCliWithExitFinalization).not.toHaveBeenCalled();
     },
   );
-
-  it.each([
-    ["update", "admit", "--help"],
-    ["update", "status"],
-  ])("retains lifecycle completion for ordinary argv %j", async (...args) => {
-    process.argv = ["node", "dist/index.js", ...args];
-    vi.mocked(existsSync).mockImplementation((value) =>
-      String(value).endsWith(".openclaw-lifecycle-pending"),
-    );
-    await import("./index.js?ordinary-lifecycle" as "./index.js");
-    expect(completePendingPackageLifecycle).toHaveBeenCalledOnce();
-  });
 });

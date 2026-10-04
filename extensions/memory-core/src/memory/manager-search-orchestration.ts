@@ -453,7 +453,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           normalizedQuery,
           opts?.signal,
           semanticProvider,
-          false,
           semanticProviderRuntime,
           opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
         );

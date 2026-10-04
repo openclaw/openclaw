@@ -18,7 +18,7 @@ import type { PreparedProviderStaticCatalog } from "../plugins/provider-discover
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentEntry, toAgentEntriesRecord } from "./agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -62,7 +62,7 @@ export function collectPreparedModelRuntimeConfiguredRefs(
           ...config,
           agents: {
             ...(config.agents?.defaults ? { defaults: config.agents.defaults } : {}),
-            list: entry ? [entry] : [],
+            entries: toAgentEntriesRecord(entry ? [entry] : []),
           },
         }
       : config,

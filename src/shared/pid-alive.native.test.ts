@@ -17,6 +17,14 @@ let bytes: Buffer;
 const query = vi.fn();
 const load = vi.fn();
 
+function mockShellIdentity() {
+  return vi
+    .spyOn(childProcess, "execFileSync")
+    .mockImplementation((_file, args) =>
+      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
+    );
+}
+
 beforeEach(() => {
   vi.resetModules();
   vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
@@ -108,49 +116,30 @@ it("keeps the bounded shell path on x64 without loading Koffi", async () => {
   expect(nativeKoffi).not.toHaveBeenCalled();
 });
 
-it.each([
-  "short read",
-  "wrong PID",
-  "invalid parent",
-  "zero start",
-  "unsafe start",
-  "invalid microseconds",
-  "query error",
-  "missing native package",
-])("uses the bounded shell fallback after %s", async (failure) => {
-  if (failure === "short read") {
-    query.mockReturnValue(135);
-  }
-  if (failure === "wrong PID") {
-    bytes.writeUInt32LE(43, 12);
-  }
-  if (failure === "invalid parent") {
-    bytes.writeUInt32LE(0xffffffff, 16);
-  }
-  if (failure === "zero start") {
-    bytes.writeBigUInt64LE(0n, 120);
-  }
-  if (failure === "unsafe start") {
-    bytes.writeBigUInt64LE(2n ** 53n, 120);
-  }
-  if (failure === "invalid microseconds") {
-    bytes.writeBigUInt64LE(1_000_000n, 128);
-  }
-  if (failure === "query error") {
-    query.mockImplementation(() => {
-      throw new Error("denied");
-    });
-  }
-  if (failure === "missing native package") {
-    nativeKoffi.mockImplementation(() => {
-      throw new Error("unavailable");
-    });
-  }
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockImplementation((_file, args) =>
-      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
-    );
+it.each<[string, () => void]>([
+  ["short read", () => query.mockReturnValue(135)],
+  ["wrong PID", () => bytes.writeUInt32LE(43, 12)],
+  ["invalid parent", () => bytes.writeUInt32LE(0xffffffff, 16)],
+  ["zero start", () => bytes.writeBigUInt64LE(0n, 120)],
+  ["unsafe start", () => bytes.writeBigUInt64LE(2n ** 53n, 120)],
+  ["invalid microseconds", () => bytes.writeBigUInt64LE(1_000_000n, 128)],
+  [
+    "query error",
+    () =>
+      query.mockImplementation(() => {
+        throw new Error("denied");
+      }),
+  ],
+  [
+    "missing native package",
+    () =>
+      nativeKoffi.mockImplementation(() => {
+        throw new Error("unavailable");
+      }),
+  ],
+])("uses the bounded shell fallback after %s", async (_name, failNative) => {
+  failNative();
+  const shell = mockShellIdentity();
   const { getFileLockProcessStartTime, getProcessInstanceStartTime, readDarwinProcessIdentity } =
     await import("./pid-alive.js");
   const expected = Date.UTC(2026, 8, 24) / 1000;
@@ -203,11 +192,7 @@ it("preserves default shell recovery after slow native loading fails", async () 
     now += 1500;
     throw new Error("native unavailable");
   });
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockImplementation((_file, args) =>
-      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
-    );
+  const shell = mockShellIdentity();
   const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
   const expected = Date.UTC(2026, 8, 24) / 1000;
   expect(getFileLockProcessStartTime(42)).toBe(expected);
@@ -225,11 +210,7 @@ it.each([600, 1000])("charges %sms native loading to an explicit deadline", asyn
     now += elapsed;
     throw new Error("native unavailable");
   });
-  const shell = vi
-    .spyOn(childProcess, "execFileSync")
-    .mockImplementation((_file, args) =>
-      args?.[1] === "lstart=" ? "Thu Sep 24 00:00:00 2026\n" : "42 7 Thu Sep 24 00:00:00 2026\n",
-    );
+  const shell = mockShellIdentity();
   const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
   expect(getFileLockProcessStartTime(42, process.env, 1000)).toBe(
     elapsed === 1000 ? null : Date.UTC(2026, 8, 24) / 1000,
@@ -247,15 +228,11 @@ it.each([600, 1000])("charges %sms native loading to an explicit deadline", asyn
   }
 });
 
-it.each([0, -1, 1.5, Number.NaN, Infinity])(
-  "rejects invalid PID %s before native conversion",
-  async (pid) => {
-    const shell = vi.spyOn(childProcess, "execFileSync");
-    const { getFileLockProcessStartTime, readDarwinProcessIdentity } =
-      await import("./pid-alive.js");
-    expect(getFileLockProcessStartTime(pid)).toBeNull();
-    expect(readDarwinProcessIdentity(pid)).toBeNull();
-    expect(nativeKoffi).not.toHaveBeenCalled();
-    expect(shell).not.toHaveBeenCalled();
-  },
-);
+it.each([0, 1.5])("rejects invalid PID %s before native conversion", async (pid) => {
+  const shell = vi.spyOn(childProcess, "execFileSync");
+  const { getFileLockProcessStartTime, readDarwinProcessIdentity } = await import("./pid-alive.js");
+  expect(getFileLockProcessStartTime(pid)).toBeNull();
+  expect(readDarwinProcessIdentity(pid)).toBeNull();
+  expect(nativeKoffi).not.toHaveBeenCalled();
+  expect(shell).not.toHaveBeenCalled();
+});

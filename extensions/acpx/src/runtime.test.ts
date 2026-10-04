@@ -12,7 +12,6 @@ import {
 import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { renderAgentCommand, type AcpxAgentCommand } from "./command-line.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
-import type { AcpxRuntime } from "./runtime.js";
 import {
   CODEX_ACP_WRAPPER_COMMAND,
   makeEmptySessionStore,
@@ -57,7 +56,7 @@ function sessionStore(initial: Record<string, unknown> | undefined): TestSession
 
 function leasedRuntime(
   record: Record<string, unknown> | undefined,
-  cleanup?: ConstructorParameters<typeof AcpxRuntime>[1],
+  cleanup?: Parameters<typeof makeRuntime>[2],
   wrapperRoot = "/tmp/openclaw/acpx",
 ) {
   const baseStore = sessionStore(record);

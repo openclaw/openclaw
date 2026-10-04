@@ -47,7 +47,7 @@ test("sessions.reset stamps provenance when it materializes a missing row", asyn
   });
   expect(reset.payload?.entry).not.toHaveProperty("sandbox");
   expect(
-    listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20).events,
+    (await listSessionStateEventsSince("agent:main:subagent:missing", "main", 0, 20)).events,
   ).toContainEqual(
     expect.objectContaining({
       kind: "created",

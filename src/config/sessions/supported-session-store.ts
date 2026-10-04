@@ -1,26 +1,13 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isCanonicalSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { SessionStoreMigrationRequiredError } from "./migration-required.js";
 
 export function assertSupportedSessionStoreEntry(entry: unknown): void {
   if (!isRecord(entry)) {
     return;
   }
-  const canonicalDelivery = isCanonicalSessionDeliveryState(entry.delivery);
-  const retiredField = (
-    [
-      ["provider", "channel"],
-      ["lastProvider", "lastChannel"],
-      ["room", "groupChannel"],
-    ] as const
-  ).find(
-    ([legacy, current]) =>
-      typeof entry[legacy] === "string" &&
-      typeof entry[current] !== "string" &&
-      (legacy === "room" || !canonicalDelivery),
-  )?.[0];
-  if (retiredField) {
-    throw new Error(
-      `Session field "${retiredField}" predates July 2026 and is no longer supported. Preserve the original store and use an older OpenClaw release to migrate it before upgrading.`,
+  if (typeof entry.room === "string" && typeof entry.groupChannel !== "string") {
+    throw new SessionStoreMigrationRequiredError(
+      'Session field "room" predates July 2026 and is no longer supported. Preserve the original state, install OpenClaw 2026.9.5 and run "openclaw doctor --fix", then upgrade again.',
     );
   }
 }

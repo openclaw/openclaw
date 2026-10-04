@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 // Coverage for assembling provider-transformed embedded attempt system prompts.
 import {
   prependSystemPromptAdditionAfterCacheBoundary,
@@ -82,6 +83,7 @@ async function preparePermissionPrompt(
   thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"],
   requireExplicitMessageTarget?: boolean,
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">,
+  skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -118,6 +120,7 @@ async function preparePermissionPrompt(
     config: {},
     admittedRunContext: await admitPrompt({}),
     thinkLevel,
+    toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
   } as EmbeddedRunAttemptParams;
@@ -135,7 +138,9 @@ async function preparePermissionPrompt(
     },
     capabilityToolNames,
     requireExplicitMessageTarget,
-    effectiveTools: tools,
+    effectiveTools: skills?.initialToolNames
+      ? tools.filter(({ name }) => skills.initialToolNames?.includes(name))
+      : tools,
     setup: createAttemptSetupFixture({
       effectiveCwd: "/tmp/openclaw",
       effectiveWorkspace: "/tmp/openclaw",
@@ -148,7 +153,7 @@ async function preparePermissionPrompt(
     }),
     isRawModelRun,
     modelToolsEnabled: true,
-    skillsPrompt: "",
+    skillsPrompt: skills?.prompt ?? "",
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
   });
@@ -167,6 +172,87 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
+
+  it.each([undefined, ["message"]])(
+    "reports the catalog selected by the attempt's tool policy (%j)",
+    async (toolsAllow) => {
+      const { prepared } = await preparePermissionPrompt(false, undefined, undefined, undefined, {
+        prompt: skillsCatalog,
+        toolsAllow,
+      });
+      const included = toolsAllow === undefined;
+      expect(prepared.systemPromptText.includes(skillsCatalog)).toBe(included);
+      expect(prepared.systemPromptReport?.skills).toEqual({
+        promptChars: included ? skillsCatalog.length : 0,
+        hash: createHash("sha256")
+          .update(included ? skillsCatalog : "")
+          .digest("hex"),
+        entries: included
+          ? [{ name: "weather", blockChars: "<skill><name>weather</name></skill>".length }]
+          : [],
+      });
+    },
+  );
+
+  it("refreshes skill diagnostics when read visibility changes or hooks replace the prompt", async () => {
+    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      { prompt: skillsCatalog },
+    );
+    const hidden = await refreshSystemPrompt(prepared.systemPromptText, []);
+    expect(hidden).not.toContain(skillsCatalog);
+    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+
+    const restored = await refreshSystemPrompt(hidden, [read]);
+    expect(restored).toContain(skillsCatalog);
+    expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
+      "weather",
+    ]);
+
+    const overridden = await refreshSystemPrompt("Use the deliberate hook override.", [read]);
+    expect(overridden).not.toContain(skillsCatalog);
+    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+    expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
+  });
+
+  it.each([undefined, ["message"]])(
+    "reports read becoming visible while preserving attempt tool policy (%j)",
+    async (toolsAllow) => {
+      const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(
+        false,
+        undefined,
+        undefined,
+        undefined,
+        { prompt: skillsCatalog, toolsAllow, initialToolNames: [] },
+      );
+      expect(prepared.systemPromptText).not.toContain(skillsCatalog);
+      expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+
+      const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
+      const included = toolsAllow === undefined;
+      expect(refreshed.includes(skillsCatalog)).toBe(included);
+      expect(prepared.systemPromptReport?.skills.promptChars).toBe(
+        included ? skillsCatalog.length : 0,
+      );
+      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
+        included ? ["weather"] : [],
+      );
+    },
+  );
+
+  it("reports no skills for a raw model run even with an eligible catalog", async () => {
+    const { prepared } = await preparePermissionPrompt(true, undefined, undefined, undefined, {
+      prompt: skillsCatalog,
+    });
+    expect(prepared.systemPromptText).toBe("");
+    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+    expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
+  });
+
   it.each([undefined, "agent:main:execution"])(
     "keeps the system prompt identical when execution-owned processes change: %s",
     async (sessionKey) => {
@@ -215,10 +301,10 @@ describe("buildAttemptSystemPrompt", () => {
       const config = {
         agents: {
           ownership: "explicit" as const,
-          list: [
-            { id: "main", sandbox: { mode: "off" as const } },
-            { id: "marketing", sandbox: { mode: "all" as const } },
-          ],
+          entries: {
+            main: { sandbox: { mode: "off" as const } },
+            marketing: { sandbox: { mode: "all" as const } },
+          },
         },
       };
       const attempt = {
@@ -270,6 +356,23 @@ describe("buildAttemptSystemPrompt", () => {
       expect(providerRegistryMocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
     },
   );
+  it("marks rebuilt prompts as fresh even when restoring the original bytes", async () => {
+    const { prepared, read } = await preparePermissionPrompt();
+    const original = prepared.systemPromptText;
+    const unchanged = await prepared.prepareToolPrompt!();
+    expect(unchanged.freshlyRendered).toBeUndefined();
+    expect(unchanged("Already projected prompt")).toBe("Already projected prompt");
+
+    const restrict = await prepared.prepareToolPrompt!([read]);
+    expect(restrict.freshlyRendered).toBe(true);
+    const restricted = restrict(original);
+    expect(restricted).not.toBe(original);
+
+    const restore = await prepared.prepareToolPrompt!();
+    expect(restore.freshlyRendered).toBe(true);
+    expect(restore(restricted)).toBe(original);
+  });
+
   it("replaces an intermediate permission prompt after later changes", async () => {
     const fixture = await preparePermissionPrompt();
     const { attempt, capabilityToolNames, prepared, read, refreshSystemPrompt, write } = fixture;
@@ -369,10 +472,10 @@ describe("buildAttemptSystemPrompt", () => {
 
   it.each(["/tmp/openclaw", "/tmp/open\u202eclaw\n"])(
     "injects workspace identity context from %j",
-    (workspaceDir) => {
+    async (workspaceDir) => {
       // Workspace identity files are part of the base system prompt and must
       // survive provider transformation.
-      const result = buildAttemptSystemPrompt({
+      const result = await buildAttemptSystemPrompt({
         isRawModelRun: false,
         transformProviderSystemPrompt,
         embeddedSystemPrompt: {
@@ -406,8 +509,8 @@ describe("buildAttemptSystemPrompt", () => {
     },
   );
 
-  it("filters first-turn curated context to global and active-project entries", () => {
-    const result = buildAttemptSystemPrompt({
+  it("filters first-turn curated context to global and active-project entries", async () => {
+    const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
       transformProviderSystemPrompt,
       embeddedSystemPrompt: {
@@ -445,8 +548,8 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).not.toContain("Beta fact");
   });
 
-  it("preserves bootstrap Project Context", () => {
-    const result = buildAttemptSystemPrompt({
+  it("preserves bootstrap Project Context", async () => {
+    const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
       transformProviderSystemPrompt,
       embeddedSystemPrompt: {
@@ -495,8 +598,8 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).toContain("Reply with BOOTSTRAP_OK.");
   });
 
-  it("preserves runtime extra system prompt context", () => {
-    const result = buildAttemptSystemPrompt({
+  it("preserves runtime extra system prompt context", async () => {
+    const result = await buildAttemptSystemPrompt({
       isRawModelRun: false,
       transformProviderSystemPrompt,
       embeddedSystemPrompt: {
@@ -527,10 +630,10 @@ describe("buildAttemptSystemPrompt", () => {
     expect(result.systemPrompt).toContain("RUN_MODE_TASK_77950");
   });
 
-  it("omits system prompts for raw model probes", () => {
+  it("omits system prompts for raw model probes", async () => {
     // Raw model probes still build a base prompt for diagnostics, but the final
     // provider prompt must be empty.
-    const result = buildAttemptSystemPrompt({
+    const result = await buildAttemptSystemPrompt({
       isRawModelRun: true,
       transformProviderSystemPrompt,
       embeddedSystemPrompt: {

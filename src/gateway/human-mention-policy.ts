@@ -11,6 +11,7 @@ import {
   type UsersMentionableResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { updateSessionProfileInvolvement } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -21,14 +22,15 @@ import {
   resolveCurrentUserProfileDisplay,
   type CurrentUserProfileDisplay,
 } from "./current-user-profile-display.js";
+import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
   authorizeGatewaySessionCreation,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
-import { resolveOperatorSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
 import {
   createProfileSessionEntryFilter,
@@ -253,6 +255,47 @@ export function createHumanMentionPolicy(params: {
   }
 
   return {
+    recordCommittedInvolvement(input: MentionCommittedInput): void {
+      const involvementConfig = params.getRuntimeConfig();
+      const involvementTarget = resolveSessionSharingTarget({
+        cfg: involvementConfig,
+        sessionKey: input.sessionKey,
+        agentId: input.agentId,
+      });
+      if (
+        involvementTarget?.entry.sessionId === input.sessionId &&
+        involvementTarget.entry.incognito !== true &&
+        !isIncognitoSessionKey(involvementTarget.canonicalKey)
+      ) {
+        const sender = readProfile(input.senderProfileId);
+        const mentionedProfiles = input.recipientProfileIds.flatMap((id) => {
+          const recipient = recipientProfile(
+            id,
+            {
+              agentId: involvementTarget.agentId,
+              sessionKey: involvementTarget.canonicalKey,
+              entry: involvementTarget.entry,
+            },
+            involvementConfig,
+          );
+          return sender && recipient && sender.profileId !== recipient.profileId
+            ? [recipient.profileId]
+            : [];
+        });
+        updateSessionProfileInvolvement(
+          {
+            agentId: involvementTarget.agentId,
+            sessionKey: involvementTarget.storeKey,
+            storePath: involvementTarget.storePath,
+          },
+          {
+            expectedSessionId: input.sessionId,
+            profileIds: mentionedProfiles,
+            change: { kind: "mention", source: input.committedSource },
+          },
+        );
+      }
+    },
     identify,
     prepareDirectory,
     needsDirectoryPreparation,

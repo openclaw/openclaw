@@ -667,28 +667,22 @@ describe("executeAgentTurn: terminal failures", () => {
       }
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
       expect(result.payload.text).not.toContain("Claude CLI");
-      expect(result.payload.text).toContain("gateway is unaffected");
-      if (mode === "overall") {
-        expect(result.payload.text).toContain("overall turn limit");
-        expect(result.payload.text).toContain("detached OpenClaw sub-agent");
-        expect(result.payload.text).toContain("agents.defaults.timeoutSeconds");
-        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
-      } else {
-        expect(result.payload.text).toContain("CLI subprocess");
-        expect(result.payload.text).toContain("no-output watchdog");
-        expect(result.payload.text).toContain("separate from the overall agent timeout");
-        expect(result.payload.text).toContain("produced no output before its watchdog expired");
-        expect(result.payload.text).not.toContain("noOutputTimeoutMs");
-        expect(result.payload.text).not.toContain("agents.defaults.timeoutSeconds");
-      }
+      expect(result.payload.text).toContain(
+        mode === "overall"
+          ? "task time limit in the Control UI settings"
+          : "prompt in the terminal",
+      );
+      expect(result.payload.text).toContain(
+        mode === "overall" ? "task took too long" : "task stopped responding",
+      );
       expect(result.payload.text).not.toContain("/new");
       if (routingSubstring) {
-        expect(result.payload.text).toContain(routingSubstring);
+        expect(result.payload.text).not.toContain(routingSubstring);
       }
     },
   );
 
-  it("explains that CLI background tasks share the timed-out parent process", () => {
+  it("warns that interrupted CLI background work may have completed", () => {
     const payload = buildKnownAgentRunFailureReplyPayload({
       err: createCliTimeoutError(
         { provider: "claude-cli" },
@@ -705,21 +699,19 @@ describe("executeAgentTurn: terminal failures", () => {
       resolvedVerboseLevel: "off",
     });
 
-    expect(payload?.text).toContain("1 CLI background task");
-    expect(payload?.text).toContain("1 active CLI tool call");
-    expect(payload?.text).toContain("shares the parent CLI process");
-    expect(payload?.text).toContain("Effects may be partial");
-    expect(payload?.text).toContain("no run timeout by default");
+    expect(payload?.text).toContain("Some work may have completed");
+    expect(payload?.text).toContain("Check its results before trying again");
+    expect(payload?.text).toContain("task time limit in the Control UI settings");
   });
 
   it.each([
     {
       rejection: new Error("codex app-server client closed before turn completed"),
-      expected: "connection closed",
+      expected: "Lost the connection",
     },
     {
       rejection: new Error("codex app-server turn idle timed out waiting for turn/completed"),
-      expected: "did not replay the turn automatically",
+      expected: "hasn't confirmed whether the task finished",
     },
   ])(
     "surfaces Codex app-server bridge failures instead of generic copy",
@@ -736,7 +728,7 @@ describe("executeAgentTurn: terminal failures", () => {
         throw new Error("expected final reply");
       }
       expect(result.payload.text).not.toBe(GENERIC_RUN_FAILURE_TEXT);
-      expect(result.payload.text).toContain("Codex app-server");
+      expect(result.payload.text).toContain("may still be running");
       expect(result.payload.text).toContain(expected);
     },
   );

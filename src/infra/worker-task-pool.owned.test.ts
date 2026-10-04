@@ -1,27 +1,26 @@
 import { channel as diagnosticsChannel } from "node:diagnostics_channel";
-import type { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import type { MessagePort } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeWorkerTaskPoolResources } from "./worker-task-pool-registry.js";
-import { createOwnedWorkerTaskPool } from "./worker-task-pool.js";
+import { createOwnedWorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
+import {
+  holdExit,
+  reply,
+  request,
+  type FakeWorker,
+  type PostedTask,
+} from "./worker-task-pool.owned.test-support.js";
 
-type PostedTask = {
-  input?: string;
-  taskId?: number;
-  responseId?: number;
-  closeResource?: true;
-  resourcePort?: MessagePort;
-};
-type FakeWorker = EventEmitter & {
-  postMessage: ReturnType<typeof vi.fn<(message: PostedTask) => void>>;
-  terminate: ReturnType<typeof vi.fn<() => Promise<number>>>;
-};
 const workers = vi.hoisted(() => [] as FakeWorker[]);
 const messageChannelReceivers = vi.hoisted(() => new WeakMap<MessagePort, MessagePort>());
 
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 3,
+}));
 vi.mock("node:worker_threads", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:worker_threads")>();
   const { EventEmitter } = await import("node:events");
@@ -72,26 +71,6 @@ function workerFor(input: string): FakeWorker {
   );
 }
 
-function reply(worker: FakeWorker, input: string, value = input): void {
-  const task = expectDefined(
-    worker.postMessage.mock.calls.find(([posted]) => posted.input === input)?.[0],
-    `posted ${input}`,
-  );
-  worker.emit("message", { status: "ok", taskId: task.taskId, value });
-}
-
-function holdExit(worker: FakeWorker) {
-  const entered = createDeferredCore();
-  const exit = createDeferredCore();
-  worker.terminate.mockImplementationOnce(async () => {
-    entered.resolve();
-    await exit.promise;
-    worker.emit("exit", 0);
-    return 0;
-  });
-  return { entered: entered.promise, release: () => exit.resolve() };
-}
-
 beforeEach(() => {
   workers.splice(0);
 });
@@ -131,6 +110,171 @@ it("retires only idle slots on critical pressure, after result and resource cust
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
 });
+
+it("reaches a cooperative exchange when earlier shared pressure has not released capacity", async () => {
+  const blocked = createPool({ sharedCompute: true });
+  const cooperative = createPool({ sharedCompute: true });
+  const waiting = createPool({ sharedCompute: true });
+  const blockedEntered = createDeferredCore<AbortSignal>();
+  const cooperativeEntered = createDeferredCore<AbortSignal>();
+  const unblock = createDeferredCore();
+  const checkpoint = createDeferredCore();
+  const blockedTask = blocked.run("blocked", {
+    onRequest: async (_value, { yieldSignal }) => {
+      blockedEntered.resolve(yieldSignal);
+      await unblock.promise;
+      return { input: "continue", timeoutMs: 1_000 };
+    },
+  });
+  const cooperativeTask = cooperative.run("cooperative", {
+    onRequest: async (_value, { yieldSignal }) => {
+      cooperativeEntered.resolve(yieldSignal);
+      yieldSignal.addEventListener("abort", () => checkpoint.resolve(), { once: true });
+      await checkpoint.promise;
+      return { input: "checkpoint", timeoutMs: 1_000 };
+    },
+  });
+  const running = Promise.allSettled([blockedTask, cooperativeTask]);
+  const cooperativeWorker = workerFor("cooperative");
+  cooperativeWorker.postMessage.mockImplementation((message) => {
+    if (message.responseId !== undefined) {
+      queueMicrotask(() => {
+        cooperativeWorker.emit("message", {
+          status: "consumed",
+          taskId: message.taskId,
+          id: message.responseId,
+        });
+        reply(cooperativeWorker, "cooperative");
+      });
+    }
+  });
+  for (const input of ["blocked", "cooperative"]) {
+    request(workerFor(input), input);
+  }
+  const [blockedSignal, cooperativeSignal] = await Promise.all([
+    blockedEntered.promise,
+    cooperativeEntered.promise,
+  ]);
+  const prepared: string[] = [];
+  const next = waiting.run(() => {
+    prepared.push("next");
+    return "next";
+  }, {});
+  const nextOutcome = Promise.allSettled([next]);
+  let queued: Promise<PromiseSettledResult<string>[]> | undefined;
+  try {
+    expect(blockedSignal.aborted).toBe(true);
+    expect(cooperativeSignal.aborted).toBe(false);
+    expect(prepared).toEqual([]);
+    const later = waiting.run(() => {
+      prepared.push("later");
+      return "later";
+    }, {});
+    queued = Promise.allSettled([later]);
+    expect(cooperativeSignal.aborted).toBe(true);
+    await expect(cooperativeTask).resolves.toBe("cooperative");
+    expect(prepared).toEqual(["next"]);
+    expect(blocked.getSnapshot().activeTasks).toBe(1);
+    reply(workerFor("next"), "next");
+    await expect(next).resolves.toBe("next");
+    expect(prepared).toEqual(["next", "later"]);
+    reply(workerFor("later"), "later");
+    await expect(later).resolves.toBe("later");
+  } finally {
+    unblock.resolve();
+    checkpoint.resolve();
+    await Promise.all([blocked.close(), cooperative.close(), waiting.close()]);
+    await Promise.all([running, nextOutcome, queued]);
+  }
+});
+
+it.each(["reply", "rejection", "cancellation"] as const)(
+  "reports accumulated host wait separately from execution settlement (%s)",
+  async (ending) => {
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const pool = createPool();
+    const controller = new AbortController();
+    const failure = new Error("host exchange ended");
+    const responses = [
+      createDeferredCore<WorkerTaskResponse>(),
+      createDeferredCore<WorkerTaskResponse>(),
+    ];
+    const entered = [createDeferredCore(), createDeferredCore()];
+    const sent = [createDeferredCore(), createDeferredCore()];
+    const diagnostics = diagnosticsChannel("openclaw.worker.task");
+    const events: unknown[] = [];
+    const onCompletion = (event: unknown) => events.push(event);
+    diagnostics.subscribe(onCompletion);
+    const task = pool.run("timed", {
+      signal: controller.signal,
+      onRequest: (value) => {
+        if (value !== 1 && value !== 2) {
+          throw new Error("Unexpected host request");
+        }
+        entered[value - 1]!.resolve();
+        return responses[value - 1]!.promise;
+      },
+    });
+    const outcome = Promise.allSettled([task]);
+    const worker = workerFor("timed");
+    worker.postMessage.mockImplementation((message) => {
+      const id = message.responseId;
+      if (id !== undefined) {
+        queueMicrotask(() => {
+          worker.emit("message", { status: "consumed", taskId: message.taskId, id });
+          sent[id - 1]!.resolve();
+        });
+      }
+    });
+    try {
+      now = 50;
+      request(worker, "timed", 1);
+      await entered[0]!.promise;
+      now = 150;
+      responses[0]!.resolve({ input: "first reply", timeoutMs: 10_000 });
+      await sent[0]!.promise;
+      now = 200;
+      request(worker, "timed", 2);
+      await entered[1]!.promise;
+      now = 400;
+      if (ending === "reply") {
+        responses[1]!.resolve({ input: "second reply", timeoutMs: 10_000 });
+        await sent[1]!.promise;
+        now = 500;
+        reply(worker, "timed");
+        await expect(task).resolves.toBe("timed");
+      } else {
+        const native = holdExit(worker);
+        if (ending === "rejection") {
+          responses[1]!.reject(failure);
+        } else {
+          controller.abort(failure);
+        }
+        await native.entered;
+        now = 500;
+        native.release();
+        await expect(task).rejects.toBe(failure);
+      }
+      expect(events).toEqual([
+        expect.objectContaining({
+          outcome: ending === "reply" ? "ok" : "failed",
+          hostWaitMs: 300,
+          runMs: 500,
+        }),
+      ]);
+    } finally {
+      now = 600;
+      for (const response of responses) {
+        response.resolve({ input: "late host reply", timeoutMs: 10_000 });
+      }
+      await pool.close();
+      await outcome;
+      diagnostics.unsubscribe(onCompletion);
+      clock.mockRestore();
+    }
+  },
+);
 
 it("rejects a lost cleanup receipt and permits the retained worker's cleanup retry", async () => {
   const pool = createPool();

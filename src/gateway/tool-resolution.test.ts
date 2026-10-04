@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   McpLoopbackToolCache,
   resolveMcpLoopbackPolicyTools,
@@ -43,7 +44,7 @@ describe("resolveGatewayScopedTools", () => {
   it("rejects collector mode after gateway policy removes its reader", async () => {
     const result = resolveTools({
       cfg: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { profile: "coding" },
         gateway: { tools: { deny: ["agents_wait"] } },
       },
@@ -156,6 +157,32 @@ describe("resolveGatewayScopedTools", () => {
     });
     expect(denied.tools.map((tool) => tool.name)).toEqual(expected.filter((name) => name !== "ls"));
   });
+
+  it.each([false, true])(
+    "exposes managed shell without bypassing tool denies (denied=%s)",
+    async (denied) => {
+      const cfg = {
+        plugins: { enabled: false },
+        tools: { profile: "coding", ...(denied ? { deny: ["exec", "process"] } : {}) },
+      } satisfies OpenClawConfig;
+      const context = { sessionKey: "agent:main:managed-shell", workspaceDir: os.tmpdir() };
+      const projected = await resolveMcpLoopbackScopedTools({
+        cfg,
+        context,
+        defaultMediatedToolNames: ["exec", "process"],
+      });
+      const toolsAllow = projected.tools.map((tool) => tool.name);
+      const granted = await resolveMcpLoopbackScopedTools({
+        cfg,
+        context: { ...context, toolsAllow },
+      });
+      for (const result of [projected, granted]) {
+        expect(result.tools.some((tool) => tool.name === "exec")).toBe(!denied);
+        expect(result.tools.some((tool) => tool.name === "process")).toBe(!denied);
+        expect(result.tools.some((tool) => tool.name === "read")).toBe(false);
+      }
+    },
+  );
 
   it("materializes an executable write tool on the mediated CLI surface", async () => {
     const workspaceDir = tempDirs.make("openclaw-mediated-write-");

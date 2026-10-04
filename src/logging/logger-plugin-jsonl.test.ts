@@ -1,10 +1,11 @@
 import fs from "node:fs";
+import os from "node:os";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createSubsystemLogger, getChildLogger } from "../plugin-sdk/logging-core.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
-import { startPluginServices } from "../plugins/services.js";
+import { startPluginServices } from "../plugins/services.test-support.js";
 import { readConfiguredLogTail } from "./log-tail.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { applyLoggingConfig, flushLogger, resetLogger } from "./logger.js";
@@ -26,7 +27,6 @@ beforeEach(() => {
 afterEach(async () => {
   await flushLogger();
   testApi.resetFileLogTransportForTests();
-  testApi.setHostnameResolverForTests();
   resetLogger();
   resetSecretRedactionRegistryForTest();
   loggingState.rawConsole = rawConsole;
@@ -168,7 +168,7 @@ it("registered plugin logger keeps built-in file protection with custom-only rul
 
 it("registered plugin logger produces valid overflow JSON with a quoted hostname", async () => {
   testApi.setFileLogQueueMaxRecordsForTests(1);
-  testApi.setHostnameResolverForTests(() => '--token "synthetic-credential-123456"');
+  vi.spyOn(os, "hostname").mockReturnValue('--token "synthetic-credential-123456"');
   const result = await logFromPlugin("overflow", undefined, undefined, (logger) => {
     logger.info("first");
     logger.info("second");

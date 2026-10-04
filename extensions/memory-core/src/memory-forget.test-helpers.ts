@@ -10,7 +10,7 @@ export async function createMemoryForgetFixture(prefix = "openclaw-memory-forget
   const { stateDir, workspaceDir } = state;
   await configureMemoryCoreDreamingStateForTests();
   const cfg: OpenClawConfig = {
-    agents: { defaults: { workspace: workspaceDir }, list: [{ id: "main", default: true }] },
+    agents: { defaults: { workspace: workspaceDir }, entries: { main: {} } },
   };
   return {
     stateDir,

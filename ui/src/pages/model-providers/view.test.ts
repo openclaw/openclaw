@@ -509,7 +509,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "ok", profileCount: 1 },
+            auth: { kind: "ok" },
             profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
             modelCount: 0,
             availableModelCount: 0,
@@ -540,7 +540,7 @@ describe("renderModelProviders", () => {
         props({
           cards: [
             card({
-              auth: { kind: "ok", profileCount: 1 },
+              auth: { kind: "ok" },
               profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
               hasConfigApiKey,
               catalogStatus: "auth-rejected",
@@ -567,7 +567,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "api-key", profileCount: 0 },
+            auth: { kind: "api-key" },
           }),
         ],
       }),
@@ -670,7 +670,7 @@ describe("renderModelProviders", () => {
       props({
         cards: [
           card({
-            auth: { kind: "ok", profileCount: 1 },
+            auth: { kind: "ok" },
             profiles: [{ profileId: "openai:chatgpt", type: "oauth", status: "ok" }],
             modelCount: 0,
             availableModelCount: 0,

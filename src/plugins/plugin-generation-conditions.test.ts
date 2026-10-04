@@ -334,8 +334,92 @@ describe("captured module conditions", () => {
     fs.writeFileSync(path.join(root, "index.cjs"), "exports.read = name => require(name).value;");
     const plugin = load(root, "index.cjs", true).value as { read(name: string): number };
     fs.writeFileSync(path.join(dependency, "real.cjs"), "exports.value = 84;");
+    // Selecting the physical alias first must promote the retained package too.
+    expect(plugin.read("#direct")).toBe(42);
     expect(plugin.read("#selected")).toBe(42);
     expect(plugin.read("#direct")).toBe(42);
+  });
+  it.each(["import", "require"])("preserves wildcard trailer precedence for %s", async (mode) => {
+    const root = temp.make("plugin-import-trailer-");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({
+        imports: { "#selected/*": "./broad.cjs", "#selected/*.js": "./specific.cjs" },
+      }),
+    );
+    fs.writeFileSync(path.join(root, "broad.cjs"), "exports.value = 'broad';");
+    fs.writeFileSync(path.join(root, "specific.cjs"), "exports.value = 'specific';");
+    // Retain both local branches before testing native wildcard precedence.
+    const entry = mode === "import" ? "index.mjs" : "index.cjs";
+    fs.writeFileSync(
+      path.join(root, entry),
+      mode === "import"
+        ? "import './broad.cjs'; import './specific.cjs'; export const read = async name => (await import(name)).value;"
+        : "require('./broad.cjs'); require('./specific.cjs'); exports.read = name => require(name).value;",
+    );
+    const plugin = load(root, entry, true).value as {
+      read(name: string): string | Promise<string>;
+    };
+    expect(await plugin.read("#selected/leaf.js")).toBe("specific");
+  });
+  it.each(
+    ["import", "require"].flatMap((mode) =>
+      ["bun:sqlite", "bun:missing-builtin", "bun:sqlite?invalid", "node:path"].map((target) => ({
+        mode,
+        target,
+      })),
+    ),
+  )("preserves native $mode package-import validation for $target", async ({ mode, target }) => {
+    const root = temp.make("plugin-native-builtin-alias-");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ imports: { "#builtin": target } }),
+    );
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      mode === "import"
+        ? "exports.read = name => import(name).then(value => typeof value.Database);"
+        : "exports.read = name => typeof require(name).Database;",
+    );
+    const outcome = async (plugin: { read(name: string): unknown }) => {
+      try {
+        return { value: await plugin.read("#builtin") };
+      } catch (error) {
+        if (!(error instanceof Error) || !("code" in error)) {
+          throw error;
+        }
+        return { code: error.code };
+      }
+    };
+    const expected = await outcome(nativeRequire(path.join(root, "index.cjs")));
+    if (target !== "bun:sqlite") {
+      expect(expected).toEqual({ code: "ERR_INVALID_PACKAGE_TARGET" });
+    } else if ("value" in expected) {
+      expect(expected.value).toBe("function");
+    }
+    const plugin = load(root, "index.cjs", true).value as { read(name: string): unknown };
+    expect(await outcome(plugin)).toEqual(expected);
+  });
+  it.each(["import", "require"])("preserves package-import array fallback for %s", async (mode) => {
+    const root = temp.make("plugin-import-array-fallback-");
+    fs.writeFileSync(
+      path.join(root, "package.json"),
+      JSON.stringify({ imports: { "#builtin": ["bun:sqlite", "./fallback.cjs"] } }),
+    );
+    fs.writeFileSync(path.join(root, "fallback.cjs"), "exports.Database = 'fallback';");
+    fs.writeFileSync(
+      path.join(root, "index.cjs"),
+      mode === "import"
+        ? "exports.read = name => import(name).then(value => typeof value.Database);"
+        : "exports.read = name => typeof require(name).Database;",
+    );
+    // Built-in URL targets are invalid inside arrays, which retain Node's fallback semantics.
+    const native = nativeRequire(path.join(root, "index.cjs")) as {
+      read(name: string): string | Promise<string>;
+    };
+    expect(await native.read("#builtin")).toBe("string");
+    const plugin = load(root, "index.cjs", true).value as typeof native;
+    expect(await plugin.read("#builtin")).toBe("string");
   });
 });
 
@@ -552,6 +636,8 @@ it.each(["declared", "alias", "undeclared"])(
     fs.writeFileSync(body, "exports.value = 'before-selection';");
     const selected = plugin.select();
     fs.writeFileSync(body, "exports.value = 'after-selection';");
+    expect(selected.read()).toBe(kind === "declared" ? "before-selection" : "after-selection");
+    fs.writeFileSync(body, "exports.value = 'after-first-read';");
     expect(selected.read()).toBe(kind === "declared" ? "before-selection" : "after-selection");
   },
 );

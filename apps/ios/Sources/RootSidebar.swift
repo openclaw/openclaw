@@ -688,10 +688,8 @@ struct RootSidebar: View {
                 canDelete: ChatSessionSidebarModel.canDeleteSession(
                     key: session.key,
                     mainSessionKey: self.resolvedMainSessionKey),
-                actions: .gateway(
-                    session: session,
-                    performMutation: self.performSessionMutation,
-                    fork: { self.forkSession(session) }))
+                performMutation: self.performSessionMutation,
+                fork: { self.forkSession(session) })
             .accessibilityValue(Self.sessionAccessibilityValue(
                 isPinned: session.pinned == true,
                 isUnread: session.unread == true))
@@ -810,7 +808,7 @@ struct RootSidebar: View {
 
     private func performSessionMutation(
         resetActiveSessionKey: String?,
-        _ operation: @escaping CommandSessionActions.Mutation)
+        _ operation: @escaping CommandSessionActionsModifier.Mutation)
     {
         Task {
             do {

@@ -53,10 +53,17 @@ const fixture = vi.hoisted(() => {
     sessionId: "requester-session",
     lifecycleRevision: "original",
   };
-  return { session, markRequesterTurnYielded: vi.fn() };
+  return {
+    session,
+    markRequesterTurnYielded: vi.fn(),
+    claimSubagentYield: vi.fn<typeof import("./registry/subagent-registry.js").claimSubagentYield>(
+      async () => "nothing-pending",
+    ),
+  };
 });
 vi.mock("./registry/subagent-registry.js", () => ({
   markRequesterTurnYielded: fixture.markRequesterTurnYielded,
+  claimSubagentYield: fixture.claimSubagentYield,
 }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 vi.mock("../../gateway/session-sharing-preparation.js", () => ({
@@ -286,14 +293,18 @@ function dispatch<T>(batch: SubagentRunRecord[], run: () => Promise<T>, runId = 
   );
 }
 
-function consume(batch: SubagentRunRecord[], runId = "continuation") {
+function consume(
+  batch: SubagentRunRecord[],
+  runId = "continuation",
+  sourceTool = "subagent_settle",
+) {
   return consumeRequesterCronAuthorityAdmission({
     runId,
     sessionKey: SESSION,
     sessionId: "requester-session",
     inputProvenance: {
       kind: "inter_session",
-      sourceTool: "subagent_settle",
+      sourceTool,
       sourceSessionKey: batch[0]!.childSessionKey,
     },
   });
@@ -512,154 +523,127 @@ describe("requester cron authority lifetime", () => {
     },
   );
 
-  it("carries separately admitted owner identity through explicit yield and expires retained bindings", async () => {
-    let current = true;
-    const owner = {
-      isCurrent: () => current,
-      senderId: "original-owner",
-      channel: "discord",
-      accountId: "original-account",
-    };
-    const entitlement = { source: "channel-owner" as const, isCurrent: owner.isCurrent };
-    const batch = createBatch("owner-source");
-    await inAdminRun(
-      "owner-source",
-      async () => expect(await mark(batch)).toBe(1),
-      undefined,
-      entitlement,
-      owner,
-    );
-    expect(await settle(batch)).toBe(true);
-    let retained: ReturnType<typeof bindRequesterOwnerIdentity>;
-    await dispatch(batch, async () => {
-      const admission = consume(batch)!;
-      expect(admission.requesterOwner).toBe(owner);
+  it.each([true, false])(
+    "carries only explicitly admitted plugin ownership: %s",
+    async (hasOwner) => {
+      let current = true;
+      const owner = {
+        isCurrent: () => current,
+        senderId: "original-owner",
+        channel: "discord",
+        accountId: "original-account",
+      };
+      const entitlement = hasOwner
+        ? { source: "channel-owner" as const, isCurrent: owner.isCurrent }
+        : { source: "control-ui-admin" as const };
+      const batch = createBatch("owner-source");
       await inAdminRun(
-        "continuation",
-        async () => {
-          const identity = {
-            runId: "continuation",
-            sessionKey: SESSION,
-            sessionId: "requester-session",
-            agentId: "main",
-          };
-          expect(
-            bindRequesterOwnerIdentity({ ...identity, sessionKey: "agent:main:unrelated" }),
-          ).toBeUndefined();
-          retained = bindRequesterOwnerIdentity(identity);
-          expect(retained).toMatchObject({
-            senderId: "original-owner",
-            channel: "discord",
-            accountId: "original-account",
-          });
-          expect(retained?.isCurrent()).toBe(true);
-          current = false;
-          expect(() => retained?.assertCurrent()).toThrow("owner identity");
-          current = true;
-          expect(retained?.isCurrent()).toBe(true);
-        },
-        admission.isCurrent,
-        admission.managementEntitlement,
-        admission.requesterOwner,
+        "owner-source",
+        async () => expect(await mark(batch)).toBe(1),
+        undefined,
+        entitlement,
+        hasOwner ? owner : undefined,
       );
-    });
-    expect(retained?.isCurrent()).toBe(false);
-    expect(() => retained?.assertCurrent()).toThrow("owner identity");
-  });
-
-  it("does not turn management-only yield authority into plugin ownership", async () => {
-    const batch = await capture();
-    await dispatch(batch, async () => {
-      const admission = consume(batch)!;
-      expect(admission.requesterOwner).toBeUndefined();
-      await inAdminRun(
-        "continuation",
-        async () => {
-          expect(
-            bindRequesterOwnerIdentity({
+      expect(await settle(batch)).toBe(true);
+      let retained: ReturnType<typeof bindRequesterOwnerIdentity>;
+      await dispatch(batch, async () => {
+        const admission = consume(batch)!;
+        expect(admission.requesterOwner).toBe(hasOwner ? owner : undefined);
+        await inAdminRun(
+          "continuation",
+          async () => {
+            const identity = {
               runId: "continuation",
               sessionKey: SESSION,
               sessionId: "requester-session",
               agentId: "main",
-            }),
-          ).toBeUndefined();
-        },
-        admission.isCurrent,
-        admission.managementEntitlement,
-      );
-    });
-  });
-
-  it.each(["before dispatch", "after admission", "after second yield"])(
-    "rechecks original channel ownership %s without retaining a closed run",
-    async (when) => {
-      let owner = true;
-      const entitlement = { source: "channel-owner" as const, isCurrent: () => owner };
-      const first = createBatch("owner-original");
-      await inAdminRun(
-        "owner-original",
-        async () => expect(await mark(first)).toBe(1),
-        undefined,
-        entitlement,
-      );
-      expect(await settle(first)).toBe(true);
-      if (when === "before dispatch") {
-        owner = false;
-      }
-      await dispatch(first, async () => {
-        const admission = consume(first);
-        if (when === "before dispatch") {
-          expect(admission).toBeUndefined();
-          return;
-        }
-        expect(admission?.managementEntitlement.source).toBe("channel-owner");
-        expect(admission?.callerOrigin).toEqual({ kind: "unknown" });
-        expect(admission?.isCurrent()).toBe(true);
-        if (when === "after admission") {
-          owner = false;
-          expect(admission?.isCurrent()).toBe(false);
-          return;
-        }
-        const next = createBatch("continuation");
-        await inAdminRun(
-          "continuation",
-          async () => expect(await mark(next)).toBe(1),
-          admission!.isCurrent,
-          admission!.managementEntitlement,
-        );
-        expect(await settle(next)).toBe(true);
-        await dispatch(
-          next,
-          async () => {
-            const second = consume(next, "second-continuation");
-            expect(second?.isCurrent()).toBe(true);
-            owner = false;
-            expect(second?.isCurrent()).toBe(false);
+            };
+            expect(
+              bindRequesterOwnerIdentity({ ...identity, sessionKey: "agent:main:unrelated" }),
+            ).toBeUndefined();
+            retained = bindRequesterOwnerIdentity(identity);
+            if (!hasOwner) {
+              expect(retained).toBeUndefined();
+              return;
+            }
+            expect(retained).toMatchObject({
+              senderId: "original-owner",
+              channel: "discord",
+              accountId: "original-account",
+            });
+            expect(retained?.isCurrent()).toBe(true);
+            current = false;
+            expect(() => retained?.assertCurrent()).toThrow("owner identity");
+            current = true;
+            expect(retained?.isCurrent()).toBe(true);
           },
-          "second-continuation",
+          admission.isCurrent,
+          admission.managementEntitlement,
+          admission.requesterOwner,
         );
       });
+      if (hasOwner) {
+        expect(retained?.isCurrent()).toBe(false);
+        expect(() => retained?.assertCurrent()).toThrow("owner identity");
+      }
     },
   );
 
-  it("does not admit an arbitrary child message from the expected child", async () => {
-    const batch = await capture();
-    await dispatch(batch, async () => {
-      expect(
-        consumeRequesterCronAuthorityAdmission({
-          runId: "continuation",
-          sessionKey: SESSION,
-          sessionId: "requester-session",
-          inputProvenance: {
-            kind: "inter_session",
-            sourceTool: "sessions_send",
-            sourceSessionKey: batch[0]!.childSessionKey,
-          },
-        }),
-      ).toBeUndefined();
-      expect(consume(batch)).toBeDefined();
+  it.each([
+    ["channel-owner", "before dispatch"],
+    ["channel-owner", "after second yield"],
+    ["control-ui-admin", "after second yield"],
+  ] as const)("retains %s authority %s without retaining a closed run", async (source, when) => {
+    let owner = true;
+    const entitlement =
+      source === "channel-owner" ? { source, isCurrent: () => owner } : { source };
+    const first = createBatch("owner-original");
+    await inAdminRun(
+      "owner-original",
+      async () => expect(await mark(first)).toBe(1),
+      undefined,
+      entitlement,
+    );
+    expect(await settle(first)).toBe(true);
+    if (when === "before dispatch") {
+      owner = false;
+    }
+    let next: SubagentRunRecord[] = [];
+    await dispatch(first, async () => {
+      const admission = consume(first);
+      if (when === "before dispatch") {
+        expect(admission).toBeUndefined();
+        return;
+      }
+      expect(admission?.managementEntitlement.source).toBe(source);
+      expect(admission?.callerOrigin).toEqual({ kind: "unknown" });
+      expect(admission?.isCurrent()).toBe(true);
+      next = createBatch("continuation");
+      await inAdminRun(
+        "continuation",
+        async () => expect(await mark(next)).toBe(1),
+        admission!.isCurrent,
+        admission!.managementEntitlement,
+      );
+      expect(await settle(next)).toBe(true);
     });
+    if (when === "after second yield") {
+      await dispatch(
+        next,
+        async () => {
+          const second = consume(next, "second-continuation");
+          expect(second?.callerOrigin).toEqual({ kind: "unknown" });
+          expect(second?.isCurrent()).toBe(true);
+          if (source === "channel-owner") {
+            owner = false;
+            expect(second?.isCurrent()).toBe(false);
+          }
+        },
+        "second-continuation",
+      );
+    }
   });
+
   it("transfers cleanup to the exact successor scope without losing session revocation", async () => {
     const batch = await capture();
     await dispatch(batch, async () => {
@@ -696,6 +680,7 @@ describe("requester cron authority lifetime", () => {
       const outside = new AsyncResource("requester-yield-callback");
       const batch = createBatch("original");
       fixture.markRequesterTurnYielded.mockImplementation(() => mark(batch));
+      fixture.claimSubagentYield.mockClear();
       try {
         await inAdminRun("original", async () => {
           const caller = getGatewayToolCallerIdentity()!;
@@ -709,6 +694,15 @@ describe("requester cron authority lifetime", () => {
             replaced ? inAdminRun("original", claim) : withGatewayToolCallerIdentity(caller, claim),
           );
         });
+        expect(fixture.claimSubagentYield).toHaveBeenCalledExactlyOnceWith({
+          runId: "original",
+          sessionKey: SESSION,
+          agentId: "main",
+          waitForMessage: false,
+          acknowledgment: undefined,
+          hasPendingWork: expect.any(Function),
+        });
+        // This root has a real completion claim, not a native child message wait.
         expect(await settle(batch)).toBe(true);
         await dispatch(batch, async () => expect(Boolean(consume(batch))).toBe(!replaced));
       } finally {
@@ -718,7 +712,6 @@ describe("requester cron authority lifetime", () => {
   );
 
   it.each([
-    ["fresh user turn", () => revokeRequesterCronAuthority(SESSION)],
     [
       "reset",
       () => {
@@ -768,50 +761,40 @@ describe("requester cron authority lifetime", () => {
     });
   });
 
-  it("keeps the parent authorized when only one child is stopped", async () => {
+  it.each([
+    "partial cohort",
+    "reconstructed cohort",
+    "arbitrary child message",
+    "one stopped child",
+  ] as const)("admits only an owned cohort continuation: %s", async (input) => {
     const batch = await capture("original", 2);
-    await updateBatch(batch, ([entry]) => {
-      entry!.killIntent = { requestedAt: 3, reason: "stop" };
-      entry!.suppressCompletionDelivery = true;
+    if (input === "one stopped child") {
+      await updateBatch(batch, ([entry]) => {
+        entry!.killIntent = { requestedAt: 3, reason: "stop" };
+        entry!.suppressCompletionDelivery = true;
+      });
+    }
+    const candidate =
+      input === "partial cohort"
+        ? batch.slice(0, 1)
+        : input === "reconstructed cohort"
+          ? structuredClone(batch)
+          : batch;
+    await dispatch(candidate, async () => {
+      if (input === "partial cohort" || input === "reconstructed cohort") {
+        expect(consume(batch)).toBeUndefined();
+        return;
+      }
+      if (input === "arbitrary child message") {
+        expect(consume(batch, "continuation", "sessions_send")).toBeUndefined();
+      }
+      const admission = consume(batch);
+      expect(admission).toBeDefined();
+      expect(admission?.isCurrent()).toBe(true);
     });
-    await dispatch(batch, async () => expect(consume(batch)?.isCurrent()).toBe(true));
-  });
-
-  it("retains an unadmitted handoff after a returned retryable delivery failure", async () => {
-    const batch = await capture();
-    await dispatch(batch, async () => ({ delivered: false, path: "none" }));
-    await dispatch(batch, async () => expect(consume(batch)?.isCurrent()).toBe(true));
-  });
-
-  it("does not promote a partial or reconstructed batch", async () => {
-    const batch = await capture("original", 2);
-    await dispatch(batch.slice(0, 1), async () => expect(consume(batch)).toBeUndefined());
-    await dispatch(structuredClone(batch), async () => expect(consume(batch)).toBeUndefined());
-    await dispatch(batch, async () => expect(consume(batch)).toBeDefined());
-  });
-
-  it("preserves the next yielded batch when the preceding delivery completes", async () => {
-    const first = await capture();
-    let next: SubagentRunRecord[] = [];
-    await dispatch(first, async () => {
-      const admission = consume(first)!;
-      next = createBatch(admission.runId);
-      await inAdminRun(
-        admission.runId,
-        async () => expect(await mark(next)).toBe(1),
-        admission.isCurrent,
-      );
-      expect(await settle(next)).toBe(true);
-    });
-    await dispatch(
-      next,
-      async () => {
-        const admission = consume(next, "second-continuation")!;
-        expect(admission.callerOrigin).toEqual({ kind: "unknown" });
-        expect(admission.isCurrent()).toBe(true);
-      },
-      "second-continuation",
-    );
+    if (candidate !== batch) {
+      await dispatch(batch, async () => expect(consume(batch)).toBeDefined());
+    }
   });
 
   it.each([true, false])(
@@ -850,28 +833,36 @@ describe("requester cron authority lifetime", () => {
     },
   );
 
-  it("can retry an unadmitted transport failure without replaying admitted authority", async () => {
-    const batch = await capture();
-    await expect(
-      dispatch(batch, async () => {
-        throw new Error("before admission");
-      }),
-    ).rejects.toThrow("before admission");
-    let admitted: ReturnType<typeof consume>;
-    await expect(
-      dispatch(batch, async () => {
-        admitted = consume(batch);
-        expect(admitted).toBeDefined();
-        expect(consume(batch)).toBeUndefined();
-        throw new Error("ambiguous transport");
-      }),
-    ).rejects.toThrow("ambiguous transport");
-    expect(admitted!.isCurrent()).toBe(true);
-    await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
-    expect(admitted!.isCurrent()).toBe(true);
-    revokeRequesterCronAuthority(SESSION);
-    expect(admitted!.isCurrent()).toBe(false);
-  });
+  it.each(["returned", "thrown"] as const)(
+    "can retry a %s unadmitted failure without replaying admitted authority",
+    async (failure) => {
+      const batch = await capture();
+      if (failure === "returned") {
+        await dispatch(batch, async () => ({ delivered: false, path: "none" }));
+      } else {
+        await expect(
+          dispatch(batch, async () => {
+            throw new Error("before admission");
+          }),
+        ).rejects.toThrow("before admission");
+      }
+      let admitted: ReturnType<typeof consume>;
+      await expect(
+        dispatch(batch, async () => {
+          admitted = consume(batch);
+          expect(admitted).toBeDefined();
+          expect(admitted?.isCurrent()).toBe(true);
+          expect(consume(batch)).toBeUndefined();
+          throw new Error("ambiguous transport");
+        }),
+      ).rejects.toThrow("ambiguous transport");
+      expect(admitted!.isCurrent()).toBe(true);
+      await dispatch(batch, async () => expect(consume(batch)).toBeUndefined());
+      expect(admitted!.isCurrent()).toBe(true);
+      revokeRequesterCronAuthority(SESSION);
+      expect(admitted!.isCurrent()).toBe(false);
+    },
+  );
 
   it.each(["failed persistence", "fresh user during persistence"] as const)(
     "does not retain provisional authority after %s",

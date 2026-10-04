@@ -59,7 +59,7 @@ it.each(["heartbeat wake", "heartbeat poll"])(
       lastTo: "-100155462274",
     });
     const title = `Investigate ${topic}`;
-    recordSessionCreated(cfg, {
+    await recordSessionCreated(cfg, {
       sessionKey: "agent:main:dashboard:new-task",
       agentId: "main",
       entry: {

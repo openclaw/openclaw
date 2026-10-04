@@ -3,11 +3,17 @@ import { nothing } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CronJob, CronJobsListResult } from "../../api/types.ts";
+import type { CronJob } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { CronState } from "../../lib/cron/types.ts";
-import { createContext } from "./cron-page.test-support.ts";
+import {
+  createContext,
+  createRequest,
+  cronListResponse,
+  operatorHello,
+  waitForCronPage,
+} from "./cron-page.test-support.ts";
 import type { DeliveryConversationsController } from "./delivery-conversations.ts";
 import { createCronViewJob } from "./view.test-support.ts";
 import "./cron-page.ts";
@@ -30,7 +36,10 @@ type CronTestPage = HTMLElement & {
   removeJob: (job: CronJob) => Promise<void>;
 };
 
-function conversationTarget(target: string): ConversationListItem {
+function conversationTarget(
+  target: string,
+  overrides: Partial<ConversationListItem> = {},
+): ConversationListItem {
   return {
     conversationRef: `conv_${target}`,
     channel: "telegram",
@@ -39,11 +48,8 @@ function conversationTarget(target: string): ConversationListItem {
     target,
     firstSeenAt: 0,
     lastSeenAt: 0,
+    ...overrides,
   };
-}
-
-function waitForCronPage(assertion: () => void) {
-  return vi.waitFor(assertion, { interval: 1 });
 }
 
 type TestGateway = ApplicationContext["gateway"] & {
@@ -82,14 +88,6 @@ function createGateway(client: GatewayBrowserClient, connected: boolean): TestGa
   } as unknown as TestGateway;
 }
 
-function operatorHello(scopes: string[]): NonNullable<ApplicationGatewaySnapshot["hello"]> {
-  return {
-    type: "hello-ok",
-    protocol: 4,
-    auth: { role: "operator", scopes },
-  };
-}
-
 function createPage(context: ApplicationContext, options: { render?: boolean } = {}): CronTestPage {
   const page = document.createElement("openclaw-cron-page") as CronTestPage;
   page.context = context;
@@ -100,36 +98,36 @@ function createPage(context: ApplicationContext, options: { render?: boolean } =
   return page;
 }
 
-function cronListResponse(jobs: CronJob[]): CronJobsListResult {
-  return {
-    jobs: jobs.map((job) => ({
-      configRevision: job.configRevision ?? `config-revision-${job.id}`,
-      ...job,
-    })),
-    snapshotRevision: "cron-page-fixture",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
+function directoryRequest(
+  load: (
+    params?: unknown,
+  ) =>
+    | { conversations: ConversationListItem[] }
+    | Promise<{ conversations: ConversationListItem[] }>,
+) {
+  const fallback = createRequest();
+  return vi.fn(async (method: string, params?: unknown) =>
+    method === "conversations.list" ? load(params) : fallback(method),
+  );
 }
 
-function createRequest() {
-  return vi.fn(async (method: string) => {
-    if (method === "cron.status") {
-      return { enabled: true, jobs: 0, triggersEnabled: true };
-    }
-    if (method === "cron.list") {
-      return cronListResponse([]);
-    }
-    if (method === "cron.runs") {
-      return { entries: [], total: 0, offset: 0, hasMore: false };
-    }
-    if (method === "models.list") {
-      return { models: [] };
-    }
-    return {};
+async function mountPage(
+  request: (method: string, params?: unknown) => Promise<unknown> = createRequest(),
+  options: { render?: boolean } = {},
+) {
+  const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
+  const context = createContext(gateway, "writer");
+  const page = createPage(context, options);
+  await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+  return { page, gateway, context };
+}
+
+function digestJob(id = "daily-digest", overrides: Partial<CronJob> = {}) {
+  return createCronViewJob(id, {
+    configRevision: "rev-1",
+    sessionTarget: "isolated",
+    payload: { kind: "agentTurn", message: "Send the digest" },
+    ...overrides,
   });
 }
 
@@ -158,8 +156,7 @@ describe("CronPage lifecycle", () => {
       }
       return fallbackRequest(method);
     });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"), { render: true });
+    const { page } = await mountPage(request, { render: true });
     await waitForCronPage(() => expect(page.cron.cronJobs).toHaveLength(1));
     page.selectJob(
       createCronViewJob("editing-route", {
@@ -176,79 +173,35 @@ describe("CronPage lifecycle", () => {
       return Array.from(input?.list?.options ?? [], (option) => option.value);
     };
     await waitForCronPage(() => expect(optionsFor("#cron-delivery-to")).toContain("-100work"));
+    expect(request).toHaveBeenCalledWith("conversations.list", {
+      agentId: "writer",
+      channel: "telegram",
+      limit: 100,
+    });
     expect(optionsFor("#cron-failure-alert-to")).toEqual(["-100saved"]);
     expect(page.querySelector<HTMLInputElement>("#cron-failure-alert-to")?.value).toBe(
       "-100personal",
     );
   });
 
-  it("loads configured conversation targets for the selected announce channel", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string, _params?: unknown) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_configured_group",
-              channel: "telegram",
-              accountId: "default",
-              kind: "group",
-              target: "-1009876543210",
-              label: "Configured group",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
-
-    await waitForCronPage(() => expect(page.deliveryDirectory.conversations).toHaveLength(1));
-    expect(request).toHaveBeenCalledWith("conversations.list", {
-      agentId: "writer",
-      channel: "telegram",
-      limit: 100,
-    });
-    expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
-      "-1009876543210",
-    ]);
-  });
-
   it("rejects conversation targets from an earlier channel selection", async () => {
     const telegram = createDeferred<{ conversations: ConversationListItem[] }>();
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "conversations.list") {
-        const channel = (params as { channel: string }).channel;
-        if (channel === "telegram") {
-          return telegram.promise;
-        }
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_discord_current",
-              channel: "discord",
-              accountId: "default",
-              kind: "channel",
-              target: "channel:current",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
+    const request = directoryRequest((params) => {
+      const channel = (params as { channel: string }).channel;
+      if (channel === "telegram") {
+        return telegram.promise;
       }
-      return fallbackRequest(method);
+      return {
+        conversations: [
+          conversationTarget("channel:current", {
+            conversationRef: "conv_discord_current",
+            channel: "discord",
+            kind: "channel",
+          }),
+        ],
+      };
     });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const { page } = await mountPage(request);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     page.patchForm({ deliveryChannel: "discord" });
     await waitForCronPage(() =>
@@ -258,17 +211,7 @@ describe("CronPage lifecycle", () => {
     );
 
     telegram.resolve({
-      conversations: [
-        {
-          conversationRef: "conv_telegram_stale",
-          channel: "telegram",
-          accountId: "default",
-          kind: "group",
-          target: "-100stale",
-          firstSeenAt: 0,
-          lastSeenAt: 0,
-        },
-      ],
+      conversations: [conversationTarget("-100stale", { conversationRef: "conv_telegram_stale" })],
     });
     await Promise.resolve();
     expect(page.deliveryDirectory.conversations.map((entry) => entry.target)).toEqual([
@@ -277,38 +220,19 @@ describe("CronPage lifecycle", () => {
   });
 
   it("filters a cached directory locally when the account changes", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_personal",
-              channel: "telegram",
-              accountId: "personal",
-              kind: "group",
-              target: "-100personal",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-            {
-              conversationRef: "conv_telegram_work",
-              channel: "telegram",
-              accountId: "work",
-              kind: "group",
-              target: "-100work",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const request = directoryRequest(() => ({
+      conversations: [
+        conversationTarget("-100personal", {
+          conversationRef: "conv_telegram_personal",
+          accountId: "personal",
+        }),
+        conversationTarget("-100work", {
+          conversationRef: "conv_telegram_work",
+          accountId: "work",
+        }),
+      ],
+    }));
+    const { page } = await mountPage(request);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.conversations).toHaveLength(2));
 
@@ -324,13 +248,7 @@ describe("CronPage lifecycle", () => {
 
   it("drops an in-flight directory response after administrator access is lost", async () => {
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return pending.promise;
-      }
-      return fallbackRequest(method);
-    });
+    const request = directoryRequest(() => pending.promise);
     const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
     gateway.emitSnapshot({ hello: operatorHello(["operator.admin"]) });
     const page = createPage(createContext(gateway, "writer"));
@@ -340,15 +258,10 @@ describe("CronPage lifecycle", () => {
     gateway.emitSnapshot({ hello: operatorHello(["operator.read"]) });
     pending.resolve({
       conversations: [
-        {
+        conversationTarget("-100private", {
           conversationRef: "conv_telegram_private",
-          channel: "telegram",
           accountId: "private",
-          kind: "group",
-          target: "-100private",
-          firstSeenAt: 0,
-          lastSeenAt: 0,
-        },
+        }),
       ],
     });
     await Promise.resolve();
@@ -357,30 +270,16 @@ describe("CronPage lifecycle", () => {
   });
 
   it("keeps an explicit suggestion account without inferring topic routing", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_bound_topic",
-              channel: "telegram",
-              accountId: "bound-account",
-              kind: "group",
-              target: "-1009876543210",
-              threadId: "42",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
-      }
-      return fallbackRequest(method);
-    });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const request = directoryRequest(() => ({
+      conversations: [
+        conversationTarget("-1009876543210", {
+          conversationRef: "conv_telegram_bound_topic",
+          accountId: "bound-account",
+          threadId: "42",
+        }),
+      ],
+    }));
+    const { page } = await mountPage(request);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.conversations).toHaveLength(1));
 
@@ -392,14 +291,7 @@ describe("CronPage lifecycle", () => {
   });
 
   it("clears stale topic metadata when an explicitly authored target changes", async () => {
-    const page = createPage(
-      createContext(
-        createGateway({ request: createRequest() } as unknown as GatewayBrowserClient, true),
-        "writer",
-      ),
-    );
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const { page } = await mountPage();
     page.patchForm({
       deliveryMode: "announce",
       deliveryChannel: "telegram",
@@ -415,18 +307,8 @@ describe("CronPage lifecycle", () => {
 
   it("drops an in-flight directory failure after the editor closes", async () => {
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return pending.promise;
-      }
-      return fallbackRequest(method);
-    });
-    const page = createPage(
-      createContext(createGateway({ request } as unknown as GatewayBrowserClient, true), "writer"),
-    );
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const request = directoryRequest(() => pending.promise);
+    const { page } = await mountPage(request);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     page.closePanel();
     pending.reject(new Error("late directory failure"));
@@ -438,18 +320,8 @@ describe("CronPage lifecycle", () => {
 
   it("drops an in-flight directory failure after a successful save", async () => {
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return pending.promise;
-      }
-      return fallbackRequest(method);
-    });
-    const page = createPage(
-      createContext(createGateway({ request } as unknown as GatewayBrowserClient, true), "writer"),
-    );
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const request = directoryRequest(() => pending.promise);
+    const { page } = await mountPage(request);
     page.cron.cronCreateOpen = true;
     page.patchForm({
       name: "Saved task",
@@ -473,33 +345,21 @@ describe("CronPage lifecycle", () => {
 
   it("clears a recipient directory error after a successful retry", async () => {
     let calls = 0;
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        calls += 1;
-        if (calls === 1) {
-          throw new Error("temporary directory failure");
-        }
-        return {
-          conversations: [
-            {
-              conversationRef: "conv_telegram_recovered",
-              channel: "telegram",
-              accountId: "work",
-              kind: "group",
-              target: "-100recovered",
-              firstSeenAt: 0,
-              lastSeenAt: 0,
-            },
-          ],
-        };
+    const request = directoryRequest(() => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error("temporary directory failure");
       }
-      return fallbackRequest(method);
+      return {
+        conversations: [
+          conversationTarget("-100recovered", {
+            conversationRef: "conv_telegram_recovered",
+            accountId: "work",
+          }),
+        ],
+      };
     });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const { page } = await mountPage(request);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
 
@@ -511,17 +371,10 @@ describe("CronPage lifecycle", () => {
   });
 
   it("keeps scheduler errors visible over recipient directory errors", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        throw new Error("temporary directory failure");
-      }
-      return fallbackRequest(method);
+    const request = directoryRequest(() => {
+      throw new Error("temporary directory failure");
     });
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"), { render: true });
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+    const { page } = await mountPage(request, { render: true });
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
     page.cron = { ...page.cron, cronError: "scheduler save failed" };
@@ -573,23 +426,10 @@ describe("CronPage lifecycle", () => {
 
   it("drops an in-flight directory failure after the selected task is deleted", async () => {
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        return pending.promise;
-      }
-      return fallbackRequest(method);
-    });
+    const request = directoryRequest(() => pending.promise);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    const job = createCronViewJob("daily-digest", {
-      configRevision: "rev-1",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "Send the digest" },
-    });
+    const { page } = await mountPage(request);
+    const job = digestJob();
     page.selectJob(job);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() =>
@@ -609,9 +449,7 @@ describe("CronPage lifecycle", () => {
   });
 
   it("keeps recipient discovery when the deletion is rejected", async () => {
-    // `cron.remove` failing is reported through `cronError`, not thrown, so the
-    // editor stays open. Retiring discovery there would strand it: nothing
-    // reloads suggestions until another channel/agent change or a reopen.
+    // A rejected remove reports cronError without throwing; its editor still owns discovery.
     const pending = createDeferred<{ conversations: ConversationListItem[] }>();
     const fallbackRequest = createRequest();
     const request = vi.fn(async (method: string) => {
@@ -624,15 +462,8 @@ describe("CronPage lifecycle", () => {
       return fallbackRequest(method);
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    const job = createCronViewJob("daily-digest", {
-      configRevision: "rev-1",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "Send the digest" },
-    });
+    const { page } = await mountPage(request);
+    const job = digestJob();
     page.selectJob(job);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() =>
@@ -642,7 +473,6 @@ describe("CronPage lifecycle", () => {
     await page.removeJob(job);
     await waitForCronPage(() => expect(page.cron.cronError).toContain("cron.remove rejected"));
 
-    // The task survived, so its editor is still the discovery owner.
     expect(page.cron.cronEditingJob?.id).toBe("daily-digest");
 
     // A directory response that lands after the failed delete still publishes
@@ -657,23 +487,12 @@ describe("CronPage lifecycle", () => {
   });
 
   it("clears a published directory error when the selected task is deleted", async () => {
-    const fallbackRequest = createRequest();
-    const request = vi.fn(async (method: string) => {
-      if (method === "conversations.list") {
-        throw new Error("temporary directory failure");
-      }
-      return fallbackRequest(method);
+    const request = directoryRequest(() => {
+      throw new Error("temporary directory failure");
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"), { render: true });
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    const job = createCronViewJob("daily-digest", {
-      configRevision: "rev-1",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "Send the digest" },
-    });
+    const { page } = await mountPage(request, { render: true });
+    const job = digestJob();
     page.selectJob(job);
     page.patchForm({ deliveryMode: "announce", deliveryChannel: "telegram" });
     await waitForCronPage(() => expect(page.deliveryDirectory.error).toContain("temporary"));
@@ -710,11 +529,7 @@ describe("CronPage lifecycle", () => {
         }
         return fallbackRequest(method);
       });
-      const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-      const context = createContext(gateway, "writer");
-      const page = createPage(context);
-
-      await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+      const { page, gateway, context } = await mountPage(request);
       page.cron.cronCreateOpen = true;
       page.patchForm({
         name: "Saved task",
@@ -770,10 +585,7 @@ describe("CronPage lifecycle", () => {
   );
 
   it("preserves a replacement editor's directory when an earlier deletion lands", async () => {
-    // The page, the connection, and the admin scope all survive a task
-    // deletion, so none of them can distinguish "the editor that asked for this
-    // deletion exited" from "a different editor owns discovery now". Only the
-    // editor generation captured before the delete can.
+    // Only editor generation changes here; page, connection, and admin scope survive.
     const removal = createDeferred<Record<string, never>>();
     const directories = [
       createDeferred<{ conversations: ConversationListItem[] }>(),
@@ -793,18 +605,10 @@ describe("CronPage lifecycle", () => {
       return fallbackRequest(method);
     });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
-    const gateway = createGateway({ request } as unknown as GatewayBrowserClient, true);
-    const page = createPage(createContext(gateway, "writer"));
-
-    await waitForCronPage(() => expect(page.cron.connected).toBe(true));
-    const doomed = createCronViewJob("daily-digest", {
-      configRevision: "rev-1",
-      sessionTarget: "isolated",
-      payload: { kind: "agentTurn", message: "Send the digest" },
-    });
-    const replacement = createCronViewJob("weekly-digest", {
+    const { page } = await mountPage(request);
+    const doomed = digestJob();
+    const replacement = digestJob("weekly-digest", {
       configRevision: "rev-2",
-      sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "Send the weekly digest" },
     });
 
@@ -839,11 +643,7 @@ describe("CronPage lifecycle", () => {
   });
 
   it("re-reads the recipient directory when conflict recovery replaces the route", async () => {
-    // Revision-conflict recovery loads the authoritative definition into the
-    // open editor and still reports `saved: false`, so the post-save resettle
-    // never runs. The sending account is applied to cached rows locally, so a
-    // recovery that only moves the channel leaves every Telegram target
-    // selectable on the recovered Discord route unless the cache is retired.
+    // Recovery reports saved: false but can replace the route under its cached directory.
     const { page, directoryChannels, directories } = await startConflictRecovery({
       recoveredChannel: "discord",
     });
@@ -879,9 +679,7 @@ describe("CronPage lifecycle", () => {
   });
 
   it("keeps the recipient directory when conflict recovery preserves the route", async () => {
-    // A rejected save that leaves the route in place must not re-read the
-    // Gateway: the cached directory still answers for that exact channel and
-    // agent, so retrying a save cannot turn into a discovery loop.
+    // An unchanged route must reuse its cache, not turn save retries into a discovery loop.
     const { page, directoryChannels } = await startConflictRecovery({
       recoveredChannel: "telegram",
     });
@@ -894,12 +692,7 @@ describe("CronPage lifecycle", () => {
   });
 });
 
-/**
- * Drives one editor through a `CRON_JOB_CHANGED` save: the editor opens on a
- * Telegram announce route, its directory read is answered, and the retry is
- * refused so `cron.get` replaces the form with an authoritative definition on
- * `recoveredChannel` under the same `default` account.
- */
+// A revision conflict replaces the form through cron.get while keeping its account unchanged.
 async function startConflictRecovery(options: {
   recoveredChannel: string;
   resolveFirstDirectory?: boolean;
@@ -909,12 +702,9 @@ async function startConflictRecovery(options: {
     createDeferred<{ conversations: ConversationListItem[] }>(),
   ];
   const directoryChannels: string[] = [];
-  const editedJob = createCronViewJob("digest", {
-    configRevision: "rev-1",
-    sessionTarget: "isolated",
-    payload: { kind: "agentTurn", message: "Send the digest" },
+  const editedJob = digestJob("digest", {
     delivery: { mode: "announce", channel: "telegram", to: "-100original", accountId: "default" },
-  } as Partial<CronJob>);
+  });
   const authoritativeJob = {
     ...editedJob,
     configRevision: "rev-2",
@@ -942,11 +732,7 @@ async function startConflictRecovery(options: {
     }
     return fallbackRequest(method);
   });
-  const page = createPage(
-    createContext(createGateway({ request } as unknown as GatewayBrowserClient, true), "writer"),
-  );
-
-  await waitForCronPage(() => expect(page.cron.connected).toBe(true));
+  const { page } = await mountPage(request);
   page.selectJob(editedJob);
   await waitForCronPage(() => expect(directoryChannels).toEqual(["telegram"]));
   if (options.resolveFirstDirectory !== false) {

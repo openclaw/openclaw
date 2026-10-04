@@ -173,11 +173,7 @@ export async function readSubagentOutput(
       : undefined;
   const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
   const snapshot = summarizeSubagentOutputHistory(sourceMessages);
-  const selected = selectSubagentOutputText(snapshot, outcome);
-  if (selected?.trim()) {
-    return selected;
-  }
-  return undefined;
+  return selectSubagentOutputText(snapshot, outcome);
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {
@@ -303,6 +299,7 @@ export function dedupeLatestChildCompletionRows<
 export function filterCurrentDirectChildCompletionRows<
   T extends ChildCompletionRow & {
     runId: string;
+    childAgentId?: string;
     requesterSessionKey: string;
     requesterAgentId?: string;
   },
@@ -315,7 +312,10 @@ export function filterCurrentDirectChildCompletionRows<
   },
 ): T[] {
   return children.filter((child) => {
-    const latest = params.getLatestSubagentRunByChildSessionKey(child.childSessionKey);
+    const latest = params.getLatestSubagentRunByChildSessionKey(
+      child.childSessionKey,
+      child.childAgentId,
+    );
     if (!latest) {
       return true;
     }

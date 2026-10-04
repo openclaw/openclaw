@@ -30,6 +30,14 @@ describe("compaction token accounting sanitization", () => {
         content: "internal",
         timestamp: 2,
       } as AgentMessage,
+      {
+        role: "custom",
+        customType: "openclaw.runtime-context",
+        content: "private context opted out of provider replay",
+        details: { source: "openclaw-runtime-context", runtimeContextCarrier: false },
+        display: false,
+        timestamp: 2,
+      },
       makeUserMessage("next", 3),
     ];
 

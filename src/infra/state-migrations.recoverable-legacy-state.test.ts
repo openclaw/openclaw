@@ -114,15 +114,16 @@ describe("recoverable legacy state", () => {
   );
 
   it.each([false, true])(
-    "keeps Discord cache cleanup advisory unless another import fails (%s)",
-    async (failedImport) => {
+    "keeps Discord cache cleanup advisory with retired state=%s",
+    async (retiredState) => {
       await withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
         const discordDir = path.join(stateDir, "discord");
         const sourcePath = path.join(discordDir, "command-deploy-cache.json");
+        const retiredPath = path.join(discordDir, "thread-bindings.json");
         await fs.mkdir(discordDir, { recursive: true });
         await fs.writeFile(sourcePath, "retired deploy hashes");
-        if (failedImport) {
-          await fs.writeFile(path.join(discordDir, "thread-bindings.json"), "{}");
+        if (retiredState) {
+          await fs.writeFile(retiredPath, "{}");
         }
         const unlink = fsSync.unlinkSync;
         vi.spyOn(fsSync, "unlinkSync").mockImplementation((target) => {
@@ -136,7 +137,6 @@ describe("recoverable legacy state", () => {
             path.resolve("extensions/discord/doctor-contract-api.ts"),
           ),
         );
-        const migration = expectDefined(stateMigrations?.[0], "Discord Doctor migration");
         const params = {
           config: {},
           env,
@@ -149,25 +149,41 @@ describe("recoverable legacy state", () => {
           }),
         };
 
-        const result = await migration.migrateLegacyState(params);
-        const receipt = migrationReceipt(migration.id, result);
+        const migrate = async () => {
+          const receipts = [];
+          for (const migration of stateMigrations) {
+            if (await migration.detectLegacyState(params)) {
+              receipts.push(
+                migrationReceipt(migration.id, await migration.migrateLegacyState(params)),
+              );
+            }
+          }
+          return receipts;
+        };
+        const receipts = await migrate();
+        const warnings = receipts.flatMap((receipt) => receipt.warnings).join("\n");
 
         await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("retired deploy hashes");
-        expect(receipt.warnings.join("\n")).toContain("Discord command deployment cache");
-        expect(receipt.warnings.join("\n")).toContain("synthetic cache cleanup permission denied");
-        if (failedImport) {
-          expect(() => throwIfDoctorStateMigrationRefused([receipt])).toThrow(
+        expect(warnings).toContain("Discord command deployment cache");
+        expect(warnings).toContain("synthetic cache cleanup permission denied");
+        expect(receipts).toContainEqual(
+          expect.objectContaining({ id: "discord-legacy-state", outcome: "warning" }),
+        );
+        if (retiredState) {
+          expect(() => throwIfDoctorStateMigrationRefused(receipts)).toThrow(
             "Doctor stopped because a state migration refused",
           );
-          expect(receipt.warnings.join("\n")).toContain("legacy Discord thread bindings store");
+          expect(warnings).toContain(
+            `Discord retired model preferences and thread bindings uses a retired pre-July 2026 format: ${retiredPath}. Install OpenClaw 2026.9.5. Run openclaw doctor --fix before upgrading to latest. Retired files were left untouched.`,
+          );
+          await expect(fs.readFile(retiredPath, "utf8")).resolves.toBe("{}");
         } else {
-          expect(() => throwIfDoctorStateMigrationRefused([receipt])).not.toThrow();
-          expect(receipt.outcome).toBe("warning");
-          expect(receipt.warnings.join("\n")).toContain("openclaw doctor --fix");
+          expect(() => throwIfDoctorStateMigrationRefused(receipts)).not.toThrow();
+          expect(warnings).toContain("openclaw doctor --fix");
         }
         vi.restoreAllMocks();
-        if (!failedImport) {
-          expect((await migration.migrateLegacyState(params)).warnings).toEqual([]);
+        if (!retiredState) {
+          expect((await migrate()).flatMap((receipt) => receipt.warnings)).toEqual([]);
           await expect(fs.stat(sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
         }
       });

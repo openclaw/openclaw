@@ -44,7 +44,7 @@ struct DashboardNavigationTests {
         #expect(!controller._testNavigationFallbackIsCurrent(
             generation: staleGeneration,
             sourceURL: baseURL))
-        #expect(controller.dashboardBaseURL == baseURL)
+        #expect(controller.currentURL == baseURL)
     }
 
     @Test func `newer Dashboard dispatch invalidates stale in-flight fallback`() throws {

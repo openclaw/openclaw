@@ -48,11 +48,14 @@ async function useReadPool() {
     ...failedDrainFixtureFiles(readPoolFixture),
     "11-a-sqlite-owner.test.ts": `
 import { afterAll, expect, it, vi } from "vitest";
+import fs from "node:fs";
 import path from "node:path";
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
+import { readDatabasePathIdentitySync } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))};
 import { registerOpenClawStateDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
 import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
 import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
@@ -61,9 +64,11 @@ const drainKey = Symbol.for("fixture.sqliteDrain");
 it("retains a real shared-state owner after host admission is refused", async () => {
   await useReadPool();
   expect(isSqliteWorkerStoreAvailable({})).toBe(false);
-  await expect(openOpenClawStateWorkerCleanupStore("/synthetic/state.sqlite", {
-    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-  }, () => {})).rejects.toMatchObject({ code: "unavailable" });
+  const sharedPath = path.join(import.meta.dirname, "refused-owner.sqlite");
+  fs.writeFileSync(sharedPath, "synthetic admission source");
+  await expect(openOpenClawStateWorkerCleanupStore(sharedPath, {
+    environment: { OPENCLAW_STATE_DIR: import.meta.dirname },
+  }, () => {}, readDatabasePathIdentitySync(sharedPath))).rejects.toMatchObject({ code: "unavailable" });
   const database = openOpenClawAgentDatabase({
     agentId: "fixture",
     env: { OPENCLAW_STATE_DIR: path.join(import.meta.dirname, "agent-state") },
@@ -87,6 +92,9 @@ afterAll(() => {
 `,
     "11-b-sqlite-cleanup.test.ts": `
 import { afterEach, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { readDatabasePathIdentitySync } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))};
 import type { SqliteWorkerStore } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-contract.ts"))};
 import {
   runWithSqliteWorkerStateContext,
@@ -123,13 +131,8 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   Worker: edge.forbidden,
 }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
-}));
-vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))}, () => ({
-  readDatabasePathIdentity: async (canonicalPath: string) => ({
-    key: "file:synthetic-state",
-    canonicalPath,
-  }),
 }));
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
   openSharedStateSqliteWorkerStore: async (
@@ -171,13 +174,15 @@ afterEach(() => {
 });
 
 it("retains installed-schema repair ownership through retired agent lease cleanup", async () => {
-  const databasePath = "/synthetic/state/openclaw.sqlite";
+  const databasePath = path.join(import.meta.dirname, "cleanup-state.sqlite");
+  fs.writeFileSync(databasePath, "synthetic cleanup source");
+  const identity = readDatabasePathIdentitySync(databasePath);
   const context: OpenClawStateWorkerContext = {
     environment: { OPENCLAW_STATE_DIR: "/synthetic" },
     existingSchemaPath: databasePath,
     admission: {
       databasePath,
-      identity: { key: "file:synthetic-state", canonicalPath: databasePath },
+      identity,
       assertCurrent() {},
     },
   };
@@ -194,7 +199,7 @@ it("retains installed-schema repair ownership through retired agent lease cleanu
       ownerPid: process.pid,
       ownerStartTime: null,
       sharedStatePath: databasePath,
-      sharedStateIdentity: "file:synthetic-state",
+      sharedStateIdentity: identity.key,
     },
   });
   expect(edge.repairs).toEqual(
@@ -291,9 +296,11 @@ it("starts only after the aroundEach close settled", () => {
 function failedDrainFixtureFiles(readPoolFixture: string): Record<string, string> {
   return {
     "13-a-retained-lease.test.ts": `
+import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
@@ -302,14 +309,17 @@ import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.
 import { registerOpenClawAgentDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-resources.ts"))};
 import { openOpenClawStateWorkerCleanupStore } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-worker-store.ts"))};
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
+import { readDatabasePathIdentitySync } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))};
 ${readPoolFixture}
 const probeKey = Symbol.for("fixture.retainedAgentLease");
 it("retains its native handle and lease when resource teardown refuses cleanup", async () => {
   await useReadPool();
   expect(isSqliteWorkerStoreAvailable({})).toBe(false);
-  await expect(openOpenClawStateWorkerCleanupStore("/synthetic/state.sqlite", {
-    environment: { OPENCLAW_STATE_DIR: "/synthetic" },
-  }, () => {})).rejects.toMatchObject({ code: "unavailable" });
+  const sharedPath = path.join(import.meta.dirname, "refused-retained-owner.sqlite");
+  fs.writeFileSync(sharedPath, "synthetic admission source");
+  await expect(openOpenClawStateWorkerCleanupStore(sharedPath, {
+    environment: { OPENCLAW_STATE_DIR: import.meta.dirname },
+  }, () => {}, readDatabasePathIdentitySync(sharedPath))).rejects.toMatchObject({ code: "unavailable" });
   const root = path.join(import.meta.dirname, "retained-agent-state");
   const database = openOpenClawAgentDatabase({ agentId: "retained", env: { OPENCLAW_STATE_DIR: root } });
   const lease = agentDatabaseLifecycle.leases.get(database.path);
@@ -527,6 +537,7 @@ function subagentRetirementFixtureFiles(): Record<string, string> {
     "10-c-subagent-registry.test.ts": `
 import { expect, it, vi } from "vitest";
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
+  resolveRuntimeWorkerThreadExecArgv: () => [],
   resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
 }));
 import ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry.ts"))};

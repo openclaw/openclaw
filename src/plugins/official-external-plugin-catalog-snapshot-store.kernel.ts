@@ -22,20 +22,7 @@ import type {
   HostedOfficialExternalPluginCatalogTrustState,
 } from "./official-external-plugin-catalog.types.js";
 
-type HostedCatalogSnapshotRow = {
-  feed_url: string;
-  body: string;
-  status: number | bigint;
-  etag: string | null;
-  last_modified: string | null;
-  checksum: string;
-  saved_at: string;
-  trust_mode: string | null;
-  trust_key_id: string | null;
-  trust_signature_count: number | bigint | null;
-  trust_threshold: number | bigint | null;
-  trust_verified_at: string | null;
-};
+type HostedCatalogSnapshotRow = NonNullable<ReturnType<typeof readHostedCatalogSnapshotRow>>;
 
 type HostedCatalogSnapshotDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -167,10 +154,7 @@ function rowToSnapshot(
   };
 }
 
-function readHostedCatalogSnapshotRow(
-  db: DatabaseSync,
-  url: string,
-): HostedCatalogSnapshotRow | undefined {
+function readHostedCatalogSnapshotRow(db: DatabaseSync, url: string) {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
     db,

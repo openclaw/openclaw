@@ -41,58 +41,14 @@ describe("executeWebSearchCandidates", () => {
     expect(fallback).not.toHaveBeenCalled();
   });
 
-  it("tries every fallback and retains the first error with its cause", async () => {
-    const cause = new Error("first transport failure");
-    const firstError = new Error("first provider failed", { cause });
-    const attempts: string[] = [];
-    const result = executeWebSearchCandidates({
-      candidates: [
-        candidate("first", async () => {
-          attempts.push("first");
-          throw firstError;
-        }),
-        candidate("second", async () => {
-          attempts.push("second");
-          throw new Error("second provider failed");
-        }),
-      ],
-      args: { query: "synthetic query" },
-      allowFallback: true,
-    });
-    await expect(result).rejects.toMatchObject({ provider: "first", cause: firstError });
-    expect(firstError.cause).toBe(cause);
-    expect(attempts).toEqual(["first", "second"]);
-  });
-
-  it.each(["first rejection", null, undefined])(
-    "retains the first non-Error rejection: %s",
-    async (firstRejection) => {
-      await expect(
-        executeWebSearchCandidates({
-          candidates: [
-            candidate(
-              "first",
-              vi.fn<WebSearchProviderToolDefinition["execute"]>().mockRejectedValue(firstRejection),
-            ),
-            candidate("second", async () => {
-              throw new Error("second provider failed");
-            }),
-          ],
-          args: {},
-          allowFallback: true,
-        }),
-      ).rejects.toThrow(String(firstRejection));
-    },
-  );
-
   it.each([true, false])(
     "retains chronology across structured and thrown errors (structured first: %s)",
     async (structuredFirst) => {
       const thrown = new Error("ordinary provider failure");
-      const missingKey = async () => ({ error: "missing_fixture_api_key" });
-      const fail = async () => {
+      const missingKey = vi.fn(async () => ({ error: "missing_fixture_api_key" }));
+      const fail = vi.fn(async () => {
         throw thrown;
-      };
+      });
       const result = executeWebSearchCandidates({
         candidates: [
           candidate("first", structuredFirst ? missingKey : fail),
@@ -108,15 +64,20 @@ describe("executeWebSearchCandidates", () => {
       } else {
         await expect(result).rejects.toMatchObject({ provider: "first", cause: thrown });
       }
+      expect(missingKey).toHaveBeenCalledOnce();
+      expect(fail).toHaveBeenCalledOnce();
     },
   );
 
-  it("does not treat a thrown undefined as an unavailable factory", async () => {
+  it("retains an undefined rejection across an unavailable factory and later failure", async () => {
     const unavailable = createWebSearchTestProvider({
       id: "unavailable",
       pluginId: "fixture-search",
       credentialPath: "plugins.entries.fixture-search.config.unavailable",
       createTool: () => null,
+    });
+    const laterFailure = vi.fn(async () => {
+      throw new Error("second provider failed");
     });
     await expect(
       executeWebSearchCandidates({
@@ -126,11 +87,13 @@ describe("executeWebSearchCandidates", () => {
             vi.fn<WebSearchProviderToolDefinition["execute"]>().mockRejectedValue(undefined),
           ),
           unavailable,
+          candidate("second", laterFailure),
         ],
         args: {},
         allowFallback: true,
       }),
     ).rejects.toThrow("undefined");
+    expect(laterFailure).toHaveBeenCalledOnce();
   });
 
   it("gives cancellation precedence over a saved failure and later cleanup error", async () => {

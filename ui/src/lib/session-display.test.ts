@@ -34,10 +34,7 @@ describe("resolveSessionDisplayName", () => {
       try {
         const key = "agent:main:subagent:worker";
         const row = { label: `${prefix} Research sources` };
-        expect(resolveSessionDisplayName(key, row)).toBe(row.label);
-        expect(resolveSessionDisplayName(key, row, { includeSubagentPrefix: false })).toBe(
-          "Research sources",
-        );
+        expect(resolveSessionDisplayName(key, row)).toBe("Research sources");
       } finally {
         translation.mockRestore();
       }
@@ -222,32 +219,25 @@ describe("resolveSessionDisplayName", () => {
     );
   });
 
-  it("can omit only the subagent prefix while preserving its untitled fallback", () => {
+  it("uses plain subagent names and preserves the unnamed fallback", () => {
     const key = "agent:main:subagent:worker";
-    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe(
-      "Subagent: Research sources",
+    expect(resolveSessionDisplayName(key, { label: "Research sources" })).toBe("Research sources");
+    expect(resolveSessionDisplayName(key, { label: "Subagent: Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key, { displayName: "Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key, { derivedTitle: "Research sources" })).toBe(
+      "Research sources",
+    );
+    expect(resolveSessionDisplayName(key)).toBe("Subagent");
+    expect(resolveSessionDisplayName("agent:main:cron:daily", { label: "Daily" })).toBe(
+      "Automation: Daily",
     );
     expect(
-      resolveSessionDisplayName(
-        key,
-        { label: "Subagent: Research sources" },
-        {
-          includeSubagentPrefix: false,
-        },
-      ),
-    ).toBe("Research sources");
-    expect(resolveSessionDisplayName(key, undefined, { includeSubagentPrefix: false })).toBe(
-      "Subagent:",
-    );
-    expect(
-      resolveSessionDisplayName(
-        "agent:main:cron:daily",
-        { label: "Daily" },
-        {
-          includeSubagentPrefix: false,
-        },
-      ),
-    ).toBe("Automation: Daily");
+      resolveSessionDisplayName("agent:main:dashboard:task", { label: "Subagent: explicit title" }),
+    ).toBe("Subagent: explicit title");
   });
 
   it("strips persisted pre-rename Cron labels instead of double-prefixing", () => {

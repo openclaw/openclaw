@@ -96,6 +96,7 @@ describe("worker placement read projection", () => {
       const warn = vi.fn();
       const monitor = createWorkerPlacementDiskSpaceMonitor({
         placements: store,
+        runnerAvailability: { read: () => undefined },
         environments: {
           async startTunnel({ environmentId, ownerEpoch }) {
             discoverySql ??= sql.queries.slice(beforeSweep);
@@ -152,12 +153,12 @@ describe("worker placement read projection", () => {
       claimId: "pending-claim",
       runId: "pending-run",
     });
-    store.markWorkspaceResultPending(claim);
+    await store.markWorkspaceResultPending(claim);
     const stagedResultRef = `refs/openclaw/worker-results/${claim.claimId}`;
     await store.recordStagedWorkspaceResult(claim, stagedResultRef);
     store.recordWorkspaceResultConflict(claim, { paths: ["changed.txt"], stagedResultRef });
-    const draining = store.startWorkspaceResultDrain(claim);
-    const pendingResult = store.listPendingWorkspaceResults("pending")[0];
+    const draining = await store.startWorkspaceResultDrain(claim);
+    const pendingResult = (await store.listPendingWorkspaceResultsAsync("pending"))[0];
     const moving = await activePlacement(database, "moving");
     const move = moving.store.beginPlacementMove({
       sessionId: moving.placement.sessionId,
@@ -349,7 +350,7 @@ describe("worker placement read projection", () => {
           .map((owner) => owner.sessionId),
       );
       expect(blockingOwners).toEqual(new Set(["journal-current", "journal-draining"]));
-      expect(store.listPendingWorkspaceResults()).toEqual(pendingResults);
+      expect(await store.listPendingWorkspaceResultsAsync()).toEqual(pendingResults);
       const orderedIds = [
         ...new Set([
           ...store.listForReconcile().map((placement) => placement.sessionId),
@@ -419,7 +420,7 @@ describe("worker placement read projection", () => {
     },
   );
 
-  it("matches synchronous pending-result claim authority for live and claimless worker and local owners", async () => {
+  it("prepares pending-result claim authority for live and claimless worker and local owners", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-result-claim-projection-"));
     const database = openOpenClawStateDatabase();
     for (const executionMode of ["worker-turn", "remote-exec"] as const) {
@@ -434,13 +435,17 @@ describe("worker placement read projection", () => {
         claimId: `claim-${executionMode}`,
         runId: `run-${executionMode}`,
       });
-      store.markWorkspaceResultPending(claim);
+      await store.markWorkspaceResultPending(claim);
       for (const claimless of [false, true]) {
         if (claimless) {
-          database.db
-            .prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL, turn_claim_id = NULL,
-            turn_claim_run_id = NULL, turn_claim_generation = NULL, turn_claim_owner_epoch = NULL WHERE session_id = ?`)
-            .run(identity.sessionId);
+          if (executionMode === "remote-exec") {
+            expect(store.clearLocalTurnClaimsAfterRestart()).toBe(1);
+          } else {
+            database.db
+              .prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL, turn_claim_id = NULL,
+              turn_claim_run_id = NULL, turn_claim_generation = NULL, turn_claim_owner_epoch = NULL WHERE session_id = ?`)
+              .run(identity.sessionId);
+          }
         }
         const projection = await store.readProjection([identity.sessionId], { current: true });
         const projectedPlacement = projection.placements.get(identity.sessionId)!;
@@ -454,6 +459,13 @@ describe("worker placement read projection", () => {
           { ...claim, owner: { ...claim.owner, ownerEpoch: 8 } },
         ]) {
           const expected = testedClaim === claim && (!claimless || executionMode === "remote-exec");
+          if (expected) {
+            await store.prepareWorkspaceResultClaim(testedClaim);
+          } else {
+            await expect(store.prepareWorkspaceResultClaim(testedClaim)).rejects.toThrow(
+              "workspace result authority changed",
+            );
+          }
           expect(store.validateWorkspaceResultClaim(testedClaim)).toBe(expected);
           expect(matchesWorkspaceResultClaim(projectedPlacement, pending, testedClaim)).toBe(
             expected,

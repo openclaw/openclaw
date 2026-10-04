@@ -408,7 +408,7 @@ export async function renderLoginGate(
   page: Page,
   baseUrl: string,
   { lastError = "unauthorized: gateway token required" }: { lastError?: string | null } = {},
-): Promise<void> {
+) {
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(baseUrl);
   if (response?.status() !== 200) {
@@ -422,6 +422,7 @@ export async function renderLoginGate(
   });
   await page.locator(".login-gate").waitFor();
   await mountLoginGate(page, lastError);
+  return gateway;
 }
 
 async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
@@ -434,7 +435,6 @@ async function mountLoginGate(page: Page, lastError: string | null): Promise<voi
     if (!gate) {
       throw new Error("Missing mounted login gate");
     }
-    document.body.dataset.connectCount = "0";
     gate.props = {
       resourceBasePath: "",
       connected: false,
@@ -448,10 +448,7 @@ async function mountLoginGate(page: Page, lastError: string | null): Promise<voi
       onGatewayUrlChange: () => {},
       onSecretChange: () => {},
       onToggleGatewaySecret: () => {},
-      onConnect: () => {
-        const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
-        document.body.dataset.connectCount = String(current + 1);
-      },
+      onConnect: gate.props.onConnect,
     };
     await gate.updateComplete;
   }, lastError);

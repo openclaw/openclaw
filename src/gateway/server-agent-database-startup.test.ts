@@ -19,13 +19,15 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import * as inspection from "../infra/sqlite-readonly-worker.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { runExec } from "../process/exec.js";
 import * as spawnBroker from "../process/spawn-broker/context.js";
 import { getActiveSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../state/agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -107,13 +109,6 @@ DatabaseSync.prototype.prepare = function(sql) {
   for (const [key, value] of Object.entries(env)) {
     vi.stubEnv(key, value);
   }
-  const readBudget = inspection.readSqliteInspectionBudget;
-  vi.spyOn(inspection, "readSqliteInspectionBudget").mockImplementation(
-    (operation, pathname, size) => {
-      const budget = readBudget(operation, pathname, size);
-      return pausedPaths.includes(pathname) ? { ...budget, timeoutMs: 1 } : budget;
-    },
-  );
   return {
     env,
     releasePath,
@@ -138,13 +133,34 @@ it.for([
 ] as const)(
   "applies startup admission while $agentId follows its $outcome lifecycle",
   async ({ outcome, agentId }, { signal }) => {
+    const holdSubagentRestoration = outcome === "recover" && agentId === "worker";
+    const checkHostJournalReads = outcome === "recover" && !holdSubagentRestoration;
+    const restorationEntered = createDeferredCore();
+    const restorationRelease = createDeferredCore();
+    let startupSettled = false;
+    let bootstrapSecrets: ReturnType<typeof getActiveSecretsRuntimeSnapshot> | undefined;
+    if (holdSubagentRestoration) {
+      vi.stubEnv("OPENCLAW_TEST_MINIMAL_GATEWAY", undefined);
+      const early = await import("./server-startup-early.js");
+      const startEarly = early.startGatewayEarlyRuntime;
+      vi.spyOn(early, "startGatewayEarlyRuntime").mockImplementation((params) => {
+        bootstrapSecrets = getActiveSecretsRuntimeSnapshot();
+        return startEarly(params);
+      });
+      const subagents = await import("../agents/subagents/registry/subagent-registry.js");
+      vi.spyOn(subagents, "activateSubagentRegistry").mockImplementation(async () => {
+        restorationEntered.resolve();
+        await restorationRelease.promise;
+      });
+    }
     const nativeBroker = process.platform === "linux" && !process.versions.bun;
     const brokerExpected =
       nativeBroker ||
       (process.platform !== "win32" &&
         !process.versions.bun &&
         ["recover", "shutdown", "shutdown-preparation"].includes(outcome));
-    testState.agentsConfig = { entries: { main: { default: true }, worker: {} } };
+    testState.agentsConfig = { ownership: "explicit", entries: { main: {}, worker: {} } };
+    testState.agentConfig = { systemAgent: { agentId: "main" } };
     const recoverySecret = "synthetic-startup-recovery-secret";
     if (outcome === "recover") {
       vi.stubEnv("OPENCLAW_TEST_RECOVERY_SECRET", recoverySecret);
@@ -322,7 +338,11 @@ it.for([
         }
         return spawnBroker.runWithSpawnBroker(suppliedBroker, () => {
           unadoptedPortClaim = undefined;
-          return startTestGatewayServer(portClaim, { bind: "loopback", auth: { mode: "none" } });
+          return startTestGatewayServer(portClaim, {
+            bind: "loopback",
+            auth: { mode: "none" },
+            ...(holdSubagentRestoration ? { sidecarStartup: "defer" as const } : {}),
+          });
         });
       }).then((started) => {
         server = started;
@@ -338,17 +358,27 @@ it.for([
         return;
       }
       server = await startup;
-      await server.startupSettled;
+      void server.startupSettled.then(
+        () => {
+          startupSettled = true;
+        },
+        () => {},
+      );
+      if (holdSubagentRestoration) {
+        await withinTest(restorationEntered.promise, signal);
+      } else {
+        await server.startupSettled;
+      }
       if (brokerExpected) {
         expect(brokerPid).toBeTypeOf("number");
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
       const readiness = await fetch(`http://127.0.0.1:${port}/readyz`);
-      expect(readiness.status).toBe(agentId === "main" && paused ? 503 : 200);
+      expect(readiness.status).toBe(200);
       if (agentId === "main" && paused) {
         await expect(readiness.json()).resolves.toMatchObject({
-          ready: false,
-          failing: ["agent-database:main"],
+          ready: true,
+          failing: [],
           agentDatabases: [readAgentDatabaseAdmissionRefusal(agentId, { env })],
         });
       }
@@ -357,10 +387,15 @@ it.for([
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-pending",
         });
+        expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         await vi.waitFor(() => expect(fs.existsSync(enteredPath)).toBe(true));
       }
       if (outcome === "recover") {
-        const snapshot = getActiveSecretsRuntimeSnapshot();
+        // Full post-attach model preparation can republish auth-store containers;
+        // assert the bootstrap fence before that independent publication.
+        const snapshot = holdSubagentRestoration
+          ? bootstrapSecrets
+          : getActiveSecretsRuntimeSnapshot();
         expect(snapshot?.authStores.some((entry) => entry.databasePath === agentPath)).toBe(false);
         expect(snapshot?.degradedOwners?.some((owner) => owner.paths.includes(agentPath))).toBe(
           true,
@@ -382,7 +417,7 @@ it.for([
       }
       const hostJournalRead = createDeferredCore();
       let hostJournalReads = 0;
-      if (outcome === "recover") {
+      if (checkHostJournalReads) {
         observeHostDataSql((sql) => {
           if (sql.includes("agent_deletion_journal")) {
             hostJournalReads++;
@@ -458,7 +493,14 @@ it.for([
           false,
         );
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(200);
-        expect(hostJournalReads).toBe(0);
+        if (checkHostJournalReads) {
+          expect(hostJournalReads).toBe(0);
+        }
+        if (holdSubagentRestoration) {
+          expect(startupSettled).toBe(false);
+          restorationRelease.resolve();
+          await server.startupSettled;
+        }
       } else if (outcome === "corrupt") {
         expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
           code: "agent-database-inspection-failed",
@@ -479,6 +521,7 @@ it.for([
       }
     } finally {
       pendingFixtureCleanup = (async () => {
+        restorationRelease.resolve();
         preparationRelease.resolve();
         fs.writeFileSync(releasePath, "resume");
         if (pause) {
@@ -501,8 +544,10 @@ it.for([
 
 it("recovers queued agents after both inspection slots expire without refusing an absent database", async () => {
   testState.agentsConfig = {
-    entries: { a: {}, b: {}, main: { default: true }, absent: {} },
+    ownership: "explicit",
+    entries: { a: {}, b: {}, main: {}, absent: {} },
   };
+  testState.agentConfig = { systemAgent: { agentId: "main" } };
   const env = { ...process.env };
   const cfg = loadGatewayTestConfig();
   const agentIds = ["a", "b", "main"];
@@ -541,7 +586,7 @@ it("recovers queued agents after both inspection slots expire without refusing a
     server = started.server;
     await server.startupSettled;
     expect((await fetch(`http://127.0.0.1:${started.port}/healthz`)).status).toBe(200);
-    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(503);
+    expect((await fetch(`http://127.0.0.1:${started.port}/readyz`)).status).toBe(200);
     await vi.waitFor(() => {
       for (const marker of pause.enteredPaths.slice(0, 2)) {
         expect(fs.existsSync(marker)).toBe(true);

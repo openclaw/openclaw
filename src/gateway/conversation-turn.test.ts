@@ -57,6 +57,9 @@ function sentResult(messageId = "reef-outbound-1") {
 
 function createDeps() {
   const store = createConversationDeliveryTestStore();
+  vi.spyOn(conversationRegistry, "readConversation").mockImplementation(async (scope, ref) =>
+    conversationRegistry.resolveConversation(scope, ref),
+  );
   return {
     ...store,
     beginOperation: vi.spyOn(deliveryStore, "beginConversationDeliveryOperation"),

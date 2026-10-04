@@ -17,7 +17,7 @@ import {
   hasResolvedRosterBeforeMigrations,
 } from "../config/agent-roster-provenance.js";
 import { getConfigValueAtPath } from "../config/config-paths.js";
-import { migratePersistedImplicitMainRoster } from "../config/legacy.js";
+import { applyImplicitAgentRosterDefaults } from "../config/implicit-agent-roster.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -68,7 +68,7 @@ export async function setupCommand(
     !snapshot.exists ||
     (!hasResolvedRosterBeforeMigrations(snapshot) && !configIncludeOwnsAgentRoster(snapshot));
   const cfg = shouldPersistRoster
-    ? (migratePersistedImplicitMainRoster(snapshot.sourceConfig).config as OpenClawConfig)
+    ? (applyImplicitAgentRosterDefaults(snapshot.sourceConfig) as OpenClawConfig)
     : snapshot.sourceConfig;
   const authoredDefaults = cfg.agents?.defaults ?? {};
   const resolvedDefaults = resolvedConfig.agents?.defaults ?? authoredDefaults;
@@ -130,10 +130,9 @@ export async function setupCommand(
   // diff against snapshot.parsed, never resolved include/env values wholesale.
   let next: OpenClawConfig = snapshot.exists ? resolvedConfig : cfg;
   if (shouldPersistRoster) {
-    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
-      agents: { ...agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
+      agents: { ...next.agents, entries: toAgentEntriesRecord(listAgentEntries(cfg)) },
     };
   }
   if (shouldWriteWorkspace && !writeInheritedWorkspaceOverride) {
@@ -148,12 +147,11 @@ export async function setupCommand(
       }
     }
     const entries = roster.length > 0 ? toAgentEntriesRecord(roster) : undefined;
-    const { list: _legacyList, ...agents } = next.agents ?? {};
     next = {
       ...next,
       agents: {
-        ...agents,
-        defaults: { ...agents.defaults, workspace },
+        ...next.agents,
+        defaults: { ...next.agents?.defaults, workspace },
         ...(entries ? { entries } : {}),
       },
     };

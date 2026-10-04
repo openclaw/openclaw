@@ -157,6 +157,14 @@ export function setupGoogleMeetPlugin(
       if (argv[0]?.endsWith("system_profiler")) {
         return { code: 0, stdout: "BlackHole 2ch", stderr: "" };
       }
+      if (
+        argv[0] === "pactl" &&
+        argv[1] === "list" &&
+        argv[2] === "short" &&
+        (argv[3] === "sinks" || argv[3] === "sources")
+      ) {
+        return { code: 0, stdout: "1\topenclaw_meeting_audio\n", stderr: "" };
+      }
       return { code: 0, stdout: "", stderr: "" };
     },
   );

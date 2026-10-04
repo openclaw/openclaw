@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { nodeFilePath } from "../../test-utils/node-file-path.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
@@ -208,13 +209,9 @@ describe("syncWorkspaceSkills", () => {
 
     const first = await syncWorkspaceSkills(params);
     await fs.rm(path.join(sourceWorkspace, "skills"), { recursive: true, force: true });
-    const copy = vi.spyOn(fs, "cp");
     const second = await syncWorkspaceSkills(params);
-    const copyCount = copy.mock.calls.length;
-    copy.mockRestore();
 
     expect(second).toEqual(first);
-    expect(copyCount).toBe(0);
     expect(await pathExists(path.join(targetWorkspace, "skills", "alpha", "SKILL.md"))).toBe(true);
     expect(await pathExists(path.join(targetWorkspace, "skills", "hidden", "SKILL.md"))).toBe(true);
   });
@@ -364,12 +361,16 @@ describe("syncWorkspaceSkills", () => {
       }),
     );
 
-    const copy = vi.spyOn(fs, "cp");
+    const staleMarker = path.join(targetSkillsDir, "alpha", "stale.txt");
+    await fs.writeFile(staleMarker, "stale");
     const usagePaths = await syncWorkspaceSkills(syncParams);
-    const copyCount = copy.mock.calls.length;
-    copy.mockRestore();
 
-    expect(copyCount).toBe(2);
+    expect(await pathExists(staleMarker)).toBe(false);
+    for (const name of ["alpha", "beta"]) {
+      expect(await fs.readFile(path.join(targetSkillsDir, name, "SKILL.md"), "utf8")).toContain(
+        `${name} skill`,
+      );
+    }
     expect(
       usagePaths.every((entry) => {
         const relative = path.relative(targetSkillsDir, entry.readPath);
@@ -415,7 +416,6 @@ describe("syncWorkspaceSkills", () => {
       skillFilter: ["alpha", "gamma"],
       snapshotVersion,
     });
-    const copy = vi.spyOn(fs, "cp");
     await syncWorkspaceSkills({
       sourceWorkspaceDir: sourceWorkspace,
       targetWorkspaceDir: targetWorkspace,
@@ -424,10 +424,6 @@ describe("syncWorkspaceSkills", () => {
       skillFilter: ["alpha", "gamma"],
       skillsSnapshot: secondSnapshot,
     });
-    const copyCount = copy.mock.calls.length;
-    copy.mockRestore();
-
-    expect(copyCount).toBe(1);
     expect(await fs.readFile(preservedMarker, "utf8")).toBe("preserved");
     expect(await pathExists(path.join(targetWorkspace, "skills", "beta"))).toBe(false);
     expect(await pathExists(path.join(targetWorkspace, "skills", "gamma", "SKILL.md"))).toBe(true);
@@ -513,7 +509,7 @@ describe("syncWorkspaceSkills", () => {
         await syncSourceSkillsToTarget(sourceWorkspace, targetWorkspace);
 
         for (const relative of ["", "scripts"]) {
-          expect((await fs.stat(path.join(targetSkill, relative))).mode & 0o700).toBe(0o700);
+          expect((await fs.stat(path.join(targetSkill, relative))).mode & 0o777).toBe(0o755);
           expect((await fs.stat(path.join(sourceSkill, relative))).mode & 0o777).toBe(0o555);
         }
         expect(await fs.readFile(path.join(targetSkill, "SKILL.md"), "utf8")).toContain(
@@ -570,9 +566,18 @@ describe("syncWorkspaceSkills", () => {
       managedSkillsDir,
       snapshotVersion: nextVersion,
     });
-    const copy = vi.spyOn(fs, "cp").mockRejectedValueOnce(new Error("injected copy failure"));
-    await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
-    copy.mockRestore();
+    const lstat = fs.lstat.bind(fs);
+    const read = vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (nodeFilePath(args[0]) === path.join(sourceSkillDir, "asset.txt")) {
+        throw new Error("injected copy failure");
+      }
+      return lstat(...args);
+    });
+    try {
+      await syncWorkspaceSkills({ ...syncParams, skillsSnapshot: secondSnapshot });
+    } finally {
+      read.mockRestore();
+    }
 
     const manifestPath = path.join(targetWorkspace, "skills", ".openclaw-sync.json");
     expect(await pathExists(manifestPath)).toBe(false);
@@ -661,7 +666,7 @@ describe("syncWorkspaceSkills", () => {
           defaults: {
             skills: ["foo_bar", "foo.dot"],
           },
-          list: [{ id: "alpha", skills: ["foo_bar"] }],
+          entries: { alpha: { skills: ["foo_bar"] } },
         },
       },
       bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
@@ -832,7 +837,7 @@ describe("syncWorkspaceSkills", () => {
           defaults: {
             skills: ["remote-only"],
           },
-          list: [{ id: "alpha" }],
+          entries: { alpha: {} },
         },
       },
       eligibility: {

@@ -212,7 +212,8 @@ enum GatewayLaunchAgentManager {
             return error.localizedDescription
         }
         if enabled {
-            self.logger.info("launchd enable requested via CLI port=\(port)")
+            let label = AppProfile.current.gatewayLaunchAgentLabel
+            self.logger.info("launchd enable requested via CLI for \(label) port=\(port)")
             let existing = self.launchdConfigSnapshot()
             let existed = FileManager.default.fileExists(atPath: self.plistURL.path)
             var installedCLI: InstalledServiceCLI?
@@ -273,7 +274,14 @@ enum GatewayLaunchAgentManager {
         do { try await checkCurrent?() } catch { return error.localizedDescription }
         if let error = custody.currentError() { return error }
         guard !self.isLaunchAgentWriteDisabled() else { return "Gateway service changes are disabled" }
-        self.logger.info("launchd disable requested via CLI")
+        let label = custody.plist.deletingPathExtension().lastPathComponent
+        // Stop runs on every remote/unconfigured launch. Without this profile's plist there is
+        // nothing to boot out, but the CLI would still take shared service-update locks.
+        guard custody.definition.plist != nil else {
+            self.logger.info("launchd disable skipped: no LaunchAgent installed for \(label)")
+            return nil
+        }
+        self.logger.info("launchd disable requested via CLI for \(label)")
         return await self.runDaemonCommand(
             ["uninstall"], expectedServiceAuthority: custody, checkCurrent: checkCurrent)
     }
@@ -627,6 +635,15 @@ extension GatewayLaunchAgentManager {
         let message: String?
     }
 
+    static let runtimePinSelectionChanged = "Gateway service or runtime pin changed before installation. " +
+        "The newer selection was preserved; inspect it before retrying."
+
+    private struct DaemonInvocation {
+        let prefix: [String]
+        let environment: [String: String]
+        let supportsExpectedRuntimePin: Bool
+    }
+
     static func runDaemonCommand(
         _ args: [String],
         timeout: Double = Self.startupMigrationTolerance,
@@ -677,10 +694,49 @@ extension GatewayLaunchAgentManager {
         } else {
             beforeSpawn = nil
         }
+        let invocation = await self.daemonInvocation(runtime: runtime, installedCLI: installedCLI)
+        var arguments = args
+        if args.first == "install", invocation.supportsExpectedRuntimePin {
+            let observation = await self.executeDaemonCommand(
+                ["status", "--deep", "--json", "--no-probe"],
+                invocation: invocation,
+                timeout: timeout,
+                quiet: true)
+            guard observation.success, let payload = observation.payload,
+                  let json = try? JSONSerialization.jsonObject(with: payload) as? [String: Any],
+                  let service = json["service"] as? [String: Any],
+                  let intent = service["runtimeIntent"] as? [String: Any],
+                  intent["status"] as? String == "known",
+                  let revision = intent["revision"] as? String,
+                  intent["definition"] == nil || intent["definition"] is NSNull || intent["definition"] is String,
+                  let expected = try? JSONSerialization.data(withJSONObject: [
+                      "revision": revision,
+                      "definition": intent["definition"] ?? NSNull(),
+                  ], options: [.sortedKeys, .withoutEscapingSlashes]),
+                  let expectation = String(bytes: expected, encoding: .utf8)
+            else { return CommandResult(success: false, payload: nil, message: self.runtimePinSelectionChanged) }
+            arguments += ["--expected-runtime-pin", expectation]
+        }
+        return await self.executeDaemonCommand(
+            arguments,
+            invocation: invocation,
+            timeout: timeout,
+            quiet: quiet,
+            beforeSpawn: beforeSpawn,
+            checkCurrent: checkCurrent)
+    }
+
+    private static func executeDaemonCommand(
+        _ args: [String],
+        invocation: DaemonInvocation,
+        timeout: Double,
+        quiet: Bool,
+        beforeSpawn: (@Sendable () -> String?)? = nil,
+        checkCurrent: (@MainActor @Sendable () async throws -> Void)? = nil) async -> CommandResult
+    {
+        let command = invocation.prefix + self.withJsonFlag(args)
         #if DEBUG
-        if let resolveCLI = self.testingState.withLock({ $0.resolveCLI }) {
-            let command = await self.daemonCommand(
-                args, runtime: runtime, installedCLI: installedCLI, resolveCLI: resolveCLI)
+        if self.testingState.withLock({ $0.resolveCLI != nil }) {
             do { try await checkCurrent?() } catch {
                 return CommandResult(success: false, payload: nil, message: error.localizedDescription)
             }
@@ -710,20 +766,11 @@ extension GatewayLaunchAgentManager {
                 message: "Gateway daemon commands require explicit interception during tests")
         }
         #endif
-        let runtime = runtime ??
-            (BundledRuntime.isBundledApp && installedCLI == nil ? try? BundledRuntime.seeded() : nil)
-        let command = await self.daemonCommand(args, runtime: runtime, installedCLI: installedCLI)
-        let env = self.daemonEnvironment(
-            runtime: runtime,
-            installedCLI: installedCLI,
-            environment: ProcessInfo.processInfo.environment,
-            profile: .current,
-            searchPaths: CommandResolver.preferredPaths())
         do { try await checkCurrent?() } catch {
             return CommandResult(success: false, payload: nil, message: error.localizedDescription)
         }
         let response = await ShellExecutor.runDetailed(
-            command: command, cwd: nil, env: env, timeout: timeout, beforeSpawn: beforeSpawn)
+            command: command, cwd: nil, env: invocation.environment, timeout: timeout, beforeSpawn: beforeSpawn)
         if let error = response.preflightError { return CommandResult(success: false, payload: nil, message: error) }
         let parsed = JSONObjectExtractionSupport.extract(from: response.stdout)
             ?? JSONObjectExtractionSupport.extract(from: response.stderr)
@@ -749,18 +796,32 @@ extension GatewayLaunchAgentManager {
         return CommandResult(success: false, payload: payload, message: detail)
     }
 
-    private static func daemonCommand(
-        _ args: [String],
+    private static func daemonInvocation(
         runtime: BundledRuntime? = nil,
-        installedCLI: InstalledServiceCLI? = nil,
-        resolveCLI: CommandResolver.LocalCLIResolver = CommandResolver.resolveLocalCLI) async -> [String]
+        installedCLI: InstalledServiceCLI? = nil) async -> DaemonInvocation
     {
-        if let prefix = installedCLI?.prefix ?? runtime?.cliCommand {
-            return AppProfile.current.localCLICommand(
-                prefix: prefix, arguments: ["gateway"] + self.withJsonFlag(args))
+        let runtime = runtime ??
+            (BundledRuntime.isBundledApp && installedCLI == nil ? try? BundledRuntime.seeded() : nil)
+        var resolveCLI: CommandResolver.LocalCLIResolver = CommandResolver.resolveLocalCLI
+        #if DEBUG
+        resolveCLI = self.testingState.withLock { $0.resolveCLI } ?? resolveCLI
+        #endif
+        let prefix: [String] = if let cli = installedCLI?.prefix ?? runtime?.cliCommand {
+            AppProfile.current.localCLICommand(prefix: cli, arguments: ["gateway"])
+        } else {
+            await CommandResolver.localOpenclawCommand(subcommand: "gateway", resolveCLI: resolveCLI)
         }
-        return await CommandResolver.localOpenclawCommand(
-            subcommand: "gateway", extraArgs: self.withJsonFlag(args), resolveCLI: resolveCLI)
+        return DaemonInvocation(
+            prefix: prefix,
+            environment: self.daemonEnvironment(
+                runtime: runtime,
+                installedCLI: installedCLI,
+                environment: ProcessInfo.processInfo.environment,
+                profile: .current,
+                searchPaths: CommandResolver.preferredPaths()),
+            // Only an explicitly selected bundled CLI carries this interop contract.
+            supportsExpectedRuntimePin: runtime != nil &&
+                (installedCLI == nil || installedCLI?.prefix == runtime?.cliCommand))
     }
 
     static func daemonEnvironment(

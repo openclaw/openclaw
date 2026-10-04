@@ -119,27 +119,11 @@ describe("Zalo API request methods", () => {
     );
   });
 
-  it("prefers an explicit API URL over ZALO_API_URL", async () => {
-    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
-    const fetcher = createOkFetcher();
-
-    await callZaloApi("getMe", "test-token", undefined, {
-      apiUrl: "http://127.0.0.1:49153/explicit/",
-      fetch: fetcher,
-    });
-
-    expect(fetcher).toHaveBeenCalledWith(
-      "http://127.0.0.1:49153/explicit/bottest-token/getMe",
-      expect.any(Object),
-    );
-  });
-
-  it("rejects an explicitly empty API URL instead of falling back to ZALO_API_URL", async () => {
-    vi.stubEnv("ZALO_API_URL", "http://127.0.0.1:49152/env");
+  it("rejects an empty ZALO_API_URL", async () => {
+    vi.stubEnv("ZALO_API_URL", "   ");
 
     await expect(
       callZaloApi("getMe", "test-token", undefined, {
-        apiUrl: "   ",
         fetch: createOkFetcher(),
       }),
     ).rejects.toThrow("ZALO_API_URL must not be empty.");
@@ -156,9 +140,9 @@ describe("Zalo API request methods", () => {
   it.each(["https://proxy.example/zalo?tenant=1", "https://proxy.example/zalo#provider"])(
     "rejects an API root with URL suffix components: %s",
     async (apiUrl) => {
+      vi.stubEnv("ZALO_API_URL", apiUrl);
       await expect(
         callZaloApi("getMe", "test-token", undefined, {
-          apiUrl,
           fetch: createOkFetcher(),
         }),
       ).rejects.toThrow("ZALO_API_URL must not include a query string or fragment.");

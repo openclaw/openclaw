@@ -10,6 +10,7 @@ import {
   readDotEnvFile,
   readDotEnvFileAsync,
 } from "./dotenv-global.js";
+import { clearFsSafeEnvFallback, normalizeFsSafeNativeEnv } from "./fs-safe-env.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -268,12 +269,14 @@ export function loadWorkspaceDotEnvFile(
   if (!parsed) {
     return;
   }
+  clearFsSafeEnvFallback(env);
   for (const { key, value } of parsed.entries) {
     if (env[key] !== undefined) {
       continue;
     }
     env[key] = value;
   }
+  normalizeFsSafeNativeEnv(env);
 }
 
 async function loadWorkspaceDotEnvFileAsync(
@@ -294,11 +297,13 @@ async function loadWorkspaceDotEnvFileAsync(
       includeUntrustedWorkspacePlugins: false,
     }),
   );
+  clearFsSafeEnvFallback(opts.env);
   for (const { key, value } of parsed.entries) {
     if (!blocked.has(key.toUpperCase()) && opts.env[key] === undefined) {
       opts.env[key] = value;
     }
   }
+  normalizeFsSafeNativeEnv(opts.env);
 }
 
 export async function loadDotEnvAsync(opts: {

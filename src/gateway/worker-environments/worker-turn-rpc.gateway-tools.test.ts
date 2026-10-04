@@ -1,12 +1,15 @@
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../../agents/harness/tool-surface-bridge.js";
+import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import type { AnyAgentTool } from "../../agents/tools/common.js";
 import { getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
 import * as support from "./service.test-support.js";
 import { createWorkerGatewayToolRuntime } from "./worker-gateway-tool-runtime.js";
 
-async function toolHarness(name: string) {
+async function toolHarness(name: string, mode: boolean | "directory" = false) {
   const fixture = await support.placementHarness(`worker-${name}`, `session-${name}`);
   let sourceCurrent = true;
   const assertSource = vi.fn(() => {
@@ -44,6 +47,12 @@ async function toolHarness(name: string) {
     signal: new AbortController().signal,
     prepare: async () => ({
       tools: [tool],
+      presentation: createToolSurfacePresentationForTest({
+        tools: {
+          codeMode: mode === true,
+          toolSearch: mode === "directory" ? { enabled: true, mode } : false,
+        },
+      }),
       policy: {
         workspaceOnly: true,
         readOnly: false,
@@ -72,6 +81,7 @@ async function toolHarness(name: string) {
     request,
     invoke,
     assertSource,
+    surface: surface.result,
     invalidateSource: () => {
       sourceCurrent = false;
     },
@@ -81,23 +91,104 @@ async function toolHarness(name: string) {
 describe("worker Gateway tool RPC authority", () => {
   support.setupWorkerEnvironmentServiceSuite();
 
-  it("keeps catalog and cancellation available while stale source authority fences effects", async () => {
-    const h = await toolHarness("source-custody");
-    h.invalidateSource();
-    await expect(h.workerService.getToolSurface(h.identity)).resolves.toMatchObject({ ok: true });
-    await expect(
-      h.workerService.cancelGatewayTool(h.identity, {
-        generation: h.request.generation,
-        toolCallId: h.request.toolCallId,
-      }),
-    ).resolves.toMatchObject({ ok: true, result: { cancelled: false } });
-    expect(h.assertSource).not.toHaveBeenCalled();
-    await expect(h.invoke()).resolves.toMatchObject({
-      ok: true,
-      result: { details: { error: "Source transcript writer changed" } },
-    });
-    expect(h.execute).not.toHaveBeenCalled();
-  });
+  it.each([true, "directory"] as const)(
+    "admits the worker's %s schemas while rejecting raw or altered schemas",
+    async (mode) => {
+      const h = await toolHarness(`model-presentation-${mode}`, mode);
+      const worker = createAgentHarnessToolSurfaceRuntimeCore({
+        presentation: h.surface.presentation,
+        modelToolsEnabled: true,
+        supportsDeferredToolCalls: false,
+      });
+      try {
+        const projected = worker
+          .compactTools(
+            h.surface.tools.map(({ definition }) => ({ ...definition, execute: h.execute })),
+            { prepared: { preserveToolNames: [] } },
+          )
+          .tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
+        expect(projected.map((tool) => tool.name)).toEqual(
+          mode === true ? ["exec", "wait"] : ["tool_search", "tool_describe", "tool_call"],
+        );
+        const request = support.inferenceRequest(h.identity);
+        for (const tools of [
+          h.surface.tools.map(({ definition: { name, description, parameters } }) => ({
+            name,
+            description,
+            parameters,
+          })),
+          projected.map((tool) => ({ ...tool, description: "unadmitted description" })),
+        ]) {
+          await expect(
+            h.workerService.startInference(
+              h.identity,
+              {
+                ...request,
+                context: { ...request.context, tools },
+              },
+              { connectionId: "schema-mismatch", send: vi.fn() },
+            ),
+          ).resolves.toEqual({ ok: false, reason: "invalid-context" });
+        }
+        const finished = createDeferred();
+        const started = await h.workerService.startInference(
+          h.identity,
+          {
+            ...request,
+            context: { ...request.context, tools: projected },
+          },
+          { connectionId: "projected-tools", send: () => finished.resolve() },
+        );
+        expect(started.ok).toBe(true);
+        if (!started.ok) {
+          throw new Error("Projected worker tools were not admitted");
+        }
+        await h.workerService.cancelInference(h.identity, request);
+        started.launch();
+        await finished.promise;
+        expect(h.execute).not.toHaveBeenCalled();
+        await expect(h.invoke()).resolves.toMatchObject({
+          ok: true,
+          result: { details: { ok: true } },
+        });
+      } finally {
+        worker.cleanup();
+      }
+    },
+  );
+
+  it.each([
+    { sourceStale: true, error: "Source transcript writer changed" },
+    { sourceStale: false, error: "portal port required" },
+  ])(
+    "returns an actionable error with sourceStale=$sourceStale",
+    async ({ sourceStale, error }) => {
+      const h = await toolHarness(`tool-error-${sourceStale}`);
+      if (sourceStale) {
+        h.invalidateSource();
+        await expect(h.workerService.getToolSurface(h.identity)).resolves.toMatchObject({
+          ok: true,
+        });
+        await expect(
+          h.workerService.cancelGatewayTool(h.identity, {
+            generation: h.request.generation,
+            toolCallId: h.request.toolCallId,
+          }),
+        ).resolves.toMatchObject({ ok: true, result: { cancelled: false } });
+        expect(h.assertSource).not.toHaveBeenCalled();
+      } else {
+        h.execute.mockRejectedValueOnce(new Error(error));
+      }
+      await expect(h.invoke()).resolves.toMatchObject({
+        ok: true,
+        result: {
+          content: [{ type: "text", text: expect.stringContaining(error) }],
+          details: { status: "error", error },
+        },
+      });
+      expect(h.execute).toHaveBeenCalledTimes(sourceStale ? 0 : 1);
+    },
+  );
 
   it("accepts only issued handles and canonical arguments before dispatch", async () => {
     const h = await toolHarness("tool-authority");
@@ -137,18 +228,6 @@ describe("worker Gateway tool RPC authority", () => {
       result: { details: { status: "error", error: "Worker tool call cancelled" } },
     });
     expect(h.execute).not.toHaveBeenCalled();
-  });
-
-  it("returns actionable tool failures to an authorized worker", async () => {
-    const h = await toolHarness("tool-error");
-    h.execute.mockRejectedValueOnce(new Error("portal port required"));
-    await expect(h.invoke()).resolves.toMatchObject({
-      ok: true,
-      result: {
-        content: [{ type: "text", text: expect.stringContaining("portal port required") }],
-        details: { status: "error", error: "portal port required" },
-      },
-    });
   });
 
   it.each(["placement", "run"] as const)(

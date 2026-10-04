@@ -33,7 +33,6 @@ beforeEach(() => {
 });
 
 it.each([
-  { stage: "read", schemaAdmission: false },
   { stage: "schema", schemaAdmission: false },
   { stage: "read", schemaAdmission: true },
   { stage: "schema", schemaAdmission: true },

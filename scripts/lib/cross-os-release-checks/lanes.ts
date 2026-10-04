@@ -921,7 +921,9 @@ export async function runDevUpdateSuite(
 }
 
 function createLaneState(name: string): LaneState {
-  const rootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  const createdRootDir = mkdtempSync(join(tmpdir(), `openclaw-${name}-`));
+  const rootDir =
+    process.platform === "darwin" ? realpathSync.native(createdRootDir) : createdRootDir;
   const prefixDir = join(rootDir, "prefix");
   const homeDir = join(rootDir, "home");
   const stateDir = join(homeDir, ".openclaw");
@@ -971,9 +973,9 @@ function buildLaneEnv(
 
 function inheritLaneEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  if (process.platform === "win32") {
-    // Published updaters cannot be patched: use long paths for their handoff
-    // receipts while keeping the runner's existing physical temp directories.
+  if (process.platform === "win32" || process.platform === "darwin") {
+    // Published updaters cannot be patched: use canonical paths for their
+    // handoff receipts while keeping the runner's physical temp directories.
     for (const key of Object.keys(env)) {
       const value = env[key];
       if (["TEMP", "TMP", "TMPDIR"].includes(key.toUpperCase()) && value) {

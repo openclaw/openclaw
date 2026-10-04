@@ -4,6 +4,7 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "openclaw/plugin-sdk/gateway-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { formatQaGatewayLogsForError } from "./gateway-log-redaction.js";
 
 type QaGatewayClientOptions = ConstructorParameters<typeof GatewayClient>[0];
@@ -54,19 +55,9 @@ async function waitForQaGatewayConnection(
   if (remainingMs <= 0) {
     throw qaGatewayDeadlineError();
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      gate.promise,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(qaGatewayDeadlineError()), remainingMs);
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  await raceWithTimeout(gate.promise, remainingMs, () => {
+    throw qaGatewayDeadlineError();
+  });
 }
 
 export async function startQaGatewayRpcClient(params: {

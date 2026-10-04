@@ -3,10 +3,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { createCronJobNameResolver, prepareCronJobNameResolver } from "../cron/store/job-name.js";
+import { prepareCronJobNameResolver } from "../cron/store/job-name.js";
 import {
   isCompletionReportInputProvenance,
   isSubagentCoordinationInputProvenance,
@@ -330,7 +330,7 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
   if (message.display === false) {
     return true;
   }
-  return message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE;
+  return isOpenClawRuntimeContextCustomMessage(message);
 }
 
 function shouldHideProjectedHistoryMessage(
@@ -564,7 +564,7 @@ function resolveForwardedSenderSession(
     : undefined;
 }
 
-function readForwardedCronJobIds(messages: readonly unknown[]) {
+export function readForwardedCronJobIds(messages: readonly unknown[]) {
   return messages.flatMap((value) => {
     const message = readRecord(value);
     if (!message || (!isForwardedUserMessage(message) && !isProjectedForwardedMessage(message))) {
@@ -587,7 +587,10 @@ export function projectForwardedMessages(
   resolveCronJobName?: (jobId: string) => string | undefined,
 ): Array<Record<string, unknown>> {
   const resolve =
-    resolveCronJobName ?? createCronJobNameResolver(readForwardedCronJobIds(messages));
+    resolveCronJobName ??
+    (() => {
+      throw new Error("Cron job names must be prepared before projecting forwarded messages");
+    });
   const names = new Map<string, string | undefined>();
   const resolveName = (jobId: string) => {
     if (!names.has(jobId)) {

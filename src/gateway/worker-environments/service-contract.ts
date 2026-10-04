@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type {
   SessionPlacementMachine,
   SessionsReclaimParams,
+  WorkerDesktopLaunchResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
@@ -70,6 +71,8 @@ export type WorkerEnvironmentServiceRecord = {
   error?: string;
 };
 
+export type { WorkerDesktopLaunchResult } from "../../../packages/gateway-protocol/src/index.js";
+
 export type WorkerDesktopObserveResult = {
   transport: "rfb";
   wsPath: string;
@@ -78,11 +81,6 @@ export type WorkerDesktopObserveResult = {
   /** Provider permission to request resizing, not negotiated RFB support. */
   canResize?: boolean;
   vncPassword?: string;
-};
-
-export type WorkerDesktopLaunchResult = {
-  app: WorkerDesktopApp["id"];
-  status: "ready";
 };
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
@@ -247,9 +245,12 @@ export type WorkerPlacementMoveRequest = Pick<
 export type WorkerPlacementAuthorization = () => void;
 
 /** Exact source eligibility may follow only transitions published by captured predecessors. */
-export type WorkerPlacementReclaimSourceCheck = (
+export type WorkerPlacementReclaimSourceCheck = ((
   predecessor?: WorkerPlacementCancellationTarget,
-) => void;
+) => void) & {
+  /** Host-only eligibility, without placement reads; ends when drain commits. */
+  assertCurrent?: WorkerPlacementAuthorization;
+};
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).

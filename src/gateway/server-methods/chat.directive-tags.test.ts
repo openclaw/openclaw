@@ -1,9 +1,7 @@
-// Chat directive tag tests cover reply directive metadata, transcript mirrors,
-// current-message reply routing, and dispatched payload ordering.
 import fs from "node:fs";
 import path from "node:path";
 import { asOptionalRecord, expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
@@ -23,6 +21,7 @@ import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js"
 import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { getTotalPendingReplies } from "../../auto-reply/reply/dispatcher-registry.js";
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import {
   replyRunRegistry,
   type ReplyBackendQueueMessageOptions,
@@ -79,9 +78,12 @@ import {
 import { handleChatSend } from "./chat-send-handler.js";
 import { readChatSendDedupeResponse } from "./chat-send-pre-admission.js";
 import {
+  ChatDirectiveDedupe,
   createChatDirectiveReplyBackend,
+  createGlobalChatDirectiveConfig,
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
+  expectManagedAudioBlock,
   createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -129,7 +131,7 @@ const mockState = vi.hoisted(() => {
     triggerAgentRunStart: false,
     replyDispatchRun: undefined as ReplyDispatchRun | undefined,
     triggerUserMessagePersisted: false,
-    runtimeUserMessagePersistencePending: null as Promise<void> | null,
+    runtimeUserMessagePersistenceError: null as Error | null,
     onAfterAgentRunStart: null as (() => void) | null,
     agentRunId: "run-agent-1",
     sessionEntry: {} as Record<string, unknown>,
@@ -209,6 +211,7 @@ let suiteFixtureRoot = "";
 let suiteDatabasePath = "";
 let suiteFixtureEnv: NodeJS.ProcessEnv = {};
 let suiteFixtureSeq = 0;
+let testSignal: AbortSignal;
 
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
   const sqliteEvents = loadTranscriptEventsSync(transcriptScope()).filter(
@@ -331,10 +334,12 @@ dispatchInboundMessageMock.mockImplementation(
         timestamp: Date.now(),
       });
     }
-    if (mockState.runtimeUserMessagePersistencePending) {
-      params.replyOptions?.userTurnTranscriptRecorder?.markRuntimePersistencePending(
-        mockState.runtimeUserMessagePersistencePending,
+    if (mockState.runtimeUserMessagePersistenceError) {
+      const runtimeRecorder = expectDefined(recorder, "runtime persistence fixture");
+      runtimeRecorder.markRuntimePersistencePending(
+        Promise.reject(mockState.runtimeUserMessagePersistenceError),
       );
+      await runtimeRecorder.waitForRuntimePersistence();
     }
     if (mockState.dispatchErrorAfterAgentRunStart) {
       throw mockState.dispatchErrorAfterAgentRunStart;
@@ -794,7 +799,7 @@ function createChatContext() {
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),
-    dedupe: new Map(),
+    dedupe: new ChatDirectiveDedupe(testSignal),
     loadGatewayModelCatalog: async () =>
       mockState.modelCatalog ?? [
         // Keep the default model image-capable here; otherwise attachment tests
@@ -844,10 +849,7 @@ function useChatTestModel(model: "vision-model" | "text-only", configured = fals
 }
 
 async function createGlobalTranscriptFixture(prefix: string, agentId = "main") {
-  mockState.config = {
-    agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-    session: { scope: "global" },
-  };
+  mockState.config = createGlobalChatDirectiveConfig();
   return await createTranscriptFixture(prefix, { agentId, sessionKey: "global" });
 }
 
@@ -1057,22 +1059,6 @@ function setAgentRunReplies(replies: TestReply[]) {
   mockState.dispatchedReplies = replies;
 }
 
-function expectManagedAudioBlock(
-  block: Record<string, unknown> | undefined,
-  fileName: string,
-  isVoiceNote?: boolean,
-) {
-  expect(block).toEqual(
-    expect.objectContaining({
-      type: "audio",
-      artifactId: expect.stringMatching(/^artifact_managed_media_/u),
-      fileName,
-      mimeType: "audio/mpeg",
-      ...(isVoiceNote === undefined ? {} : { isVoiceNote }),
-    }),
-  );
-}
-
 async function runNonStreamingChatSend(params: {
   context: ChatContext;
   respond: RespondFn;
@@ -1126,12 +1112,7 @@ async function runNonStreamingChatSend(params: {
     return undefined;
   }
   if (waitFor === "dedupe") {
-    await waitForAssertion(() => {
-      // Admission retains request identity before a terminal response exists.
-      expect(
-        readChatSendDedupeResponse(params.context.dedupe, params.idempotencyKey),
-      ).toBeDefined();
-    });
+    await params.context.dedupe.waitForResponse(params.idempotencyKey);
     return undefined;
   }
 
@@ -1170,6 +1151,10 @@ async function expectImageOnlyFinal(params: {
   expect(content.some((block) => block.type === "attachment_error")).toBe(false);
   expect(JSON.stringify(content)).not.toContain(mediaUrl);
 }
+
+beforeEach(({ signal }) => {
+  testSignal = signal;
+});
 
 beforeAll(() => {
   suiteResources = createChatDirectiveSuiteResources();
@@ -2527,7 +2512,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("registers default global tool-event recipients for unscoped global sends", async () => {
+  it("registers migrated default global tool-event recipients for unscoped global sends", async () => {
     await createGlobalTranscriptFixture("openclaw-chat-send-global-tool-events-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
@@ -2847,6 +2832,43 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect(mockState.disposedTranscriptWriteAttempts).toBe(0);
       },
     );
+  });
+
+  it("rewrites a reply whose only MEDIA directive was rejected instead of appending a copy", async () => {
+    await withTranscriptFixtureState("openclaw-chat-send-rejected-media-", async () => {
+      const text =
+        "Here is the movie.\nMEDIA:http://192.168.1.138:64384/movie.mp4?openclaw_portal=synthetic";
+      const parsed = parseReplyDirectives(text);
+      mockState.triggerAgentRunStart = true;
+      mockState.runtimeAssistantTextsBeforeDelivery = [text];
+      mockState.dispatchedReplies = [
+        {
+          kind: "final",
+          payload: setReplyPayloadMetadata(
+            { text: parsed.text },
+            { assistantMessageIndex: 1, assistantMediaFailures: parsed.mediaFailures },
+          ),
+        },
+      ];
+      await createChatRequestFixture().send({
+        idempotencyKey: "idem-rejected-media",
+        expectBroadcast: false,
+        waitFor: "dedupe",
+      });
+
+      const messages = await readActiveAssistantTranscriptMessages();
+      expect(messages).toHaveLength(1);
+      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
+      const content = Array.isArray(messages[0]?.content)
+        ? (messages[0].content as Array<Record<string, unknown>>)
+        : [];
+      expect(content.filter((block) => block.type === "attachment_error")).toEqual([
+        {
+          type: "attachment_error",
+          attachment: { code: "invalid-reference", kind: "document", label: "Media not attached" },
+        },
+      ]);
+    });
   });
 
   it("materializes latest media payloads once in first-seen order", async () => {
@@ -3683,7 +3705,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
       // Admission already owns a dedupe entry; observe the first terminal write, not key presence.
       await waitForAssertion(() => {
-        expect(["ok", "error"]).toContain(context.dedupe.get(`chat:${runId}`)?.payload?.status);
+        expect(["ok", "error"]).toContain(
+          asOptionalRecord(context.dedupe.get(`chat:${runId}`)?.payload)?.status,
+        );
       });
       const dedupe = context.dedupe.get(`chat:${runId}`);
       expect(dedupe?.ok).toBe(!failed);
@@ -4209,7 +4233,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const storePath = mockState.storePath;
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: storePath,
       identities: ["main", mockState.sessionId],
       run: async () => {
@@ -4923,17 +4947,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.finalText = "ok";
     mockState.config = {
       agents: {
-        list: [
-          {
-            id: "vision",
-            default: true,
+        entries: {
+          vision: {
             model: "test-provider/vision-model",
           },
-          {
-            id: "writer",
+          writer: {
             model: "test-provider/text-only",
           },
-        ],
+        },
       },
     };
     mockState.modelCatalog = [
@@ -5476,9 +5497,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       "openclaw-chat-send-user-transcript-success-runtime-persist-failed-",
     );
     mockState.triggerAgentRunStart = true;
-    mockState.runtimeUserMessagePersistencePending = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error("runtime prompt mirror failed")), 0);
-    });
+    mockState.runtimeUserMessagePersistenceError = new Error("runtime prompt mirror failed");
     mockState.finalPayload = { text: "agent still answered" };
     const { context, send } = createChatRequestFixture();
 

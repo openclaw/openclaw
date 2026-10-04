@@ -24,24 +24,12 @@ enum ExecSystemRunCommandValidator {
         "zsh",
     ])
 
-    private static let posixOrPowerShellInlineWrapperNames = Set([
-        "ash",
-        "bash",
-        "dash",
-        "fish",
-        "ksh",
-        "powershell",
-        "pwsh",
-        "sh",
-        "zsh",
-    ])
-
     private static let shellMultiplexerWrapperNames = Set(["busybox", "toybox"])
     private static let posixInlineCommandFlags = Set(["-lc", "-c", "--command"])
     private static let powershellInlineCommandFlags = Set(["-c", "-command", "--command"])
 
     static func resolve(command: [String], rawCommand: String?) -> ValidationResult {
-        let normalizedRaw = self.trimmedNonEmpty(rawCommand)
+        let normalizedRaw = rawCommand?.nonEmpty
         let shell = self.displayShell(command)
         let canonicalDisplay = ExecCommandFormatter.displayString(for: command)
 
@@ -63,7 +51,7 @@ enum ExecSystemRunCommandValidator {
     }
 
     static func allowlistEvaluationRawCommand(command: [String], rawCommand: String?) -> String? {
-        let normalizedRaw = self.trimmedNonEmpty(rawCommand)
+        let normalizedRaw = rawCommand?.nonEmpty
         let shell = self.displayShell(command)
 
         return self.allowlistEvaluationRawCommand(
@@ -79,13 +67,8 @@ enum ExecSystemRunCommandValidator {
         return .init(
             isWrapper: shell.isWrapper,
             command: shell.isWrapper && !envManipulation && !positionalArguments
-                ? self.trimmedNonEmpty(shell.command)
+                ? shell.command?.nonEmpty
                 : nil)
-    }
-
-    private static func trimmedNonEmpty(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? nil : trimmed
     }
 
     private static func allowlistEvaluationRawCommand(
@@ -111,7 +94,7 @@ enum ExecSystemRunCommandValidator {
     }
 
     private static func unwrapShellMultiplexerInvocation(_ argv: [String]) -> [String]? {
-        guard let token0 = self.trimmedNonEmpty(argv.first) else {
+        guard let token0 = argv.first?.nonEmpty else {
             return nil
         }
         let wrapper = self.normalizeExecutableToken(token0)
@@ -145,7 +128,7 @@ enum ExecSystemRunCommandValidator {
         if depth >= ExecEnvInvocationUnwrapper.maxWrapperDepth {
             return false
         }
-        guard let token0 = self.trimmedNonEmpty(argv.first) else {
+        guard let token0 = argv.first?.nonEmpty else {
             return false
         }
 
@@ -179,11 +162,11 @@ enum ExecSystemRunCommandValidator {
 
     private static func hasTrailingPositionalArgvAfterInlineCommand(_ argv: [String]) -> Bool {
         let wrapperArgv = self.unwrapShellWrapperArgv(argv)
-        guard let token0 = self.trimmedNonEmpty(wrapperArgv.first) else {
+        guard let token0 = wrapperArgv.first?.nonEmpty else {
             return false
         }
         let wrapper = self.normalizeExecutableToken(token0)
-        guard self.posixOrPowerShellInlineWrapperNames.contains(wrapper) else {
+        guard wrapper != "cmd", self.shellWrapperNames.contains(wrapper) else {
             return false
         }
 
@@ -211,7 +194,7 @@ enum ExecSystemRunCommandValidator {
     private static func unwrapShellWrapperArgv(_ argv: [String]) -> [String] {
         var current = argv
         for _ in 0..<ExecEnvInvocationUnwrapper.maxWrapperDepth {
-            guard let token0 = self.trimmedNonEmpty(current.first) else {
+            guard let token0 = current.first?.nonEmpty else {
                 break
             }
             let normalized = self.normalizeExecutableToken(token0)
@@ -259,30 +242,15 @@ enum ExecSystemRunCommandValidator {
             return self.extractCmdInlineCommand(argv)
         }
         if normalizedWrapper == "powershell" || normalizedWrapper == "pwsh" {
-            return self.extractInlineCommandByFlags(
+            return ExecInlineCommandParser.extractInlineCommand(
                 argv,
                 flags: self.powershellInlineCommandFlags,
-                allowCombinedC: false)
+                allowCombinedC: false)?.nonEmpty
         }
-        return self.extractInlineCommandByFlags(
+        return ExecInlineCommandParser.extractInlineCommand(
             argv,
             flags: self.posixInlineCommandFlags,
-            allowCombinedC: true)
-    }
-
-    private static func extractInlineCommandByFlags(
-        _ argv: [String],
-        flags: Set<String>,
-        allowCombinedC: Bool) -> String?
-    {
-        guard let match = ExecInlineCommandParser.findMatch(argv, flags: flags, allowCombinedC: allowCombinedC) else {
-            return nil
-        }
-        if let inlineCommand = match.inlineCommand {
-            return inlineCommand
-        }
-        let nextIndex = match.tokenIndex + match.valueTokenOffset
-        return self.trimmedNonEmpty(nextIndex < argv.count ? argv[nextIndex] : nil)
+            allowCombinedC: true)?.nonEmpty
     }
 
     private static func extractCmdInlineCommand(_ argv: [String]) -> String? {

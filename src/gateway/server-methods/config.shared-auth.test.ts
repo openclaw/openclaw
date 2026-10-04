@@ -4,6 +4,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred, awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { getRuntimeConfigWriteApplication } from "../../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
@@ -325,6 +326,43 @@ describe("config shared auth disconnects", () => {
     )(options);
     await flushConfigHandlerMicrotasks();
 
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ ok: true, hash: "next-hash" }),
+      undefined,
+    );
+  });
+
+  it("withholds config acknowledgement until its restart sentinel write settles", async () => {
+    mockPreviousConfig(tokenAuthConfig("old-token"));
+    const started = createDeferred();
+    const release = createDeferred();
+    restartSentinelMocks.writeRestartSentinel.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const { options, respond } = createConfigHandlerHarness({
+      method: "config.apply",
+      params: {
+        raw: JSON.stringify(tokenAuthConfig("new-token")),
+        baseHash: "base-hash",
+        restartDelayMs: 1000,
+      },
+    });
+    const handler = expectDefined(configHandlers["config.apply"], "config.apply handler");
+    const operation = Promise.resolve(handler(options));
+    try {
+      await awaitGateBeforeSettlement(
+        started.promise,
+        operation,
+        "Config did not reach sentinel persistence",
+      );
+      expect(respond).not.toHaveBeenCalled();
+      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await operation;
+    }
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ ok: true, hash: "next-hash" }),

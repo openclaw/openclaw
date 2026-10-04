@@ -16,6 +16,10 @@ import {
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
+import {
+  AgentDatabaseAdmissionError,
+  createAgentDatabaseInspectionRefusal,
+} from "../../state/agent-database-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
@@ -32,54 +36,69 @@ const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
 
 describe("handleChatSendSetupError", () => {
-  it("returns typed projection setup failures to the client retry owner without a terminal broadcast", async () => {
-    const cleanupAdmittedRun = vi.fn();
-    const clearRun = vi.fn();
-    const broadcast = vi.fn();
-    const respond = vi.fn();
-    const dedupe = new Map();
-
-    await handleChatSendSetupError({
-      admission: {
-        sessionBinding: {
-          sessionId: "sess-main",
-          sessionKey: "agent:main:main",
-          agentId: "main",
-          lifecycleGeneration: "test-generation",
-        },
-        cleanupAdmittedRun,
-        lifecycleGeneration: "test-generation",
-        restartSafeAdmission: undefined,
-      },
-      context: {
-        agentRunSeq: new Map(),
-        broadcast,
-        chatRunState: { clearRun },
-        dedupe,
-        logGateway: { warn: vi.fn() },
-        nodeSendToSession: vi.fn(),
-        removeChatRun: vi.fn(),
-      } as never,
-      error: new SessionTranscriptProjectionUnavailableError("sess-main"),
-      respond,
-      session: {
+  it.each([
+    new SessionTranscriptProjectionUnavailableError("sess-main"),
+    new AgentDatabaseAdmissionError(
+      createAgentDatabaseInspectionRefusal({
         agentId: "main",
-        clientRunId: "setup-projection-retry",
-        sessionKey: "agent:main:main",
-      },
-      terminalizeRestartSafeAdmission: vi.fn(),
-    });
+        paths: ["/isolated/main.sqlite"],
+        reason: "Inspection continues in the background.",
+        pending: true,
+      }),
+    ),
+  ])(
+    "returns %s setup failures to the client retry owner without a terminal broadcast",
+    async (error) => {
+      const cleanupAdmittedRun = vi.fn();
+      const broadcast = vi.fn();
+      const respond = vi.fn();
+      const dedupe = new Map();
 
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
-      expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
-      expect.anything(),
-    );
-    expect(dedupe.size).toBe(0);
-    expect(broadcast).not.toHaveBeenCalled();
-    expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
-  });
+      await handleChatSendSetupError({
+        admission: {
+          sessionBinding: {
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            lifecycleGeneration: "test-generation",
+          },
+          cleanupAdmittedRun,
+          lifecycleGeneration: "test-generation",
+          restartSafeAdmission: undefined,
+        },
+        context: {
+          agentRunSeq: new Map(),
+          broadcast,
+          chatRunState: createChatRunState(),
+          dedupe,
+          logGateway: { warn: vi.fn() },
+          nodeSendToSession: vi.fn(),
+          removeChatRun: vi.fn(),
+        } as never,
+        error,
+        respond,
+        session: {
+          agentId: "main",
+          clientRunId: "setup-projection-retry",
+          sessionKey: "agent:main:main",
+        },
+        terminalizeRestartSafeAdmission: vi.fn(),
+      });
+
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        expect.objectContaining({ runId: "setup-projection-retry", status: "error" }),
+        expect.objectContaining({ code: "UNAVAILABLE", retryable: true, retryAfterMs: 250 }),
+        expect.anything(),
+      );
+      expect(dedupe.size).toBe(0);
+      expect(broadcast).not.toHaveBeenCalled();
+      expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
+      if (error instanceof AgentDatabaseAdmissionError) {
+        expect(respond.mock.calls[0]?.[2]).toMatchObject({ details: error.refusal });
+      }
+    },
+  );
 });
 
 describe("createChatSendDispatchErrorLifecycle", () => {
@@ -292,8 +311,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         if (missingProfile) {
           const recovery = renderFailoverCodeUserCopy("selected_auth_profile_unavailable")!;
           const storedError = loadSessionEntry(target)?.lastRunError;
-          expect(storedError).toMatch(/^The selected auth profile is unavailable/u);
-          expect(storedError).toContain("`openclaw configure`, then retry.");
+          expect(storedError).toMatch(/^This saved login isn't available\./u);
+          expect(storedError).toContain("run `openclaw configure`.");
           expect(storedError?.length).toBeLessThanOrEqual(160);
           expect(JSON.stringify(messages)).toContain(recovery);
           expect(JSON.stringify(messages)).not.toContain("openai:removed");
@@ -716,7 +735,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     const cfg = retainLegacyDefaultAgentId(
       {
         agents: {
-          list: [{ id: "main" }, { id: "ops" }],
+          entries: { main: {}, ops: {} },
         },
       },
       "main",

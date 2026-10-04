@@ -6,10 +6,10 @@ import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { readWorkspaceSkillStatusFacts } from "../discovery/status-files.js";
 import { prepareWorkspaceSkillStatus } from "../discovery/status.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
-import { recordSkillFileHost, resolveSkillFileHost } from "./skill-file-host.js";
 import { resolveSkillDiscoveryLimits } from "./skill-root-discovery.js";
 import {
   loadWorkspaceSkills,

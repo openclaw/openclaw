@@ -1017,9 +1017,9 @@ describe("sqlite WAL maintenance", () => {
     expect(
       vi.mocked(db["exec"]).mock.calls.filter(([sql]) => sql.startsWith("PRAGMA busy_timeout")),
     ).toEqual([
-      ["PRAGMA busy_timeout = 50;"],
-      ["PRAGMA busy_timeout = 0;"],
-      ["PRAGMA busy_timeout = 50;"],
+      ["PRAGMA busy_timeout = 50"],
+      ["PRAGMA busy_timeout = 0"],
+      ["PRAGMA busy_timeout = 50"],
     ]);
   });
 
@@ -1054,7 +1054,7 @@ describe("sqlite WAL maintenance", () => {
 
     configureSqlitePreSchemaPragmas(db, { busyTimeoutMs: 5000 });
 
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 5000;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 5000");
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA page_count");
     expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA auto_vacuum = INCREMENTAL;");
     expect(vi.mocked(db["exec"]).mock.invocationCallOrder[0]).toBeLessThan(
@@ -1077,7 +1077,7 @@ describe("sqlite WAL maintenance", () => {
       synchronous: "NORMAL",
     });
 
-    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 5000;");
+    expect(db["exec"]).toHaveBeenNthCalledWith(1, "PRAGMA busy_timeout = 5000");
     expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = DELETE;");
     expect(db["exec"]).toHaveBeenNthCalledWith(2, "PRAGMA synchronous = NORMAL;");
   });

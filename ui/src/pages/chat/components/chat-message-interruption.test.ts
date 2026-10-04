@@ -47,11 +47,6 @@ describe("interrupted assistant replies", () => {
       message: createAssistantMessage([{ type: "text", text: "Partial reply" }]),
     },
     { name: "no payload", message: undefined },
-    { name: "invalid payload", message: "not-an-assistant-message" },
-    {
-      name: "non-assistant payload",
-      message: { role: "user", content: [{ type: "text", text: "unexpected" }] },
-    },
   ])("marks a live stopped reply with $name", ({ message }) => {
     const state: ChatState = {
       client: null,

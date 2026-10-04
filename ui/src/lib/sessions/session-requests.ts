@@ -37,6 +37,7 @@ export function dashboardSessionListQuery(agentId?: string | null): SessionListO
   const normalizedAgentId = agentId?.trim();
   return {
     ...DEFAULT_SESSION_LIST_QUERY,
+    rowMode: "compact",
     hasBoard: true,
     archivedFilter: "all",
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
@@ -78,6 +79,9 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
     includeUnknown: true,
     configuredAgentsOnly: true,
   };
+  if (options.rowMode) {
+    params.rowMode = options.rowMode;
+  }
   if (options.limit === undefined) {
     params.limit = DEFAULT_SESSION_LIST_QUERY.limit;
   } else if (options.limit > 0) {

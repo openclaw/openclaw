@@ -209,7 +209,6 @@ Replace model IDs with exact names from `ollama list` or
       agents: {
         entries: {
           local: {
-            default: true,
             model: { primary: "ollama/gemma4" },
           },
         },

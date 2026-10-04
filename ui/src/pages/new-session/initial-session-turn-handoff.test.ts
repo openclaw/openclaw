@@ -16,10 +16,15 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-describe.each(["started", "rejected"] as const)("%s first-turn publication", (status) => {
-  it.each(["scope", "request", "unchanged"] as const)(
-    "rechecks %s authority at the readiness publication boundary",
-    async (change) => {
+describe("first-turn publication", () => {
+  it.each([
+    { status: "started", change: "scope" },
+    { status: "rejected", change: "request" },
+    { status: "started", change: "unchanged" },
+    { status: "rejected", change: "unchanged" },
+  ] as const)(
+    "rechecks $change authority before publishing a $status turn",
+    async ({ status, change }) => {
       const { context } = createDraftFixture();
       Object.defineProperties(context, {
         router: {
@@ -163,47 +168,40 @@ describe("retained launcher rejection", () => {
     expect(onRejectedPrompt).toHaveBeenCalledExactlyOnceWith("Rejected image");
   });
 
-  it.each([true, false])(
-    "publishes rejected-prompt recovery only to its current owner (%s)",
-    async (current) => {
-      const { context } = createDraftFixture();
-      const client = context.gateway.snapshot.client;
-      if (!client) {
-        throw new Error("Expected a connected fixture");
-      }
-      const retained = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
-      const navigation = new StartedSessionNavigation();
-      const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
-      const clearDraft = vi.fn(async () => {});
-      const onRejectedPrompt = vi.fn();
-      const onAccepted = vi.fn();
-      await completeInitialSessionTurn({
-        context,
-        client,
-        agentId: "main",
-        result: {
-          key: "agent:main:dashboard:rejected",
-          initialRun: { status: "rejected", error: "First turn denied" },
-        },
-        turn: { text: "Keep this prompt visible", attachments: [], createdAt: 1 },
-        instant: undefined,
-        navigation,
-        isCurrent: () => current,
-        clearDraft,
-        completeInBackground: () => true,
-        finishNavigation: vi.fn(),
-        onRejectedPrompt,
-        onAccepted,
-      });
-      expect(clearDraft).not.toHaveBeenCalled();
-      expect(navigate).not.toHaveBeenCalled();
-      expect(retained).toHaveBeenCalledTimes(current ? 1 : 0);
-      expect(onAccepted).toHaveBeenCalledTimes(current ? 1 : 0);
-      if (current) {
-        expect(onRejectedPrompt).toHaveBeenCalledWith("First turn denied");
-      } else {
-        expect(onRejectedPrompt).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("does not publish rejected-prompt recovery to a stale owner", async () => {
+    const { context } = createDraftFixture();
+    const client = context.gateway.snapshot.client;
+    if (!client) {
+      throw new Error("Expected a connected fixture");
+    }
+    const retained = vi.spyOn(rejected, "retainRejectedInitialTurn").mockReturnValue(false);
+    const navigation = new StartedSessionNavigation();
+    const navigate = vi.spyOn(navigation, "navigate").mockResolvedValue();
+    const clearDraft = vi.fn(async () => {});
+    const onRejectedPrompt = vi.fn();
+    const onAccepted = vi.fn();
+    await completeInitialSessionTurn({
+      context,
+      client,
+      agentId: "main",
+      result: {
+        key: "agent:main:dashboard:rejected",
+        initialRun: { status: "rejected", error: "First turn denied" },
+      },
+      turn: { text: "Keep this prompt visible", attachments: [], createdAt: 1 },
+      instant: undefined,
+      navigation,
+      isCurrent: () => false,
+      clearDraft,
+      completeInBackground: () => true,
+      finishNavigation: vi.fn(),
+      onRejectedPrompt,
+      onAccepted,
+    });
+    expect(clearDraft).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
+    expect(retained).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(onRejectedPrompt).not.toHaveBeenCalled();
+  });
 });

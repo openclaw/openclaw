@@ -116,10 +116,12 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     }
     const recovery = html`<openclaw-chat-outbox-recovery
       .host=${state}
+      .messages=${state.chatMessages}
       .identity=${JSON.stringify([
         state.settings.gatewayUrl,
         state.connected && state.client?.recoveryScopeReady ? state.client.recoveryScope : null,
         storedChatOutboxScopeKey(resolveUiConversationIdentity(state, state.sessionKey)),
+        state.currentSessionId,
       ])}
       @outbox-restored=${() => {
         this.chatState.composerPersistence.restore();
@@ -127,23 +129,19 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       }}
     ></openclaw-chat-outbox-recovery>`;
     const latestBrowserTabs = latestBrowserTabCards(chatProps.messages, chatProps.toolMessages);
+    const panePresentation = { owner: this, isPresented: () => this.presented };
+    const slotPresentation = (slot: SidebarSlotId) => ({
+      owner: this,
+      isPresented: () =>
+        this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, slot),
+    });
     const chat = renderChat({
       ...chatProps,
+      composerRecovery: recovery,
       pluginToolIcons: this.toolIcons.icons,
-      presented: this.active && this.presented,
-      presentation: { owner: this, isPresented: () => this.active && this.presented },
-      progressCardVisibility: { owner: this, isPresented: () => this.presented },
-      transcriptVisible:
-        this.presented &&
-        this.visuallyPresented &&
-        isSidebarSlotVisible(sidebarLayout, "conversation"),
-      transcriptPresentation: {
-        owner: this,
-        isPresented: () =>
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "conversation"),
-      },
+      presented: { owner: this, isPresented: () => this.active && this.presented },
+      progressCardVisibility: panePresentation,
+      transcriptVisible: slotPresentation("conversation"),
       latestBrowserTabs: this.active && this.presented ? latestBrowserTabs : undefined,
       historyState: catalog ? undefined : state,
     });
@@ -154,10 +152,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const desktopAvailable = isDesktopPanelAvailable(this.context.gateway.snapshot);
     const companionSessionKey = state.sessionKey;
     const companionThread = this.sessionCompanionThreads.view(companionSessionKey, currentAgentId);
-    const companionPresented =
-      this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "companion");
+    const companionPresented = slotPresentation("companion");
     // Capture the opening before the lazy rail can yield to newer input intent.
-    this.syncSessionCompanionPresentation(companionPresented);
+    this.syncSessionCompanionPresentation(companionPresented.isPresented());
     const browserPresented = {
       owner: this,
       isPresented: () =>
@@ -166,8 +163,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     const browserTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "browser";
     const terminalTabsInHeader = sidebarMainPanel(sidebarLayout)?.slot !== "terminal";
     // Another pane can own keyboard focus while this desktop remains visible.
-    const desktopPresented =
-      this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "desktop");
+    const desktopPresented = slotPresentation("desktop");
     const desktopRefreshOnPresentation = !this.pendingPanelToggleRequests.has("desktop");
     const discoveredDesktopSource = this.activeSessionResources.desktopSource(
       state.client,
@@ -187,7 +183,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       state.sessionKey,
       this.connectionGeneration,
       desktopAvailable,
-      desktopPresented,
+      desktopPresented.isPresented(),
       state.basePath,
     ]);
     if (this.desktopFocus?.key !== desktopFocusKey || this.desktopFocus.client !== state.client) {
@@ -202,41 +198,25 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
     }
     const desktopFocus = this.desktopFocus;
     const panelDefinitions = sidebarPanelDefinitions({
-      panePresentation: { owner: this, isPresented: () => this.presented },
+      panePresentation,
       state,
       themeMode: this.context.theme.resolvedMode,
       agentId: currentAgentId,
       browserPresented,
       browserTabsInHeader,
       linkReaders: availableLinkReaders(this.context.gateway.snapshot),
-      linkReaderPresented: {
-        owner: this,
-        isPresented: () =>
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "link-reader"),
-      },
+      linkReaderPresented: slotPresentation("link-reader"),
       linkReaderTabsInHeader: sidebarMainPanel(sidebarLayout)?.slot !== "link-reader",
       onCloseLinkReader: () => closePanelSlot("link-reader"),
       terminalTabsInHeader,
       browserRefreshOnPresentation: !this.pendingPanelToggleRequests.has("browser"),
       preferredBrowserTab: [...latestBrowserTabs.values()].at(-1),
       sessionBrowserTabs: [...latestBrowserTabs.values()].map((selection) => selection.tab),
-      desktopPresented: {
-        owner: this,
-        isPresented: () =>
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "desktop"),
-      },
+      desktopPresented,
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource,
-      portalPresented: {
-        owner: this,
-        isPresented: () =>
-          this.presented && this.visuallyPresented && isSidebarSlotVisible(sidebarLayout, "portal"),
-      },
+      portalPresented: slotPresentation("portal"),
       desktopFocusHref: desktopFocus.href,
       onDesktopFocusTargetChange: (target) => {
         // A retained callback cannot publish a previous presentation's source or control state.
@@ -260,13 +240,7 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       pullRequests: this.sessionPullRequests,
       companion: companionThread,
       companionFocusRequest: this.sessionCompanionFocusRequest,
-      companionPresented: {
-        owner: this,
-        isPresented: () =>
-          this.presented &&
-          this.visuallyPresented &&
-          isSidebarSlotVisible(sidebarLayout, "companion"),
-      },
+      companionPresented,
       onCompanionSubmit: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionDraftChange: (draft) =>
         this.sessionCompanionThreads.setDraft(state.sessionKey, draft, currentAgentId),
@@ -345,13 +319,13 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       panelActions,
       narrow: this.paneWidth < SIDEBAR_NARROW_BREAKPOINT_PX,
       panelTemplates,
-      header: html`${header}${recovery}`,
+      header,
       primary,
       requestUpdate: state.requestUpdate!,
     });
     return html`${content}
     ${presentedContent(
-      { owner: this, isPresented: () => this.presented },
+      panePresentation,
       html`${renderChatImageLightbox(state.imageLightbox, state.handleCloseImage)}${this.renderResetConfirmation()}`,
     )}`;
   }

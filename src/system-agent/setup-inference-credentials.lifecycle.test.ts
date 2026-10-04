@@ -28,14 +28,12 @@ afterEach(() => {
 });
 
 describe("setup inference credential provider lifetime", () => {
-  it.each(
-    (["managed wizard", "app-guided auth"] as const).flatMap((flow) =>
-      (["empty", "matching-last", "missing-match"] as const).map((profileCase) => ({
-        flow,
-        profileCase,
-      })),
-    ),
-  )(
+  it.each([
+    { flow: "managed wizard", profileCase: "matching-last" },
+    { flow: "managed wizard", profileCase: "missing-match" },
+    { flow: "app-guided auth", profileCase: "empty" },
+    { flow: "app-guided auth", profileCase: "missing-match" },
+  ] as const)(
     "materializes $flow model normalization with $profileCase profiles before retiring the provider",
     async ({ flow, profileCase }) => {
       await withOpenClawTestState({ label: "setup-plan-lifetime" }, async (state) => {
@@ -45,31 +43,14 @@ describe("setup inference credential provider lifetime", () => {
         const observationEvent = `${id}-observation`;
         const rawModelRef = `${id}/preview`;
         const canonicalModelRef = `${id}/canonical`;
+        const profile = (provider: string) => ({
+          profileId: `${provider}:default`,
+          credential: { type: "api_key", provider, key: `synthetic-${provider}-key` },
+        });
         const profiles =
           profileCase === "empty"
             ? []
-            : [
-                {
-                  profileId: "unrelated:default",
-                  credential: {
-                    type: "api_key",
-                    provider: "unrelated",
-                    key: "synthetic-unrelated-key",
-                  },
-                },
-                ...(profileCase === "matching-last"
-                  ? [
-                      {
-                        profileId: `${id}:default`,
-                        credential: {
-                          type: "api_key",
-                          provider: id,
-                          key: "synthetic-selected-key",
-                        },
-                      },
-                    ]
-                  : []),
-              ];
+            : [profile("unrelated"), ...(profileCase === "matching-last" ? [profile(id)] : [])];
         const nativeBefore = process.listenerCount(nativeEvent);
         const observations: Array<{ phase: string; value: unknown }> = [];
         const observe = (phase: string, value: unknown) => {
@@ -210,8 +191,10 @@ describe("setup inference credential provider lifetime", () => {
           expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
           expect(cfg).toEqual(originalConfig);
           expect(structuredClone(plan)).toEqual(plan);
+          const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           if (profileCase === "missing-match") {
             expect(plan).toEqual({ error: expect.stringContaining("did not return credentials") });
+            expect(saved).toEqual({});
             expect(observations[0]).toEqual({ phase: "auth-result", value: rawModelRef });
             expect(observations.at(-1)).toEqual({ phase: "dispose", value: undefined });
             return;
@@ -238,9 +221,9 @@ describe("setup inference credential provider lifetime", () => {
           if ("error" in plan) {
             throw new Error(plan.error);
           }
-          const saved = loadAuthProfileStoreWithoutExternalProfiles(state.agentDir()).profiles;
           if (profileCase === "matching-last") {
             expect(plan.authProfileId).toBeDefined();
+            expect(Object.keys(saved)).toEqual([plan.authProfileId]);
             expect(saved[plan.authProfileId!]).toMatchObject(
               expectDefined(profiles[1]?.credential, "Expected the selected fixture credential"),
             );

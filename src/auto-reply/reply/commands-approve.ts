@@ -17,25 +17,28 @@ import {
   type ApprovalCommandAuthorization,
 } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { commandReply, requireGatewayClientScope } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 
+const log = createSubsystemLogger("auto-reply/commands-approve");
+
 const COMMAND_REGEX = /^\/?approve(?:\s|$)/i;
 const FOREIGN_COMMAND_MENTION_REGEX = /^\/approve@([^\s]+)(?:\s|$)/i;
 
-const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
-  allow: "allow-once",
-  once: "allow-once",
-  "allow-once": "allow-once",
-  allowonce: "allow-once",
-  always: "allow-always",
-  "allow-always": "allow-always",
-  allowalways: "allow-always",
-  deny: "deny",
-  reject: "deny",
-  block: "deny",
-};
+const DECISION_ALIASES = new Map<string, "allow-once" | "allow-always" | "deny">([
+  ["allow", "allow-once"],
+  ["once", "allow-once"],
+  ["allow-once", "allow-once"],
+  ["allowonce", "allow-once"],
+  ["always", "allow-always"],
+  ["allow-always", "allow-always"],
+  ["allowalways", "allow-always"],
+  ["deny", "deny"],
+  ["reject", "deny"],
+  ["block", "deny"],
+]);
 
 type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
@@ -65,11 +68,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const first = normalizeLowercaseStringOrEmpty(tokens[0]);
   const second = normalizeLowercaseStringOrEmpty(tokens[1]);
 
-  // Decision tokens are chat-supplied, so inherited keys such as "constructor"
-  // or "__proto__" must not read through to Object.prototype.
-  const firstDecision = Object.hasOwn(DECISION_ALIASES, first)
-    ? DECISION_ALIASES[first]
-    : undefined;
+  const firstDecision = DECISION_ALIASES.get(first);
   if (firstDecision) {
     return {
       ok: true,
@@ -77,9 +76,7 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
       id: tokens.slice(1).join(" ").trim(),
     };
   }
-  const secondDecision = Object.hasOwn(DECISION_ALIASES, second)
-    ? DECISION_ALIASES[second]
-    : undefined;
+  const secondDecision = DECISION_ALIASES.get(second);
   if (secondDecision) {
     return {
       ok: true,
@@ -289,8 +286,14 @@ export async function handleApproveCommandFromContext(
         if (systemAgentRefusedForOwner) {
           return ownerOnlyResult;
         }
+        return commandReply(
+          "That approval is no longer available. Check the request in the Control UI.",
+        );
       }
-      return commandReply(`❌ Failed to submit approval: ${formatErrorMessage(error)}`);
+      log.warn(`Approval submission failed: ${formatErrorMessage(error)}`);
+      return commandReply(
+        "⚠️ Couldn't confirm that approval. Check the request in the Control UI before trying again.",
+      );
     }
   }
 

@@ -34,12 +34,7 @@ export function resolveNodeDesktopHostConfig(params: {
   };
 }
 
-type NodeDesktopStreamCommandParams = {
-  ticket: string;
-  attachPath: string;
-};
-
-function decodeDesktopStreamParams(raw?: string | null): NodeDesktopStreamCommandParams {
+function decodeDesktopStreamParams(raw?: string | null) {
   let value: unknown;
   try {
     value = raw ? JSON.parse(raw) : undefined;
@@ -104,7 +99,7 @@ async function readVncPassword(
 
 /** Splices a node-local loopback RFB socket to a ticket-authenticated Gateway WebSocket. */
 async function runNodeDesktopStreamCommand(params: {
-  command: NodeDesktopStreamCommandParams;
+  command: ReturnType<typeof decodeDesktopStreamParams>;
   gatewayUrl: string;
   gatewayTlsFingerprint?: string;
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
@@ -193,16 +188,12 @@ export async function invokeNodeDesktopStream(params: {
   await runNodeDesktopStreamCommand({
     command,
     gatewayUrl: params.gatewayUrl,
-    ...(params.gatewayTlsFingerprint
-      ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
-      : {}),
-    ...(params.gatewayCloudflareAccess
-      ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
-      : {}),
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
     port: params.config.port ?? DEFAULT_DESKTOP_PORT,
-    ...(params.config.passwordFile ? { passwordFile: params.config.passwordFile } : {}),
+    passwordFile: params.config.passwordFile,
     signal: params.signal,
-    ...(params.emitStatus ? { emitStatus: params.emitStatus } : {}),
+    emitStatus: params.emitStatus,
   });
 }
 
@@ -221,15 +212,11 @@ export async function invokeNodeWorkerDesktopStream(params: {
   await runNodeDesktopStreamCommand({
     command,
     gatewayUrl: params.gatewayUrl,
-    ...(params.gatewayTlsFingerprint
-      ? { gatewayTlsFingerprint: params.gatewayTlsFingerprint }
-      : {}),
-    ...(params.gatewayCloudflareAccess
-      ? { gatewayCloudflareAccess: params.gatewayCloudflareAccess }
-      : {}),
+    gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+    gatewayCloudflareAccess: params.gatewayCloudflareAccess,
     port: command.port,
-    ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),
-    ...(command.username ? { username: command.username } : {}),
+    passwordFile: command.passwordFilePath,
+    username: command.username,
     signal: params.signal,
   });
 }

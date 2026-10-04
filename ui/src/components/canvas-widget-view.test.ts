@@ -257,6 +257,107 @@ describe("Canvas widget view", () => {
     expect(view.documentHtml).toBe("<p>Updated bytes</p>");
   });
 
+  it("hands scroll intent to its transcript only from the current isolated widget", async () => {
+    const thread = document.createElement("div");
+    const sibling = document.createElement("div");
+    thread.className = sibling.className = "chat-thread";
+    document.body.append(thread, sibling);
+    const events: Array<{ type: string; deltaY: number; scrollTop: number }> = [];
+    thread.scrollTop = 400;
+    thread.addEventListener("wheel", (event) => {
+      events.push({ type: "wheel", deltaY: event.deltaY, scrollTop: thread.scrollTop });
+    });
+    Object.defineProperty(thread, "scrollBy", {
+      value: vi.fn((options: ScrollToOptions) => {
+        const deltaY = options.top ?? 0;
+        events.push({ type: "scroll", deltaY, scrollTop: thread.scrollTop });
+        thread.scrollTop += deltaY;
+      }),
+    });
+    const scrollSibling = vi.fn();
+    sibling.scrollBy = scrollSibling;
+    const client = { request: vi.fn().mockResolvedValue(documentView) };
+    const view = mount(client, "cv_scroll", thread);
+    const start = async (frame: HTMLIFrameElement) => {
+      const post = vi.spyOn(frame.contentWindow!, "postMessage");
+      message(frame, {
+        method: "ui/notifications/sandbox-proxy-ready",
+        params: { sandboxUrl: frame.src },
+      });
+      await settle(view);
+      expect(post).toHaveBeenCalledWith(
+        { type: "openclaw:widget-board-host", nonce: expect.any(String) },
+        new URL(frame.src).origin,
+      );
+      const nonce = post.mock.calls.find(([data]) => data.type === "openclaw:widget-board-host")![0]
+        .nonce;
+      const renderId = post.mock.calls.find(
+        ([data]) => data.method === "ui/notifications/sandbox-resource-ready",
+      )![0].params.renderId;
+      post.mockClear();
+      message(frame, {
+        method: "ui/notifications/sandbox-resource-loaded",
+        params: { renderId },
+      });
+      // Stored wrappers can miss host state until their document finishes loading.
+      expect(post).toHaveBeenCalledWith(
+        { type: "openclaw:widget-board-host", nonce },
+        new URL(frame.src).origin,
+      );
+      return nonce;
+    };
+    const frame = await frameFor(view);
+    const nonce = await start(frame);
+    const scroll = { type: "openclaw:widget-scroll", nonce, deltaY: 120 };
+    const foreignFrame = document.createElement("iframe");
+    foreignFrame.src = frame.src;
+    sibling.append(foreignFrame);
+    message(frame, scroll, [], "https://wrong.example");
+    message(foreignFrame, scroll);
+    message(frame, { ...scroll, nonce: "wrong" });
+    for (const deltaY of ["120", undefined, Infinity, Number.NaN]) {
+      message(frame, { ...scroll, deltaY });
+    }
+    expect(events).toEqual([]);
+    message(frame, scroll);
+    expect(events).toEqual([
+      { type: "wheel", deltaY: 120, scrollTop: 400 },
+      { type: "scroll", deltaY: 120, scrollTop: 400 },
+    ]);
+    expect(thread.scrollTop).toBe(520);
+    events.length = 0;
+
+    const oldSource = frame.contentWindow;
+    view.docId = "cv_scroll_replaced";
+    message(frame, scroll);
+    await settle(view);
+    const current = await frameFor(view);
+    expect(current).not.toBe(frame);
+    const currentNonce = await start(current);
+    expect(currentNonce).not.toBe(nonce);
+    message(current, scroll);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: oldSource,
+        origin: new URL(current.src).origin,
+        data: { ...scroll, nonce: currentNonce },
+      }),
+    );
+    expect(events).toEqual([]);
+    message(current, { ...scroll, nonce: currentNonce, deltaY: -80 });
+    expect(events).toEqual([
+      { type: "wheel", deltaY: -80, scrollTop: 520 },
+      { type: "scroll", deltaY: -80, scrollTop: 520 },
+    ]);
+    expect(thread.scrollTop).toBe(440);
+    events.length = 0;
+    view.remove();
+    message(current, { ...scroll, nonce: currentNonce });
+    expect(events).toEqual([]);
+    expect(scrollSibling).not.toHaveBeenCalled();
+    expect(sibling.scrollTop).toBe(0);
+  });
+
   it.each(["credential", "profile", "session", "denied"])(
     "retires retained content after %s changes",
     async (change) => {

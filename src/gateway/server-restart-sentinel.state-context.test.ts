@@ -9,6 +9,7 @@ import { captureDeliveryQueueStateContext } from "../infra/delivery-queue-state-
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import * as stateOwner from "../infra/gateway-state-owner.js";
 import { findDeliveryIntentOwner } from "../infra/outbound/delivery-queue-storage.js";
+import { writeRestartSentinelRowSync } from "../infra/restart-sentinel-store.js";
 import * as restartSentinel from "../infra/restart-sentinel.js";
 import { readRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import {
@@ -32,7 +33,10 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
 } from "../state/openclaw-state-db-async-lifecycle.js";
-import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   createDirectOutboundTestAdapter,
   createOutboundTestPlugin,
@@ -124,8 +128,7 @@ const { loadSessionEntry: realLoadSessionEntry } =
   await vi.importActual<typeof import("./session-utils.js")>("./session-utils.js");
 const sidecars: Array<{ stop: () => void | Promise<void> }> = [];
 const gatewayLocks: Array<{ release: () => Promise<void> }> = [];
-const { scheduleRestartSentinelWake, refreshLatestUpdateRestartSentinel } =
-  await import("./server-restart-sentinel.js");
+const { scheduleRestartSentinelWake } = await import("./server-restart-sentinel.js");
 let envSnapshot: ReturnType<typeof captureEnv>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -533,10 +536,13 @@ it.each([false, true])(
       deliveryContext: { channel: "matrix", to: "!operator:example" },
     };
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
-    const original = await writeRestartSentinel(payload, originalEnv);
-    const unrelated = await writeRestartSentinel(
-      { ...payload, message: "unrelated restart" },
-      unrelatedEnv,
+    const original = runOpenClawStateWriteTransaction(
+      ({ db }) => writeRestartSentinelRowSync(db, payload),
+      { env: originalEnv },
+    );
+    const unrelated = runOpenClawStateWriteTransaction(
+      ({ db }) => writeRestartSentinelRowSync(db, { ...payload, message: "unrelated restart" }),
+      { env: unrelatedEnv },
     );
     clock.mockRestore();
     expect(unrelated.revision).toBe(original.revision);
@@ -668,23 +674,6 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
     }
   },
 );
-
-it("does not rewrite pending update sentinels during status refresh", async () => {
-  const originalEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-restart-status-") };
-  const sentinel = await writeRestartSentinel(
-    {
-      kind: "update",
-      status: "skipped",
-      ts: 123,
-      stats: { mode: "git", handoffId: "handoff-1", reason: "managed-service-handoff-started" },
-    },
-    originalEnv,
-  );
-
-  await expect(refreshLatestUpdateRestartSentinel(originalEnv)).resolves.toEqual(sentinel.payload);
-
-  expect(await readRestartSentinel(originalEnv)).toEqual(sentinel);
-});
 
 it.each([
   "portable-claim",
@@ -963,3 +952,36 @@ it.each(["verifying", "terminal-before-marker", "replaced-handoff", "replaced-ki
     expect(warn).not.toHaveBeenCalled();
   },
 );
+
+it("leaves durable notices queued when the Gateway stops during sentinel consumption", async () => {
+  const stateDir = tempDirs.make("openclaw-restart-consume-stop-");
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  const context = captureDeliveryQueueStateContext();
+  const sentinel = await writeRestartSentinel({
+    kind: "restart",
+    status: "ok",
+    ts: 123,
+    sessionKey: "agent:main:main",
+    deliveryContext: { channel: "matrix", to: "!operator:example" },
+  });
+  const controller = new AbortController();
+  const clear = restartSentinel.clearRestartSentinelIfRevision;
+  vi.spyOn(restartSentinel, "clearRestartSentinelIfRevision").mockImplementationOnce(
+    async (...args) => {
+      const consumed = await clear(...args);
+      controller.abort();
+      return consumed;
+    },
+  );
+  await scheduleRestartSentinelWake({ scheduler, signal: controller.signal, deps: {}, context });
+  expect(await readRestartSentinel()).toBeNull();
+  expect(mocks.sendDurableMessageBatchCore).not.toHaveBeenCalled();
+  expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
+  expect(
+    await findDeliveryIntentOwner(
+      `restart-sentinel-notice:agent:main:main:${sentinel.revision}`,
+      undefined,
+      context,
+    ),
+  ).toMatchObject({ status: "pending" });
+});

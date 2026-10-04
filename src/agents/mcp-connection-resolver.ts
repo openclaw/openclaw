@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "@openclaw/retry";
 import { resolveConfiguredMcpTransport } from "../config/mcp-config-normalize.js";
 import { logWarn } from "../logger.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -63,25 +64,6 @@ class McpResolverTimeoutError extends Error {
     super("mcp connection resolver timed out");
     this.name = "McpResolverTimeoutError";
   }
-}
-
-function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new McpResolverTimeoutError());
-    }, timeoutMs);
-    timer.unref?.();
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
 }
 
 /** Returns registered connection resolvers keyed by server name (deterministic order). */
@@ -213,7 +195,14 @@ export async function resolveRequesterScopedMcpConnections(params: {
         return null;
       }
       try {
-        const result = await raceWithTimeout(Promise.resolve(entry.resolve(ctx)), timeoutMs);
+        const result = await raceWithTimeout(
+          Promise.resolve(entry.resolve(ctx)),
+          timeoutMs,
+          () => {
+            throw new McpResolverTimeoutError();
+          },
+          { ref: false },
+        );
         if (!result || typeof result.url !== "string" || result.url.trim().length === 0) {
           return null;
         }

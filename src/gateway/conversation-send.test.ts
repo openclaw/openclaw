@@ -54,6 +54,9 @@ function sentResult() {
 
 function createDeps(agentId = "main") {
   const store = createConversationDeliveryTestStore(agentId);
+  vi.spyOn(conversationRegistry, "readConversation").mockImplementation(async (scope, ref) =>
+    conversationRegistry.resolveConversation(scope, ref),
+  );
   return {
     ...store,
     beginOperation: vi.spyOn(deliveryStore, "beginConversationDeliveryOperation"),
@@ -481,7 +484,7 @@ describe("runGatewayConversationSend", () => {
     await runGatewayConversationSend({
       config: {
         ...workerDeps.config,
-        agents: { entries: { worker: { default: true } } },
+        agents: { entries: { worker: {} } },
       },
       agentId: "worker",
       senderIsOwner: true,

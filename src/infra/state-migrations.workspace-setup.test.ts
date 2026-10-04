@@ -353,36 +353,22 @@ describe("legacy workspace Doctor migration", () => {
     expect(() => assertReady(context)).not.toThrow();
   });
 
-  it.each(["setup", "attestation"] as const)(
-    "rejects %s beneath a symlinked parent",
-    async (kind) => {
-      const context = setup();
-      const externalDir = path.join(context.homeDir, "external-state");
-      const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
-      const externalSource = path.join(
-        externalDir,
-        kind === "setup" ? "workspace-state.json" : `${identity.workspaceKey}.attested`,
-      );
-      const raw =
-        kind === "setup"
-          ? JSON.stringify({ version: 1 })
-          : "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n";
-      await write(externalSource, raw);
-      await fsp.mkdir(context.stateDir, { recursive: true });
-      await fsp.symlink(
-        externalDir,
-        kind === "setup"
-          ? path.join(context.workspaceDir, ".openclaw")
-          : path.join(context.stateDir, "workspace-attestations"),
-      );
-      expect((await detect(context)).hasLegacy).toBe(true);
-      const result = await migrate(context);
-      expect(result.warnings[0]).toMatch(/legacy workspace/i);
-      await expect(fsp.readFile(externalSource, "utf8")).resolves.toBe(raw);
-      expect(fs.existsSync(`${externalSource}.doctor-importing`)).toBe(false);
-      expect(readSetup(context, "workspace_key")).toBeUndefined();
-    },
-  );
+  it("rejects attestation beneath a symlinked parent", async () => {
+    const context = setup();
+    const externalDir = path.join(context.homeDir, "external-state");
+    const identity = resolveWorkspaceStateIdentity(context.workspaceDir);
+    const externalSource = path.join(externalDir, `${identity.workspaceKey}.attested`);
+    const raw = "openclaw-workspace-attestation:v1\n2026-07-15T11:00:00.000Z\n";
+    await write(externalSource, raw);
+    await fsp.mkdir(context.stateDir, { recursive: true });
+    await fsp.symlink(externalDir, path.join(context.stateDir, "workspace-attestations"));
+    expect((await detect(context)).hasLegacy).toBe(true);
+    const result = await migrate(context);
+    expect(result.warnings[0]).toMatch(/legacy workspace/i);
+    await expect(fsp.readFile(externalSource, "utf8")).resolves.toBe(raw);
+    expect(fs.existsSync(`${externalSource}.doctor-importing`)).toBe(false);
+    expect(readSetup(context, "workspace_key")).toBeUndefined();
+  });
 
   it("retains a setup source that changes before Doctor claims it", async () => {
     const context = setup();
@@ -519,7 +505,7 @@ describe("legacy workspace Doctor migration", () => {
     });
   });
 
-  it("imports both shared-root markers for an explicit fleet without moving content", async () => {
+  it("imports shared-root setup for an explicit fleet without moving content", async () => {
     const context = setup();
     const cfg = {
       ...context.cfg,
@@ -542,7 +528,6 @@ describe("legacy workspace Doctor migration", () => {
       }),
     );
     const rootPath = path.join(context.workspaceDir, "openclaw-workspace-state.json");
-    const nestedPath = path.join(context.workspaceDir, ".openclaw", "workspace-state.json");
     const rootSeededAt = "2026-07-15T10:00:00.000Z";
     const completedAt = "2026-07-15T10:01:00.000Z";
     await write(
@@ -552,10 +537,6 @@ describe("legacy workspace Doctor migration", () => {
         bootstrapSeededAt: rootSeededAt,
         setupCompletedAt: completedAt,
       }),
-    );
-    await write(
-      nestedPath,
-      JSON.stringify({ version: 1, bootstrapSeededAt: "2026-07-14T09:00:00.000Z" }),
     );
 
     expect(effectiveDirs).toEqual(
@@ -569,7 +550,6 @@ describe("legacy workspace Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(fs.existsSync(rootPath)).toBe(false);
-    expect(fs.existsSync(nestedPath)).toBe(false);
     expect(readSetup(context, "bootstrap_seeded_at, setup_completed_at")).toEqual({
       bootstrap_seeded_at: rootSeededAt,
       setup_completed_at: completedAt,

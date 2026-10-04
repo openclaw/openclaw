@@ -1,23 +1,8 @@
-// Builds portable APNs payloads for alerts, wakes, and approval lifecycle events.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChannelApprovalKind } from "./approval-types.js";
 
-const EXEC_APPROVAL_GENERIC_ALERT_BODY = "Open OpenClaw to review this request.";
 const PLUGIN_APPROVAL_ALERT_BODY_MAX_LENGTH = 256;
-
-function toPushMetadata(params: {
-  kind: "push.test" | "node.wake";
-  nodeId: string;
-  reason?: string;
-}): { kind: "push.test" | "node.wake"; nodeId: string; ts: number; reason?: string } {
-  return {
-    kind: params.kind,
-    nodeId: params.nodeId,
-    ts: Date.now(),
-    ...(params.reason ? { reason: params.reason } : {}),
-  };
-}
 
 export function createApnsAlertPayload(params: {
   nodeId: string;
@@ -32,10 +17,11 @@ export function createApnsAlertPayload(params: {
       },
       sound: "default",
     },
-    openclaw: toPushMetadata({
+    openclaw: {
       kind: "push.test",
       nodeId: params.nodeId,
-    }),
+      ts: Date.now(),
+    },
   };
 }
 
@@ -43,20 +29,18 @@ export function createApnsBackgroundPayload(params: {
   nodeId: string;
   wakeReason?: string;
 }): object {
+  const reason = params.wakeReason ?? "node.invoke";
   return {
     aps: {
       "content-available": 1,
     },
-    openclaw: toPushMetadata({
+    openclaw: {
       kind: "node.wake",
-      reason: params.wakeReason ?? "node.invoke",
       nodeId: params.nodeId,
-    }),
+      ts: Date.now(),
+      ...(reason ? { reason } : {}),
+    },
   };
-}
-
-export function resolveExecApprovalAlertBody(): string {
-  return EXEC_APPROVAL_GENERIC_ALERT_BODY;
 }
 
 export function createApnsApprovalAlertPayload(params: {

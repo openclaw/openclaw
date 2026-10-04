@@ -177,7 +177,7 @@ async function launchProbe(
     input.preparedRunAdmission?.close();
   }
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-  expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+  expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
   if (launch) {
     expect(outcome.kind).toBe("rejected");
     if (outcome.kind === "rejected") {

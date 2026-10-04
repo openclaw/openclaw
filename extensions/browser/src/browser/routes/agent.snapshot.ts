@@ -31,7 +31,7 @@ import {
   shouldUsePlaywrightForScreenshot,
 } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
-import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
+import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
 import type { BrowserObservedState } from "../pw-session-contracts.js";
 import type { AnnotationItem } from "../screenshot-annotate.js";
 import { scaleAnnotations } from "../screenshot-annotate.js";
@@ -457,35 +457,6 @@ export function registerBrowserAgentSnapshotRoutes(
                   maxChars: plan.resolvedMaxChars,
                 }
               : undefined;
-          const createDeltaState = (documentIdentity?: string) => {
-            const previousKeys =
-              deltaFamily && documentIdentity
-                ? getPreviousSnapshotKeys(ctx, {
-                    profile: profileCtx.profile.name,
-                    targetId: tab.targetId,
-                    documentIdentity,
-                    family: deltaFamily,
-                  })
-                : undefined;
-            return {
-              delta:
-                deltaFamily && previousKeys !== undefined
-                  ? { mode: deltaFamily.identity, previousKeys }
-                  : undefined,
-              record: (refs: RoleRefMap) => {
-                if (!deltaFamily || !documentIdentity) {
-                  return;
-                }
-                recordSnapshotKeys(ctx, {
-                  profile: profileCtx.profile.name,
-                  targetId: tab.targetId,
-                  documentIdentity,
-                  family: deltaFamily,
-                  refs,
-                });
-              },
-            };
-          };
           if (usesChromeMcp) {
             const operation: ChromeMcpTargetOperation = {
               profileName: profileCtx.profile.name,
@@ -582,11 +553,24 @@ export function registerBrowserAgentSnapshotRoutes(
             plan.format === "ai" &&
             !plan.frameSelectorValue &&
             (plan.refsMode === "aria" || !pwModule || !plan.wantsRoleSnapshot);
-          const deltaState = createDeltaState(
+          const deltaDocumentIdentity =
             snapshotSpansFrames || plan.frameSelectorValue
               ? initialIdentities.frameTree
-              : initialDocumentIdentity,
-          );
+              : initialDocumentIdentity;
+          const deltaKey =
+            deltaFamily && deltaDocumentIdentity
+              ? {
+                  profile: profileCtx.profile.name,
+                  targetId: tab.targetId,
+                  documentIdentity: deltaDocumentIdentity,
+                  family: deltaFamily,
+                }
+              : undefined;
+          const previousKeys = deltaKey ? getPreviousSnapshotKeys(ctx, deltaKey) : undefined;
+          const delta =
+            deltaFamily && previousKeys !== undefined
+              ? { mode: deltaFamily.identity, previousKeys }
+              : undefined;
           const assertDocumentIdentityUnchanged = async () => {
             if (!initialDocumentIdentity) {
               return;
@@ -620,7 +604,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 compact: plan.compact ?? undefined,
                 maxDepth: plan.depth ?? undefined,
               },
-              delta: deltaState.delta,
+              delta,
             };
 
             const cdpRoleWsUrl =
@@ -646,7 +630,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   compact: plan.compact ?? undefined,
                   maxDepth: plan.depth ?? undefined,
                 },
-                delta: deltaState.delta,
+                delta,
               });
               usedCdpRoleSnapshot = true;
               return snapshot;
@@ -675,7 +659,7 @@ export function registerBrowserAgentSnapshotRoutes(
                     ...(typeof plan.resolvedMaxChars === "number"
                       ? { maxChars: plan.resolvedMaxChars }
                       : {}),
-                    delta: deltaState.delta,
+                    delta,
                   })
                 : await cdpRoleSnapshot();
             if (!snap) {
@@ -712,7 +696,9 @@ export function registerBrowserAgentSnapshotRoutes(
             }
 
             await assertDocumentIdentityUnchanged();
-            deltaState.record(snap.refs ?? {});
+            if (deltaKey) {
+              recordSnapshotKeys(ctx, { ...deltaKey, refs: snap.refs ?? {} });
+            }
             return jsonSnapshot({
               ...browserStateFields,
               ...image,
@@ -762,7 +748,7 @@ export function registerBrowserAgentSnapshotRoutes(
         },
       });
     } catch (err) {
-      handleRouteError(ctx, res, err);
+      handleRouteError(res, err);
     }
   });
 }

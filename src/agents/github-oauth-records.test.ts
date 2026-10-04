@@ -97,6 +97,29 @@ describe("GitHub OAuth hidden records", () => {
     expect(readGitHubDeviceAuthorizationRecord(requestId)).toEqual(record);
   });
 
+  it.each([false, true])(
+    "preserves sandbox opt-in %s in authorization snapshots",
+    (allowInSandbox) => {
+      const expectedIdentity = { profileId, allowInSandbox };
+      const device = { ...deviceRecord, expectedIdentity };
+      writeGitHubDeviceAuthorizationRecord(device);
+      expect(readGitHubDeviceAuthorizationRecord(requestId)).toStrictEqual(device);
+
+      const oauth = {
+        ...oauthRecord,
+        pendingInitial: {
+          requestId,
+          scope: deviceRecord.scope,
+          agentId: deviceRecord.agentId,
+          agentLifecycleBinding: deviceRecord.agentLifecycleBinding,
+          expectedIdentity,
+        },
+      };
+      writeGitHubOAuthRecord(oauth);
+      expect(inspectGitHubOAuthRecord(profileId)).toStrictEqual({ state: "valid", record: oauth });
+    },
+  );
+
   it.each(["record", "identity", "author", "binding", "provenance"] as const)(
     "rejects an own __proto__ key in the persisted %s",
     (location) => {
@@ -183,6 +206,8 @@ describe("GitHub OAuth hidden records", () => {
       },
     ],
     ["empty Git author", { expectedIdentity: { profileId, gitAuthor: {} } }],
+    ["extra identity field", { expectedIdentity: { profileId, unexpected: true } }],
+    ["non-boolean sandbox opt-in", { expectedIdentity: { profileId, allowInSandbox: "true" } }],
     ["blank Git author", { expectedIdentity: { profileId, gitAuthor: { name: "  " } } }],
     [
       "extra Git author field",

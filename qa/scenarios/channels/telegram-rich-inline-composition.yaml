@@ -37,7 +37,7 @@ scenario:
     isolationReason: Rich-message account configuration and native message revisions belong to this leased DM.
     transportPolicy:
       directMessageOnly: true
-    summary: Send eleven synthetic formatting cases through the Gateway and edit one through the normal CLI; inspect full TDLib trees from the leased Test Server DM. This proves direct operator delivery, not model generation. The CLI harness and package candidate must contain the same reviewed renderer.
+    summary: Send eleven synthetic formatting cases and edit one through the Gateway action boundary; inspect full TDLib trees from the leased Test Server DM. This proves direct operator delivery, not model generation.
     config:
       requiredProviderMode: mock-openai
       requiredChannelDriver: live
@@ -129,7 +129,7 @@ flow:
           value: []
         - set: failures
           value: []
-        - set: editCliCompleted
+        - set: editCompleted
           value: false
         - set: editVerified
           value: false
@@ -176,7 +176,7 @@ flow:
                     receipts: vars.receipts.slice(0, 11).map((receipt, index) => ({ case: receipt.case, label: `message-${index + 1}` })),
                     cases: vars.proofs.slice(0, 11).map(proof => ({ case: proof.case, label: proof.label, accountMessageIdsDiffer: proof.accountMessageIdsDiffer, richMessage: tree(proof.richMessage) })),
                     failures: vars.failures.map(failure => ({ case: failure.case, label: failure.label, contentType: failure.contentType, full: failure.full, matchesPattern: failure.matchesPattern, richMessage: tree(failure.richMessage) })),
-                    edit: { completedWithBotReceipt: vars.editCliCompleted, verified: vars.editVerified },
+                    edit: { completedWithBotReceipt: vars.editCompleted, verified: vars.editVerified },
                     candidates, unmatched: { count: unmatchedCount, contentTypes: [...unmatchedTypes] }
                   };
                   const content = redactQaGatewayDebugText(JSON.stringify(artifact).replaceAll(runId, 'run'));
@@ -243,13 +243,23 @@ flow:
               - set: editMarker
                 value:
                   expr: "`QA-RICH-${runId}-edit-END`"
-              - call: runQaCli
+              - call: env.gateway.call
                 args:
-                  - ref: env
-                  - expr: "['message', 'edit', '--channel', 'telegram', '--account', transport.accountId, '--target', delivery.to, '--message-id', String(editTarget.botMessageId), '--message', `${fixtures[1].markdown}\n\n${editMarker}`, '--json']"
+                  - message.action
+                  - channel: telegram
+                    accountId: { ref: transport.accountId }
+                    action: edit
+                    conversationReadOrigin: direct-operator
+                    params:
+                      chatId: { ref: delivery.to }
+                      messageId:
+                        expr: "Number(editTarget.botMessageId)"
+                      content:
+                        expr: "`${fixtures[1].markdown}\n\n${editMarker}`"
+                    idempotencyKey:
+                      expr: "`${runId}:edit`"
                   - timeoutMs: 60000
-                    json: true
-              - set: editCliCompleted
+              - set: editCompleted
                 value: true
               - call: waitForCondition
                 saveAs: edited

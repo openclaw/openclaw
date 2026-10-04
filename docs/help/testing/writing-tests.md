@@ -102,7 +102,9 @@ measured with `pnpm test <file> --maxWorkers=1` on one worker:
   `await import()` in a test or hook whose graph reaches a declaration spends
   that preparation inside the test or hook deadline. Import the subject
   statically; suites that re-import it per test add a side-effect import of
-  `src/test-utils/prepare-compiled-subprocesses.ts`.
+  `src/test-utils/prepare-compiled-subprocesses.ts` in core. Extension tests use
+  `import "openclaw/plugin-sdk/compiled-subprocess-testing";` instead. Add the
+  preload only to suites that already load a declaration.
 - State the measured cost in the PR for every new or materially changed test
   file, and the CI seconds once the run exists.
 

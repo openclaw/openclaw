@@ -15,7 +15,13 @@ if (!directory || !["status", "cleanup-group", "release"].includes(command)) {
     "Usage: telegram-test-recover.mjs <retained-lease-directory> <status|cleanup-group|release> [driver arguments]",
   );
 }
-const leaseDir = path.resolve(directory);
+const requestedDir = path.resolve(directory);
+// Canonicalize the parent once so /private/var and /var spell the same temporary
+// root; the lease directory itself stays unresolved and must not be a symlink.
+const leaseDir = path.join(
+  fs.realpathSync(path.dirname(requestedDir)),
+  path.basename(requestedDir),
+);
 const stateRoot = path.join(leaseDir, "state");
 const receipt = path.join(leaseDir, "lease.json");
 
@@ -33,7 +39,7 @@ function requireOwnedPath(file, directory, privateMode = true) {
 
 function validateRetainedLayout() {
   if (
-    path.dirname(leaseDir) !== path.resolve(os.tmpdir()) ||
+    path.dirname(leaseDir) !== fs.realpathSync(os.tmpdir()) ||
     !path.basename(leaseDir).startsWith("openclaw-tg-test-credential-")
   ) {
     throw new Error(
@@ -68,13 +74,9 @@ function validateRetainedLayout() {
     for (const name of fs.readdirSync(directory)) {
       const file = path.join(directory, name);
       const stat = fs.lstatSync(file);
-      // Private enclosing roots protect archive directories and runtime caches;
-      // the runtime owner can contain ordinary tool-created file modes.
-      requireOwnedPath(
-        file,
-        stat.isDirectory(),
-        !stat.isDirectory() && !file.startsWith(path.join(stateRoot, "runtime") + path.sep),
-      );
+      // The private roots checked above are the confidentiality boundary. TDLib
+      // and uv create databases, downloads, and caches with ordinary modes.
+      requireOwnedPath(file, stat.isDirectory(), false);
       if (stat.isDirectory()) pending.push(file);
     }
   }

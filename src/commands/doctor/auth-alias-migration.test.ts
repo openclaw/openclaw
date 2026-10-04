@@ -35,7 +35,61 @@ import {
 } from "../doctor-auth-flat-profiles.js";
 import { runDoctorRepairSequence } from "./repair-sequencing.js";
 
+function writeStore(env: NodeJS.ProcessEnv, store: unknown, agentDir?: string) {
+  runAuthProfileWriteTransaction(
+    agentDir,
+    (database) => {
+      writePersistedAuthProfileStoreRaw(store, agentDir, database);
+    },
+    { env },
+  );
+}
+
 describe("Doctor stored auth alias migration", () => {
+  it.each(["import", "repair sequence"])(
+    "refuses config-selected retired sidecars before direct %s mutates auth",
+    async (entrypoint) => {
+      await withOpenClawTestState(
+        { label: "auth-retired-sidecar", layout: "home", env: { OPENCLAW_OAUTH_DIR: undefined } },
+        async (fixture) => {
+          const oauthDir = fixture.statePath("custom-credentials");
+          const sidecar = path.join(oauthDir, "auth-profiles", `${"b".repeat(32)}.json`);
+          const sourcePath = fixture.statePath("agents/main/agent/auth-profiles.json");
+          await fixture.writeJson("agents/main/agent/auth-profiles.json", {
+            version: 1,
+            profiles: {
+              "example:default": { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
+            },
+          });
+          fs.mkdirSync(path.dirname(sidecar), { recursive: true });
+          fs.writeFileSync(sidecar, "unparsed historical bytes");
+          const sourceBytes = fs.readFileSync(sourcePath);
+          const cfg = {
+            plugins: { enabled: false },
+            env: { vars: { OPENCLAW_OAUTH_DIR: oauthDir } },
+          };
+          const pending =
+            entrypoint === "import"
+              ? maybeMigrateAuthProfileJsonStoresToSqlite({
+                  cfg,
+                  env: fixture.env,
+                  prompter: { confirmAutoFix: async () => true },
+                })
+              : runDoctorRepairSequence({
+                  state: { cfg, candidate: cfg, pendingChanges: false, fixHints: [] },
+                  env: fixture.env,
+                  doctorFixCommand: "openclaw doctor --fix",
+                });
+          await expect(pending).rejects.toThrow("Upgrade through OpenClaw 2026.9.7");
+          expect(fs.readFileSync(sourcePath)).toEqual(sourceBytes);
+          expect(fs.readFileSync(sidecar, "utf8")).toBe("unparsed historical bytes");
+          expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["auth-profiles.json"]);
+          expect(fixture.env.OPENCLAW_OAUTH_DIR).toBeUndefined();
+        },
+      );
+    },
+  );
+
   it("keeps canonical JSON import projection and archives the exact original fields", async () => {
     await withOpenClawTestState(
       { label: "auth-json-projection", layout: "home" },
@@ -99,13 +153,7 @@ describe("Doctor stored auth alias migration", () => {
             "example:work": { mode: "api_key", provider: "example", apiKey: "synthetic-key" },
           },
         };
-        runAuthProfileWriteTransaction(
-          undefined,
-          (database) => {
-            writePersistedAuthProfileStoreRaw(original, undefined, database);
-          },
-          { env: fixture.env },
-        );
+        writeStore(fixture.env, original);
         const databasePath = resolveSharedAuthStorePath(fixture.env);
         const snapshot = sqliteSnapshot.createVerifiedSqliteSnapshot;
         const replacedDuringBackup = vi
@@ -163,7 +211,10 @@ describe("Doctor stored auth alias migration", () => {
       await withOpenClawTestState(
         { label: "auth-credential-fields", layout: "home" },
         async (fixture) => {
-          const cfg: OpenClawConfig = { plugins: { enabled: false } };
+          const cfg: OpenClawConfig = {
+            plugins: { enabled: false },
+            secrets: { defaults: { env: "configured-env" } },
+          };
           const ref = { source: "env", provider: "default", id: "SYNTHETIC_AUTH_KEY" };
           const original = {
             version: 1,
@@ -210,6 +261,21 @@ describe("Doctor stored auth alias migration", () => {
               },
               "example:type": { type: "apiKey", provider: "example", apiKey: "synthetic-type-key" },
               "example:ref": { type: "api_key", provider: "example", key: ref },
+              "example:providerless-key": {
+                type: "api_key",
+                provider: "example",
+                keyRef: { source: "env", id: "SYNTHETIC_AUTH_KEY", opaque: "keep-in-backup" },
+                extension: "preserved",
+              },
+              "example:providerless-token": {
+                type: "token",
+                provider: "example",
+                tokenRef: {
+                  source: "env",
+                  id: "SYNTHETIC_AUTH_KEY",
+                  opaque: { note: "keep-in-backup" },
+                },
+              },
               "example:api-ref": { type: "api_key", provider: "example", key: null, apiKey: ref },
               "example:empty": {
                 type: "api_key",
@@ -254,7 +320,16 @@ describe("Doctor stored auth alias migration", () => {
               doctorFixCommand: "openclaw doctor --fix",
               env: fixture.env,
             });
-          await run();
+          const repaired = await run();
+          expect(
+            repaired.changeNotes
+              .flatMap((note) => note.split("\n"))
+              .filter((message) => message.startsWith("Canonicalized 2 auth SecretRef(s) in ")),
+          ).toEqual([
+            expect.stringContaining(
+              "to source/provider/id; unsupported fields are preserved in the verified migration backup.",
+            ),
+          ]);
           const expected = {
             version: 1,
             profiles: {
@@ -300,6 +375,13 @@ describe("Doctor stored auth alias migration", () => {
               },
               "example:type": { type: "api_key", provider: "example", key: "synthetic-type-key" },
               "example:ref": { type: "api_key", provider: "example", keyRef: ref },
+              "example:providerless-key": {
+                type: "api_key",
+                provider: "example",
+                keyRef: ref,
+                extension: "preserved",
+              },
+              "example:providerless-token": { type: "token", provider: "example", tokenRef: ref },
               "example:api-ref": { type: "api_key", provider: "example", keyRef: ref },
               "example:empty": { type: "api_key", provider: "example", key: "synthetic-fallback" },
               "example:token": {
@@ -413,13 +495,7 @@ describe("Doctor stored auth alias migration", () => {
           lastGood: { [legacyProvider]: legacyId },
           usageStats: { [legacyId]: { errorCount: 4, lastUsed: 4321 } },
         };
-        runAuthProfileWriteTransaction(
-          agentDir,
-          (database) => {
-            writePersistedAuthProfileStoreRaw(original, agentDir, database);
-          },
-          { env: fixture.env },
-        );
+        writeStore(fixture.env, original, agentDir);
 
         const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
         const result = await maybeRepairLegacyAuthProfileStores({
@@ -472,13 +548,7 @@ describe("Doctor stored auth alias migration", () => {
           order: { "openai-codex": ["openai-codex:work"], openai: [] },
         },
       };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw("unreadable-store-shape", undefined, database);
-        },
-        { env: fixture.env },
-      );
+      writeStore(fixture.env, "unreadable-store-shape");
       const result = await runDoctorRepairSequence({
         state: { cfg, candidate: structuredClone(cfg), pendingChanges: false, fixHints: [] },
         doctorFixCommand: "openclaw doctor --fix",
@@ -533,13 +603,7 @@ describe("Doctor stored auth alias migration", () => {
         },
         { env: fixture.env },
       );
-      runAuthProfileWriteTransaction(
-        fixture.agentDir("broken"),
-        (database) => {
-          writePersistedAuthProfileStoreRaw(invalid, fixture.agentDir("broken"), database);
-        },
-        { env: fixture.env },
-      );
+      writeStore(fixture.env, invalid, fixture.agentDir("broken"));
       const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
       const result = await maybeRepairLegacyAuthProfileStores({
         cfg,
@@ -587,13 +651,7 @@ describe("Doctor stored auth alias migration", () => {
             },
           },
         };
-        runAuthProfileWriteTransaction(
-          undefined,
-          (database) => {
-            writePersistedAuthProfileStoreRaw(original, undefined, database);
-          },
-          { env: fixture.env },
-        );
+        writeStore(fixture.env, original);
         const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
         const result = await maybeRepairLegacyAuthProfileStores({
           cfg,
@@ -607,91 +665,59 @@ describe("Doctor stored auth alias migration", () => {
     },
   );
 
-  it("rejects a stale collision map before changing stored credentials", async () => {
-    await withOpenClawTestState({ label: "alias-stale-map", layout: "home" }, async (fixture) => {
-      const cfg: OpenClawConfig = { plugins: { enabled: false } };
-      const original = {
-        version: 1,
-        profiles: {
-          "openai-codex:work": { type: "api_key", provider: "openai-codex", key: "old-key" },
-        },
-      };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(original, undefined, database);
-        },
-        { env: fixture.env },
-      );
-      const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
-      const current = {
-        ...original,
-        profiles: {
-          ...original.profiles,
-          "openai:work": { type: "api_key", provider: "openai", key: "new-account-key" },
-        },
-      };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(current, undefined, database);
-        },
-        { env: fixture.env },
-      );
-      const result = await maybeRepairLegacyAuthProfileStores({
-        cfg,
-        env: fixture.env,
-        profileIdMap,
+  it.each(["credentials", "rotation state"])(
+    "rejects a stale map before replacing newer %s",
+    async (occupied) => {
+      await withOpenClawTestState({ label: "alias-stale-map", layout: "home" }, async (fixture) => {
+        const cfg: OpenClawConfig = { plugins: { enabled: false } };
+        const original = {
+          version: 1,
+          profiles: {
+            "openai-codex:work": { type: "api_key", provider: "openai-codex", key: "old-key" },
+          },
+        };
+        writeStore(fixture.env, original);
+        const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
+        const current =
+          occupied === "credentials"
+            ? {
+                ...original,
+                profiles: {
+                  ...original.profiles,
+                  "openai:work": { type: "api_key", provider: "openai", key: "new-account-key" },
+                },
+              }
+            : original;
+        const currentState = {
+          version: 1,
+          usageStats: { "openai-codex:work": { errorCount: 2 }, "openai:work": { errorCount: 99 } },
+        };
+        runAuthProfileWriteTransaction(
+          undefined,
+          (database) => {
+            if (occupied === "credentials") {
+              writePersistedAuthProfileStoreRaw(current, undefined, database);
+            } else {
+              writePersistedAuthProfileStateRaw(currentState, undefined, database);
+            }
+          },
+          { env: fixture.env },
+        );
+        const result = await maybeRepairLegacyAuthProfileStores({
+          cfg,
+          env: fixture.env,
+          profileIdMap,
+        });
+        expect.soft(result.changes).toEqual([]);
+        expect.soft(result.profileIdMap.size).toBe(0);
+        expect.soft(result.warnings.join("\n")).toContain("target is occupied");
+        expect.soft(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(current);
+        if (occupied === "rotation state") {
+          expect.soft(readPersistedSharedAuthProfileStateRaw(fixture.env)).toEqual(currentState);
+        }
       });
-      expect(result.changes).toEqual([]);
-      expect(result.profileIdMap.size).toBe(0);
-      expect(result.warnings.join("\n")).toContain("target is occupied");
-      expect(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(current);
-    });
-  });
-
-  it("rejects a stale rotation-state map before replacing newer metadata", async () => {
-    await withOpenClawTestState({ label: "alias-stale-state", layout: "home" }, async (fixture) => {
-      const cfg: OpenClawConfig = { plugins: { enabled: false } };
-      const original = {
-        version: 1,
-        profiles: {
-          "openai-codex:work": { type: "api_key", provider: "openai-codex", key: "old-key" },
-        },
-      };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStoreRaw(original, undefined, database);
-        },
-        { env: fixture.env },
-      );
-      const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg, env: fixture.env });
-      const currentState = {
-        version: 1,
-        usageStats: {
-          "openai-codex:work": { errorCount: 2 },
-          "openai:work": { errorCount: 99 },
-        },
-      };
-      runAuthProfileWriteTransaction(
-        undefined,
-        (database) => {
-          writePersistedAuthProfileStateRaw(currentState, undefined, database);
-        },
-        { env: fixture.env },
-      );
-      const result = await maybeRepairLegacyAuthProfileStores({
-        cfg,
-        env: fixture.env,
-        profileIdMap,
-      });
-      expect.soft(result.changes).toEqual([]);
-      expect.soft(result.profileIdMap.size).toBe(0);
-      expect.soft(readPersistedSharedAuthProfileStoreRaw(fixture.env)).toEqual(original);
-      expect.soft(readPersistedSharedAuthProfileStateRaw(fixture.env)).toEqual(currentState);
-    });
-  });
+    },
+  );
 
   it("refuses alias planning when an agent location is not a directory", async () => {
     await withOpenClawTestState({ label: "alias-census", layout: "home" }, async (fixture) => {

@@ -204,7 +204,7 @@ export async function recoverStore(params: {
       });
       entries = entry ? [{ sessionKey: params.expectedTarget.sessionKey, entry }] : [];
     } else {
-      entries = listSessionEntriesByStatus(
+      entries = await listSessionEntriesByStatus(
         { agentId: params.storeAgentId, storePath: params.storePath },
         ["running"],
       );
@@ -319,58 +319,9 @@ export async function recoverStore(params: {
       result.skipped++;
       continue;
     }
-    const recordResumeResult = (resumeResult: Awaited<ReturnType<typeof resumeMainSession>>) => {
-      result[resumeResult]++;
-      if (resumeResult === "started" || resumeResult === "settled") {
-        params.handledSessionKeys.add(resumeDedupeKey);
-      } else if (resumeResult === "failed") {
-        const current = loadExpectedRestartRecoveryTarget({
-          expected: { agentId, sessionId: entry.sessionId, sessionKey },
-          storePath: params.storePath,
-        });
-        if (
-          getMainSessionRecoveryRetryCount(current?.mainRestartRecovery) === MAX_RECOVERY_RETRIES &&
-          !current?.mainRestartRecovery?.reservation
-        ) {
-          params.onExhaustedTarget?.({
-            ...target,
-            canonicalSessionKey: dispatchSessionKey,
-            sessionId: entry.sessionId,
-          });
-        }
-      }
-    };
-
     const expectedRecoverySourceRunId = normalizeOptionalString(
       entry.restartRecoveryDeliverySourceRunId,
     );
-    const resumeCurrent = async (
-      options: Pick<
-        Parameters<typeof resumeMainSession>[0],
-        "forceCodeModeTools" | "forceRestartSafeTools" | "pendingFinalDeliveryText"
-      > = {},
-    ) => {
-      if (stopped()) {
-        return false;
-      }
-      recordResumeResult(
-        await resumeMainSession({
-          ...target,
-          canonicalSessionKey: dispatchSessionKey,
-          cfg: params.cfg,
-          entry,
-          observation: recoveryView.observation,
-          recoveryAttempt: recoveryView.nextAttempt,
-          recoveryAdmission: params.recoveryAdmission,
-          gatewayRuntime: params.gatewayRuntime,
-          ...options,
-          lifecycleGeneration: params.lifecycleGeneration,
-          recoveryCapacity: params.recoveryCapacity,
-          shouldContinue: params.shouldContinue,
-        }),
-      );
-      return true;
-    };
 
     const pendingAction = entry.pendingFinalDelivery
       ? await pendingFinalRecoveryAction(entry.pendingFinalDelivery, params.stateDir)
@@ -526,70 +477,98 @@ export async function recoverStore(params: {
     }
 
     const pendingFinal = entry.pendingFinalDelivery;
+    let resumeOptions: Pick<
+      Parameters<typeof resumeMainSession>[0],
+      "forceCodeModeTools" | "forceRestartSafeTools" | "pendingFinalDeliveryText"
+    >;
     if (pendingAction === "fail" || pendingFinal?.kind === "replayable") {
-      if (
-        !(await resumeCurrent({
-          ...(pendingFinal?.kind === "replayable"
-            ? { pendingFinalDeliveryText: pendingFinal.text }
-            : {}),
-          forceRestartSafeTools:
-            pendingAction === "fail" ||
-            entry.restartRecoveryForceSafeTools === true ||
-            hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
-        }))
-      ) {
-        return result;
-      }
-      continue;
-    }
-
-    const retainedSafeTools =
-      replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
-    const resumePolicy = resolveMainSessionResumePolicy(
-      messages,
-      retainedSafeTools,
-      expectedRecoverySourceRunId,
-      entry.restartRecoveryBeforeAgentReplyState,
-      entry.restartRecoveryDeliveryReceiptState,
-      entry.restartRecoveryDeliveryToolCallId,
-      fullAccess && !retainedSafeTools,
-    );
-    if (resumePolicy.action === "complete") {
-      if (stopped()) {
-        return result;
-      }
-      const completion = await markSessionCompletedAfterRecoveryCheckpoint({
-        ...target,
-        entry,
+      resumeOptions = {
+        ...(pendingFinal?.kind === "replayable"
+          ? { pendingFinalDeliveryText: pendingFinal.text }
+          : {}),
+        forceRestartSafeTools:
+          pendingAction === "fail" ||
+          entry.restartRecoveryForceSafeTools === true ||
+          hasReplaySafeCodeModeCheckpointInCurrentTurn(messages),
+      };
+    } else {
+      const retainedSafeTools =
+        replaySafeCheckpoint || (entry.restartRecoveryForceSafeTools === true && !fullAccess);
+      const resumePolicy = resolveMainSessionResumePolicy(
         messages,
-        reason: resumePolicy.reason,
-        sourceTurnId: expectedRecoverySourceRunId,
-        ...(resumePolicy.reason === "handled-silent"
-          ? {}
-          : {
-              toolCallId: resumePolicy.toolCallId,
-            }),
-      });
-      if (completion.outcome === "completed") {
-        params.handledSessionKeys.add(resumeDedupeKey);
-        result.settled++;
-      } else if (completion.outcome === "changed") {
-        result.skipped++;
-      } else {
-        if (!(await resumeCurrent({ forceRestartSafeTools: true }))) {
+        retainedSafeTools,
+        expectedRecoverySourceRunId,
+        entry.restartRecoveryBeforeAgentReplyState,
+        entry.restartRecoveryDeliveryReceiptState,
+        entry.restartRecoveryDeliveryToolCallId,
+        fullAccess && !retainedSafeTools,
+      );
+      if (resumePolicy.action === "complete") {
+        if (stopped()) {
           return result;
         }
+        const completion = await markSessionCompletedAfterRecoveryCheckpoint({
+          ...target,
+          entry,
+          messages,
+          reason: resumePolicy.reason,
+          sourceTurnId: expectedRecoverySourceRunId,
+          ...(resumePolicy.reason === "handled-silent"
+            ? {}
+            : { toolCallId: resumePolicy.toolCallId }),
+        });
+        if (completion.outcome === "completed") {
+          params.handledSessionKeys.add(resumeDedupeKey);
+          result.settled++;
+          continue;
+        }
+        if (completion.outcome === "changed") {
+          result.skipped++;
+          continue;
+        }
+        resumeOptions = { forceRestartSafeTools: true };
+      } else {
+        resumeOptions = {
+          forceRestartSafeTools: retainedSafeTools || resumePolicy.forceRestartSafeTools,
+          forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
+        };
       }
-      continue;
     }
-
-    if (
-      !(await resumeCurrent({
-        forceRestartSafeTools: retainedSafeTools || resumePolicy.forceRestartSafeTools,
-        forceCodeModeTools: resumePolicy.forceCodeModeTools === true,
-      }))
-    ) {
+    if (stopped()) {
       return result;
+    }
+    const resumeResult = await resumeMainSession({
+      ...target,
+      canonicalSessionKey: dispatchSessionKey,
+      cfg: params.cfg,
+      entry,
+      observation: recoveryView.observation,
+      recoveryAttempt: recoveryView.nextAttempt,
+      recoveryAdmission: params.recoveryAdmission,
+      gatewayRuntime: params.gatewayRuntime,
+      ...resumeOptions,
+      lifecycleGeneration: params.lifecycleGeneration,
+      recoveryCapacity: params.recoveryCapacity,
+      shouldContinue: params.shouldContinue,
+    });
+    result[resumeResult]++;
+    if (resumeResult === "started" || resumeResult === "settled") {
+      params.handledSessionKeys.add(resumeDedupeKey);
+    } else if (resumeResult === "failed") {
+      const current = loadExpectedRestartRecoveryTarget({
+        expected: { agentId, sessionId: entry.sessionId, sessionKey },
+        storePath: params.storePath,
+      });
+      if (
+        getMainSessionRecoveryRetryCount(current?.mainRestartRecovery) === MAX_RECOVERY_RETRIES &&
+        !current?.mainRestartRecovery?.reservation
+      ) {
+        params.onExhaustedTarget?.({
+          ...target,
+          canonicalSessionKey: dispatchSessionKey,
+          sessionId: entry.sessionId,
+        });
+      }
     }
   }
 

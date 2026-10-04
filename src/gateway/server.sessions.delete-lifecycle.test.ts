@@ -309,7 +309,7 @@ test.each(["session id", "updated at"] as const)(
     let releaseBlockingMutation = () => {};
     const { promise: blockingMutationStarted, resolve: markBlockingMutationStarted } =
       createDeferred();
-    const blockingMutation = runExclusiveSessionLifecycleMutation({
+    const blockingMutation = runExclusiveSessionLifecycleMutation("delete", {
       scope: storePath,
       identities: [sessionKey],
       run: async () => {
@@ -347,36 +347,16 @@ test.each(["session id", "updated at"] as const)(
   },
 );
 
-test.each(["runtime loading", "cleanup"] as const)(
-  "sessions.delete rejects a same-key successor created during %s without a caller identity guard",
-  async (phase) => {
-    const sessionKey = "agent:main:cleanup-successor";
-    const { storePath } = await createSessionStoreDir();
-    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("original-session") } });
-    const replace = () => {
-      replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry("successor-session"));
-    };
-    const shared = await import("./server-methods/sessions-shared.js");
-    const loadRuntime = shared.loadSessionsRuntimeModule;
-    const loading =
-      phase === "runtime loading"
-        ? vi.spyOn(shared, "loadSessionsRuntimeModule").mockImplementationOnce(async () => {
-            const runtime = await loadRuntime();
-            replace();
-            return runtime;
-          })
-        : undefined;
-    if (phase === "cleanup") {
-      bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => replace());
-    }
-    try {
-      await expectSessionDeleteChanged({ key: sessionKey });
-      expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("successor-session");
-    } finally {
-      loading?.mockRestore();
-    }
-  },
-);
+test("sessions.delete rejects a same-key successor created during cleanup without a caller identity guard", async () => {
+  const sessionKey = "agent:main:cleanup-successor";
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("original-session") } });
+  bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockImplementationOnce(async () => {
+    replaceSessionEntrySync({ sessionKey, storePath }, sessionStoreEntry("successor-session"));
+  });
+  await expectSessionDeleteChanged({ key: sessionKey });
+  expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("successor-session");
+});
 
 test("sessions.delete includes cleanup-owned row changes in its guarded deletion", async () => {
   const sessionKey = "agent:main:cron:cleanup";

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -83,6 +84,7 @@ function createDiscordStatusReadyListener(params: {
 }
 
 export async function createDiscordMonitorClient(params: {
+  scheduler: PluginServiceSchedulerV1;
   accountId: string;
   applicationId: string;
   token: string;
@@ -124,7 +126,6 @@ export async function createDiscordMonitorClient(params: {
       commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
-        maxQueueSize: 1000,
         ...(params.restFetch ? { fetch: params.restFetch } : {}),
       },
       eventQueue: eventQueueOpts,
@@ -150,6 +151,7 @@ export async function createDiscordMonitorClient(params: {
 
   if (gateway) {
     autoPresenceController = params.createAutoPresenceController({
+      scheduler: params.scheduler,
       accountId: params.accountId,
       discordConfig: params.discordConfig,
       gateway,

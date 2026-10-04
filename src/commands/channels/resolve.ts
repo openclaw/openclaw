@@ -8,6 +8,7 @@ import type {
   ChannelResolveKind,
   ChannelResolveResult,
 } from "../../channels/plugins/types.adapters.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
@@ -27,42 +28,27 @@ export type ChannelsResolveOptions = {
   entries?: string[];
 };
 
-function resolvePreferredKind(
-  kind?: ChannelsResolveOptions["kind"],
-): ChannelResolveKind | undefined {
-  if (!kind || kind === "auto") {
-    return undefined;
-  }
-  if (kind === "user") {
-    return "user";
-  }
-  return "group";
-}
-
-function detectAutoKind(input: string): ChannelResolveKind {
+function detectAutoKindForPlugin(input: string, plugin: ChannelPlugin): ChannelResolveKind {
   const trimmed = input.trim();
-  return trimmed.startsWith("@") ||
+  if (
+    trimmed.startsWith("@") ||
     /^<@!?/.test(trimmed) ||
     /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed) ||
     /^user:/i.test(trimmed)
-    ? "user"
-    : "group";
-}
-
-function detectAutoKindForPlugin(
-  input: string,
-  plugin?: {
-    id: string;
-    meta?: {
-      aliases?: readonly string[];
-    };
-  },
-): ChannelResolveKind {
-  const generic = detectAutoKind(input);
-  if (generic === "user" || !plugin) {
-    return generic;
+  ) {
+    return "user";
   }
-  const trimmed = input.trim();
+  try {
+    const chatType = plugin.messaging?.inferTargetChatType?.({ to: trimmed });
+    if (chatType === "direct") {
+      return "user";
+    }
+    if (chatType === "group" || chatType === "channel") {
+      return "group";
+    }
+  } catch {
+    // Some plugins only accept resolved IDs here; names still need directory lookup.
+  }
   const lowered = normalizeLowercaseStringOrEmpty(trimmed);
   const prefixes = [plugin.id, ...(plugin.meta?.aliases ?? [])]
     .map((entry) => normalizeOptionalLowercaseString(entry))
@@ -84,7 +70,7 @@ function detectAutoKindForPlugin(
     }
     return "user";
   }
-  return generic;
+  return "group";
 }
 
 function formatResolveResult(result: ChannelResolveResult): string {
@@ -153,7 +139,8 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
       }),
     );
   }
-  const preferredKind = resolvePreferredKind(opts.kind);
+  const preferredKind =
+    !opts.kind || opts.kind === "auto" ? undefined : opts.kind === "user" ? "user" : "group";
 
   const byKind = new Map<ChannelResolveKind, string[]>();
   if (preferredKind) {

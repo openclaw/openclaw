@@ -1872,7 +1872,7 @@ describe("loadChatHistory retry handling", () => {
     expect(secondState.chatLoading).toBe(true);
     expect(request.mock.calls[1]?.[2]?.signal.aborted).toBe(false);
     secondAttempt.reject(retryableError);
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(1_000);
     await secondLoad;
 
     expect(request).toHaveBeenCalledTimes(3);
@@ -2238,7 +2238,7 @@ describe("loadChatHistory retry handling", () => {
     expect(getChatHistoryLoadState(state)).toMatchObject({
       phase: "failed",
       message:
-        "This connection is missing operator.read, so existing chat history cannot be loaded yet.",
+        "You don't have permission to view existing chat history. Ask the person who manages OpenClaw for access.",
       retryable: false,
     });
     expect(state.lastError).toBeNull();

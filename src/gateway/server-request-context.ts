@@ -148,7 +148,10 @@ type GatewayRequestContextRuntime = Pick<
       GatewayCoreRuntime["sessionMessageSubscribers"],
       "unsubscribeAll"
     >;
-    toolEventRecipients: Pick<GatewayCoreRuntime["toolEventRecipients"], "add">;
+    toolEventRecipients: Pick<
+      GatewayCoreRuntime["toolEventRecipients"],
+      "add" | "removeConnection"
+    >;
     readinessEventLoopHealth: Pick<GatewayCoreRuntime["readinessEventLoopHealth"], "snapshot">;
     kernel: Pick<
       GatewayCoreRuntime["kernel"],
@@ -555,6 +558,7 @@ export function createGatewayRequestContext(
     unsubscribeAllSessionEvents: (connId) => {
       sessionEventSubscribers.unsubscribe(connId);
       sessionMessageSubscribers.unsubscribeAll(connId);
+      runtime.toolEventRecipients.removeConnection(connId);
       sessionObserver.removeConnection(connId);
       // PR replace-sets share this websocket cleanup boundary with session events.
       runtimeState.controlUiSessionPullRequests?.unsubscribe(connId);

@@ -448,7 +448,7 @@ describe("handleEmbeddedPromptFailure", () => {
         resolvedVerboseLevel: "off",
       }),
     ).toMatchObject({
-      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      text: "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.",
       isError: true,
     });
   });

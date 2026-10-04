@@ -56,7 +56,11 @@ import {
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
 } from "./index.js";
-import { createIdleRelayProvider, makeRelayTransport } from "./index.test-support.js";
+import {
+  createIdleRelayProvider,
+  createRelayAgentConfig,
+  makeRelayTransport,
+} from "./index.test-support.js";
 import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
 import { closeRelaySession } from "./operations.js";
 import { usePersistentRelayTestState } from "./session-state.test-support.js";
@@ -92,7 +96,7 @@ function createTalkRealtimeRelaySession(
     tools = [],
     ...request
   } = params;
-  const cfg = params.cfg ?? { agents: { entries: { main: { default: true } } } };
+  const cfg = params.cfg ?? { agents: { entries: { main: {} } } };
   const capabilities = resolveRealtimeVoiceProviderCapabilities({
     provider: params.provider,
     providerConfig,
@@ -1036,9 +1040,7 @@ describe("talk realtime gateway relay", () => {
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-relay-owner-pin-")),
     );
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
-    let runtimeConfig: OpenClawConfig = {
-      agents: { entries: { main: { default: true }, ops: {} } },
-    };
+    let runtimeConfig: OpenClawConfig = createRelayAgentConfig("main");
     try {
       const session = createTalkRealtimeRelaySessionRaw({
         controlSource: "transcript",
@@ -1056,9 +1058,7 @@ describe("talk realtime gateway relay", () => {
         sessionTarget: prepareTalkSessionTarget(runtimeConfig, "main"),
       });
       activeRelaySessions.set(session.relaySessionId, "conn-owner-pin");
-      runtimeConfig = {
-        agents: { entries: { main: {}, ops: { default: true } } },
-      };
+      runtimeConfig = createRelayAgentConfig("ops");
 
       ensureTalkRealtimeRelayVoiceSession({
         relaySessionId: session.relaySessionId,
@@ -1094,9 +1094,7 @@ describe("talk realtime gateway relay", () => {
         context: {
           broadcastToConnIds: vi.fn(),
           chatAbortControllers: new Map(),
-          getRuntimeConfig: () => ({
-            agents: { entries: { main: {}, ops: { default: true } } },
-          }),
+          getRuntimeConfig: () => createRelayAgentConfig("ops"),
           logGateway: { warn: vi.fn() },
         } as never,
         connId: "conn-trimmed-owner",
@@ -1104,10 +1102,7 @@ describe("talk realtime gateway relay", () => {
         providerConfig: {},
         instructions: "brief",
         tools: [],
-        sessionTarget: prepareTalkSessionTarget(
-          { agents: { entries: { main: {}, ops: { default: true } } } },
-          " agent:main:main ",
-        ),
+        sessionTarget: prepareTalkSessionTarget(createRelayAgentConfig("ops"), " agent:main:main "),
       });
       activeRelaySessions.set(session.relaySessionId, "conn-trimmed-owner");
 

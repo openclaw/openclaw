@@ -6,16 +6,21 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   createReplyOperation,
   type ReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
-import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntryCore,
+  replaceSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
-import { SqliteReclamationWorker } from "../config/sessions/session-accessor.sqlite-reclamation-worker-lifetime.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
+import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
 import { writeGatewayRestartIntentSync } from "../infra/restart-intent.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
@@ -25,6 +30,7 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { startPluginServices } from "../plugins/services.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
@@ -51,11 +57,100 @@ import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import * as mentionWorker from "./mention-inbox-worker.js";
+import { readMentionInbox } from "./mention-inbox.test-support.js";
+import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
+import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
-it("closes a Gateway with an active plugin while retaining a deleted agent store", async () => {
+it("persists accepted mentions before Gateway worker close and rejects records after the close prelude", async ({
+  signal,
+}) => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-mention-close");
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const parentClosed = createDeferredCore();
+  let closing: Promise<void> | undefined;
+  let accepted: Promise<void> | undefined;
+  try {
+    const port = await fixture.reservePort();
+    const server = await fixture.start(port);
+    const kernel = fixture.kernels.get(port);
+    assert(kernel);
+    const alice = ensureProfileForEmail("alice@mentions.example.test");
+    const bob = ensureProfileForEmail("bob@mentions.example.test");
+    const sessionKey = "agent:main:mention-close";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: "mention-close-session",
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: alice.id },
+      },
+    );
+    await kernel.mentionInbox.invalidateAsync();
+    const input: MentionCommittedInput = {
+      sourceId: "accepted-before-close",
+      committedSource: { generation: "mention-close", sequence: 1, timestamp: 1 },
+      sessionKey,
+      agentId: "main",
+      sessionId: "mention-close-session",
+      messageId: "accepted-before-close",
+      senderProfileId: alice.id,
+      recipientProfileIds: [bob.id],
+      excerpt: "@Bob review this change",
+    };
+    const readSnapshot = mentionWorker.readMentionSnapshot;
+    vi.spyOn(mentionWorker, "readMentionSnapshot").mockImplementationOnce(async (...args) => {
+      const snapshot = await readSnapshot(...args);
+      entered.resolve();
+      await release.promise;
+      return snapshot;
+    });
+    accepted = kernel.mentionInbox.recordCommittedInputAsync(input);
+    await withinTest(entered.promise, signal);
+    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    kernel.scheduler.signal.addEventListener("abort", () => parentClosed.resolve(), { once: true });
+    closing = server.close({ reason: "mention close regression" });
+    await withinTest(parentClosed.promise, signal);
+    await kernel.mentionInbox.recordCommittedInputAsync({
+      ...input,
+      sourceId: "refused-after-close",
+      messageId: "refused-after-close",
+    });
+    expect(shared.isOpen).toBe(true);
+    release.resolve();
+    await accepted;
+    await closing;
+    expect(shared.isOpen).toBe(false);
+
+    const reopenedPort = await fixture.reservePort();
+    await fixture.start(reopenedPort);
+    const reopened = fixture.kernels.get(reopenedPort);
+    assert(reopened);
+    const result = await readMentionInbox(reopened.mentionInbox, identifiedClient(bob.id, "Bob"));
+    expect(result.items.map((item) => item.messageId)).toEqual(["accepted-before-close"]);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([accepted, closing]);
+    vi.restoreAllMocks();
+    await fixture.cleanup();
+  }
+});
+
+it("joins scheduled plugin work before closing stores while retaining a deleted agent store", async ({
+  signal,
+}) => {
   const fixture = await createGatewayMetadataCloseFixture("gateway-retained-deleted-agent-close");
+  const stopEntered = createDeferredCore();
+  const rootJoinEntered = createDeferredCore();
+  const releaseRootWork = createDeferredCore();
+  let closing: Promise<void> | undefined;
+  let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
+  let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
   try {
     const pluginId = fixture.pluginId;
     const registry = createEmptyPluginRegistry();
@@ -69,6 +164,8 @@ it("closes a Gateway with an active plugin while retaining a deleted agent store
     setActivePluginRegistry(registry);
     const port = await fixture.reservePort();
     const server = await fixture.start(port);
+    const kernel = fixture.kernels.get(port);
+    assert(kernel);
     expect(fixture.kernels.get(port)?.pluginRuntime.registry.plugins).toEqual(
       expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
     );
@@ -84,6 +181,17 @@ it("closes a Gateway with an active plugin while retaining a deleted agent store
           sessionId: `${agentId}-session`,
           updatedAt: 1,
           pluginExtensions: { [pluginId]: { active: true } },
+          ...(agentId === "main"
+            ? {
+                pendingFinalDelivery: {
+                  kind: "replayable" as const,
+                  text: "accepted final",
+                  createdAt: 1,
+                  intentId: "close-intent",
+                  deliveries: [{ id: "close-delivery", state: "prepared" as const }],
+                },
+              }
+            : {}),
         },
       );
     }
@@ -105,14 +213,113 @@ it("closes a Gateway with an active plugin while retaining a deleted agent store
       (database) => completeAgentDeletionJournalInDatabase(database, "retired", operationId),
       { env: fixture.state.env },
     );
-    await expect(server.close({ reason: "gateway stopping" })).resolves.toBeUndefined();
+    const shared = openOpenClawStateDatabase({ env: fixture.state.env }).db;
+    const pluginWorkEntered = createDeferredCore();
+    const rootWorkEntered = createDeferredCore();
+    const writerEntered = createDeferredCore();
+    heldWriter = patchSessionEntryCore(
+      { agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" },
+      async () => {
+        writerEntered.resolve();
+        await releaseRootWork.promise;
+        return { label: "writer settled before final" };
+      },
+      { skipMaintenance: true, workerGuard: {} },
+    );
+    await withinTest(writerEntered.promise, signal);
+    const stopService = vi.fn(() => stopEntered.resolve());
+    const services = createEmptyPluginRegistry();
+    services.services.push({
+      pluginId,
+      id: "scheduled-close",
+      source: "synthetic",
+      origin: "workspace",
+      service: {
+        id: "scheduled-close",
+        apiVersion: 2,
+        start(context) {
+          context.scheduler.schedule({
+            id: "held",
+            delayMs: 0,
+            everyMs: 1,
+            async run() {
+              pluginWorkEntered.resolve();
+              await stopEntered.promise;
+            },
+          });
+        },
+        stop: stopService,
+      },
+    });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    kernel.runtimeState.pluginServices = await startPluginServices({
+      registry: services,
+      config: fixture.config,
+      scheduler: kernel.scheduler,
+    });
+    kernel.scheduler.schedule({
+      id: "kernel-held-work",
+      delayMs: 0,
+      async run() {
+        acceptedFinal = settlePendingFinalDelivery(
+          {
+            kind: "pending-final",
+            agentId: "main",
+            sessionKey: "agent:main:main",
+            sessionId: "main-session",
+            storePath: activeStore,
+            deliveryId: "close-delivery",
+            intentId: "close-intent",
+          },
+          "delivered",
+        );
+        rootWorkEntered.resolve();
+        await acceptedFinal;
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await withinTest(Promise.all([pluginWorkEntered.promise, rootWorkEntered.promise]), signal);
+    vi.useRealTimers();
+    const stopScheduler = kernel.scheduler.stop.bind(kernel.scheduler);
+    vi.spyOn(kernel.scheduler, "stop").mockImplementation(() => {
+      rootJoinEntered.resolve();
+      return stopScheduler();
+    });
+    closing = server.close({ reason: "gateway stopping" });
+    await withinTest(Promise.race([stopEntered.promise, rootJoinEntered.promise, closing]), signal);
+    expect(stopService).toHaveBeenCalledOnce();
+    await withinTest(rootJoinEntered.promise, signal);
+    expect(kernel.scheduler.signal.aborted).toBe(true);
+    const lateWork = vi.fn();
+    await kernel.scheduler.schedule({ id: "after-close", delayMs: 0, run: lateWork }).stop();
+    expect(lateWork).not.toHaveBeenCalled();
+    expect(disposed).toBe(false);
+    expect(shared.isOpen).toBe(true);
+    releaseRootWork.resolve();
+    await heldWriter;
+    await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
+    await expect(closing).resolves.toBeUndefined();
     expect(disposed).toBe(true);
+    expect(shared.isOpen).toBe(false);
     expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
     expect(
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
     ).toBeUndefined();
+    expect(
+      loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" }),
+    ).toMatchObject({
+      label: "writer settled before final",
+      pendingFinalDelivery: {
+        deliveries: [{ id: "close-delivery", state: "delivered" }],
+      },
+    });
   } finally {
+    stopEntered.resolve();
+    releaseRootWork.resolve();
+    await Promise.allSettled([heldWriter, acceptedFinal, closing]);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     await fixture.cleanup();
   }
 }, 300_000);
@@ -257,15 +464,16 @@ it.skipIf(process.platform !== "linux")(
             },
           }),
       );
-      const reclamationClose = vi.spyOn(SqliteReclamationWorker.prototype, "close");
+      const agentLeases = shared.prepare(
+        "SELECT lease_id FROM agent_database_leases WHERE path = ? ORDER BY lease_id",
+      );
+      const writerLeases = agentLeases.all(agent.path);
+      expect(writerLeases).toHaveLength(2);
       await runSqliteSessionReclamation({
         forceInProcess: false,
         plan: createSessionMaintenanceStatisticsOperation({ ...options, path: agent.path }),
       });
-      const hostLeaseCount = shared
-        .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
-        .get(agent.path)?.n;
-      expect(hostLeaseCount).toBe(3);
+      expect(agentLeases.all(agent.path)).toEqual(writerLeases);
       // External cleanup can outlive the stop budget; idle writers must not wait for it.
       const removeSidecar = kernel.registerConnectionDependentSidecars({
         async stop() {
@@ -306,13 +514,7 @@ it.skipIf(process.platform !== "linux")(
       ]);
       expect(isAgentRunRestartAbortReason(operation.abortSignal.reason)).toBe(true);
       await writerReleased.promise;
-      expect(reclamationClose).toHaveBeenCalledOnce();
-      await reclamationClose.mock.results[0]?.value;
-      expect(
-        shared
-          .prepare("SELECT count(*) AS n FROM agent_database_leases WHERE path = ?")
-          .get(agent.path)?.n,
-      ).toBe(1);
+      expect(agentLeases.all(agent.path)).toHaveLength(1);
       await vi.advanceTimersByTimeAsync(10_001);
       expect(exit).not.toHaveBeenCalled();
       expect(agent.db.isOpen).toBe(true);

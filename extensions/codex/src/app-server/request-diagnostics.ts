@@ -20,6 +20,9 @@ const DIAGNOSTIC_METHODS = new Set<string>([
 ]);
 const MAX_METHODS = 8;
 type InitializeSnapshot = ReturnType<CodexAppServerClient["getInitializeDiagnostic"]>;
+type RegisteredTransportIdentity = ReturnType<
+  CodexAppServerClient["getRegisteredTransportIdentity"]
+>;
 
 type ReadInitializeSnapshot = (beforeClientClose?: boolean) => InitializeSnapshot;
 function readInitializeSnapshot(read: ReadInitializeSnapshot | undefined, beforeClose = false) {
@@ -45,6 +48,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
     acquireBoundaryBeforeCleanup: CodexAppServerAcquireObservation["boundary"] | undefined;
     acquireStartup: CodexAppServerAcquireObservation["startup"];
     lastStartedClientInstanceId: string | undefined;
+    lastStartedTransportIdentity: RegisteredTransportIdentity;
     initializeSnapshot: ReadInitializeSnapshot | undefined;
     initializeBeforeCleanup: InitializeSnapshot;
     initializeBeforeCleanupSource: "at-cleanup" | "before-client-close" | undefined;
@@ -60,6 +64,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
       acquireBoundaryBeforeCleanup: undefined,
       acquireStartup: undefined,
       lastStartedClientInstanceId: undefined,
+      lastStartedTransportIdentity: undefined,
       initializeSnapshot: undefined,
       initializeBeforeCleanup: undefined,
       initializeBeforeCleanupSource: undefined,
@@ -108,6 +113,7 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
           }
           // Fallback can replace this client; this identity is an observation, not a lease.
           current.lastStartedClientInstanceId = undefined;
+          current.lastStartedTransportIdentity = undefined;
           current.initializeSnapshot = undefined;
           current.initializeBeforeCleanup = undefined;
           current.initializeBeforeCleanupSource = undefined;
@@ -117,6 +123,14 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
               client.getInitializeDiagnostic(beforeClose);
           } catch {
             // A diagnostic identity cannot invalidate startup.
+          }
+          try {
+            const identity = client.getRegisteredTransportIdentity();
+            current.lastStartedTransportIdentity = identity
+              ? { pid: identity.pid, startedAt: identity.startedAt }
+              : undefined;
+          } catch {
+            // Optional transport evidence must not suppress initialize diagnostics.
           }
         },
       };
@@ -169,7 +183,12 @@ export function createCodexRequestTimeoutDiagnostics(timeoutMs: number) {
             ? { acquireBoundaryBeforeCleanup: attempt.acquireBoundaryBeforeCleanup }
             : {}),
           ...(attempt.lastStartedClientInstanceId
-            ? { lastStartedClientInstanceId: attempt.lastStartedClientInstanceId }
+            ? {
+                lastStartedClientInstanceId: attempt.lastStartedClientInstanceId,
+                lastStartedTransportIdentity: attempt.lastStartedTransportIdentity
+                  ? JSON.stringify(attempt.lastStartedTransportIdentity)
+                  : "unavailable",
+              }
             : {}),
           ...(attempt.clientInstanceId ? { clientInstanceId: attempt.clientInstanceId } : {}),
           ...(initialize ? { initializeSnapshot: JSON.stringify(initialize) } : {}),

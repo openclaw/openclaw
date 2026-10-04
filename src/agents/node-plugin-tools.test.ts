@@ -61,9 +61,6 @@ function createCodeModeHarness(tools: AnyAgentTool[]) {
   const compacted = applyCodeModeCatalog({
     tools: [...codeModeTools, ...tools],
     config,
-    sessionId: ctx.sessionId,
-    sessionKey: ctx.sessionKey,
-    runId: ctx.runId,
     catalogRef,
   });
   return { catalogRef, codeModeTools, compacted };

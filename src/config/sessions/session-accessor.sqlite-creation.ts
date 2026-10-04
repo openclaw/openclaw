@@ -324,7 +324,7 @@ async function publishCreationArchivesInWorker(
   const databaseOptions = { ...toDatabaseOptions(scope), path: scope.path };
   const run = <T>(
     execute: (
-      worker: import("../../state/openclaw-agent-execution-native.js").AgentDatabaseExecutionScope,
+      worker: import("../../state/openclaw-agent-execution-contract.js").AgentDatabaseExecutionScope,
     ) => Promise<T>,
   ) =>
     withSessionEntryWorker(

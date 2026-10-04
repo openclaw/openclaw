@@ -163,11 +163,15 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Selected-test requirements are separate from explicit omissions. The reviewed exceptions are
-`-f telegram_waiver=2026.8.1-owner-approved` and
-`-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
-reviewed code change; a matching `<target-version>-owner-approved` string alone
-is not authorization. The value must name the validated target's actual
+Selected-test requirements are separate from explicit omissions. The reviewed
+Telegram-only exceptions are `2026.8.1-owner-approved` and
+`2026.9.1-owner-approved`. The reviewed Telegram and Matrix QA-live exceptions
+are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`,
+`2026.9.8-owner-approved`, and `2026.9.9-owner-approved`. Pass the selected value
+with `-f telegram_waiver=<value>`.
+Any future exception requires a reviewed code change; a matching
+`<target-version>-owner-approved` string alone is not authorization. The value
+must name the validated target's actual
 `package.json` version, the sealed candidate version must match, and the profile
 must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
 Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs

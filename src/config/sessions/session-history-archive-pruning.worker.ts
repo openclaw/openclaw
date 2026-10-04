@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
-import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
 import { assertExistingDatabaseIdentity } from "../../infra/sqlite-worker-identity.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
@@ -229,16 +228,4 @@ export function deletePublishedSessionArchiveInDatabase(
     options,
     { operationLabel: "session.archive.delete-published" },
   );
-}
-
-export function reclaimSessionArchivePagesInWorker(
-  database: OpenClawAgentDatabase,
-  maxPages: number | undefined,
-  admit: (stage: "transaction" | "commit") => void,
-): SqliteWalReclamationResult {
-  return database.walMaintenance.reclaimFreePages({
-    maxPages,
-    beforeMutation: () => admit("transaction"),
-    onCommit: () => admit("commit"),
-  });
 }

@@ -58,6 +58,7 @@ export const suspendHandlers: GatewayRequestHandlers = {
     const result = armGatewaySuspendHandoff({
       suspensionId: params.suspensionId.trim(),
       owner,
+      commit: params.commit,
     });
     if (!result.ok) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, result.error));

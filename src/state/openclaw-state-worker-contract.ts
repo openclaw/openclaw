@@ -10,6 +10,10 @@ import type {
   WorkspaceAttestation,
   WorkspaceAttestationInput,
 } from "../agents/workspace-state-store.kernel.js";
+import type {
+  WorkspaceStateGuard,
+  WorkspaceStateWorkerOperations,
+} from "../agents/workspace-state-store.worker-contract.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
 import type {
@@ -28,7 +32,6 @@ import type {
 } from "../gateway/session-group-catalog.types.js";
 import type * as deviceAuth from "../infra/device-auth-store.kernel.js";
 import type { DeviceIdentity } from "../infra/device-identity-store.js";
-import type { PreparedSqliteAuditRecord } from "../infra/sqlite-audit-record.kernel.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import type {
   SqliteWalPeriodicRequest,
@@ -47,6 +50,7 @@ import type { PluginMetadataStateSelector } from "../plugins/installed-plugin-in
 import type { CaptureWorkerOperations } from "../proxy-capture/store.worker-contract.js";
 import type { SecretStoreConfigRefWrite } from "../secrets/store/secret-store-config-ref.kernel.js";
 import type { SecretStoreExpiryCutoffs } from "../secrets/store/secret-store-expiry.kernel.js";
+import type * as secretWrites from "../secrets/store/secret-store-write.js";
 import type { SessionStateWorkerOperations } from "../sessions/session-state-events.worker-contract.js";
 import type { SessionUpstreamLink } from "../sessions/session-upstream-links.kernel.js";
 import type { SessionUpstreamWorkerOperations } from "../sessions/session-upstream-links.worker-contract.js";
@@ -69,6 +73,7 @@ export type OpenClawStateWorkerOpenPreparation = { type: "deviceIdentity"; ident
 
 /** Commands share one physical shared-state actor; bindings belong to commands, not open input. */
 export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
+  WorkspaceStateWorkerOperations &
   UpdateRunReconciliationOperations &
   UpdateRunWriteOperations &
   CaptureWorkerOperations &
@@ -86,7 +91,7 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
     "sandboxRegistry.insertIfMissing": { input: SandboxRegistryInsert; output: void };
     "sandboxRegistry.write": { input: SandboxRegistryWrite; output: void };
     "workspace.replaceAttestation": {
-      input: WorkspaceAttestationInput;
+      input: WorkspaceAttestationInput & Pick<WorkspaceStateGuard, "recoveryHoldPredicate">;
       output: WorkspaceAttestation;
     };
     "updateRuns.reconcileInterrupted": {
@@ -147,6 +152,24 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
       output: AgentProvenance[];
     };
     "agentProvenance.list": { input: undefined; output: AgentProvenance[] };
+    "secrets.write": {
+      input: Omit<secretWrites.SecretStoreBatchWriteParams, "database"> & {
+        capturePrevious: boolean;
+        now: number;
+      };
+      output: secretWrites.SecretStoreWriteResult[];
+    };
+    "secrets.rollback": {
+      input: Omit<
+        Parameters<typeof secretWrites.rollbackSecretStoreEntryWriteInDatabase>[0],
+        "database"
+      >;
+      output: boolean;
+    };
+    "secrets.delete": {
+      input: Omit<Parameters<typeof secretWrites.deleteSecretStoreEntryInDatabase>[0], "database">;
+      output: void;
+    };
     "secrets.purge": { input: SecretStoreExpiryCutoffs; output: number };
     "secrets.writeForConfigRef": {
       input: SecretStoreConfigRefWrite;
@@ -178,14 +201,6 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
         expected: ConfigHealthEntryBasis | null | undefined;
         updatedAtMs: number;
       };
-      output: boolean;
-    };
-    "diagnostic.register": {
-      input: { scope: string; maxEntries: number; record: PreparedSqliteAuditRecord };
-      output: void;
-    };
-    "config.snapshot.upsert": {
-      input: { record: PreparedSqliteAuditRecord; expectedPayloadJson?: string | null };
       output: boolean;
     };
   };

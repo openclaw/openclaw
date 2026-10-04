@@ -1,5 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
-import { executeSqliteQuerySync, prepareSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
+} from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -59,7 +63,7 @@ function prepareScratchWriteGuard(db: DatabaseSync) {
   );
 }
 
-const scratchWriteGuards = new WeakMap<DatabaseSync, ReturnType<typeof prepareScratchWriteGuard>>();
+const scratchWriteGuard = createSqliteQueryCache(prepareScratchWriteGuard);
 
 /** Job existence and scratch revision remain one authoritative transaction boundary. */
 export function writeCronJobScratchInDatabase(
@@ -70,12 +74,7 @@ export function writeCronJobScratchInDatabase(
     assertCronJobScratchContent(input.content);
   }
   const cronDb = getCronStoreKysely(db);
-  let readGuard = scratchWriteGuards.get(db);
-  if (!readGuard) {
-    readGuard = prepareScratchWriteGuard(db);
-    scratchWriteGuards.set(db, readGuard);
-  }
-  const current = readGuard(input);
+  const current = scratchWriteGuard(db)(input);
   const currentRevision = current?.revision ?? 0;
   if (
     current?.job_id == null ||

@@ -6,39 +6,19 @@ import OpenClawProtocol
 import OSLog
 
 struct MacNodeGatewayTLSSessionCache {
-    private struct Key: Equatable {
-        let url: URL
-        let required: Bool
-        let expectedFingerprint: String?
-        let allowTOFU: Bool
-        let storeKey: String?
-
-        init(url: URL, params: GatewayTLSParams) {
-            self.url = url
-            self.required = params.required
-            self.expectedFingerprint = params.expectedFingerprint
-            self.allowTOFU = params.allowTOFU
-            self.storeKey = params.storeKey
-        }
-    }
-
-    private var cachedKey: Key?
-    private var cachedBox: WebSocketSessionBox?
+    private var cached: (url: URL, params: GatewayTLSParams, box: WebSocketSessionBox)?
 
     mutating func sessionBox(url: URL, params: GatewayTLSParams) -> WebSocketSessionBox {
-        let key = Key(url: url, params: params)
-        if let cachedKey = self.cachedKey, cachedKey == key, let cachedBox = self.cachedBox {
-            return cachedBox
+        if let cached, cached.url == url, cached.params == params {
+            return cached.box
         }
         let box = WebSocketSessionBox(session: GatewayTLSPinningSession(params: params))
-        self.cachedKey = key
-        self.cachedBox = box
+        self.cached = (url, params, box)
         return box
     }
 
     mutating func invalidate() {
-        self.cachedKey = nil
-        self.cachedBox = nil
+        self.cached = nil
     }
 }
 
@@ -128,6 +108,7 @@ final class MacNodeModeCoordinator: NSObject {
     private var lastObservedComputerControlProvider: ComputerControlProvider
     private let runtime: MacNodeRuntime
     private let session: GatewayNodeSession
+    private let endpointProvider: @Sendable () async throws -> GatewayConnection.EndpointSnapshot
     private let channelStatus: MacNodeChannelStatusStore
     private let nodeHostWorker: (any MacNodeHostWorking)?
     private var appActivityMonitor: Any?
@@ -169,6 +150,9 @@ final class MacNodeModeCoordinator: NSObject {
     init(
         session: GatewayNodeSession,
         runtime: MacNodeRuntime,
+        endpointProvider: @escaping @Sendable () async throws -> GatewayConnection.EndpointSnapshot = {
+            try await GatewayEndpointStore.shared.requireEndpoint()
+        },
         nodeHostWorker: (any MacNodeHostWorking)? = nil,
         presenceReporter: MacNodePresenceReporter = MacNodePresenceReporter(),
         desktopAvailability: MacDesktopAvailabilityCoordinator = .shared,
@@ -186,6 +170,7 @@ final class MacNodeModeCoordinator: NSObject {
     {
         let refreshEvents = AsyncStream.makeStream(of: Void.self, bufferingPolicy: .bufferingNewest(1))
         self.session = session
+        self.endpointProvider = endpointProvider
         self.runtime = runtime
         self.nodeHostWorker = nodeHostWorker
         self.presenceReporter = presenceReporter
@@ -519,11 +504,10 @@ final class MacNodeModeCoordinator: NSObject {
             let codexThreadCatalogEnabled = MacNodeCodexThreadCatalog.shouldAdvertise()
             let claudeSessionCatalogEnabled = MacNodeClaudeSessionCatalog.shouldAdvertise()
 
-            var attemptedEndpoint: GatewayConnection.EndpointSnapshot?
             do {
                 let endpointAttemptGeneration = self.endpointAttemptGeneration
                 let routeAuthorityGeneration = self.routeAuthorityGeneration
-                let endpoint = try await GatewayEndpointStore.shared.requireEndpoint()
+                let endpoint = try await self.endpointProvider()
                 self.pendingEndpoint = endpoint
                 guard endpointAttemptGeneration == self.endpointAttemptGeneration,
                       Self.routeAuthorityAllowsInvoke(
@@ -532,7 +516,6 @@ final class MacNodeModeCoordinator: NSObject {
                           completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
                           isPaused: false)
                 else { continue }
-                attemptedEndpoint = endpoint
                 guard let attempt = try await self.prepareConnectionAttempt(
                     endpoint: endpoint,
                     endpointGeneration: endpointAttemptGeneration,
@@ -542,7 +525,10 @@ final class MacNodeModeCoordinator: NSObject {
                     claudeSessionCatalogEnabled: claudeSessionCatalogEnabled)
                 else { continue }
 
-                try await self.connect(attempt)
+                guard try await self.connectWithTLSRepair(attempt) else {
+                    retryDelay = 1_000_000_000
+                    continue
+                }
                 guard try await self.validatePostConnect(attempt) else { continue }
 
                 retryDelay = 1_000_000_000
@@ -556,17 +542,6 @@ final class MacNodeModeCoordinator: NSObject {
                     let failure = self.lastNodeHostWorkerStartFailure ?? (error.localizedDescription, nil)
                     self.channelStatus.record(.unavailable(reason: failure.reason, diagnostic: failure.diagnostic))
                     guard await refreshIterator.next() != nil else { return }
-                    continue
-                }
-                if let tlsError = error as? GatewayTLSValidationError,
-                   let attemptedEndpoint,
-                   await GatewayTLSRepairCoordinator.shared.repair(
-                       route: attemptedEndpoint.tls,
-                       url: attemptedEndpoint.config.url,
-                       failure: tlsError.failure)
-                {
-                    await self.session.disconnect()
-                    retryDelay = 1_000_000_000
                     continue
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
@@ -642,7 +617,7 @@ final class MacNodeModeCoordinator: NSObject {
         // Resolve compatibility fallback before node admission. Operator recovery
         // here cannot block the node lifecycle callback or its successor cleanup.
         let fallbackMainSessionKey = await GatewayConnection.shared.refreshMainSessionKey()
-        let currentEndpoint = try await GatewayEndpointStore.shared.requireEndpoint()
+        let currentEndpoint = try await self.endpointProvider()
         guard workerConfigurationGeneration == self.nodeHostWorkerConfigurationGeneration,
               Self.endpointAttemptCanConnect(
                   capturedGeneration: endpointGeneration,
@@ -812,7 +787,7 @@ final class MacNodeModeCoordinator: NSObject {
     }
 
     private func validatePostConnect(_ attempt: ConnectionAttempt) async throws -> Bool {
-        let postConnectEndpoint = try await GatewayEndpointStore.shared.requireEndpoint()
+        let postConnectEndpoint = try await self.endpointProvider()
         guard Self.endpointAttemptCanConnect(
             capturedGeneration: attempt.endpointGeneration,
             currentGeneration: self.endpointAttemptGeneration,
@@ -959,6 +934,61 @@ final class MacNodeModeCoordinator: NSObject {
 }
 
 extension MacNodeModeCoordinator {
+    #if DEBUG
+    func connectForTesting(
+        endpoint: GatewayConnection.EndpointSnapshot,
+        sessionBox: WebSocketSessionBox) async throws -> Bool
+    {
+        try await self.connectWithTLSRepair(ConnectionAttempt(
+            endpointGeneration: self.endpointAttemptGeneration,
+            routeAuthorityGeneration: self.routeAuthorityGeneration,
+            codexThreadCatalogAdvertised: false,
+            claudeSessionCatalogAdvertised: false,
+            workerUnavailable: nil,
+            endpoint: endpoint,
+            options: GatewayConnectOptions(
+                role: "node",
+                scopes: [],
+                caps: [],
+                commands: [],
+                permissions: [:],
+                clientId: "openclaw-macos",
+                clientMode: "node",
+                clientDisplayName: "Renewal Test",
+                includeDeviceIdentity: false),
+            sessionBox: sessionBox,
+            fallbackMainSessionKey: "main"))
+    }
+
+    #endif
+
+    private func connectWithTLSRepair(_ attempt: ConnectionAttempt) async throws -> Bool {
+        do {
+            try await self.connect(attempt)
+            return true
+        } catch let error as GatewayTLSValidationError {
+            let currentEndpoint = try await self.endpointProvider()
+            guard !Task.isCancelled,
+                  attempt.endpointGeneration == self.endpointAttemptGeneration,
+                  Self.routeAuthorityAllowsInvoke(
+                      capturedRouteAuthorityGeneration: attempt.routeAuthorityGeneration,
+                      currentRouteAuthorityGeneration: self.routeAuthorityGeneration,
+                      completedRouteAuthorityGeneration: self.completedRouteAuthorityGeneration,
+                      isPaused: self.lastObservedPaused),
+                  Self.sameEndpoint(attempt.endpoint, currentEndpoint, allowLearnedPinRenewal: true)
+            else { throw CancellationError() }
+            // Keep owner validation and the conditional write on this executor.
+            // An actor hop here could let a revoked attempt persist its old trust.
+            guard GatewayTLSRepairCoordinator.repairOnCurrentExecutor(
+                route: attempt.endpoint.tls,
+                url: attempt.endpoint.config.url,
+                failure: error.failure)
+            else { throw error }
+            await self.session.disconnect()
+            return false
+        }
+    }
+
     private func currentCaps(
         cameraEnabled: Bool,
         computerControlProvider: ComputerControlProvider,
@@ -1229,12 +1259,16 @@ extension MacNodeModeCoordinator {
 
     private nonisolated static func sameEndpoint(
         _ lhs: GatewayConnection.EndpointSnapshot,
-        _ rhs: GatewayConnection.EndpointSnapshot) -> Bool
+        _ rhs: GatewayConnection.EndpointSnapshot,
+        allowLearnedPinRenewal: Bool = false) -> Bool
     {
-        lhs.config.url == rhs.config.url &&
+        let sameTLS = allowLearnedPinRenewal
+            ? GatewayTLSRoute.hasSameTrustPolicy(lhs.tls, rhs.tls)
+            : GatewayTLSRoute.hasSameConnectionIdentity(lhs.tls, rhs.tls)
+        return lhs.config.url == rhs.config.url &&
             lhs.config.token == rhs.config.token &&
             lhs.config.password == rhs.config.password &&
-            GatewayTLSRoute.hasSameConnectionIdentity(lhs.tls, rhs.tls) &&
+            sameTLS &&
             lhs.routeAuthority == rhs.routeAuthority &&
             lhs.deviceAuthGatewayID == rhs.deviceAuthGatewayID &&
             lhs.revision == rhs.revision

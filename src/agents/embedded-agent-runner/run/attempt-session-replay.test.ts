@@ -500,10 +500,10 @@ describe("interrupted canonical user replay", () => {
             createAssistant(testModel, [{ type: "text", text: "Already finished" }]),
           );
         }
-        appendCompletedToolWork(
+        await appendCompletedToolWork(
           original,
           boundary === "other-run" ? "unrelated-run" : fixture.attempt.runId,
-          () => {
+          async () => {
             // This row and the nested activity share one omitted context link.
             if (boundary === "hidden-user") {
               const hiddenUser: PersistedUserTurnMessage = {
@@ -512,9 +512,9 @@ describe("interrupted canonical user replay", () => {
                 excludeFromContext: true,
                 timestamp: 2,
               };
-              original.appendMessage(hiddenUser);
+              await original.appendMessageAsync(hiddenUser);
             } else if (boundary === "unknown-activity") {
-              original.appendMessage({
+              await original.appendMessageAsync({
                 role: "custom",
                 customType: "unidentified-activity",
                 content: "Unknown context must close the replay",

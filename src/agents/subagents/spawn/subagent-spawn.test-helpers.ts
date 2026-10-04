@@ -8,7 +8,10 @@ import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
 import type { RegisterSubagentRunParams } from "../registry/subagent-registry-run-launch-record.js";
-import type { RegisterSubagentRunOptions } from "../registry/subagent-registry.types.js";
+import type {
+  RegisterSubagentRunOptions,
+  SubagentRegistrationScope,
+} from "../registry/subagent-registry.types.js";
 
 type MockFn = (...args: unknown[]) => unknown;
 type MockImplementationTarget = {
@@ -26,6 +29,22 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
+
+export function createSubagentRegistrationScopeForTest(
+  overrides: Partial<SubagentRegistrationScope> &
+    Pick<SubagentRegistrationScope, "settleFailedLaunch">,
+): SubagentRegistrationScope {
+  return {
+    canLaunch: () => true,
+    canAcceptLaunch: () => true,
+    canAbortAcceptedRun: () => true,
+    canCleanupSession: () => true,
+    canRetireReservation: () => true,
+    waitForClaim: () => undefined,
+    waitForRetirementPublication: () => undefined,
+    ...overrides,
+  };
+}
 
 export function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
   const call = mock.mock.calls[0];
@@ -131,12 +150,7 @@ export function createConfigOverride(overrides?: Record<string, unknown>) {
       defaults: {
         workspace: os.tmpdir(),
       },
-      list: [
-        {
-          id: "main",
-          workspace: "/tmp/workspace-main",
-        },
-      ],
+      entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
   });
@@ -498,17 +512,13 @@ export async function loadSubagentSpawnModuleForTest(params: {
         } satisfies RegisterSubagentRunOptions);
         // Successful queued registration transfers custody; stricter test scopes win.
         if (!retained) {
-          options.retainOwnership?.({
-            canLaunch: () => true,
-            canAcceptLaunch: () => true,
-            canCleanupSession: () => true,
-            canRetireReservation: () => true,
-            waitForClaim: () => undefined,
-            waitForRetirementPublication: () => undefined,
-            settleFailedLaunch: async (error) => {
-              await params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
-            },
-          });
+          options.retainOwnership?.(
+            createSubagentRegistrationScopeForTest({
+              settleFailedLaunch: async (error) => {
+                await params.settleFailedQueuedSubagentLaunchMock?.(record.runId, error);
+              },
+            }),
+          );
         }
       },
     ),

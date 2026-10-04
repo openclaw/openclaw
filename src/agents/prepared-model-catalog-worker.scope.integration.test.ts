@@ -35,6 +35,7 @@ import {
   publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeCatalog,
 } from "./prepared-model-runtime.js";
+import { CREDENTIAL_ONLY_PROVIDER_ID } from "./test-helpers/prepared-model-catalog-credential-only.test-support.js";
 import { createStaticCatalogSnapshotFixture } from "./test-helpers/prepared-model-catalog-static-fixture.js";
 import {
   observeSyntheticAuth,
@@ -113,6 +114,24 @@ describe("prepared model catalog worker plugin scope", () => {
     expect(fixture.snapshot.isCurrent()).toBe(true);
   });
 
+  it("captures runtime synthetic auth for credential-only providers before full refresh", async () => {
+    const fixture = await createStaticSnapshot(0, {}, { credentialOnlySyntheticAuth: true });
+
+    const catalog = await fixture.snapshot.loadFullModelCatalog?.({ refresh: true });
+
+    // The provider's catalog emits this row only when its stored token resolves.
+    expect(catalog?.entries).toContainEqual(
+      expect.objectContaining({
+        provider: CREDENTIAL_ONLY_PROVIDER_ID,
+        id: "credential-only-model",
+      }),
+    );
+    // The worker read the parent's captured answer; it never ran the hook itself.
+    expect(
+      fs.readFileSync(path.join(fixture.root, "credential-only-auth-owner.txt"), "utf8"),
+    ).toMatch(/^(parent\n)+$/u);
+  });
+
   it.for([
     { first: "full", slot: "memory", asyncSyntheticAuth: false, syntheticAuthAvailable: true },
     {
@@ -155,7 +174,7 @@ describe("prepared model catalog worker plugin scope", () => {
             "published-fixture/published-model": { agentRuntime: { id: "openclaw" } },
           },
         },
-        list: [{ id: "main", default: true, agentDir, workspace: workspaceDir }],
+        entries: { main: { agentDir, workspace: workspaceDir } },
       },
       models: {
         providers: {
@@ -342,15 +361,7 @@ describe("prepared model catalog worker plugin scope", () => {
               ...config,
               agents: {
                 ...config.agents,
-                list: [
-                  {
-                    id: "main",
-                    default: true,
-                    agentDir,
-                    workspace: workspaceDir,
-                    name: "Updated agent",
-                  },
-                ],
+                entries: { main: { agentDir, workspace: workspaceDir, name: "Updated agent" } },
               },
             },
           };

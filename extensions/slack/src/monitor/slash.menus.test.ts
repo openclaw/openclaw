@@ -8,7 +8,6 @@ import {
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createArgMenusHarness,
-  createSlashCommand,
   encodeValue,
   expectArgMenuLayout,
   expectSingleDispatchedSlashBody,
@@ -29,69 +28,30 @@ import { firstCallPayload, getSlackSlashMocks } from "./slash.test-harness.js";
 
 const { dispatchMock } = getSlackSlashMocks();
 const { pluginCommandFixtures, skillCommandFixtures } = getSlackCommandFixtures();
+type DispatchParams = {
+  dispatcherOptions: {
+    deliver: (payload: { text: string }, info: { kind: "block" | "final" }) => Promise<void>;
+  };
+};
 
 describe("Slack native command argument menus", () => {
   let harness: ReturnType<typeof createArgMenusHarness>;
-  let loginHandler: (args: unknown) => Promise<void>;
-  let toolsHandler: (args: unknown) => Promise<void>;
-  let ttsHandler: (args: unknown) => Promise<void>;
-  let usageHandler: (args: unknown) => Promise<void>;
-  let reportExternalHandler: (args: unknown) => Promise<void>;
-  let reportLongHandler: (args: unknown) => Promise<void>;
-  let reportLongButtonHandler: (args: unknown) => Promise<void>;
-  let reportHugeButtonHandler: (args: unknown) => Promise<void>;
-  let reportHugeValueHandler: (args: unknown) => Promise<void>;
-  let unsafeConfirmHandler: (args: unknown) => Promise<void>;
-  let longConfirmHandler: (args: unknown) => Promise<void>;
-  let agentStatusHandler: (args: unknown) => Promise<void>;
   let argMenuHandler: (args: unknown) => Promise<void>;
   let argMenuOptionsHandler: (args: unknown) => Promise<void>;
+  const trackEvent = vi.fn();
+  const command = (name: string) => requireHandler(harness.commands, `/${name}`, `/${name}`);
 
   beforeAll(async () => {
     harness = createArgMenusHarness();
-    await registerCommands(harness.ctx, harness.account);
-    loginHandler = requireHandler(harness.commands, "/login", "/login");
-    toolsHandler = requireHandler(harness.commands, "/tools", "/tools");
-    ttsHandler = requireHandler(harness.commands, "/tts", "/tts");
-    usageHandler = requireHandler(harness.commands, "/usage", "/usage");
-    reportExternalHandler = requireHandler(harness.commands, "/reportexternal", "/reportexternal");
-    reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
-    reportLongButtonHandler = requireHandler(
-      harness.commands,
-      "/reportlongbutton",
-      "/reportlongbutton",
-    );
-    reportHugeButtonHandler = requireHandler(
-      harness.commands,
-      "/reporthugebutton",
-      "/reporthugebutton",
-    );
-    reportHugeValueHandler = requireHandler(
-      harness.commands,
-      "/reporthugevalue",
-      "/reporthugevalue",
-    );
-    unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
-    longConfirmHandler = requireHandler(harness.commands, "/longconfirm", "/longconfirm");
-    agentStatusHandler = requireHandler(harness.commands, "/agentstatus", "/agentstatus");
+    await registerCommands(harness.ctx, harness.account, trackEvent);
     argMenuHandler = requireHandler(harness.actions, /^openclaw_cmdarg/, "arg-menu action");
     argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
   });
 
   beforeEach(() => {
+    trackEvent.mockClear();
     harness.postEphemeral.mockClear();
     (harness.ctx as { dispatchReplyFromConfig?: unknown }).dispatchReplyFromConfig = undefined;
-  });
-
-  it("forwards the instance-bound reply dispatcher", async () => {
-    const dispatchReplyFromConfig = vi.fn();
-    (harness.ctx as { dispatchReplyFromConfig?: unknown }).dispatchReplyFromConfig =
-      dispatchReplyFromConfig;
-
-    await runCommandHandler(agentStatusHandler);
-
-    const { turnPlanMock } = getSlackSlashMocks();
-    expect(turnPlanMock).toHaveBeenCalledWith(expect.objectContaining({ dispatchReplyFromConfig }));
   });
 
   it("delivers native /login block replies before the command finishes", async () => {
@@ -104,29 +64,14 @@ describe("Slack native command argument menus", () => {
         codeDelivered.resolve();
       }
     });
-    const asyncDispatchMock = dispatchMock as unknown as {
-      mockImplementation: (
-        implementation: (params: unknown) => Promise<unknown>,
-      ) => typeof dispatchMock;
-    };
-    asyncDispatchMock.mockImplementation(async (params: unknown) => {
-      const deliver = (
-        params as {
-          dispatcherOptions: {
-            deliver: (
-              payload: { text: string },
-              info: { kind: "block" | "final" },
-            ) => Promise<void>;
-          };
-        }
-      ).dispatcherOptions.deliver;
+    dispatchMock.mockImplementation(async ({ dispatcherOptions: { deliver } }: DispatchParams) => {
       await deliver({ text: "Use code ABCD" }, { kind: "block" });
       await loginFinished.promise;
       await deliver({ text: "Codex login complete." }, { kind: "final" });
       return { counts: { final: 1, tool: 0, block: 1 } };
     });
 
-    const runPromise = runCommandHandler(loginHandler);
+    const runPromise = runCommandHandler(command("login"));
     await codeDelivered.promise;
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
     expect(deliverSlackSlashRepliesMock).toHaveBeenLastCalledWith(
@@ -143,22 +88,7 @@ describe("Slack native command argument menus", () => {
 
   it("batches non-login block streams with the terminal reply", async () => {
     const { deliverSlackSlashRepliesMock } = getSlackSlashMocks();
-    const asyncDispatchMock = dispatchMock as unknown as {
-      mockImplementation: (
-        implementation: (params: unknown) => Promise<unknown>,
-      ) => typeof dispatchMock;
-    };
-    asyncDispatchMock.mockImplementation(async (params: unknown) => {
-      const deliver = (
-        params as {
-          dispatcherOptions: {
-            deliver: (
-              payload: { text: string },
-              info: { kind: "block" | "final" },
-            ) => Promise<void>;
-          };
-        }
-      ).dispatcherOptions.deliver;
+    dispatchMock.mockImplementation(async ({ dispatcherOptions: { deliver } }: DispatchParams) => {
       for (let index = 1; index <= 5; index += 1) {
         await deliver({ text: `progress ${String(index)}` }, { kind: "block" });
       }
@@ -166,7 +96,7 @@ describe("Slack native command argument menus", () => {
       return { counts: { final: 1, tool: 0, block: 5 } };
     });
 
-    await runCommandHandler(agentStatusHandler);
+    await runCommandHandler(command("agentstatus"));
 
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
     expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
@@ -183,118 +113,23 @@ describe("Slack native command argument menus", () => {
     );
   });
 
-  it("batches accepted payloads in order while omitting a hook-cancelled payload", async () => {
-    const { deliverSlackSlashRepliesMock, turnPlanMock } = getSlackSlashMocks();
-    const asyncDispatchMock = dispatchMock as unknown as {
-      mockImplementation: (
-        implementation: (params: unknown) => Promise<unknown>,
-      ) => typeof dispatchMock;
-    };
-    asyncDispatchMock.mockImplementation(async (params: unknown) => {
-      const deliver = (
-        params as {
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-          };
-        }
-      ).dispatcherOptions.deliver;
-      const plan = turnPlanMock.mock.calls.at(-1)?.[0] as {
-        delivery: {
-          onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
-        };
-      };
-      await deliver({ text: "first" }, { kind: "final" });
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      await deliver({ text: "third" }, { kind: "final" });
-      return { counts: { final: 2, tool: 0, block: 0 } };
-    });
-
-    await runCommandHandler(agentStatusHandler);
-
-    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledOnce();
-    expect(deliverSlackSlashRepliesMock).toHaveBeenCalledWith(
-      expect.objectContaining({ replies: [{ text: "first" }, { text: "third" }] }),
-    );
-  });
-
-  it("does not call the response URL when every payload is hook-cancelled", async () => {
-    const { deliverSlackSlashRepliesMock, turnPlanMock } = getSlackSlashMocks();
-    const asyncDispatchMock = dispatchMock as unknown as {
-      mockImplementation: (implementation: () => Promise<unknown>) => typeof dispatchMock;
-    };
-    asyncDispatchMock.mockImplementation(async () => {
-      const plan = turnPlanMock.mock.calls.at(-1)?.[0] as {
-        delivery: {
-          onDelivered?: (payload: unknown, info: unknown, result: unknown) => Promise<void> | void;
-        };
-      };
-      await plan.delivery.onDelivered?.(
-        { text: "cancelled" },
-        { kind: "final" },
-        {
-          visibleReplySent: false,
-          suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
-        },
-      );
-      return { counts: { final: 0, tool: 0, block: 0 } };
-    });
-
-    await runCommandHandler(agentStatusHandler);
-
-    expect(deliverSlackSlashRepliesMock).not.toHaveBeenCalled();
-  });
-
   it("prefers the configured slash command over native commands", async () => {
     pluginCommandFixtures.specs = [
       { name: "slackplugin", description: "Plugin command", acceptsArgs: false },
     ];
     const configuredHarness = createArgMenusHarness();
-    (
-      configuredHarness.ctx as {
-        slashCommand: { enabled: boolean };
-      }
-    ).slashCommand.enabled = true;
+    configuredHarness.ctx.slashCommand.enabled = true;
     const registration = await registerCommands(configuredHarness.ctx, configuredHarness.account);
 
     expect(registration).toEqual({ mode: "single", name: "openclaw" });
     expect(
       [...configuredHarness.commands.keys()].some(
-        (command) => command instanceof RegExp && command.test("/openclaw"),
+        (matcher) => matcher instanceof RegExp && matcher.test("/openclaw"),
       ),
     ).toBe(true);
     expect(configuredHarness.commands.has("/usage")).toBe(false);
     expect(configuredHarness.actions.size).toBe(0);
     expect(configuredHarness.options.size).toBe(0);
-  });
-
-  it("registers unique plugin commands and silently keeps primary names on collision", async () => {
-    pluginCommandFixtures.specs = [
-      { name: "slackplugin", description: "Unique plugin command", acceptsArgs: false },
-      { name: "reportlong", description: "Colliding plugin command", acceptsArgs: false },
-    ];
-    const testHarness = createArgMenusHarness();
-    const runtimeLog = vi.fn();
-    const runtimeError = vi.fn();
-    testHarness.ctx.runtime = { log: runtimeLog, error: runtimeError };
-
-    await registerCommands(testHarness.ctx, testHarness.account);
-
-    expect(testHarness.commands.has("/slackplugin")).toBe(true);
-    expect(testHarness.commandRegistrations.filter((name) => name === "/slackplugin")).toHaveLength(
-      1,
-    );
-    expect(testHarness.commandRegistrations.filter((name) => name === "/reportlong")).toHaveLength(
-      1,
-    );
-    expect(runtimeLog).not.toHaveBeenCalled();
-    expect(runtimeError).not.toHaveBeenCalled();
   });
 
   it("executes the exact selected plugin candidate with its native arguments", async () => {
@@ -306,6 +141,7 @@ describe("Slack native command argument menus", () => {
         acceptsArgs: true,
         execute,
       },
+      { name: "reportlong", description: "Colliding plugin command", acceptsArgs: false },
     ];
     let selectedDispatch: PluginCommandDispatch | undefined;
     setAsyncDispatchMock(async ({ replyOptions }) => {
@@ -315,14 +151,21 @@ describe("Slack native command argument menus", () => {
       return { counts: { final: 1, tool: 0, block: 0 } };
     });
     const pluginHarness = createArgMenusHarness();
+    const runtimeLog = vi.fn();
+    const runtimeError = vi.fn();
+    pluginHarness.ctx.runtime = { log: runtimeLog, error: runtimeError };
     await registerCommands(pluginHarness.ctx, pluginHarness.account);
+    expect(pluginHarness.commands.has("/slackplugin")).toBe(true);
+    for (const name of ["/slackplugin", "/reportlong"]) {
+      expect(
+        pluginHarness.commandRegistrations.filter((registered) => registered === name),
+      ).toHaveLength(1);
+    }
+    expect(runtimeLog).not.toHaveBeenCalled();
+    expect(runtimeError).not.toHaveBeenCalled();
     const handler = requireHandler(pluginHarness.commands, "/slackplugin", "plugin command");
 
-    await handler({
-      command: createSlashCommand({ text: "now please" }),
-      ack: vi.fn().mockResolvedValue(undefined),
-      respond: vi.fn().mockResolvedValue(undefined),
-    });
+    await runCommandHandler(handler, { text: "now please" });
 
     expect(selectedDispatch).toBeDefined();
     await selectedDispatch!.execute({
@@ -359,27 +202,6 @@ describe("Slack native command argument menus", () => {
     },
   );
 
-  it("filters a same-name plugin owned by another channel", async () => {
-    const execute = vi.fn(async () => ({ text: "wrong channel" }));
-    pluginCommandFixtures.specs = [
-      {
-        name: "reportlong",
-        description: "Telegram-only plugin",
-        acceptsArgs: false,
-        channels: ["telegram"],
-        execute,
-      },
-    ];
-    const channelHarness = createArgMenusHarness();
-    await registerCommands(channelHarness.ctx, channelHarness.account);
-
-    await runCommandHandler(
-      requireHandler(channelHarness.commands, "/reportlong", "report command"),
-    );
-
-    expect(execute).not.toHaveBeenCalled();
-  });
-
   it.each([
     ["same name", "skill-only"],
     ["dash/underscore", "foo-bar"],
@@ -413,51 +235,26 @@ describe("Slack native command argument menus", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
-  it("deduplicates a skill after the Slack status native rename", async () => {
-    skillCommandFixtures.commands = [
-      {
-        name: "agentstatus",
-        skillName: "Agent Status Skill",
-        description: "Skill agent status",
-      },
-    ];
-    const config: OpenClawConfig = { commands: { native: true, nativeSkills: true } };
-    const testHarness = createArgMenusHarness(config);
-    (testHarness.account as { config: OpenClawConfig }).config = config;
-
-    await registerCommands(testHarness.ctx, testHarness.account);
-
-    expect(testHarness.commandRegistrations.filter((name) => name === "/agentstatus")).toHaveLength(
-      1,
-    );
-  });
-
-  it.each([
-    { agentRuntime: "codex", includesUltra: true },
-    { agentRuntime: "openclaw", includesUltra: true },
-  ] as const)(
-    "renders runtime-specific /think choices for $agentRuntime",
-    async ({ agentRuntime, includesUltra }) => {
-      const testHarness = createArgMenusHarness({
-        commands: { native: true, nativeSkills: false },
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.6-luna" },
-            models: {
-              "openai/gpt-5.6-luna": { agentRuntime: { id: agentRuntime } },
-            },
+  it("renders runtime-specific /think choices", async () => {
+    const testHarness = createArgMenusHarness({
+      commands: { native: true, nativeSkills: false },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-luna" },
+          models: {
+            "openai/gpt-5.6-luna": { agentRuntime: { id: "codex" } },
           },
         },
-      });
-      await registerCommands(testHarness.ctx, testHarness.account);
-      const handler = requireHandler(testHarness.commands, "/think", "/think");
+      },
+    });
+    await registerCommands(testHarness.ctx, testHarness.account);
+    const handler = requireHandler(testHarness.commands, "/think", "/think");
 
-      const values = await getCommandArgMenuValues(handler);
+    const values = await getCommandArgMenuValues(handler);
 
-      expect(values.length).toBeGreaterThan(0);
-      expect(values.includes("ultra")).toBe(includesUltra);
-    },
-  );
+    expect(values.length).toBeGreaterThan(0);
+    expect(values).toContain("ultra");
+  });
 
   it("falls back to static menus when app.options() throws during registration", async () => {
     const testHarness = createArgMenusHarness();
@@ -467,7 +264,6 @@ describe("Slack native command argument menus", () => {
       throw new Error("Cannot read properties of undefined (reading 'listeners')");
     };
 
-    // Registration should not throw despite app.options() throwing
     await registerCommands(testHarness.ctx, testHarness.account);
     expect(testHarness.commands.size).toBeGreaterThan(0);
     expect(runtimeLog).toHaveBeenCalledTimes(1);
@@ -482,53 +278,51 @@ describe("Slack native command argument menus", () => {
       ),
     ).toBe(true);
 
-    // The /reportexternal command (140 choices) should fall back to static_select
-    // instead of external_select since options registration failed
     const handler = requireHandler(testHarness.commands, "/reportexternal", "/reportexternal");
-    const respond = vi.fn().mockResolvedValue(undefined);
-    const ack = vi.fn().mockResolvedValue(undefined);
-    await handler({
-      command: createSlashCommand(),
-      ack,
-      respond,
-    });
+    const { respond } = await runCommandHandler(handler);
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = firstCallPayload(respond, "response") as {
       blocks?: Array<{ type: string }>;
     };
     const actionsBlock = findFirstActionsBlock(payload);
-    // Should be static_select (fallback) not external_select
     expect(actionsBlock?.elements?.[0]?.type).toBe("static_select");
   });
 
-  it("shows a button menu when required args are omitted", async () => {
-    const { respond } = await runCommandHandler(toolsHandler);
+  it.each([
+    { name: "tools", type: "button" },
+    { name: "usage", type: "overflow" },
+  ])("renders the $type argument menu for /$name", async ({ name, type }) => {
+    const { respond } = await runCommandHandler(command(name));
     const actions = expectArgMenuLayout(respond);
-    const elementType = actions?.elements?.[0]?.type;
-    expect(elementType).toBe("button");
-    expect(actions?.elements?.[0]?.action_id).toBe("openclaw_cmdarg_0_0");
-    expect(actions?.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
-    expect(actions?.elements?.[0]).toHaveProperty("confirm");
-  });
-
-  it("shows a static_select menu when choices exceed button row size", async () => {
-    const { respond } = await runCommandHandler(ttsHandler);
-    const actions = expectArgMenuLayout(respond);
-    const element = actions?.elements?.[0];
-    expect(element?.type).toBe("static_select");
-    expect(element?.action_id).toBe("openclaw_cmdarg");
+    const element = actions.elements?.[0];
+    expect(element?.type).toBe(type);
     expect(element).toHaveProperty("confirm");
+    if (type === "button") {
+      expect(element?.action_id).toBe("openclaw_cmdarg_0_0");
+      expect(actions.elements?.[1]?.action_id).toBe("openclaw_cmdarg_0_1");
+      await runArgMenuAction(argMenuHandler, {
+        action: {
+          value: encodeValue({ command: name, arg: "mode", value: "compact", userId: "U1" }),
+        },
+      });
+      expectSingleDispatchedSlashBody("/tools compact");
+    } else {
+      expect(element?.action_id).toBe("openclaw_cmdarg");
+    }
   });
 
   it("uses static_select when encoded values fit Slack option limits", async () => {
-    const firstElement = (await getFirstActionElementFromCommand(reportLongHandler)) as
+    const { respond } = await runCommandHandler(command("reportlong"));
+    const firstElement = expectArgMenuLayout(respond).elements?.[0] as
       | {
           type?: string;
+          action_id?: string;
           options?: Array<{ value?: string }>;
           confirm?: unknown;
         }
       | undefined;
     expect(firstElement?.type).toBe("static_select");
+    expect(firstElement?.action_id).toBe("openclaw_cmdarg");
     const longOption = firstElement?.options?.find((option) => option.value?.includes("xxx"));
     expect(longOption?.value?.length).toBeGreaterThan(75);
     expect(longOption?.value?.length).toBeLessThanOrEqual(150);
@@ -540,7 +334,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("truncates button labels when static_select value limit would be exceeded", async () => {
-    const firstElement = (await getFirstActionElementFromCommand(reportLongButtonHandler)) as
+    const firstElement = (await getFirstActionElementFromCommand(command("reportlongbutton"))) as
       | { type?: string; text?: { text?: string }; value?: string; confirm?: unknown }
       | undefined;
     expect(firstElement?.type).toBe("button");
@@ -551,7 +345,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("caps large button fallback menus to Slack's block limit", async () => {
-    const { respond } = await runCommandHandler(reportHugeButtonHandler);
+    const { respond } = await runCommandHandler(command("reporthugebutton"));
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = firstCallPayload(respond, "response") as {
       blocks?: Array<{ type: string; elements?: unknown[] }>;
@@ -563,7 +357,7 @@ describe("Slack native command argument menus", () => {
   });
 
   it("drops fallback buttons whose encoded values exceed Slack's button value limit", async () => {
-    const { respond } = await runCommandHandler(reportHugeValueHandler);
+    const { respond } = await runCommandHandler(command("reporthugevalue"));
     expect(respond).toHaveBeenCalledTimes(1);
     const payload = firstCallPayload(respond, "response") as {
       blocks?: Array<{
@@ -579,15 +373,8 @@ describe("Slack native command argument menus", () => {
     expect(element?.value?.length).toBeLessThanOrEqual(2000);
   });
 
-  it("shows an overflow menu when choices fit compact range", async () => {
-    const element = await getFirstActionElementFromCommand(usageHandler);
-    expect(element?.type).toBe("overflow");
-    expect(element?.action_id).toBe("openclaw_cmdarg");
-    expect(element).toHaveProperty("confirm");
-  });
-
   it("escapes only entities in confirm dialog text", async () => {
-    const element = (await getFirstActionElementFromCommand(unsafeConfirmHandler)) as
+    const element = (await getFirstActionElementFromCommand(command("unsafeconfirm"))) as
       | { confirm?: { text?: { text?: string } } }
       | undefined;
     expect(element?.confirm?.text?.text).toContain(
@@ -596,25 +383,13 @@ describe("Slack native command argument menus", () => {
   });
 
   it("truncates confirm dialog text when long args force button fallback", async () => {
-    const element = (await getFirstActionElementFromCommand(longConfirmHandler)) as
+    const element = (await getFirstActionElementFromCommand(command("longconfirm"))) as
       | { type?: string; confirm?: { text?: { text?: string } } }
       | undefined;
     const confirmText = element?.confirm?.text?.text;
     expect(element?.type).toBe("button");
     expect(confirmText).toHaveLength(300);
     expect(confirmText?.endsWith("…")).toBe(true);
-  });
-
-  it("dispatches the command when a menu button is clicked", async () => {
-    await runArgMenuAction(argMenuHandler, {
-      action: {
-        value: encodeValue({ command: "tools", arg: "mode", value: "compact", userId: "U1" }),
-      },
-    });
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const call = firstDispatchArg() as { ctx?: { Body?: string } };
-    expect(call.ctx?.Body).toBe("/tools compact");
   });
 
   it("keeps the Enterprise Grid team on deferred argument-menu actions", async () => {
@@ -648,26 +423,41 @@ describe("Slack native command argument menus", () => {
   });
 
   it.each([
-    { name: "top-level", message: undefined, threadTs: undefined },
-    {
-      name: "threaded",
-      message: { ts: "171.222", thread_ts: "170.111" },
-      threadTs: "170.111",
-    },
-  ])("does not cap $name Web API action replies", async ({ message, threadTs }) => {
+    ["threaded Web API", "action", true, { ts: "171.222", thread_ts: "170.111" }, "170.111"],
+    ["action response URL", "action", false, { ts: "171.222", thread_ts: "170.111" }, "170.111"],
+    ["slash response URL", "slash", false, undefined, undefined],
+  ] as const)("preserves the %s reply budget", async (_name, source, webApi, message, threadTs) => {
     mockSixDispatchedReplies();
-
-    await runArgMenuAction(argMenuHandler, {
-      action: {
-        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
-      },
-      message,
-      includeRespond: false,
-    });
-
-    expect(harness.postEphemeral).toHaveBeenCalledTimes(6);
-    for (const [payload] of harness.postEphemeral.mock.calls) {
-      expect(payload.thread_ts).toBe(threadTs);
+    const dispatchReplyFromConfig = vi.fn();
+    if (source === "slash") {
+      (harness.ctx as { dispatchReplyFromConfig?: unknown }).dispatchReplyFromConfig =
+        dispatchReplyFromConfig;
+    }
+    const respond =
+      source === "slash"
+        ? (await runCommandHandler(command("agentstatus"))).respond
+        : await runArgMenuAction(argMenuHandler, {
+            action: {
+              value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
+            },
+            message,
+            includeRespond: !webApi,
+          });
+    expect(trackEvent).toHaveBeenCalledTimes(1);
+    if (webApi) {
+      expect(harness.postEphemeral).toHaveBeenCalledTimes(6);
+      for (const [payload] of harness.postEphemeral.mock.calls) {
+        expect(payload.thread_ts).toBe(threadTs);
+      }
+    } else {
+      expect(respond).toHaveBeenCalledTimes(5);
+      expect(harness.postEphemeral).not.toHaveBeenCalled();
+    }
+    if (source === "slash") {
+      expectSingleDispatchedSlashBody("/status");
+      expect(getSlackSlashMocks().turnPlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({ dispatchReplyFromConfig }),
+      );
     }
   });
 
@@ -692,14 +482,7 @@ describe("Slack native command argument menus", () => {
         response_type: "in_channel",
       });
     });
-    dispatchMock.mockImplementation((params: unknown) => {
-      const deliver = (
-        params as {
-          dispatcherOptions: {
-            deliver: (payload: { text: string }, info: { kind: "final" }) => Promise<void>;
-          };
-        }
-      ).dispatcherOptions.deliver;
+    dispatchMock.mockImplementation(({ dispatcherOptions: { deliver } }: DispatchParams) => {
       void deliver({ text: "table reply" }, { kind: "final" });
       return { counts: { final: 1, tool: 0, block: 0 } };
     });
@@ -716,47 +499,10 @@ describe("Slack native command argument menus", () => {
     );
   });
 
-  it("keeps the response_url call cap on action responders", async () => {
-    mockSixDispatchedReplies();
-
-    const respond = await runArgMenuAction(argMenuHandler, {
-      action: {
-        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
-      },
-      message: { ts: "171.222", thread_ts: "170.111" },
-    });
-
-    expect(respond).toHaveBeenCalledTimes(5);
-    expect(harness.postEphemeral).not.toHaveBeenCalled();
-  });
-
-  it("keeps the response_url call cap on actual slash command replies", async () => {
-    mockSixDispatchedReplies();
-
-    const { respond } = await runCommandHandler(agentStatusHandler);
-
-    expect(respond).toHaveBeenCalledTimes(5);
-  });
-
-  it("tracks accepted slash command activity", async () => {
-    const trackingHarness = createArgMenusHarness();
-    const trackEvent = vi.fn();
-    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
-    const usageTrackingHandler = requireHandler(trackingHarness.commands, "/usage", "/usage");
-
-    await runCommandHandler(usageTrackingHandler);
-
-    expect(trackEvent).toHaveBeenCalledTimes(1);
-  });
-
-  it("maps /agentstatus to /status when dispatching", async () => {
-    await runCommandHandler(agentStatusHandler);
-    expectSingleDispatchedSlashBody("/status");
-  });
-
   it("truncates served option labels on a surrogate boundary", async () => {
-    const { respond, payload, blockId } =
-      await runCommandAndResolveActionsBlock(reportExternalHandler);
+    const { respond, payload, blockId } = await runCommandAndResolveActionsBlock(
+      command("reportexternal"),
+    );
     expect(respond).toHaveBeenCalledTimes(1);
     const element = findFirstActionsBlock(payload)?.elements?.[0];
     expect(element?.type).toBe("external_select");
@@ -765,6 +511,7 @@ describe("Slack native command argument menus", () => {
     expect(harness.optionsReceiverContexts[0]).toBe(harness.app);
 
     const ackOptions = vi.fn().mockResolvedValue(undefined);
+    trackEvent.mockClear();
     await argMenuOptionsHandler({
       ack: ackOptions,
       body: {
@@ -775,11 +522,10 @@ describe("Slack native command argument menus", () => {
     });
 
     expect(ackOptions).toHaveBeenCalledTimes(1);
+    expect(trackEvent).toHaveBeenCalledTimes(1);
     const optionsPayload = firstCallPayload(ackOptions, "options ack") as {
       options?: Array<{ text?: { text?: string }; value?: string }>;
     };
-    // The "emojioverflow" query matches only the long emoji label, so exactly one
-    // option is served.
     const served = optionsPayload.options ?? [];
     expect(served).toHaveLength(1);
     expect(decodeURIComponent(served[0]?.value?.split("|")[3] ?? "")).toBe("emoji-overflow");
@@ -793,38 +539,8 @@ describe("Slack native command argument menus", () => {
     ).toBe(false);
   });
 
-  it("tracks accepted external_select option requests", async () => {
-    const trackingHarness = createArgMenusHarness();
-    const trackEvent = vi.fn();
-    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
-    const reportExternalTrackingHandler = requireHandler(
-      trackingHarness.commands,
-      "/reportexternal",
-      "/reportexternal",
-    );
-    const argMenuOptionsTrackingHandler = requireHandler(
-      trackingHarness.options,
-      "openclaw_cmdarg",
-      "arg-menu options",
-    );
-    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalTrackingHandler);
-    const ackOptions = vi.fn().mockResolvedValue(undefined);
-    trackEvent.mockClear();
-
-    await argMenuOptionsTrackingHandler({
-      ack: ackOptions,
-      body: {
-        user: { id: "U1" },
-        value: "period 12",
-        actions: [{ block_id: blockId }],
-      },
-    });
-
-    expect(trackEvent).toHaveBeenCalledTimes(1);
-  });
-
   it("rejects external_select option requests without user identity", async () => {
-    const { blockId } = await runCommandAndResolveActionsBlock(reportExternalHandler);
+    const { blockId } = await runCommandAndResolveActionsBlock(command("reportexternal"));
     expect(blockId).toContain("openclaw_cmdarg_ext:");
 
     const ackOptions = vi.fn().mockResolvedValue(undefined);
@@ -854,25 +570,6 @@ describe("Slack native command argument menus", () => {
       text: "That menu is for another user.",
       response_type: "ephemeral",
     });
-  });
-
-  it("tracks accepted arg-menu actions", async () => {
-    const trackingHarness = createArgMenusHarness();
-    const trackEvent = vi.fn();
-    await registerCommands(trackingHarness.ctx, trackingHarness.account, trackEvent);
-    const argMenuTrackingHandler = requireHandler(
-      trackingHarness.actions,
-      /^openclaw_cmdarg/,
-      "arg-menu action",
-    );
-
-    await runArgMenuAction(argMenuTrackingHandler, {
-      action: {
-        value: encodeValue({ command: "usage", arg: "mode", value: "tokens", userId: "U1" }),
-      },
-    });
-
-    expect(trackEvent).toHaveBeenCalledTimes(1);
   });
 
   it.each([

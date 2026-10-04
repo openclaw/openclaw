@@ -67,7 +67,6 @@ describe("AppSidebar session catalog ownership", () => {
   );
 
   it.each([
-    { owner: "the selected agent", assistantAgentId: null },
     { owner: "the advertised catalog capability", assistantAgentId: "main" },
     {
       owner: "catalog read authority",

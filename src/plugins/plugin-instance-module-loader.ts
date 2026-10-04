@@ -6,10 +6,10 @@ import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { isPathInside } from "../infra/path-guards.js";
 import { createJiti } from "./jiti-factory.js";
 import {
-  isJavaScriptModulePath,
   resolvePluginLoaderTryNative,
   isPluginSourceModulePath,
   supportsBunRuntimeOnResolveTargets,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import { bindPluginCacheRoot, getPluginCache, withPluginCache } from "./plugin-cache.js";
@@ -34,12 +34,11 @@ import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-ali
 /** Runtime and setup share code identity policy while keeping separate instance authority. */
 export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoaderParams): void {
   const cache = getPluginCache();
-  if (params.origin === "bundled" && isJavaScriptModulePath(params.source)) {
+  if (params.origin === "bundled") {
     if (params.expectedSourceDigest !== undefined) {
       throw new Error("Source digest validation is not applicable to core-bundled runtime modules");
     }
-    // Core-shipped code keeps process identity. Recapturing it creates native ESM
-    // module jobs that Node retains after the inventory and its callbacks retire.
+    // Recaptured bundled code leaves native ESM jobs alive after its inventory retires.
     let loader: PluginModuleLoader;
     if (params.createHostModuleLoader) {
       loader = params.createHostModuleLoader();
@@ -65,7 +64,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     });
     return;
   }
-  const nativeHooks = typeof Module.registerHooks === "function";
   const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
@@ -120,7 +118,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     allowedParentRoots: [artifact.boundaryRoot],
     pluginSdkResolution: params.pluginSdkResolution,
   });
-  if (!nativeHooks) {
+  if (!useNodeModuleHooks()) {
     const capturedSource = artifact.resolve(params.source);
     artifact.prepareModule(capturedSource);
     const bunSourceFacts =

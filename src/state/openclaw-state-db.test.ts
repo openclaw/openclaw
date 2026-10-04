@@ -37,7 +37,6 @@ import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { VERSION } from "../version.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import {
   readConfigMachineState,
@@ -187,10 +186,7 @@ function expectStateSchemaMigrationRequired(
   expect(caught).toMatchObject(expected);
 }
 
-function replaceManagedImageRecordsWithLegacyTable(
-  database: DatabaseSync,
-  options: { withRow: boolean },
-): void {
+function replaceManagedImageRecordsWithLegacyTable(database: DatabaseSync): void {
   database.exec(`
     DROP TABLE managed_outgoing_image_records;
     CREATE TABLE managed_outgoing_image_records (
@@ -218,57 +214,6 @@ function replaceManagedImageRecordsWithLegacyTable(
     DROP INDEX idx_worker_session_placements_environment; PRAGMA user_version = 2;
     UPDATE schema_meta SET schema_version = 2 WHERE meta_key = 'primary';
   `);
-  if (!options.withRow) {
-    return;
-  }
-  const record = {
-    attachmentId: "legacy-attachment",
-    sessionKey: "agent:main:legacy",
-    messageId: "legacy-message",
-    createdAt: "2026-07-17T00:00:00.000Z",
-    alt: "legacy image",
-    original: {
-      path: "/legacy/media/outgoing/originals/legacy-media",
-      contentType: "image/png",
-      width: 640,
-      height: 480,
-      sizeBytes: 1234,
-      filename: "legacy.png",
-    },
-  };
-  database
-    .prepare(
-      `INSERT INTO managed_outgoing_image_records (
-        attachment_id,
-        session_key,
-        message_id,
-        created_at,
-        alt,
-        original_media_id,
-        original_media_subdir,
-        original_content_type,
-        original_width,
-        original_height,
-        original_size_bytes,
-        original_filename,
-        record_json
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-    .run(
-      record.attachmentId,
-      record.sessionKey,
-      record.messageId,
-      record.createdAt,
-      record.alt,
-      "legacy-media",
-      "outgoing/originals",
-      record.original.contentType,
-      record.original.width,
-      record.original.height,
-      record.original.sizeBytes,
-      record.original.filename,
-      JSON.stringify(record),
-    );
 }
 
 const LEGACY_SESSION_WATCH_SCHEMA_VERSION = 3;
@@ -2884,58 +2829,7 @@ INSERT INTO device_identities VALUES (
     });
   });
 
-  it("upgrades the plugin listing index through runtime without rewriting entries", () => {
-    const stateDir = createTempStateDir();
-    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-    const legacy = openMaterializedCurrentStateDatabase(stateDir);
-    const entriesSql =
-      "SELECT * FROM plugin_state_entries ORDER BY plugin_id, namespace, entry_key";
-    const metadataSql =
-      "SELECT role, agent_id, schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'";
-    let entries: unknown;
-    let metadata: unknown;
-    try {
-      legacy.exec(`
-          DROP INDEX idx_plugin_state_listing;
-          CREATE INDEX idx_plugin_state_listing
-            ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
-          INSERT INTO plugin_state_entries VALUES
-            ('plugin', 'written', 'live', '{ "value": 1 }', 10, NULL),
-            ('plugin', 'written', 'at-cutoff', '{ "value": 2 }', 10, 1000),
-            ('plugin', 'sibling', 'expired', '{ "value": 3 }', 20, 999),
-            ('plugin', 'sibling', 'future', '{ "value": 4 }', 20, 1001),
-            ('peer', 'written', 'live', '{ "value": 5 }', 10, NULL);
-        `);
-      entries = legacy.prepare(entriesSql).all();
-      metadata = legacy.prepare(metadataSql).get();
-      expect(metadata).toMatchObject({
-        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
-        app_version: VERSION,
-      });
-    } finally {
-      legacy.close();
-    }
-
-    const upgraded = openOpenClawStateDatabase(options);
-    expect(
-      upgraded.db
-        .prepare("PRAGMA index_info(idx_plugin_state_listing)")
-        .all()
-        .map((row) => row.name),
-    ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-    expect(upgraded.db.prepare(entriesSql).all()).toEqual(entries);
-    expect(upgraded.db.prepare(metadataSql).get()).toEqual(metadata);
-    expect(readSqliteNumberPragma(upgraded.db, "user_version")).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
-    const schemaVersion = readSqliteNumberPragma(upgraded.db, "schema_version");
-    closeOpenClawStateDatabaseForTest();
-
-    const reopened = openOpenClawStateDatabase(options);
-    expect(readSqliteNumberPragma(reopened.db, "schema_version")).toBe(schemaVersion);
-    expect(reopened.db.prepare(entriesSql).all()).toEqual(entries);
-    expect(reopened.db.prepare(metadataSql).get()).toEqual(metadata);
-  });
-
-  it("repairs same-version Claw bootstrap columns before runtime schema validation", () => {
+  it("repairs same-version Claw bootstrap columns and an index before runtime schema validation", () => {
     const stateDir = createTempStateDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const shippedSchema = openMaterializedCurrentStateDatabase(stateDir);
@@ -2943,6 +2837,7 @@ INSERT INTO device_identities VALUES (
       shippedSchema.exec(`
         ALTER TABLE claw_installs DROP COLUMN bootstrap_source_path;
         ALTER TABLE claw_installs DROP COLUMN bootstrap_content_digest;
+        DROP INDEX idx_task_runs_status;
       `);
       expect(readSqliteNumberPragma(shippedSchema, "user_version")).toBe(
         OPENCLAW_STATE_SCHEMA_VERSION,
@@ -4233,69 +4128,52 @@ INSERT INTO device_identities VALUES (
     expect(result.warnings[0]).not.toContain("run openclaw doctor --fix");
   });
 
-  it.each([{ migrationPath: "doctor repair", withRow: true }])(
-    "restores the true legacy managed-image table through $migrationPath",
-    ({ migrationPath, withRow }) => {
-      const stateDir = createTempStateDir();
-      const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-      const legacyDb = openMaterializedCurrentStateDatabase(stateDir);
-      replaceManagedImageRecordsWithLegacyTable(legacyDb, { withRow });
-      legacyDb.close();
+  it("restores the empty managed-image table shipped by July releases", () => {
+    const stateDir = createTempStateDir();
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const legacyDb = openMaterializedCurrentStateDatabase(stateDir);
+    replaceManagedImageRecordsWithLegacyTable(legacyDb);
+    legacyDb.close();
 
-      if (migrationPath === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      }
-      const reopened = openOpenClawStateDatabase(options);
-      const columns = reopened.db
-        .prepare("PRAGMA table_info(managed_outgoing_image_records)")
-        .all() as Array<{ dflt_value?: unknown; name?: unknown; notnull?: unknown }>;
-      expect(columns).toContainEqual(
-        expect.objectContaining({ dflt_value: null, name: "original_media_root", notnull: 1 }),
-      );
-      expect(columns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
-      expect(columns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
-      assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path });
-      const tableSql = reopened.db
-        .prepare(
-          "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'managed_outgoing_image_records'",
-        )
-        .get() as { sql: string };
-      expect(
-        tableSql.sql
-          .split("\n")
-          .find((line) => line.includes("original_media_root"))
-          ?.trim()
-          .replace(/,$/u, ""),
-      ).toBe("original_media_root TEXT NOT NULL");
-      expect(tableSql.sql).toMatch(/\) STRICT$/u);
-      const indexes = reopened.db
-        .prepare("PRAGMA index_list(managed_outgoing_image_records)")
-        .all() as Array<{ name?: unknown }>;
-      expect(indexes).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ name: "idx_managed_outgoing_images_session" }),
-          expect.objectContaining({ name: "idx_managed_outgoing_images_message" }),
-          expect.objectContaining({ name: "idx_managed_outgoing_images_agent_session" }),
-          expect.objectContaining({ name: "idx_managed_outgoing_images_agent_message" }),
-        ]),
-      );
-      if (withRow) {
-        expect(
-          reopened.db
-            .prepare(
-              `SELECT attachment_id, original_media_root, agent_id, cleanup_pending
-                 FROM managed_outgoing_image_records`,
-            )
-            .get(),
-        ).toEqual({
-          agent_id: null,
-          attachment_id: "legacy-attachment",
-          cleanup_pending: 0,
-          original_media_root: "/legacy/media",
-        });
-      }
-    },
-  );
+    expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    const reopened = openOpenClawStateDatabase(options);
+    const columns = reopened.db
+      .prepare("PRAGMA table_info(managed_outgoing_image_records)")
+      .all() as Array<{ dflt_value?: unknown; name?: unknown; notnull?: unknown }>;
+    expect(columns).toContainEqual(
+      expect.objectContaining({ dflt_value: null, name: "original_media_root", notnull: 1 }),
+    );
+    expect(columns).toContainEqual(expect.objectContaining({ name: "agent_id" }));
+    expect(columns).toContainEqual(expect.objectContaining({ name: "cleanup_pending" }));
+    assertOpenClawStateDatabaseForMaintenance(reopened.db, { pathname: reopened.path });
+    const tableSql = reopened.db
+      .prepare(
+        "SELECT sql FROM sqlite_schema WHERE type = 'table' AND name = 'managed_outgoing_image_records'",
+      )
+      .get() as { sql: string };
+    expect(
+      tableSql.sql
+        .split("\n")
+        .find((line) => line.includes("original_media_root"))
+        ?.trim()
+        .replace(/,$/u, ""),
+    ).toBe("original_media_root TEXT NOT NULL");
+    expect(tableSql.sql).toMatch(/\) STRICT$/u);
+    const indexes = reopened.db
+      .prepare("PRAGMA index_list(managed_outgoing_image_records)")
+      .all() as Array<{ name?: unknown }>;
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "idx_managed_outgoing_images_session" }),
+        expect.objectContaining({ name: "idx_managed_outgoing_images_message" }),
+        expect.objectContaining({ name: "idx_managed_outgoing_images_agent_session" }),
+        expect.objectContaining({ name: "idx_managed_outgoing_images_agent_message" }),
+      ]),
+    );
+    expect(
+      reopened.db.prepare("SELECT COUNT(*) AS count FROM managed_outgoing_image_records").get(),
+    ).toEqual({ count: 0 });
+  });
 
   it(
     "serializes concurrent additive schema upgrades across processes",

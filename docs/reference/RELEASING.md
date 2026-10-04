@@ -15,17 +15,17 @@ For switching channels, see [Release channels](/install/development-channels).
 
 ## Release channels
 
-| Channel         | What you get                                                                                              |
-| --------------- | --------------------------------------------------------------------------------------------------------- |
-| Stable          | The regular release promoted to npm `latest`.                                                             |
-| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion.                |
-| Extended-stable | A Gateway maintenance release from either of the two trailing completed months, on npm `extended-stable`. |
-| Dev             | The moving head of `main`, for development.                                                               |
+| Channel         | What you get                                                                               |
+| --------------- | ------------------------------------------------------------------------------------------ |
+| Stable          | The regular release promoted to npm `latest`.                                              |
+| Beta            | A candidate on npm `beta`. This may be a prerelease or a final version awaiting promotion. |
+| Extended-stable | A Gateway maintenance release from the trailing completed month, on npm `extended-stable`. |
+| Dev             | The moving head of `main`, for development.                                                |
 
 Extended-stable includes the Gateway, official npm plugins, and Docker images.
 It does not include native apps or ClawHub publication, and it does not change
 the regular stable channel. Its GitHub release is not marked Latest. A monthly
-line retires when it falls outside the two supported completed months.
+line retires when `main` advances into the next month.
 
 ## Version naming
 
@@ -66,37 +66,29 @@ Stable publication requires stable or full validation, longer-running soak tests
 and blocking performance checks. These requirements also apply to a final version
 first published on the beta channel. Beta-profile evidence cannot qualify stable.
 
-Windows Node unit-test CI shards (`checks-windows-node-*`) in Full Release
-Validation's normal CI child (`normalCi`) are advisory for Release Decision and
-publication. The `windows-node-ci` class is defined by
-`scripts/full-release-validation-policy.mjs`; its failures remain visible in the
-decision, GitHub step summary, and release evidence manifest. This policy is not
-an operator-selectable input or waiver. Ordinary PR, push, scheduled, and main CI
-still require Windows shards to pass.
-
 Every failed test needs an explicit release-lead decision: blocker or flake.
 Rerun a flake on the same Release SHA at most twice, file its fix-in-parallel
-issue or PR on `main`, and retain the original failure. A still-failing eligible
-`normalCi` job can use the authenticated `recorded-flake` classification workflow;
-its receipt binds the parent, child run, exact job attempt, Release SHA, reason,
-and tracking link. The decision, manifest, and release verification notes retain
-the failure. Do not re-cut, change tooling, or start another Full Release
-Validation for a flake. See [recorded flakes](/reference/full-release-validation/continuation#record-a-flake).
+issue or PR on `main`, and retain the original failure. Do not re-cut, change
+tooling, or start another Full Release Validation solely to clear a flake; a
+selected job that remains red blocks publication.
 
-Other children stay strict in v1; extending classification to them is follow-up
-work. Non-classifiable jobs remain blocking: the CI coverage gate, seal/evidence,
+Blocking jobs include the CI coverage gate, seal/evidence,
 Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
-run still blocks. A failed CI gate is accepted only when its own log proves that
-every non-passing entry selected a failed advisory job; missing, skipped, or
-cancelled coverage blocks. Publication waivers cannot bypass failures or required
-coverage. Validation covers source CI, packages, plugins,
+run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
+skipped, or cancelled coverage blocks. Publication waivers cannot bypass failures
+or required coverage. Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
 live-provider checks. All-group qualification includes all nine Gateway
 install/upgrade combinations across Linux, Windows, and macOS. Coverage otherwise
 varies by profile and selected operating systems. Check the release's recorded
 coverage: skipped or deferred checks are not passes.
+
+For selected official npm plugins, Full Release Validation packs and qualifies
+the exact tarballs intended for publication and records their immutable artifact
+descriptors. Publication consumes those same bytes. Unpacked source fixtures do
+not participate unless npm includes them in a shipped tarball.
 
 Dependency advisories never block or delay a release. Release dependency
 evidence records every advisory finding, at any severity, and CI dispatched by

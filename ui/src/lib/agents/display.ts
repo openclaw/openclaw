@@ -51,7 +51,6 @@ type AgentConfigEntry = Pick<
 > & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;
-  agentRuntime?: unknown;
   tools?: AgentDisplayTools;
 };
 
@@ -189,7 +188,8 @@ export function buildAgentContext(
   const fallbacks =
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agent.model));
-  const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
+  const modelLabel =
+    primary && fallbacks?.length ? `${primary} (+${fallbacks.length} fallback)` : (primary ?? "-");
   const runtime = formatAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
@@ -212,24 +212,6 @@ export function buildAgentContext(
       : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
-}
-
-function resolveModelLabel(model?: unknown): string {
-  if (!model) {
-    return "-";
-  }
-  if (typeof model === "string") {
-    return normalizeOptionalString(model) || "-";
-  }
-  if (typeof model === "object") {
-    const record = model as { primary?: string; fallbacks?: string[] };
-    const primary = normalizeOptionalString(record.primary);
-    if (primary) {
-      const fallbackCount = Array.isArray(record.fallbacks) ? record.fallbacks.length : 0;
-      return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
-    }
-  }
-  return "-";
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {

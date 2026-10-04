@@ -17,7 +17,10 @@ import {
   UPDATE_RUN_ID_ENV,
 } from "./update-control-plane-sentinel.js";
 import { resolveUpdateInstallRoot } from "./update-install-root.js";
-import type { HandoffChild } from "./update-managed-service-handoff-control.js";
+import {
+  createHandoffLineReader,
+  type HandoffChild,
+} from "./update-managed-service-handoff-control.js";
 import type { ActiveManagedServiceUpdateHandoff } from "./update-managed-service-handoff-types.js";
 
 const SERVICE_IDENTITY_ENV_VARS = new Set<string>([
@@ -91,19 +94,12 @@ export function observeManagedServiceUpdateHandoffClose(
   owner: ActiveManagedServiceUpdateHandoff,
   child: HandoffChild,
 ): Promise<void> {
-  let buffered = "";
   let cleanupSettled = false;
-  const onData = (chunk: Buffer | string) => {
-    buffered = (buffered + chunk.toString()).slice(-1024);
-    let newline;
-    while ((newline = buffered.indexOf("\n")) >= 0) {
-      const line = buffered.slice(0, newline + 1);
-      buffered = buffered.slice(newline + 1);
-      if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
-        cleanupSettled = true;
-      }
+  const onData = createHandoffLineReader((line) => {
+    if (line === SYSTEM_SERVICE_UPDATE_SETTLED_MARKER) {
+      cleanupSettled = true;
     }
-  };
+  });
   child.stdout.on("data", onData);
   return new Promise((resolve) => {
     child.once("close", () => {

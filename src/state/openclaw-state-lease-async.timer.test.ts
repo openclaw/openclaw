@@ -205,9 +205,16 @@ function fixture() {
     );
   return {
     run,
+    enter(result: ReturnType<typeof run>) {
+      return Promise.race([
+        entered.promise,
+        result.outcome.then((outcome) => {
+          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
+        }),
+      ]);
+    },
     maintenance,
     resources,
-    entered,
     finishCallback,
     onRenew,
     onVerify,
@@ -233,12 +240,7 @@ describe("async state lease timer", () => {
     });
     const result = f.run();
     try {
-      const { lease, within } = await Promise.race([
-        f.entered.promise,
-        result.outcome.then((outcome) => {
-          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-        }),
-      ]);
+      const { lease, within } = await f.enter(result);
       await within(() => vi.advanceTimersByTimeAsync(1_000));
       await renewing.promise;
       f.finishCallback.resolve();
@@ -289,12 +291,7 @@ describe("async state lease timer", () => {
     });
     const result = f.run();
     try {
-      const { lease, within } = await Promise.race([
-        f.entered.promise,
-        result.outcome.then((outcome) => {
-          throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-        }),
-      ]);
+      const { lease, within } = await f.enter(result);
       await within(() => vi.advanceTimersByTimeAsync(1_000));
       await committed.promise;
       await within(() => vi.advanceTimersByTimeAsync(2_000));
@@ -321,12 +318,7 @@ describe("async state lease timer", () => {
       const reply = createDeferredCore();
       const result = f.run();
       try {
-        const { lease, within } = await Promise.race([
-          f.entered.promise,
-          result.outcome.then((outcome) => {
-            throw outcome.ok ? new Error("Lease completed before callback") : outcome.error;
-          }),
-        ]);
+        const { lease, within } = await f.enter(result);
         f.onVerify.mockImplementationOnce(async (command) => {
           const expiresAt = command.publish(Date.now() + 3_000);
           checked.resolve();

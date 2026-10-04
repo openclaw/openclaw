@@ -1,48 +1,21 @@
 name: Setup test Bun
-description: Install the checksum-pinned Linux x64 Bun fork used by test lanes.
+description: Install the shared checksum-pinned Linux x64 Bun fork used by test lanes.
 runs:
   using: composite
   steps:
     - name: Install pinned Bun test runtime
       shell: bash
+      env:
+        OPENCLAW_BUN_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
         if [[ "$RUNNER_OS/$RUNNER_ARCH" != "Linux/X64" ]]; then
           echo "::error::The pinned Bun test runtime requires Linux/X64."
           exit 1
         fi
-
-        # Built from openclaw/bun commit b3684189fe1f3592dfc5f9774060b405a243d9a6.
-        # WebKit commit fb1167ebf2cb9edc1f6771a2c11771b024693ae0.
         bun_dir="$(mktemp -d "$RUNNER_TEMP/openclaw-test-bun.XXXXXX")"
-        release_url="https://github.com/openclaw/bun/releases/download/openclaw-v1.4.3-20261002-b3684189fe-webkit-fb1167ebf2"
-        archive="$bun_dir/bun-linux-x64.zip"
-        for asset in bun-linux-x64.zip SHA256SUMS manifest.json; do
-          curl --fail --location --no-progress-meter --show-error \
-            --connect-timeout 10 --max-time 300 \
-            --retry 3 --retry-all-errors --retry-max-time 300 \
-            --output "$bun_dir/$asset" "$release_url/$asset" \
-            2> >(sed 's/^Warning: /::warning::/' >&2)
-        done
-        # Check published metadata as well as the independent pins below.
-        (
-          cd "$bun_dir"
-          for asset in bun-linux-x64.zip manifest.json; do
-            awk -v asset="$asset" '$2 == asset { print }' SHA256SUMS | sha256sum --check -
-          done
-        )
-        printf '%s  %s\n' \
-          'ba15d6d39be476dd2ec5151a047b51636c67d49281313021d697ccc2494c3987' \
-          "$archive" | sha256sum --check -
-        unzip -p "$archive" bun-linux-x64/bun > "$bun_dir/bun"
-        printf '%s  %s\n' \
-          "$(jq -er '.assets[] | select(.name == "bun-linux-x64.zip") | .executable.sha256' "$bun_dir/manifest.json")" \
-          "$bun_dir/bun" | sha256sum --check -
-        printf '%s  %s\n' \
-          '333ee756a2d3fa86089651031bf47be165ed48cf99e024e6597fa1330282d059' \
-          "$bun_dir/bun" | sha256sum --check -
-        chmod 755 "$bun_dir/bun"
-        "$bun_dir/bun" --version
-        "$bun_dir/bun" --revision
-        rm "$archive" "$bun_dir/SHA256SUMS" "$bun_dir/manifest.json"
-        echo "$bun_dir" >> "$GITHUB_PATH"
+        # Resolve from the action: frozen CI/release harnesses own their own pin.
+        /bin/bash "$OPENCLAW_BUN_ACTION_PATH/../../../scripts/stage-openclaw-bun.sh" "$bun_dir" linux x64
+        "$bun_dir/bin/bun" --version
+        "$bun_dir/bin/bun" --revision
+        echo "$bun_dir/bin" >> "$GITHUB_PATH"

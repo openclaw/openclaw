@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { normalizeTelegramMessagingTarget } from "./normalize.js";
 import { installMaybePersistResolvedTelegramTargetTests } from "./target-writeback.test-shared.js";
 import {
+  hasRejectedTelegramTopic,
   normalizeTelegramChatId,
   normalizeTelegramLookupTarget,
   normalizeTelegramOutboundTarget,
@@ -10,8 +11,10 @@ import {
 } from "./targets.js";
 
 describe("parseTelegramTarget", () => {
-  it("rejects non-positive and unsafe channel Direct Messages topic ids", () => {
+  it("rejects non-positive and unsafe topic ids", () => {
     for (const target of [
+      "-1001234567890:topic:0",
+      "-1001234567890:0",
       "-1001234567890:direct-topic:0",
       "-1001234567890:direct-topic:9007199254740992",
     ]) {
@@ -35,6 +38,27 @@ describe("parseTelegramTarget", () => {
       chatId: "-1001234567890:topic:9007199254740992",
       chatType: "unknown",
     });
+  });
+});
+
+describe("hasRejectedTelegramTopic", () => {
+  it("flags a rejected topic only when the base target is valid", () => {
+    for (const target of [
+      "-1001234567890:topic:0",
+      "-1001234567890:0",
+      "telegram:group:-1001234567890:topic:0",
+      "@fixture:topic:0",
+    ]) {
+      expect(hasRejectedTelegramTopic(target), target).toBe(true);
+    }
+    for (const target of [
+      "-1001234567890",
+      "-1001234567890:topic:7",
+      "-1001234567890:abc",
+      "garbage:extra:0",
+    ]) {
+      expect(hasRejectedTelegramTopic(target), target).toBe(false);
+    }
   });
 });
 

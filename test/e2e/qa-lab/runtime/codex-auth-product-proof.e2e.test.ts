@@ -30,8 +30,7 @@ const ACCOUNT_ID = "qa-codex-account";
 const MODEL = "openai/gpt-5.6-luna";
 const MISSING_PROFILE_ID = "openai:missing";
 const SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT =
-  "The selected auth profile is unavailable in this agent's OpenClaw credential store. " +
-  "Import or migrate that credential into the agent, select another configured profile, or run `openclaw configure`, then retry.";
+  "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.";
 const PRODUCT_OUTPUT = "QA_CODEX_AUTH_PRODUCT_PROOF_OK";
 const REQUEST_TIMEOUT_MS = 60_000;
 
@@ -72,15 +71,13 @@ type GatewayEvent = { event?: string; payload?: unknown };
 
 function expectBoundedMissingProfileRecovery(
   value: unknown,
-  options?: { allowSessionTruncation?: boolean; diagnostic?: string },
+  options?: { sessionError?: boolean; diagnostic?: string },
 ) {
   const serialized = JSON.stringify(value);
-  if (options?.allowSessionTruncation) {
+  if (options?.sessionError) {
     expect(typeof value).toBe("string");
-    expect(value).toContain("The selected auth profile is unavailable");
-    expect(value).toContain("`openclaw configure`");
-    expect(value).toMatch(/then retry\.$/u);
-    expect(value).toHaveLength(160);
+    expect(value).toBe(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
+    expect(String(value).length).toBeLessThanOrEqual(160);
   } else {
     expect(serialized, options?.diagnostic).toContain(SELECTED_AUTH_PROFILE_UNAVAILABLE_USER_TEXT);
   }
@@ -603,11 +600,11 @@ describe("Codex auth product proof", () => {
       expectBoundedMissingProfileRecovery(
         (lifecycleEvent?.payload as { session?: { lastRunError?: unknown } } | undefined)?.session
           ?.lastRunError,
-        { allowSessionTruncation: true },
+        { sessionError: true },
       );
       expectBoundedMissingProfileRecovery(terminal);
       expectBoundedMissingProfileRecovery(failedHistory?.sessionInfo?.lastRunError, {
-        allowSessionTruncation: true,
+        sessionError: true,
       });
       expect(JSON.stringify(failedHistory)).not.toContain(MISSING_PROFILE_ID);
       expect(JSON.stringify(failedHistory)).not.toContain("Codex app-server auth profile");

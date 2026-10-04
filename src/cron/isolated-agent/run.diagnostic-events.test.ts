@@ -16,7 +16,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
-const hasAnyAuthProfileStoreSourceMock = vi.fn(() => false);
+const hasAnyAuthProfileStoreSourceMock = vi.hoisted(() => vi.fn(() => false));
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: hasAnyAuthProfileStoreSourceMock,
 }));

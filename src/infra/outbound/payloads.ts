@@ -1,7 +1,6 @@
-// Outbound payload planning normalizes reply payloads into sendable text,
-// media, presentation, interactive, and mirror projections.
 import {
   applyReplyPayloadTargetPolicy,
+  addReplyPayloadMediaFailures,
   copyReplyPayloadMetadata,
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -25,6 +24,7 @@ import {
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
+import { indexFirstByKey } from "../../shared/dedupe-by-key.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 import { collectReplyMediaEntries } from "./reply-media-entries.js";
@@ -204,24 +204,22 @@ function normalizeRawOutboundPayload(
       audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
     }),
   );
+  addReplyPayloadMediaFailures(normalizedPayload, [
+    ...(parsed.mediaFailures ?? []),
+    ...(strippedParsed === parsed ? [] : (strippedParsed.mediaFailures ?? [])),
+  ]);
   return suppressedText && !hasReplyPayloadContent(normalizedPayload) ? null : normalizedPayload;
 }
 
 function createStructuredOutboundPayloadPlanEntry(
   payload: ReplyPayload,
 ): Omit<OutboundPayloadPlan, "sourceIndex"> | null {
-  const mediaUrls: string[] = [];
-  const attachments: ReplyPayload["attachments"] = payload.attachments ? [] : undefined;
-  const seen = new Set<string>();
-  for (const { url, attachment } of collectReplyMediaEntries(payload)) {
-    const trimmed = url.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    mediaUrls.push(trimmed);
-    attachments?.push(attachment ?? {});
-  }
+  const mediaEntries = indexFirstByKey(collectReplyMediaEntries(payload), ({ url }) => url.trim());
+  mediaEntries.delete("");
+  const mediaUrls = [...mediaEntries.keys()];
+  const attachments = payload.attachments
+    ? [...mediaEntries.values()].map(({ attachment }) => attachment ?? {})
+    : undefined;
   const normalizedPayload = applyReplyPayloadTargetPolicy(
     copyReplyPayloadMetadata(payload, {
       ...payload,
