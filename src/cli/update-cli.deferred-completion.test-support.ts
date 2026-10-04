@@ -30,6 +30,7 @@ vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runCommandWithTimeout: vi.fn(),
   runExec: vi.fn(),
+  runUtf8CommandWithTimeout: vi.fn(),
 }));
 vi.mock("../runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../runtime.js")>()),
@@ -194,8 +195,9 @@ const { createTempHomeEnv } = await import("../test-utils/temp-home.js");
 const existingHostUri = nodeSqlite.resolveExistingSqliteFileUri;
 const immutableHostUri = nodeSqlite.resolveImmutableSqliteFileUri;
 export const { updateGitCheckout } = await import("../infra/update-runner-git.js");
-const { runExec, runCommandWithTimeout } = await import("../process/exec.js");
-export { runExec };
+const { runExec, runCommandWithTimeout, runUtf8CommandWithTimeout } =
+  await import("../process/exec.js");
+export { runExec, runUtf8CommandWithTimeout };
 export const { defaultRuntime, ExitError } = await import("../runtime.js");
 export const { readConfigFileSnapshot, replaceConfigFile, mutateConfigFileWithRetry } =
   await import("../config/config.js");
@@ -480,8 +482,22 @@ export function installDeferredCompletionFixture() {
     const entrypoint = path.join(process.cwd(), "dist", "index.js");
     pathExists.mockImplementation(async (candidate: string) => candidate === entrypoint);
     // Child completion may invoke only Doctor and config validation.
+    vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv) => {
+      if (argv[2] === "doctor") {
+        return {
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          cleanup: "normal",
+          stdout: "",
+          stderr: "",
+        };
+      }
+      throw new Error(`Unexpected completion process: ${argv.join(" ")}`);
+    });
     vi.mocked(runExec).mockImplementation(async (file, args) => {
-      if (file === process.execPath && (args[1] === "doctor" || args[1] === "config")) {
+      if (file === process.execPath && args[1] === "config") {
         return { stdout: "", stderr: "" };
       }
       throw new Error(`Unexpected completion process: ${file}`);

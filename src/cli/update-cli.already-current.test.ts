@@ -57,6 +57,7 @@ import {
   resolveUpdateInstallKind,
   runDaemonRestart,
   runExec,
+  runUtf8CommandWithTimeout,
   runPostCorePluginConvergenceSpy,
   updateCommand,
   updateGitCheckout,
@@ -163,15 +164,26 @@ describe("update-cli", () => {
       });
 
       if (failure === "doctor") {
-        const runFixtureExec = requireValue(
-          vi.mocked(runExec).getMockImplementation(),
-          "fixture exec",
+        const runFixtureDoctor = requireValue(
+          vi.mocked(runUtf8CommandWithTimeout).getMockImplementation(),
+          "fixture Doctor transport",
         );
-        vi.mocked(runExec).mockImplementation(async (file, args, options) => {
-          if (args[1] === "doctor" && args.includes("--repair")) {
-            throw new Error("plugin Doctor failed");
+        vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
+          if (argv[2] === "doctor") {
+            return {
+              code: 1,
+              signal: null,
+              killed: false,
+              termination: "exit",
+              cleanup: "normal",
+              stdout: "",
+              stderr: "plugin Doctor failed",
+            };
           }
-          return runFixtureExec(file, args, options);
+          const result = await runFixtureDoctor(argv, options);
+          return argv.at(-1) === "--doctor"
+            ? { ...result, code: 1, stderr: "plugin Doctor failed" }
+            : result;
         });
       } else if (failure === "stop") {
         serviceStop.mockImplementationOnce(async (params: { onMutation?: () => void }) => {
