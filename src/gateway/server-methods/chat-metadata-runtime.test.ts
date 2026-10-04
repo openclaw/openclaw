@@ -893,6 +893,9 @@ describe("gateway chat metadata runtime", () => {
       release.resolve();
     }
     expect(await reading).toEqual(draft.error);
+    await expect(harness.runtime.read({ ...draft.params, includeModels: false })).rejects.toBe(
+      draft.error,
+    );
     expect(await harness.runtime.read({ agentId: "main" })).toEqual(shared);
   });
 

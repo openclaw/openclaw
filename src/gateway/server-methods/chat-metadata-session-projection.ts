@@ -12,11 +12,16 @@ import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { resolveGatewaySessionRuntimeSelectionLocked } from "../session-utils-projection.js";
+import {
+  type prepareChatAccountSelection,
+  resolveChatAccountSelection,
+} from "./chat-account-selection.js";
 import type {
   ChatMetadataReadParams,
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
+import type { PreparedAgentFacts } from "./chat-metadata-facts.js";
 import type { GatewayModelCatalogContext } from "./models-list-context.js";
 
 export type ChatMetadataProjectionFacts = {
@@ -26,6 +31,39 @@ export type ChatMetadataProjectionFacts = {
   authModes: PreparedAgentCredentialModes;
   modelCatalog: ModelCatalogSnapshot;
 };
+
+export type PreparedChatMetadataProjection = Awaited<
+  ReturnType<typeof prepareChatMetadataModelProjection>
+> & {
+  agent: PreparedAgentFacts & Pick<ChatMetadataResult, "commands" | "swarmEnabled">;
+};
+
+export function readPreparedChatMetadata(
+  projection: Pick<PreparedChatMetadataProjection, "read" | "agent">,
+  readParams: ChatMetadataReadParams,
+  config: OpenClawConfig,
+  acpMeta: SessionAcpMeta | null,
+  readAccountSelection?: Awaited<ReturnType<typeof prepareChatAccountSelection>>,
+): ChatMetadataResult {
+  readParams.draftAccountSelection?.assertCurrent();
+  const { agent } = projection;
+  return projectChatSessionMetadata(
+    readParams,
+    {
+      ...projection.read(),
+      ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
+      swarmEnabled: agent.swarmEnabled,
+      accountSelection:
+        readAccountSelection?.() ??
+        resolveChatAccountSelection({
+          authStore: agent.authStore,
+          sessionEntry: readParams.sessionEntry,
+        }),
+    },
+    config,
+    acpMeta,
+  );
+}
 
 export async function prepareSessionAcpMeta(
   params: Pick<ChatMetadataReadParams, "agentId" | "sessionKey" | "sessionEntry">,
@@ -195,7 +233,7 @@ export function projectSessionModelCatalog(
   });
 }
 
-export function projectChatSessionMetadata(
+function projectChatSessionMetadata(
   readParams: ChatMetadataReadParams,
   metadata: ChatMetadataResult,
   config: OpenClawConfig,

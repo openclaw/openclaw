@@ -187,8 +187,14 @@ compatible rows remain usable; recovery clears it. A successful empty catalog
 remains empty.
 
 The Gateway advertises `session-scoped-model-catalog` for this contract.
-`chat.metadata` remains available to legacy clients; the Control UI reads models
-directly and keeps commands in its metadata cache. Opening a conversation picker
+`chat.metadata` remains available to legacy clients. Clients that read models
+directly can pass `includeModels: false` to skip the duplicate catalog, account
+selection, and runtime-selection projection. Commands and swarm availability
+remain available. The bundled Control UI uses this compact response and keeps
+commands in its metadata cache. Session changes invalidate its direct model
+catalog through the catalog owner instead of comparing a second catalog from
+metadata. Native clients that also support older Gateways retain the default
+request shape. Opening a conversation picker
 performs a passive read, without a model-cache timer or implicit provider refresh.
 Metadata refresh publishes model-owner facts without preparing every agent's
 commands and model projections. Requests prepare their agent's metadata on demand;
