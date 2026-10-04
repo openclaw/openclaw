@@ -31,6 +31,7 @@ import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
 import ai.openclaw.app.ui.GatewaySavedAuthAction
@@ -50,6 +51,7 @@ import android.Manifest
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import android.widget.Toast
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.LifecycleOwner
@@ -65,6 +67,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
@@ -75,6 +78,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -333,6 +337,50 @@ class MainViewModel private constructor(
 
   @Volatile private var runtimeStartupQueued = false
   private val initialIntentGate = MainActivityInitialIntentGate()
+
+  internal class AssistantTalkStartRequest(
+    val deadline: Long,
+    val epoch: Long = 0,
+  )
+
+  private var assistantTalkStartEpoch = 0L
+
+  internal class TalkPermissionRequest(
+    val assistantRequest: AssistantTalkStartRequest?,
+  )
+
+  private var talkPermissionRequest: TalkPermissionRequest? = null
+
+  internal fun beginTalkPermissionRequest(assistantRequest: AssistantTalkStartRequest?): Boolean {
+    val alreadyPending = talkPermissionRequest != null
+    talkPermissionRequest = TalkPermissionRequest(assistantRequest)
+    return !alreadyPending
+  }
+
+  internal fun takeTalkPermissionRequest(): TalkPermissionRequest? = talkPermissionRequest.also { talkPermissionRequest = null }
+
+  internal fun isAssistantTalkStartCurrent(request: AssistantTalkStartRequest): Boolean = request.epoch == assistantTalkStartEpoch && request.deadline > SystemClock.elapsedRealtime() && foreground && prefs.onboardingCompleted.value
+
+  private val pendingAssistantTalkStartMutable = MutableStateFlow<AssistantTalkStartRequest?>(null)
+  internal val pendingAssistantTalkStart: StateFlow<AssistantTalkStartRequest?> = pendingAssistantTalkStartMutable
+
+  internal fun clearAssistantTalkStart() {
+    assistantTalkStartEpoch += 1
+    pendingAssistantTalkStartMutable.value = null
+  }
+
+  internal fun consumeAssistantTalkStart(request: AssistantTalkStartRequest): Boolean = pendingAssistantTalkStartMutable.compareAndSet(request, null)
+
+  internal suspend fun awaitAssistantTalkReady(request: AssistantTalkStartRequest): Boolean {
+    val remaining = request.deadline - SystemClock.elapsedRealtime()
+    if (remaining <= 0 || !prefs.onboardingCompleted.value) return false
+    return withTimeoutOrNull(remaining) {
+      val runtime = ensureRuntime()
+      if (runtime.voiceCaptureMode.value == VoiceCaptureMode.TalkMode) return@withTimeoutOrNull true
+      // Connection and failure must come from one snapshot, not separately published projections.
+      runtime.gatewayConnectionDisplay.first { it.isConnected || it.problem != null }.isConnected
+    } == true
+  }
 
   private val _requestedHomeDestination = MutableStateFlow<HomeDestination?>(null)
   val requestedHomeDestination: StateFlow<HomeDestination?> = _requestedHomeDestination
@@ -743,6 +791,7 @@ class MainViewModel private constructor(
     // Activity's duplicate true edge so it cannot restart gateway work.
     if (foreground == value) return
     foreground = value
+    if (!value) clearAssistantTalkStart()
     if (
       shouldStartRuntimeOnForeground(
         foreground = value,
@@ -971,8 +1020,26 @@ class MainViewModel private constructor(
   }
 
   /** Routes assistant intents into chat, either as a draft or queued auto-send prompt. */
-  fun handleAssistantLaunch(request: AssistantLaunchRequest) {
+  fun handleAssistantLaunch(
+    request: AssistantLaunchRequest,
+    talkStartWindowMillis: Long = assistantTalkStartWindowMillis,
+  ) {
     _requestedHomeDestination.value = HomeDestination.Chat
+    if (request.startsTalk) {
+      if (talkStartWindowMillis <= 0) {
+        clearAssistantTalkStart()
+        showTalkSetupMessage(nativeText("Invoke the assistant again to start Talk."))
+        return
+      }
+      // Keep only the latest invocation, with its own bounded admission window. Never persist microphone intent.
+      val pending = AssistantTalkStartRequest(SystemClock.elapsedRealtime() + talkStartWindowMillis.coerceAtMost(assistantTalkStartWindowMillis), assistantTalkStartEpoch)
+      pendingAssistantTalkStartMutable.value = pending
+      if (talkPermissionRequest?.assistantRequest != null) {
+        talkPermissionRequest = TalkPermissionRequest(pending)
+      }
+      return
+    }
+    clearAssistantTalkStart()
     chatShareDraftQueue.clear()
     val owner = currentOrProvisionalChatComposerOwner()
     if (request.autoSend) {
@@ -1226,6 +1293,18 @@ class MainViewModel private constructor(
 
   fun setTalkModeEnabled(enabled: Boolean) {
     ensureRuntime().setTalkModeEnabled(enabled)
+  }
+
+  internal fun ensureTalkStarted() {
+    val runtime = ensureRuntime()
+    // Capture ownership is assigned before the asynchronous Talk startup completes.
+    if (runtime.voiceCaptureMode.value == VoiceCaptureMode.TalkMode) return
+    // UI projections can still be catching up when a cold assistant launch becomes ready.
+    if (!prefs.onboardingCompleted.value || !runtime.gatewayConnectionDisplay.value.isConnected) {
+      showTalkSetupMessage(nativeText("Gateway not connected"))
+      return
+    }
+    runtime.setTalkModeEnabled(true)
   }
 
   internal suspend fun requestRecordAudioPermission(): Boolean {

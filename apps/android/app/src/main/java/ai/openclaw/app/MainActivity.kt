@@ -46,10 +46,22 @@ class MainActivity : AppCompatActivity() {
   private val pendingIntentRouter = MainActivityPendingIntentRouter()
   private val runtimeUiStarter = MainActivityRuntimeUiStarter()
   private var screenshotScene: AndroidScreenshotScene? = null
+  private var assistantTalkIntentHandled = false
+  private var assistantLaunchExpiresAtMillis = 0L
 
   override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    pendingIntentRouter.setInitialIntent(intent)
+    assistantTalkIntentHandled = savedInstanceState?.getBoolean("assistantTalkIntentHandled") == true
+    assistantLaunchExpiresAtMillis =
+      if (savedInstanceState == null) {
+        System.currentTimeMillis() + assistantTalkStartWindowMillis
+      } else {
+        savedInstanceState.getLong("assistantLaunchExpiresAtMillis")
+      }
+    // Restoring a task is not a new request to turn on the microphone.
+    if (!assistantTalkIntentHandled || parseAssistantLaunchIntent(intent)?.startsTalk != true) {
+      pendingIntentRouter.setInitialIntent(intent)
+    }
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester.attach(this)
     if (BuildConfig.DEBUG) {
@@ -117,6 +129,9 @@ class MainActivity : AppCompatActivity() {
     permissionRequester.deactivate(this)
     foreground = false
     if (shouldNotifyRuntimeBackgrounded(isChangingConfigurations)) {
+      assistantLaunchExpiresAtMillis = 0L
+      pendingIntentRouter.discardPendingTalkIntent()
+      if (parseAssistantLaunchIntent(intent)?.startsTalk == true) assistantTalkIntentHandled = true
       initializedViewModel?.setForeground(false)
     }
     super.onStop()
@@ -130,6 +145,10 @@ class MainActivity : AppCompatActivity() {
   override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
     setIntent(intent)
+    assistantTalkIntentHandled = false
+    if (parseAssistantLaunchIntent(intent)?.startsTalk == true) {
+      assistantLaunchExpiresAtMillis = System.currentTimeMillis() + assistantTalkStartWindowMillis
+    }
     pendingIntentRouter.onNewIntent(intent) { routedIntent ->
       initializedViewModel?.let { handleLaunchIntent(viewModel = it, intent = routedIntent) }
     }
@@ -146,6 +165,12 @@ class MainActivity : AppCompatActivity() {
     initializedViewModel?.refreshNodePermissionSurface()
   }
 
+  override fun onSaveInstanceState(outState: Bundle) {
+    outState.putBoolean("assistantTalkIntentHandled", assistantTalkIntentHandled)
+    outState.putLong("assistantLaunchExpiresAtMillis", assistantLaunchExpiresAtMillis)
+    super.onSaveInstanceState(outState)
+  }
+
   /**
    * Wires MainViewModel only after Activity first draw and background prefs warm-up.
    */
@@ -155,7 +180,7 @@ class MainActivity : AppCompatActivity() {
     readyViewModel.setForeground(foreground)
     startViewModelCollectors(readyViewModel)
     if (!readyViewModel.claimInitialIntentRouting()) {
-      pendingIntentRouter.discardInitialIntent()
+      pendingIntentRouter.discardInitialIntent(preserveUnroutedTalk = !assistantTalkIntentHandled)
     }
     pendingIntentRouter.activate { initialIntent ->
       handleLaunchIntent(viewModel = readyViewModel, intent = initialIntent)
@@ -218,6 +243,8 @@ class MainActivity : AppCompatActivity() {
     viewModel: MainViewModel,
     intent: Intent?,
   ) {
+    val assistantRequest = parseAssistantLaunchIntent(intent)
+    if (assistantRequest == null) viewModel.clearAssistantTalkStart()
     if (intent?.isShareLaunchIntent() == true) {
       viewModel.handleShareLaunchIntent(intent)
       return
@@ -233,8 +260,9 @@ class MainActivity : AppCompatActivity() {
       viewModel.requestHomeDestination(destination)
       return
     }
-    val request = parseAssistantLaunchIntent(intent) ?: return
-    viewModel.handleAssistantLaunch(request)
+    val request = assistantRequest ?: return
+    assistantTalkIntentHandled = request.startsTalk
+    viewModel.handleAssistantLaunch(request, talkStartWindowMillis = remainingAssistantTalkStartWindow(assistantLaunchExpiresAtMillis))
   }
 }
 
@@ -267,10 +295,17 @@ internal class MainActivityPendingIntentRouter {
     return store(intent = intent, initial = false)
   }
 
-  fun discardInitialIntent() {
+  fun discardInitialIntent(preserveUnroutedTalk: Boolean = false) {
     if (activated) return
     pendingShareIntents.removeAll { it.initial }
-    if (pendingNonShareIntent?.initial == true) pendingNonShareIntent = null
+    val pending = pendingNonShareIntent
+    if (pending?.initial == true && (!preserveUnroutedTalk || parseAssistantLaunchIntent(pending.intent)?.startsTalk != true)) {
+      pendingNonShareIntent = null
+    }
+  }
+
+  fun discardPendingTalkIntent() {
+    if (parseAssistantLaunchIntent(pendingNonShareIntent?.intent)?.startsTalk == true) pendingNonShareIntent = null
   }
 
   fun activate(routeIntent: (Intent) -> Unit): Boolean {

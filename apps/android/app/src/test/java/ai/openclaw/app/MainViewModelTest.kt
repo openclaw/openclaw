@@ -10,6 +10,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Looper
 import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.ViewModelStore
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -23,6 +25,9 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import org.robolectric.util.ReflectionHelpers
+import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -131,6 +136,194 @@ class MainViewModelTest {
     assertEquals(null, viewModel.gatewayAdditionRequest.value)
     assertNodeServiceStopRequested()
     assertEquals(listOf(gateway), prefs.gatewayRegistry.entries.value)
+  }
+
+  @Test
+  fun systemAssistantTalkRequestReplacesPendingAndIsConsumedOnce() {
+    val (viewModel, _) = createViewModel()
+    val request = requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST)))
+    viewModel.handleAssistantLaunch(request)
+    val pending = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    assertEquals(HomeDestination.Chat, viewModel.requestedHomeDestination.value)
+    viewModel.handleAssistantLaunch(request)
+    val latest = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    assertFalse(viewModel.consumeAssistantTalkStart(pending))
+    assertTrue(viewModel.consumeAssistantTalkStart(latest))
+    assertFalse(viewModel.consumeAssistantTalkStart(latest))
+    assertFalse(viewModel.consumeAssistantTalkStart(pending))
+    assertNull(viewModel.pendingAssistantTalkStart.value)
+    viewModel.handleAssistantLaunch(request)
+    assertFalse(viewModel.consumeAssistantTalkStart(pending))
+    assertNotNull(viewModel.pendingAssistantTalkStart.value)
+  }
+
+  @Test
+  fun voiceCommandSupersedesAssistWithoutChangingTheDraftOrStartingTwice() {
+    val (viewModel, _) = createViewModel()
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "existing draft"))))
+    val draft = viewModel.chatDraft.value
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))))
+    val previous = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_VOICE_COMMAND))))
+    val voiceCommand = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    assertEquals(HomeDestination.Chat, viewModel.requestedHomeDestination.value)
+    assertEquals(draft, viewModel.chatDraft.value)
+    assertFalse(viewModel.consumeAssistantTalkStart(previous))
+    assertTrue(viewModel.consumeAssistantTalkStart(voiceCommand))
+    assertFalse(viewModel.consumeAssistantTalkStart(voiceCommand))
+    assertFalse(viewModel.runtimeInitialized.value)
+  }
+
+  @Test
+  fun freshAssistantInvocationRenewsPendingAndPermissionAdmissionWindow() {
+    val (viewModel, prefs) = createViewModel()
+    viewModel.setForeground(true)
+    prefs.setOnboardingCompleted(true)
+    val invocation = requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST)))
+    viewModel.handleAssistantLaunch(invocation)
+    val original = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    assertTrue(viewModel.beginTalkPermissionRequest(original))
+    ShadowSystemClock.advanceBy(Duration.ofSeconds(14))
+    viewModel.handleAssistantLaunch(invocation)
+    val latest = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    assertEquals(original.deadline + 14_000, latest.deadline)
+    ShadowSystemClock.advanceBy(Duration.ofSeconds(2))
+    assertFalse(viewModel.isAssistantTalkStartCurrent(original))
+    assertTrue(viewModel.isAssistantTalkStartCurrent(latest))
+    assertFalse(viewModel.consumeAssistantTalkStart(original))
+    assertTrue(requireNotNull(viewModel.takeTalkPermissionRequest()).assistantRequest === latest)
+    assertNull(viewModel.takeTalkPermissionRequest())
+    assertTrue(viewModel.consumeAssistantTalkStart(latest))
+    assertFalse(viewModel.consumeAssistantTalkStart(latest))
+  }
+
+  @Test
+  fun expiredRestoredVoiceCommandCannotReceiveANewStartWindow() {
+    val (viewModel, prefs) = createViewModel()
+    prefs.setOnboardingCompleted(true)
+    viewModel.handleAssistantLaunch(
+      requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_VOICE_COMMAND))),
+      talkStartWindowMillis = remainingAssistantTalkStartWindow(20_000L, nowMillis = 620_000L),
+    )
+    assertNull(viewModel.pendingAssistantTalkStart.value)
+    assertNotNull(viewModel.pendingTalkSetupMessage.value)
+    assertFalse(viewModel.runtimeInitialized.value)
+  }
+
+  @Test
+  fun incompleteSetupConsumesVoiceRequestWithoutReplayingAfterSetup() =
+    runBlocking {
+      val (viewModel, prefs) = createViewModel()
+      viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))))
+      val pending = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+      assertFalse(viewModel.awaitAssistantTalkReady(pending))
+      assertTrue(viewModel.consumeAssistantTalkStart(pending))
+      prefs.setOnboardingCompleted(true)
+      assertNull(viewModel.pendingAssistantTalkStart.value)
+      assertFalse(viewModel.consumeAssistantTalkStart(pending))
+    }
+
+  @Test
+  fun coldTalkAdmissionUsesOneConnectionSnapshotBeforeProjectionsCatchUp() =
+    runBlocking {
+      val (viewModel, prefs) = createViewModel()
+      prefs.setOnboardingCompleted(true)
+      val app = RuntimeEnvironment.getApplication() as NodeApp
+      val previousRuntime = app.peekRuntime()
+      val runtime = NodeRuntime(app, prefs, NodeRuntimeMode.ScreenshotFixture)
+      val store = ViewModelStore().apply { put("assistant", viewModel) }
+      bindNodeRuntimeTestFixture(app, runtime)
+      try {
+        ReflectionHelpers.getField<MutableStateFlow<Boolean>>(runtime, "_isConnected").value = false
+        ReflectionHelpers.getField<MutableStateFlow<GatewayConnectionDisplay>>(runtime, "_gatewayConnectionDisplay").value =
+          GatewayConnectionDisplay(
+            isConnected = true,
+            statusText = "Connected (node offline)",
+            problem = GatewayConnectionProblem(null, "Node offline", null, null, null, pauseReconnect = false, retryable = true),
+          )
+        assertFalse(viewModel.isConnected.value)
+        viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_VOICE_COMMAND))))
+        assertTrue(viewModel.awaitAssistantTalkReady(requireNotNull(viewModel.pendingAssistantTalkStart.value)))
+        viewModel.ensureTalkStarted()
+        assertNull(viewModel.pendingTalkSetupMessage.value)
+      } finally {
+        store.clear()
+        bindNodeRuntimeTestFixture(app, previousRuntime)
+        closeNodeRuntimeTestFixture(runtime)
+      }
+    }
+
+  @Test
+  fun expiredVoiceRequestDoesNotInitializeRuntime() =
+    runBlocking {
+      val (viewModel, prefs) = createViewModel()
+      prefs.setOnboardingCompleted(true)
+      assertFalse(viewModel.awaitAssistantTalkReady(MainViewModel.AssistantTalkStartRequest(deadline = 0)))
+      assertFalse(viewModel.runtimeInitialized.value)
+    }
+
+  @Test
+  fun promptActionSupersedesPendingTalkAndRetainsComposerBehavior() {
+    val (viewModel, _) = createViewModel()
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))))
+    val pending = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "hello"))))
+    assertFalse(viewModel.consumeAssistantTalkStart(pending))
+    assertEquals("hello", viewModel.chatDraft.value?.text)
+    assertNull(viewModel.pendingAssistantAutoSend.value)
+  }
+
+  @Test
+  fun permissionReturnCannotReviveBackgroundedAssistantStart() {
+    val (viewModel, prefs) = createViewModel()
+    viewModel.setForeground(true)
+    prefs.setOnboardingCompleted(true)
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))))
+    val request = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    assertTrue(viewModel.consumeAssistantTalkStart(request))
+    assertTrue(viewModel.beginTalkPermissionRequest(request))
+    assertTrue(viewModel.isAssistantTalkStartCurrent(request))
+    viewModel.setForeground(false)
+    assertFalse(viewModel.isAssistantTalkStartCurrent(requireNotNull(viewModel.takeTalkPermissionRequest()).assistantRequest!!))
+    assertNull(viewModel.takeTalkPermissionRequest())
+  }
+
+  @Test
+  fun talkPermissionOwnerCoalescesAndIsConsumedOnce() {
+    val (viewModel, prefs) = createViewModel()
+    viewModel.setForeground(true)
+    prefs.setOnboardingCompleted(true)
+    val expired = MainViewModel.AssistantTalkStartRequest(deadline = 0)
+    assertTrue(viewModel.beginTalkPermissionRequest(expired))
+    assertFalse(viewModel.beginTalkPermissionRequest(expired))
+    assertFalse(viewModel.isAssistantTalkStartCurrent(expired))
+    assertTrue(requireNotNull(viewModel.takeTalkPermissionRequest()).assistantRequest === expired)
+    assertNull(viewModel.takeTalkPermissionRequest())
+    // A restored ViewModel has no permission owner and cannot act on a restored result.
+    assertNull(createViewModel().first.takeTalkPermissionRequest())
+  }
+
+  @Test
+  fun promptLaunchCancelsAssistantPermissionOwner() {
+    val (viewModel, prefs) = createViewModel()
+    viewModel.setForeground(true)
+    prefs.setOnboardingCompleted(true)
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))))
+    val request = requireNotNull(viewModel.pendingAssistantTalkStart.value)
+    viewModel.consumeAssistantTalkStart(request)
+    viewModel.beginTalkPermissionRequest(request)
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "hello"))))
+    assertFalse(viewModel.isAssistantTalkStartCurrent(requireNotNull(viewModel.takeTalkPermissionRequest()).assistantRequest!!))
+  }
+
+  @Test
+  fun foregroundExitDiscardsPendingTalk() {
+    val (viewModel, _) = createViewModel()
+    // Onboarding is incomplete, so this exercises foreground bookkeeping without starting a Gateway.
+    viewModel.setForeground(true)
+    viewModel.handleAssistantLaunch(requireNotNull(parseAssistantLaunchIntent(Intent(Intent.ACTION_ASSIST))))
+    viewModel.setForeground(false)
+    assertNull(viewModel.pendingAssistantTalkStart.value)
   }
 
   @Test

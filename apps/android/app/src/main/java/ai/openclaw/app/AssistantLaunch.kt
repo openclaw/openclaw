@@ -25,14 +25,22 @@ enum class HomeDestination {
   Settings,
 }
 
-/**
- * Normalized launch request from Android Assistant or explicit app actions.
- */
+internal const val assistantTalkStartWindowMillis = 15_000L
+
+/** A restored task keeps the original window; wall time also expires requests across reboot. */
+internal fun remainingAssistantTalkStartWindow(
+  expiresAtMillis: Long,
+  nowMillis: Long = System.currentTimeMillis(),
+): Long = (expiresAtMillis - nowMillis).takeIf { it in 1..assistantTalkStartWindowMillis } ?: 0L
+
+/** Normalized launch request from Android Assistant or explicit app actions. */
 data class AssistantLaunchRequest(
   val source: String,
   val prompt: String?,
   val autoSend: Boolean,
-)
+) {
+  val startsTalk: Boolean get() = source == "assist" && prompt == null
+}
 
 /** Shared content staged in chat for user review before sending. */
 data class ShareLaunchRequest(
@@ -94,10 +102,11 @@ fun parseHomeDestinationIntent(intent: Intent?): HomeDestination? {
 fun parseAssistantLaunchIntent(intent: Intent?): AssistantLaunchRequest? {
   val action = intent?.action ?: return null
   return when (action) {
-    Intent.ACTION_ASSIST -> {
+    Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND -> {
+      val prompt = intent.getStringExtra(extraAssistantPrompt)?.trim()?.ifEmpty { null }
       AssistantLaunchRequest(
         source = "assist",
-        prompt = null,
+        prompt = prompt,
         autoSend = false,
       )
     }

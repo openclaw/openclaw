@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 import android.os.Looper
 import androidx.lifecycle.SavedStateHandle
 import org.junit.Assert.assertEquals
@@ -27,6 +28,137 @@ import java.util.concurrent.TimeUnit
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class MainActivityLifecycleTest {
+  @Test
+  fun recreationPreservesAnAssistantIntentThatHasNotReachedTheViewModel() {
+    for (action in listOf(Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND)) {
+      val router = MainActivityPendingIntentRouter()
+      router.setInitialIntent(Intent(action))
+      router.discardInitialIntent(preserveUnroutedTalk = true)
+      val routed = mutableListOf<Intent>()
+      assertTrue(router.activate(routed::add))
+      assertEquals(listOf(action), routed.map { it.action })
+      assertFalse(router.activate(routed::add))
+    }
+
+    val ordinaryRouter = MainActivityPendingIntentRouter()
+    ordinaryRouter.setInitialIntent(Intent(Intent.ACTION_MAIN))
+    ordinaryRouter.discardInitialIntent(preserveUnroutedTalk = true)
+    assertTrue(ordinaryRouter.activate { error("Ordinary restored launches should still be discarded") })
+  }
+
+  @Test
+  fun restoredHandledAssistantIntentDoesNotRouteAgain() {
+    for (action in listOf(Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND)) {
+      val savedState = Bundle().apply { putBoolean("assistantTalkIntentHandled", true) }
+      val controller = Robolectric.buildActivity(MainActivity::class.java, Intent(action)).create(savedState)
+      val router =
+        MainActivity::class.java
+          .getDeclaredField("pendingIntentRouter")
+          .apply { isAccessible = true }
+          .get(controller.get()) as MainActivityPendingIntentRouter
+      val routed = mutableListOf<Intent>()
+      assertTrue(router.activate(routed::add))
+      assertTrue(routed.isEmpty())
+      controller.destroy()
+    }
+  }
+
+  @Test
+  fun restoredUnroutedColdAssistantIntentIsStillBuffered() {
+    for (action in listOf(Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND)) {
+      val savedState = Bundle().apply { putLong("assistantLaunchExpiresAtMillis", 25_000L) }
+      val controller = Robolectric.buildActivity(MainActivity::class.java, Intent(action)).create(savedState)
+      val restoredExpiry =
+        MainActivity::class.java
+          .getDeclaredField("assistantLaunchExpiresAtMillis")
+          .apply { isAccessible = true }
+          .getLong(controller.get())
+      assertEquals(25_000L, restoredExpiry)
+      val router =
+        MainActivity::class.java
+          .getDeclaredField("pendingIntentRouter")
+          .apply { isAccessible = true }
+          .get(controller.get()) as MainActivityPendingIntentRouter
+      val routed = mutableListOf<Intent>()
+      assertTrue(router.activate(routed::add))
+      assertEquals(listOf(action), routed.map { it.action })
+      assertFalse(router.activate(routed::add))
+      assertEquals(1, routed.size)
+      controller.destroy()
+    }
+  }
+
+  @Test
+  fun restoredPromptActionRetainsItsExistingDraftRouting() {
+    val saved = Bundle().apply { putBoolean("assistantTalkIntentHandled", true) }
+    val prompt = Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "restored prompt")
+    val controller = Robolectric.buildActivity(MainActivity::class.java, prompt).create(saved)
+    val router =
+      MainActivity::class.java
+        .getDeclaredField("pendingIntentRouter")
+        .apply { isAccessible = true }
+        .get(controller.get()) as MainActivityPendingIntentRouter
+    val routed = mutableListOf<Intent>()
+    router.activate(routed::add)
+    assertEquals(listOf(prompt), routed)
+    controller.destroy()
+  }
+
+  @Test
+  fun backgroundExitConsumesAssistantIntentBeforeViewModelInitialization() {
+    val controller =
+      Robolectric
+        .buildActivity(MainActivity::class.java, Intent(Intent.ACTION_VOICE_COMMAND))
+        .create()
+        .start()
+        .stop()
+    val saved = Bundle()
+    controller.saveInstanceState(saved)
+    assertTrue(saved.getBoolean("assistantTalkIntentHandled"))
+    assertEquals(0L, saved.getLong("assistantLaunchExpiresAtMillis"))
+    val router =
+      MainActivity::class.java
+        .getDeclaredField("pendingIntentRouter")
+        .apply { isAccessible = true }
+        .get(controller.get()) as MainActivityPendingIntentRouter
+    assertTrue(router.activate { error("Backgrounded Talk intent must be consumed") })
+    controller.destroy()
+  }
+
+  @Test
+  fun shareIntentDoesNotRenewABufferedVoiceLaunchWindow() {
+    val saved = Bundle().apply { putLong("assistantLaunchExpiresAtMillis", 25_000L) }
+    val controller = Robolectric.buildActivity(MainActivity::class.java, Intent(Intent.ACTION_VOICE_COMMAND)).create(saved)
+    controller.newIntent(Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "shared draft"))
+    val expiry =
+      MainActivity::class.java
+        .getDeclaredField("assistantLaunchExpiresAtMillis")
+        .apply { isAccessible = true }
+        .getLong(controller.get())
+    assertEquals(25_000L, expiry)
+    controller.destroy()
+  }
+
+  @Test
+  fun discardingPendingTalkKeepsBufferedSharesAndPromptActions() {
+    val router = MainActivityPendingIntentRouter()
+    val share = Intent(Intent.ACTION_SEND).setType("text/plain").putExtra(Intent.EXTRA_TEXT, "shared draft")
+    router.setInitialIntent(Intent(Intent.ACTION_VOICE_COMMAND))
+    router.onNewIntent(share) { error("Router has not activated") }
+    router.discardPendingTalkIntent()
+    val routed = mutableListOf<Intent>()
+    router.activate(routed::add)
+    assertEquals(listOf(share), routed)
+
+    val prompt = Intent(actionAskOpenClaw).putExtra(extraAssistantPrompt, "prompt")
+    val promptRouter = MainActivityPendingIntentRouter()
+    promptRouter.setInitialIntent(prompt)
+    promptRouter.discardPendingTalkIntent()
+    val prompts = mutableListOf<Intent>()
+    promptRouter.activate(prompts::add)
+    assertEquals(listOf(prompt), prompts)
+  }
+
   @Test
   fun pendingIntentRouterUsesLatestIntentBeforeActivation() {
     val router = MainActivityPendingIntentRouter()
