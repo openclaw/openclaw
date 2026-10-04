@@ -5,10 +5,6 @@ import { observeHostDataSql } from "../../test/helpers/sqlite-statement-executio
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { readAcpSessionMetaForEntries } from "../acp/runtime/session-meta-readonly.js";
 import * as metadataReader from "../acp/runtime/session-meta-readonly.js";
-import {
-  readIncognitoAcpSessionEntry,
-  upsertIncognitoAcpSessionMeta,
-} from "../acp/runtime/session-meta-worker-mutation.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -59,7 +55,7 @@ afterAll(async () => {
 
 it("orders set, link and clear through both owners with zero caller-thread SQL", async () => {
   const sessionKey = key("sequence");
-  const target = { actor, authority, cfg, env, sessionKey };
+  const target = { authority, cfg, env, sessionKey };
   await actor.sessions.create(authority, {
     sessionKey,
     entry: { ...entry("sequence"), acp: meta },
@@ -97,8 +93,8 @@ it("orders set, link and clear through both owners with zero caller-thread SQL",
     );
   const observe = observeHostDataSql();
   try {
-    expect((await readIncognitoAcpSessionEntry(target))?.acp).toBeUndefined();
-    const set = await upsertIncognitoAcpSessionMeta({
+    expect((await actor.acp.readEntry(target))?.acp).toBeUndefined();
+    const set = await actor.acp.upsertMeta({
       ...target,
       now: () => 200,
       mutate: () => meta,
@@ -108,28 +104,28 @@ it("orders set, link and clear through both owners with zero caller-thread SQL",
     expect(sequence).toEqual(["entry", "metadata"]);
     const stored = (await actor.sessions.read(authority, { sessionKey })).entry;
     expect(stored?.acp).toBeUndefined();
-    const joined = await readIncognitoAcpSessionEntry(target);
+    const joined = await actor.acp.readEntry(target);
     expect(joined?.acp).toEqual(meta);
     expect(joined?.updatedAt).toBe(stored?.updatedAt);
     sequence.length = 0;
-    expect(
-      await upsertIncognitoAcpSessionMeta({ ...target, mutate: () => undefined }),
-    ).toMatchObject({ acp: meta });
+    expect(await actor.acp.upsertMeta({ ...target, mutate: () => undefined })).toMatchObject({
+      acp: meta,
+    });
     expect(sequence).toEqual([]);
-    expect(await upsertIncognitoAcpSessionMeta({ ...target, mutate: () => null })).toMatchObject({
+    expect(await actor.acp.upsertMeta({ ...target, mutate: () => null })).toMatchObject({
       sessionId: "sequence",
     });
     expect(sequence).toEqual(["entry", "metadata"]);
-    expect((await readIncognitoAcpSessionEntry(target))?.acp).toBeUndefined();
-    const linked = await upsertIncognitoAcpSessionMeta({
+    expect((await actor.acp.readEntry(target))?.acp).toBeUndefined();
+    const linked = await actor.acp.upsertMeta({
       ...target,
       sessionKey: key("new-link"),
       mutate: () => meta,
     });
     expect(linked?.lifecycleRevision).toEqual(expect.any(String));
-    expect(
-      (await readIncognitoAcpSessionEntry({ ...target, sessionKey: key("new-link") }))?.acp,
-    ).toEqual(meta);
+    expect((await actor.acp.readEntry({ ...target, sessionKey: key("new-link") }))?.acp).toEqual(
+      meta,
+    );
     expect(observe.queries).toEqual([]);
   } finally {
     observe.restore();
@@ -151,7 +147,7 @@ it.each(["snapshot", "policy"] as const)(
         }
       },
     };
-    const target = { actor, authority: currentAuthority, cfg, env, sessionKey };
+    const target = { authority: currentAuthority, cfg, env, sessionKey };
     await actor.sessions.create(authority, { sessionKey, entry: entry("revoked") });
     const reached = createDeferredCore();
     const release = createDeferredCore();
@@ -178,7 +174,7 @@ it.each(["snapshot", "policy"] as const)(
         ),
       );
     const mutate = vi.fn(() => meta);
-    const pending = upsertIncognitoAcpSessionMeta({ ...target, mutate });
+    const pending = actor.acp.upsertMeta({ ...target, mutate });
     const outcome = pending.then(
       () => undefined,
       (error: unknown) => error,
@@ -208,7 +204,7 @@ it.each(["snapshot", "policy"] as const)(
         change === "policy" ? "ACP policy revoked" : "snapshot changed",
       );
       expect(mutate).toHaveBeenCalledOnce();
-      expect((await readIncognitoAcpSessionEntry({ ...target, authority }))?.acp).toBeUndefined();
+      expect((await actor.acp.readEntry({ ...target, authority }))?.acp).toBeUndefined();
     } finally {
       release.resolve();
       await outcome;
@@ -220,8 +216,7 @@ it.each(["snapshot", "policy"] as const)(
 it("rechecks policy before disclosing the joined shared metadata", async () => {
   const sessionKey = key("read-policy");
   await actor.sessions.create(authority, { sessionKey, entry: entry("read-policy") });
-  await upsertIncognitoAcpSessionMeta({
-    actor,
+  await actor.acp.upsertMeta({
     authority,
     sessionKey,
     cfg,
@@ -239,8 +234,7 @@ it("rechecks policy before disclosing the joined shared metadata", async () => {
     });
   try {
     await expect(
-      readIncognitoAcpSessionEntry({
-        actor,
+      actor.acp.readEntry({
         sessionKey,
         cfg,
         env,
@@ -261,9 +255,9 @@ it("rechecks policy before disclosing the joined shared metadata", async () => {
 
 it("keeps shared ACP metadata after the volatile actor ends", async () => {
   const sessionKey = key("retention");
-  const target = { actor, authority, cfg, env, sessionKey };
+  const target = { authority, cfg, env, sessionKey };
   await actor.sessions.create(authority, { sessionKey, entry: entry("retention") });
-  const persisted = await upsertIncognitoAcpSessionMeta({ ...target, mutate: () => meta });
+  const persisted = await actor.acp.upsertMeta({ ...target, mutate: () => meta });
   assert(persisted);
   await actor.close();
   expect(
@@ -273,5 +267,5 @@ it("keeps shared ACP metadata after the volatile actor ends", async () => {
       env,
     }),
   ).toEqual([meta]);
-  expect(() => readIncognitoAcpSessionEntry(target)).toThrow(/ended/i);
+  expect(() => actor.acp.readEntry(target)).toThrow(/ended/i);
 });

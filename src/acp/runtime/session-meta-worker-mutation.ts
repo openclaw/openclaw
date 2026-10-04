@@ -181,7 +181,10 @@ export async function commitAcpSessionMutation(
 }
 
 type Target = {
-  actor: IncognitoAgentDatabaseExecution;
+  actor: Pick<
+    IncognitoAgentDatabaseExecution,
+    "agentId" | "path" | "identity" | "sessions" | "assertCurrent"
+  >;
   authority: IncognitoSessionAuthority;
   sessionKey: string;
   cfg: OpenClawConfig;

@@ -370,15 +370,18 @@ it("keeps the outer actor reentrancy fence after nested grants consume prepared 
         stage,
       );
       expect(facts.sessionKey).toBe(sessionKey);
-      try {
-        reentered.push(memory(reference));
-      } catch (error) {
-        refusals.push(error);
-      }
-      try {
-        reentered.push(reference.sessions.withSharedState(() => memory(reference)));
-      } catch (error) {
-        refusals.push(error);
+      const target = { authority, sessionKey, cfg: {}, env };
+      for (const reenter of [
+        () => memory(reference),
+        () => reference.sessions.withSharedState(() => memory(reference)),
+        () => reference.acp.readEntry(target),
+        () => reference.acp.upsertMeta({ ...target, mutate: () => undefined }),
+      ]) {
+        try {
+          reentered.push(reenter());
+        } catch (error) {
+          refusals.push(error);
+        }
       }
     },
   };
@@ -387,6 +390,8 @@ it("keeps the outer actor reentrancy fence after nested grants consume prepared 
   expect(read.entry?.sessionId).toBe("nested-grant");
   expect(prepared).toEqual([sessionKey]);
   expect(refusals).toEqual([
+    new Error("Incognito authority callbacks cannot call their actor"),
+    new Error("Incognito authority callbacks cannot call their actor"),
     new Error("Incognito authority callbacks cannot call their actor"),
     new Error("Incognito authority callbacks cannot call their actor"),
   ]);

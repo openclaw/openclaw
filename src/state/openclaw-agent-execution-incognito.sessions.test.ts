@@ -22,6 +22,7 @@ const references = new Set<IncognitoAgentDatabaseExecution>();
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
 const DAY_MS = 24 * 60 * 60_000;
 const reviewWidget = vi.hoisted(() => vi.fn());
+// mock-isolation: Keep model/provider startup outside this SQLite ownership fixture.
 vi.mock("../agents/exec-auto-reviewer.js", () => ({
   createModelExecAutoReviewer: () => reviewWidget,
 }));

@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type {
+  readIncognitoAcpSessionEntry,
+  upsertIncognitoAcpSessionMeta,
+} from "../acp/runtime/session-meta-worker-mutation.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   createIncognitoSessionFacts,
@@ -48,6 +52,14 @@ export type IncognitoAgentDatabaseExecution = {
   readonly path: string;
   readonly identity: AgentDatabaseIncognitoIdentity;
   readonly sessions: ReturnType<ReturnType<typeof createIncognitoSessionFacts>["bind"]>;
+  readonly acp: {
+    readEntry(
+      params: Omit<Parameters<typeof readIncognitoAcpSessionEntry>[0], "actor">,
+    ): ReturnType<typeof readIncognitoAcpSessionEntry>;
+    upsertMeta(
+      params: Omit<Parameters<typeof upsertIncognitoAcpSessionMeta>[0], "actor">,
+    ): ReturnType<typeof upsertIncognitoAcpSessionMeta>;
+  };
   assertCurrent(): void;
   /** Retains the actor across preparation/publication, independently of its writer turn. */
   run<T>(
@@ -336,13 +348,29 @@ function createIncognitoAgentExecutionOwner(
         );
         return track(track(work), borrowedWork);
       };
-      return {
+      const execution: IncognitoAgentDatabaseExecution = {
         agentId: options.agentId,
         path: options.path,
         identity,
         sessions: sessionFacts.bind(run, assertBorrowed, (work) =>
           track(track(work), borrowedWork),
         ),
+        acp: {
+          readEntry(params) {
+            return execution.sessions.withSharedState(async () => {
+              const { readIncognitoAcpSessionEntry } =
+                await import("../acp/runtime/session-meta-worker-mutation.js");
+              return readIncognitoAcpSessionEntry({ ...params, actor: execution });
+            });
+          },
+          upsertMeta(params) {
+            return execution.sessions.withSharedState(async () => {
+              const { upsertIncognitoAcpSessionMeta } =
+                await import("../acp/runtime/session-meta-worker-mutation.js");
+              return upsertIncognitoAcpSessionMeta({ ...params, actor: execution });
+            });
+          },
+        },
         assertCurrent: assertBorrowed,
         run: (currentAuthority, operation, operationSignal) =>
           run(currentAuthority, operation, operationSignal),
@@ -353,6 +381,7 @@ function createIncognitoAgentExecutionOwner(
         },
         close: () => owner.close(),
       };
+      return execution;
     },
     close() {
       if (state === "closed") {

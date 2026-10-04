@@ -281,6 +281,8 @@ configuration, or memory cap and retires no T1 sites.
 
 ACP entry reads and finite field changes can use the captured actor while ACP
 metadata keeps its existing shared-state owner, persistence, and retention.
+The actor borrow exposes this composition through its lazy `acp` capability;
+production callers do not acquire the actor or select this capability until P7.
 Setting metadata touches the entry before publishing the shared row. Clearing
 metadata patches the entry before clearing the shared row. Runtime uses canonical
 ACP keys; Doctor owns legacy repair. Missing-entry linking uses the same entry
