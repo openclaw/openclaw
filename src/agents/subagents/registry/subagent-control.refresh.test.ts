@@ -1,6 +1,6 @@
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
-import { useSubagentControlFixture } from "./subagent-control.test-support.js";
+import { persistSubagentRunsToDiskOrThrow, useSubagentControlFixture } from "./subagent-control.test-support.js";
 /** A transient discovery failure must survive successful runtime cancellation. */
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -12,8 +12,6 @@ import {
   getActiveSessionWorkAdmissionCount,
   runExclusiveSessionLifecycleMutation,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { findTaskByRunId } from "../../../tasks/task-registry.js";
-import { onTaskRegistryChange } from "../../../tasks/task-registry.store.js";
 import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "../../embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import { enqueueSwarmRun, releaseSwarmRun } from "../swarm/swarm-scheduler.js";
@@ -22,6 +20,7 @@ import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
 import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
 
@@ -125,9 +124,9 @@ it("retains a captured child prefix when the next child's parent identity read f
     firstStart,
     "an already captured reservation cannot escape on scope disposal",
   ).not.toHaveBeenCalled();
-  expect(findTaskByRunId("prefix-first")?.status).toBe("cancelled");
-  expect(findTaskByRunId("prefix-second")?.status).not.toBe("cancelled");
-  expect(findTaskByRunId("prefix-healthy")?.status).toBe("cancelled");
+  expect(resolveSubagentSessionStatus(subagentRuns.get("prefix-first"))).toBe("killed");
+  expect(resolveSubagentSessionStatus(subagentRuns.get("prefix-second"))).not.toBe("killed");
+  expect(resolveSubagentSessionStatus(subagentRuns.get("prefix-healthy"))).toBe("killed");
   expect(unrelatedStart).toHaveBeenCalledOnce();
 });
 
@@ -238,8 +237,9 @@ it.each([
         return exactRead(scope);
       });
     const grandchildCancelled = createDeferred();
-    const unsubscribeTasks = onTaskRegistryChange(() => {
-      if (findTaskByRunId("g")?.status === "cancelled") {
+    fixture.persist.mockImplementation((...args) => {
+      persistSubagentRunsToDiskOrThrow(...args);
+      if (resolveSubagentSessionStatus(subagentRuns.get("g")) === "killed") {
         grandchildCancelled.resolve();
       }
     });
@@ -300,7 +300,7 @@ it.each([
         });
         expect(a.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
         expect(d.endedReason).toBe(SUBAGENT_ENDED_REASON_KILLED);
-        expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
         expect(startG).not.toHaveBeenCalled();
         armed = true;
         admissionHealthy.release();
@@ -312,7 +312,7 @@ it.each([
       expect(startFailure).not.toHaveBeenCalled();
       if (faultAt === undefined) {
         expect(result).toMatchObject({ status: "ok", killed: 4 });
-        expect(findTaskByRunId("g")?.status).toBe("cancelled");
+        expect(resolveSubagentSessionStatus(subagentRuns.get("g"))).toBe("killed");
         expect(startG).not.toHaveBeenCalled();
       } else {
         expect(failedReads, "exactly one transient I/O fault").toBe(1);
@@ -328,7 +328,7 @@ it.each([
           aKilled: a.endedReason,
           dKilled: d.endedReason,
           healthyKilled: healthy.endedReason,
-          gTask: findTaskByRunId("g")?.status,
+          gTask: resolveSubagentSessionStatus(subagentRuns.get("g")),
           gExecution: subagentRuns.get("g")?.execution.status,
           gDispatches: startG.mock.calls.length,
           result,
@@ -341,7 +341,6 @@ it.each([
       }
     } finally {
       armed = false;
-      unsubscribeTasks();
       admissionA.release();
       admissionD.release();
       admissionHealthy.release();

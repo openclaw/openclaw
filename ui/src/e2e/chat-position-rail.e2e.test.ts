@@ -392,6 +392,7 @@ suite.define(() => {
 
           const composer = page.locator(".agent-chat__composer-combobox textarea");
           await composer.focus();
+          await expect.poll(visibilityMatchesViewport).toBe(true);
           const strokeColors = () =>
             markers.evaluateAll((items) =>
               items.map(
@@ -400,7 +401,11 @@ suite.define(() => {
                     .backgroundColor,
               ),
             );
-          const restingColors = await strokeColors();
+          // The tick animates its background after visibility changes. Capture
+          // each marker's target color, not a transient animation frame.
+          const restingColors = await markers.evaluateAll((items) =>
+            items.map((item) => getComputedStyle(item).color),
+          );
           await markerForIndex(4).hover();
           await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
           await expect

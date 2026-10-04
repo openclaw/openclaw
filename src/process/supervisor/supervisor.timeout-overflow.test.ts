@@ -133,15 +133,17 @@ describe("process supervisor oversized timer deadlines", () => {
         await vi.advanceTimersByTimeAsync(1);
         expect(adapter.killMock).not.toHaveBeenCalled();
 
+        expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
+          refreshOutput
+            ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, 0]
+            : [MAX_TIMER_TIMEOUT_MS, 0],
+        );
+        await vi.advanceTimersToNextTimerAsync();
         const remainingIntervalMs = Math.min(
           durationMs - MAX_TIMER_TIMEOUT_MS,
           MAX_TIMER_TIMEOUT_MS,
         );
-        expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
-          refreshOutput
-            ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, remainingIntervalMs]
-            : [MAX_TIMER_TIMEOUT_MS, remainingIntervalMs],
-        );
+        expect(setTimeoutSpy.mock.calls.at(-1)?.[1]).toBe(remainingIntervalMs);
 
         if (durationMs === Number.MAX_SAFE_INTEGER) {
           adapter.settle();
@@ -156,9 +158,9 @@ describe("process supervisor oversized timer deadlines", () => {
           return;
         }
 
-        await vi.advanceTimersByTimeAsync(remainingIntervalMs - 1);
+        await vi.advanceTimersByTimeAsync(remainingIntervalMs);
         expect(adapter.killMock).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(1);
+        await vi.advanceTimersToNextTimerAsync();
         await expect(run.wait()).resolves.toMatchObject({
           reason,
           timedOut: true,
@@ -199,15 +201,17 @@ describe("process supervisor oversized timer deadlines", () => {
 
         nowSpy.mockReturnValue(initialNowMs + MAX_TIMER_TIMEOUT_MS + callbackLatenessMs);
         await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+        await vi.advanceTimersToNextTimerAsync();
         expect(adapter.killMock).not.toHaveBeenCalled();
         expect(setTimeoutSpy.mock.calls.map(([, delay]) => delay)).toEqual(
           refreshOutput
-            ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, 60_000]
-            : [MAX_TIMER_TIMEOUT_MS, 60_000],
+            ? [MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS, 0, 60_000]
+            : [MAX_TIMER_TIMEOUT_MS, 0, 60_000],
         );
 
         nowSpy.mockReturnValue(initialNowMs + MAX_TIMER_TIMEOUT_MS + trailingDurationMs);
         await vi.advanceTimersByTimeAsync(60_000);
+        await vi.advanceTimersToNextTimerAsync();
         await expect(run.wait()).resolves.toMatchObject({
           reason,
           timedOut: true,

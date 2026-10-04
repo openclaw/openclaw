@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
-import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descriptor.js";
+import { parseWorkerLaunchPlan } from "./launch-descriptor.js";
 import {
   WorkerGatewayNamespace,
   workerProtocolIdentifier as identifier,
@@ -10,6 +10,7 @@ import {
 } from "./protocol-record.js";
 
 const NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES = 4 * 1024;
+export const NODE_WORKER_STATUS_WAIT_MAX_MS = 20_000;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
@@ -68,7 +69,16 @@ const LaunchInput = workerProtocolObject({
   }),
   placementGeneration: IdentityShape.placementGeneration,
 });
-const Lookup = workerProtocolObject({ launchId: IdentityShape.launchId });
+const Lookup = workerProtocolObject({
+  launchId: IdentityShape.launchId,
+  waitMs: z
+    .custom<number>(
+      (value) =>
+        isNonNegativeInteger(value) && value >= 1 && value <= NODE_WORKER_STATUS_WAIT_MAX_MS,
+      { error: "INVALID_REQUEST: waitMs must be an integer between 1 and 20000" },
+    )
+    .optional(),
+});
 const Receipt = z.union([
   workerProtocolObject({ ...IdentityShape, state: z.enum(["pending", "running"]) }),
   workerProtocolObject({
@@ -123,32 +133,25 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
-function assertNodeWorkerLaunchIdentity(
-  input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
-  descriptor: WorkerLaunchPlan,
-): void {
-  if (descriptor.assignment.turnId !== input.launchId) {
-    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
-  }
-  if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
-    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
-  }
-}
-
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
   return validateNodeWorkerLaunchInput(decodeRequest(raw));
 }
 
 export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   const input = parseRequest(LaunchInput, value, "launch");
-  assertNodeWorkerLaunchIdentity(input, input.descriptor);
+  if (input.descriptor.assignment.turnId !== input.launchId) {
+    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
+  }
+  if (input.descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
+    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
+  }
   if (input.sessionKey === undefined) {
     delete input.sessionKey;
   }
   return input;
 }
 
-export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: string } {
+export function parseNodeWorkerLookupInput(raw?: string | null): z.infer<typeof Lookup> {
   return parseRequest(Lookup, decodeRequest(raw), "lookup");
 }
 
@@ -221,4 +224,19 @@ export function parseNodeWorkerSupervisorReceipt(
   value: unknown,
 ): NodeWorkerSupervisorReceipt | null {
   return Receipt.safeParse(value).data ?? null;
+}
+
+export function nodeWorkerTurnMatchesIdentity(
+  receipt: NodeWorkerSupervisorIdentity,
+  expected: NodeWorkerSupervisorIdentity,
+): boolean {
+  return (
+    receipt.launchId === expected.launchId &&
+    receipt.planHash === expected.planHash &&
+    receipt.environmentId === expected.environmentId &&
+    receipt.sessionId === expected.sessionId &&
+    receipt.ownerEpoch === expected.ownerEpoch &&
+    receipt.placementGeneration === expected.placementGeneration &&
+    receipt.runId === expected.runId
+  );
 }

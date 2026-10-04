@@ -24,7 +24,7 @@ import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 
-it("reuses expanded provider scopes across agents while keeping auth request-local", async () => {
+it("prepares known provider owners once while keeping catalog execution and auth request-local", async () => {
   vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-reuse-empty-codex-"));
   const agentIds = ["fleet-a", "fleet-b"];
   const providerIds = ["worker-reuse-0", "worker-reuse-1", "worker-reuse-2"];
@@ -54,11 +54,19 @@ it("reuses expanded provider scopes across agents while keeping auth request-loc
           "registrations.jsonl",
           `provider: ${JSON.stringify(provider)}, filename: __filename`,
         );
-      const execution = (provider: string) => `
-        ${record("executions.jsonl", `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir`)}
+      const execution = (provider: string) =>
+        `require("node:v8").queryObjects(WeakRef);` +
+        record(
+          "heap.jsonl",
+          `memory: process.memoryUsage(), payloads: globalThis[Symbol.for("catalog.reuse.payloads")].filter(ref => ref.deref()).length`,
+        ) +
+        record(
+          "executions.jsonl",
+          `provider: ${JSON.stringify(provider)}, agentDir: context.agentDir`,
+        ) +
+        `
         const retained = globalThis[Symbol.for("catalog.retired.registries.proof")];
         if (retained && ++retained.requests % ${2 * providerIds.length} === 0) {
-          require("node:v8").queryObjects(WeakRef);
           fs.writeFileSync(${JSON.stringify(path.join(seed.root, "retention.json"))}, JSON.stringify({
             registries: retained.registries.filter(ref => ref.deref()).length,
             captured: retained.registries.length,
@@ -85,13 +93,31 @@ it("reuses expanded provider scopes across agents while keeping auth request-loc
 `;
       const baseEntry = path.join(seed.root, "plugin", "index.cjs");
       fs.writeFileSync(
+        path.join(seed.root, "plugin", "payload.mjs"),
+        `export const payload = {
+  rows: Array.from({ length: 100_000 }, (_, index) => ({ index })),
+  buffer: new Uint8Array(1024 * 1024),
+};`,
+      );
+      fs.writeFileSync(
         baseEntry,
-        fs
-          .readFileSync(baseEntry, "utf8")
-          // This proof has only provider publication, not a second native acquisition.
-          .replace(/ {6}loadModelCatalog: async \(\) => \{[\s\S]*?\n {6}\},\n/u, "")
-          .replace("  register(api) {", `  register(api) {${registration(PROVIDER_ID)}${retention}`)
-          .replace("run(context) {", `run(context) {${execution(PROVIDER_ID)}`),
+        `const { payload } = require("./payload.mjs");
+(globalThis[Symbol.for("catalog.reuse.payloads")] ??= []).push(new WeakRef(payload));
+` +
+          fs
+            .readFileSync(baseEntry, "utf8")
+            // This proof has only provider publication, not a second native acquisition.
+            .replace(/ {6}loadModelCatalog: async \(\) => \{[\s\S]*?\n {6}\},\n/u, "")
+            .replace(
+              "  register(api) {",
+              `  register(api) {${registration(PROVIDER_ID)}${retention}`,
+            )
+            .replace(
+              "run(context) {",
+              `run(context) {
+if (payload.rows[99_999].index !== 99_999) throw Error("native payload unavailable");
+${execution(PROVIDER_ID)}`,
+            ),
       );
       for (const provider of providerIds) {
         const directory = path.join(bundledRoot, provider);
@@ -235,16 +261,16 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   for (const [index, provider] of providerIds.entries()) {
     const before = registrations().length;
     await refreshScope(index % 2, provider);
-    // A new provider rebuilds the growing union once, never an unrelated future scope.
+    // The first catalog demand prepares every credential owner without invoking their hooks.
     expect(
       registrations()
         .slice(before)
         .map((entry) => entry.provider)
         .toSorted(),
-    ).toEqual([PROVIDER_ID, ...providerIds.slice(0, index + 1)].toSorted());
+    ).toEqual(index === 0 ? [PROVIDER_ID, ...providerIds].toSorted() : []);
     const expanded = registrations();
     const footprint = readCatalogCaptureFootprint(captureRoot);
-    // Bundled JavaScript keeps process identity; only the nonbundled base is captured.
+    // Retired capture files disappear even though Node retains their native ESM payloads.
     expect(footprint.captures).toHaveLength(1);
     await refreshScope((index + 1) % 2, provider);
     expect(registrations()).toEqual(expanded);
@@ -253,7 +279,8 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   const retained = JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8"));
   console.log("Retired catalog registries", JSON.stringify(retained));
   expect(retained.controlCollected).toBe(true);
-  expect(retained.captured).toBe(1 + providerIds.length);
+  // The auth-only base is replaced once for all known owners; both native exports stay rooted.
+  expect(retained.captured).toBe(2);
   expect(retained.nativeExports).toBe(retained.captured);
   expect(retained.registries).toBe(1);
   const warmedRegistrations = registrations();
@@ -292,11 +319,21 @@ module.exports = { id: ${JSON.stringify(provider)}, register(api) {
   expect(
     JSON.parse(fs.readFileSync(path.join(fixture.root, "retention.json"), "utf8")),
   ).toMatchObject({
-    captured: 1 + providerIds.length,
-    nativeExports: 1 + providerIds.length,
+    captured: 2,
+    nativeExports: 2,
     registries: 1,
     controlCollected: true,
   });
+  const heap = fs
+    .readFileSync(path.join(fixture.root, "heap.jsonl"), "utf8")
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { memory: NodeJS.MemoryUsage; payloads: number });
+  expect(heap).toHaveLength(providerIds.length * agentIds.length * 2);
+  expect(heap.map(({ payloads }) => payloads)).toEqual(heap.map(() => 2));
+  expect(heap.at(-1)!.memory.heapUsed - heap[0]!.memory.heapUsed).toBeLessThan(16 * 1024 * 1024);
+  expect(heap.at(-1)!.memory.arrayBuffers - heap[0]!.memory.arrayBuffers).toBeLessThan(1024 * 1024);
+  console.log("Provider-scope heap", JSON.stringify({ first: heap[0], last: heap.at(-1) }));
   expect(getPreparedModelCatalogWorkerPoolSnapshot()).toMatchObject({
     workers: 1,
     workersCreated: 1,

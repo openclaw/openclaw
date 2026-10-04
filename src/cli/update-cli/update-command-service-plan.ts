@@ -1,17 +1,21 @@
-// Read-only managed Gateway ownership and Node selection for update planning.
+// Read-only managed Gateway ownership and runtime selection for update planning.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { compare, minVersion, Range, satisfies as satisfiesRange, validRange, valid } from "semver";
+import { minVersion, validRange, valid } from "semver";
 import { detectCurrentSqliteCapabilities, nodeRuntimeFailure } from "../../../node-sqlite.mjs";
 import { SUPPORTED_NODE_VERSION_RANGE } from "../../../node-version.mjs";
 import { createConfigIO } from "../../config/io.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveNodeRuntimeInfo } from "../../daemon/runtime-paths.js";
+import { isBunRuntime } from "../../daemon/runtime-binary.js";
+import {
+  resolveNodeRuntimeInfo,
+  resolvePinnedDaemonRuntimePath,
+} from "../../daemon/runtime-paths.js";
 import {
   formatServiceInspectionReason,
   type ServiceInspectionReason,
@@ -22,10 +26,12 @@ import {
   resolveManagedServiceNodeRunner,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
+import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import {
   hasGatewayServiceDefinitionOverrides,
   type GatewayServiceCommandConfig,
   type GatewayServiceState,
+  type GatewayServiceUnitInspection,
 } from "../../daemon/service-types.js";
 import {
   readGatewayServiceState,
@@ -62,17 +68,15 @@ import { resolveNodeVersionManager } from "../../shared/version-manager-path.js"
 import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
+import { minimumSupportedNodeVersion } from "./update-command-node-engine.js";
 import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 import type {
   ManagedGatewayUpdateVerdict,
+  ManagedServicePackageUpdatePlan,
+  PackageRuntimePreflight,
   PreManagedServiceStop,
 } from "./update-command-service-context-types.js";
 import { resolveServiceRecoveryContext } from "./update-command-service-env.js";
-
-export type ManagedServiceRootRedirect = {
-  root: string;
-  previousRoot: string;
-};
 
 export class GatewayServiceUpdateOwnershipError extends Error {
   readonly failureFacts: UpdateFailureFact[];
@@ -169,10 +173,7 @@ function serviceInspectionWarningMessage(state: GatewayServiceState): string {
     return `${GATEWAY_SERVICE_INSPECTION_WARNING} ${formatServiceInspectionReason(state.inspectionReason)}`;
   }
   if (process.platform === "freebsd") {
-    return (
-      `${GATEWAY_SERVICE_INSPECTION_WARNING} ` +
-      "On FreeBSD, use the Gateway's rc.d or foreground process owner for service management."
-    );
+    return `${GATEWAY_SERVICE_INSPECTION_WARNING} On FreeBSD, use the Gateway's rc.d or foreground process owner for service management.`;
   }
   const runtime = state.runtime;
   const tasksCurrent = runtime?.systemd?.tasksCurrent;
@@ -227,6 +228,11 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
       ? { kind: "absent" }
       : unavailable();
   }
+  // Direct Windows actions are readable, but the updater cannot restore them
+  // through its managed CMD/VBS definition and control owners.
+  if (process.platform === "win32" && !command.sourcePath) {
+    return unavailable();
+  }
   if (
     !params.allowIncompleteInspection &&
     (state.loadState.status === "unknown" ||
@@ -235,16 +241,14 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
   ) {
     return unavailable();
   }
-  // Stable updaters through 2026.9.4 omit known-empty systemd override metadata.
-  // Keep their fingerprint while the full snapshot retains authored defaults for runtime pinning.
-  const {
-    managedDefinition: _managedDefinition,
-    managedOverrides: _managedOverrides,
-    ...effectiveCommand
-  } = command;
-  const serialized = stableStringify(
-    hasGatewayServiceDefinitionOverrides(command) ? command : effectiveCommand,
-  );
+  // Updaters through 2026.9.4 omit selection provenance and known-empty systemd overrides.
+  // Keep their fingerprint while discovery and runtime pinning retain the full snapshot.
+  const { startupEntryPaths: _startupEntryPaths, ...fingerprintCommand } = command;
+  if (!hasGatewayServiceDefinitionOverrides(fingerprintCommand)) {
+    delete fingerprintCommand.managedDefinition;
+    delete fingerprintCommand.managedOverrides;
+  }
+  const serialized = stableStringify(fingerprintCommand);
   if (Buffer.byteLength(serialized) > 4 * 1024 * 1024) {
     return unavailable();
   }
@@ -290,13 +294,31 @@ export function readGatewayServiceStateForUpdate(
   service: GatewayService,
   env: NodeJS.ProcessEnv | undefined,
   timeoutMs?: number,
+  inspection?: { managerUid: number | undefined; assertCurrent: () => void },
 ): Promise<GatewayServiceState> {
-  return readGatewayServiceState(service, {
-    env,
-    requireEffective: true,
-    requireLoadedCommand: true,
-    validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
-    timeoutMs,
+  const read = (loadForInspection?: GatewayServiceUnitInspection) =>
+    readGatewayServiceState(service, {
+      env,
+      requireEffective: true,
+      requireLoadedCommand: true,
+      loadForInspection,
+      validateEnvBeforeStatusRead: assertGatewayServiceManagementAllowedForUpdate,
+      timeoutMs,
+    });
+  if (process.platform !== "linux" || inspection?.managerUid === undefined) {
+    return read();
+  }
+  const { managerUid } = inspection;
+  // systemd may collect a stopped unit; loading its metadata retains both owners.
+  return withGatewayServiceOperationLock(env ?? process.env, async (assertNative) => {
+    const assertCurrent = () => {
+      assertNative();
+      inspection.assertCurrent();
+    };
+    assertCurrent();
+    const state = await read({ managerUid, assertCurrent, assertReadCurrent: assertNative });
+    assertCurrent();
+    return state;
   });
 }
 
@@ -346,12 +368,6 @@ export async function readManagedGatewayServiceForUpdate(
   });
 }
 
-export type PackageRuntimePreflight = {
-  nodeRunner?: string;
-  replacedNodeRunner?: string;
-  targetVersion?: string;
-};
-
 export async function resolvePackageRuntimePreflight(params: {
   channel?: UpdateChannel;
   requestedChannel?: UpdateChannel | null;
@@ -375,12 +391,9 @@ export async function resolvePackageRuntimePreflight(params: {
   }
 > {
   return await withCommandProcessScope(async () => {
+    const verdict = params.service?.serviceUpdateVerdict;
     const nodeRunner = normalizeOptionalString(
-      params.alreadyCurrent &&
-        !(
-          params.service?.serviceUpdateVerdict?.kind === "owned" &&
-          params.service.serviceUpdateVerdict.requiresInstallRootRefresh
-        )
+      params.alreadyCurrent && !(verdict?.kind === "owned" && verdict.requiresInstallRootRefresh)
         ? (params.service?.serviceNodeRunner ?? params.nodeRunner)
         : params.nodeRunner,
     );
@@ -406,6 +419,20 @@ export async function resolvePackageRuntimePreflight(params: {
     if (!target) {
       return ok(unchanged());
     }
+    // Bun has its own capability contract; its emulated Node version is not an engine.
+    if (nodeRunner ? isBunRuntime(nodeRunner) : process.versions.bun) {
+      const runtimeEnv = params.service?.serviceEnv ?? process.env;
+      try {
+        await resolvePinnedDaemonRuntimePath(nodeRunner, "bun", runtimeEnv);
+        // Finalization keeps the updater runtime; service recovery cannot replace it.
+        const updater = process.versions.bun
+          ? ok<PackageRuntimePreflight, string>({})
+          : await resolvePackageRuntimePreflight({ target, timeoutMs: params.timeoutMs });
+        return updater.ok ? ok({ ...unchanged(), targetVersion: target.version }) : updater;
+      } catch (error) {
+        return resultError(error instanceof Error ? error.message : String(error));
+      }
+    }
     const runtime = await resolvePackageRuntimeForPreflight({
       nodeRunner,
       timeoutMs: params.timeoutMs,
@@ -419,12 +446,11 @@ export async function resolvePackageRuntimePreflight(params: {
       return ok(unchangedRuntime);
     }
     const canRefreshCurrentService =
-      params.service?.running &&
-      params.service.serviceUpdateVerdict?.kind === "owned" &&
-      params.service.serviceUpdateVerdict.refreshDefinition;
+      params.service?.running && verdict?.kind === "owned" && verdict.refreshDefinition;
     const fallbackNodeRunner =
       params.fallbackNodeRunner ??
       (params.shouldRestart &&
+      !process.versions.bun &&
       nodeRunner &&
       (params.alreadyCurrent
         ? canRefreshCurrentService
@@ -475,7 +501,6 @@ export async function resolvePackageRuntimePreflight(params: {
       : "unspecified";
     const recommendation = minimumSupportedNodeVersion(engineRange ?? "*");
     const requirement = target.nodeEngine ? `Node ${target.nodeEngine}` : "a working Node runtime";
-    const verdict = params.service?.serviceUpdateVerdict;
     const context =
       verdict?.kind === "owned" && params.service?.serviceEnv
         ? resolveServiceRecoveryContext({
@@ -557,24 +582,6 @@ export async function resolvePackageRuntimePreflight(params: {
   });
 }
 
-function minimumSupportedNodeVersion(engineRange: string): string | undefined {
-  const candidate = new Range(engineRange);
-  return new Range(SUPPORTED_NODE_VERSION_RANGE).set
-    .flatMap((supported) =>
-      candidate.set.flatMap((required) => {
-        const intersection = [...supported, ...required].map((entry) => entry.value).join(" ");
-        const minimum = minVersion(intersection);
-        if (!minimum) {
-          return [];
-        }
-        // Node's release contract excludes prereleases, even when engines allow them.
-        const release = `${minimum.major}.${minimum.minor}.${minimum.patch}`;
-        return satisfiesRange(release, intersection) ? [release] : [];
-      }),
-    )
-    .toSorted(compare)[0];
-}
-
 async function resolvePackageRuntimeForPreflight(params: {
   nodeRunner?: string;
   timeoutMs?: number;
@@ -608,71 +615,62 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
   rebind?: boolean;
-}): Promise<{
-  rootRedirect: ManagedServiceRootRedirect | null;
-  serviceRoot?: string;
-  nodeRunner?: string;
-  serviceUnitTarget?: string;
-}> {
+}): Promise<ManagedServicePackageUpdatePlan> {
   const pkgOwnership =
     params.pkgOwnership ?? createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS);
   await pkgOwnership.assertUnowned(params.root);
+  const plan: ManagedServicePackageUpdatePlan = {
+    rootRedirect: null,
+    serviceUnitTarget: "not inspected (service management unavailable)",
+  };
   if (!isGatewayServiceManagementAllowedForUpdate(process.env)) {
-    return {
-      rootRedirect: null,
-      serviceUnitTarget: "not inspected (service management unavailable)",
-    };
+    return plan;
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
   const inspected = await readManagedGatewayServiceForUpdate(process.env);
   const command = inspected?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
-  const serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
+  plan.serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
   if (!layout?.packageRootReal) {
-    return { rootRedirect: null, serviceUnitTarget };
+    return plan;
   }
   const serviceRoot = layout?.packageRoot;
   await pkgOwnership.assertUnowned(serviceRoot);
-  const serviceNode = resolveManagedServiceNodeRunner(command);
-  if (
-    layout.entrypointSourceCheckout &&
-    (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
-  ) {
-    return { rootRedirect: null, serviceUnitTarget };
+  const differentRoot = (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal;
+  if (layout.entrypointSourceCheckout && differentRoot) {
+    return plan;
   }
+  const executable = command?.programArguments[0];
+  const serviceBun = executable && isBunRuntime(executable);
+  const serviceNode = serviceBun
+    ? await resolvePinnedDaemonRuntimePath(executable, "bun", inspected?.env ?? process.env)
+    : resolveManagedServiceNodeRunner(command);
   if (
-    serviceRoot &&
-    layout.entrypointSourceCheckout !== true &&
-    (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
+    serviceNode &&
+    (differentRoot ||
+      serviceBun ||
+      (await tryRealpathOrResolve(serviceNode)) !==
+        (await tryRealpathOrResolve(resolveNodeRunner())))
   ) {
+    plan.nodeRunner = serviceNode;
+  }
+  if (serviceRoot && differentRoot) {
     // Only an owned, writable definition can move from serving A to invoking B.
-    // Windows/overridden definitions retain the existing service-root update path.
-    const canRebind =
+    // Bun and protected definitions retain the existing service-root update path.
+    if (
+      !serviceBun &&
       params.rebind !== false &&
       process.platform !== "win32" &&
       !hasGatewayServiceDefinitionOverrides(command) &&
-      inspected?.verdict.refreshDefinition === true;
-    return {
-      serviceUnitTarget,
-      ...(canRebind
-        ? { rootRedirect: null, serviceRoot }
-        : { rootRedirect: { root: serviceRoot, previousRoot: params.root } }),
-      ...(serviceNode ? { nodeRunner: serviceNode } : {}),
-    };
+      inspected?.verdict.refreshDefinition === true
+    ) {
+      plan.serviceRoot = serviceRoot;
+    } else {
+      plan.rootRedirect = { root: serviceRoot, previousRoot: params.root };
+    }
   }
-  if (!serviceNode) {
-    return { rootRedirect: null, serviceUnitTarget };
-  }
-  const [serviceNodeReal, currentNodeReal] = await Promise.all([
-    tryRealpathOrResolve(serviceNode),
-    tryRealpathOrResolve(resolveNodeRunner()),
-  ]);
-  return {
-    serviceUnitTarget,
-    rootRedirect: null,
-    ...(serviceNodeReal !== currentNodeReal ? { nodeRunner: serviceNode } : {}),
-  };
+  return plan;
 }
 
 export async function gatewayServiceCommandUsesRoot(params: {

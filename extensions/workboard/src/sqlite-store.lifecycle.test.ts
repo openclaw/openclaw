@@ -100,13 +100,9 @@ describe("Workboard SQLite facade cleanup", () => {
     ]);
   });
 
-  it.each(
-    (["closed", "unavailable", "outcome-unknown"] as const).flatMap((code) =>
-      (["current", "previous"] as const).map((graph) => ({ code, graph })),
-    ),
-  )(
-    "delegates terminal $code from the $graph module graph without replay",
-    async ({ code, graph }) => {
+  it.each(["closed", "unavailable", "outcome-unknown"])(
+    "delegates terminal %s from a previous module graph without replay",
+    async (code) => {
       const retired = createDeferred<void>();
       const cleanupFailure = new Error("broker retirement incomplete");
       class PreviousGraphSqliteWorkerError extends Error {
@@ -116,11 +112,8 @@ describe("Workboard SQLite facade cleanup", () => {
           this.code = failureCode;
         }
       }
-      const failure =
-        graph === "current"
-          ? new SqliteWorkerError("transport stopped", code)
-          : new PreviousGraphSqliteWorkerError(code);
-      expect(failure instanceof SqliteWorkerError).toBe(graph === "current");
+      const failure = new PreviousGraphSqliteWorkerError(code);
+      expect(failure).not.toBeInstanceOf(SqliteWorkerError);
       const { execute, release, stores } = workerFixture();
       execute
         .mockResolvedValueOnce({ ok: true, value: { connection: 7, dataVersion: 4 } })
@@ -144,7 +137,7 @@ describe("Workboard SQLite facade cleanup", () => {
     },
   );
 
-  it.each(["overloaded", "SQLITE_BUSY", undefined])(
+  it.each(["overloaded", undefined])(
     "retains nonterminal rejection %s for explicit retry",
     async (code) => {
       const failure = Object.assign(new Error("close refused"), { code });

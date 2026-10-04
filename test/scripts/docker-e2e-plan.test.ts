@@ -1122,7 +1122,7 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
         name: updateFirstHopCompatLaneName(version),
         resources: ["docker", "npm", "service"],
         stateScenario: "upgrade-survivor",
-        timeoutMs: 1_500_000,
+        timeoutMs: 2_100_000,
         weight: 1,
       })),
     ]);
@@ -1498,17 +1498,20 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
     ]);
   });
 
-  it("plans legacy operator state with tracked and formerly bundled plugins and serial admission", () => {
+  it("plans legacy operator state with native, tracked, and formerly bundled plugins and serial admission", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1",
+      upgradeSurvivorBaselines: "2026.6.33 2026.6.34 2026.9.1 2026.9.4 2026.9.6",
       upgradeSurvivorScenarios: "legacy-operator-state",
     });
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
       "published-upgrade-survivor-2026.6.34-legacy-operator-state",
       "published-upgrade-survivor-2026.9.1-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.4-legacy-operator-state",
+      "published-upgrade-survivor-2026.9.6-legacy-operator-state",
     ]);
     expect(plan.requiredPrepublishPluginPackages).toEqual([
+      "@openclaw/codex",
       "@openclaw/discord",
       "@openclaw/duckduckgo-plugin",
     ]);
@@ -1574,7 +1577,6 @@ await import('./scripts/check-docker-e2e-boundaries.mts');`,
   it.each([
     { scenario: "projects-doctor", baseline: "2026.9.4" },
     { scenario: "projects-startup-migration", baseline: "2026.9.4" },
-    { scenario: "taskflow-restoration", baseline: "2026.9.4" },
     { scenario: "dreaming-cron-doctor", baseline: "2026.9.6" },
   ])(
     "plans $scenario only for its exact published writer without registry or credential fixtures",

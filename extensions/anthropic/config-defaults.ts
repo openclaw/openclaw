@@ -39,9 +39,7 @@ function resolveAnthropicDefaultAuthMode(
 
   const order = [
     ...(config.auth?.order?.anthropic ?? []),
-    ...((config.auth?.order as Record<string, string[] | undefined> | undefined)?.[
-      CLAUDE_CLI_BACKEND_ID
-    ] ?? []),
+    ...(config.auth?.order?.[CLAUDE_CLI_BACKEND_ID] ?? []),
   ];
   for (const profileId of order) {
     const entry = profiles[profileId];
@@ -129,9 +127,7 @@ function usesSelectedClaudeCliAuthProfile(config: OpenClawConfig): boolean {
   const profiles = config.auth?.profiles ?? {};
   const orderedProfileIds = [
     ...(config.auth?.order?.anthropic ?? []),
-    ...((config.auth?.order as Record<string, string[] | undefined> | undefined)?.[
-      CLAUDE_CLI_BACKEND_ID
-    ] ?? []),
+    ...(config.auth?.order?.[CLAUDE_CLI_BACKEND_ID] ?? []),
   ];
   for (const profileId of orderedProfileIds) {
     const provider = profiles[profileId]?.provider;
@@ -222,12 +218,9 @@ export function applyAnthropicConfigDefaults(params: {
 
   let mutated = false;
   const nextDefaults = { ...defaults };
-  const contextPruning = defaults.contextPruning ?? {};
-  const heartbeat = defaults.heartbeat ?? {};
-
   if (defaults.contextPruning?.mode === undefined) {
     nextDefaults.contextPruning = {
-      ...contextPruning,
+      ...defaults.contextPruning,
       mode: "cache-ttl",
       ttl: defaults.contextPruning?.ttl ?? "1h",
     };
@@ -236,16 +229,15 @@ export function applyAnthropicConfigDefaults(params: {
 
   if (defaults.heartbeat?.every === undefined) {
     nextDefaults.heartbeat = {
-      ...heartbeat,
+      ...defaults.heartbeat,
       every: authMode === "oauth" ? "1h" : "30m",
     };
     mutated = true;
   }
 
+  const nextModels = { ...defaults.models };
+  let modelsMutated = false;
   if (authMode === "api_key") {
-    const nextModels = defaults.models ? { ...defaults.models } : {};
-    let modelsMutated = false;
-
     const primary = resolveKnownAnthropicModelRef(resolveAgentModelPrimaryValue(defaults.model));
     const parsedPrimary = primary ? parseAnthropicModelRef(primary) : null;
     const refs = [
@@ -282,19 +274,12 @@ export function applyAnthropicConfigDefaults(params: {
         modelsMutated = true;
       }
     }
-
-    if (modelsMutated) {
-      nextDefaults.models = nextModels;
-      mutated = true;
-    }
   }
 
   if (
     authMode === "oauth" &&
     (usesClaudeCliModelSelection(params.config) || usesSelectedClaudeCliAuthProfile(params.config))
   ) {
-    const nextModels = defaults.models ? { ...defaults.models } : {};
-    let modelsMutated = false;
     const runtimeRefs = new Set([
       ...collectClaudeCliRuntimeRefsFromConfig(params.config),
       ...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS,
@@ -308,10 +293,10 @@ export function applyAnthropicConfigDefaults(params: {
       nextModels[ref] = updated;
       modelsMutated = true;
     }
-    if (modelsMutated) {
-      nextDefaults.models = nextModels;
-      mutated = true;
-    }
+  }
+  if (modelsMutated) {
+    nextDefaults.models = nextModels;
+    mutated = true;
   }
 
   if (!mutated) {

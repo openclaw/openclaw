@@ -2,8 +2,8 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
+import * as workerReplies from "../../infra/sqlite-worker-broker-reply.js";
 import type { SqliteWorkerRequest } from "../../infra/sqlite-worker-contract.js";
-import * as workerLifecycle from "../../infra/sqlite-worker-lifecycle-preparation.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createTestIngressQueue, withTempState } from "./ingress-drain.test-helpers.js";
 import { createChannelIngressQueue } from "./ingress-queue.js";
@@ -158,30 +158,16 @@ describe("channel ingress claim ownership", () => {
         }
         return originalPost.call(this, request, transferList);
       });
-      const prepareLifecycle = workerLifecycle.createSqliteWorkerLifecyclePreparation;
-      const lifecycle = vi
-        .spyOn(workerLifecycle, "createSqliteWorkerLifecyclePreparation")
-        .mockImplementation((params) =>
-          prepareLifecycle({
-            ...params,
-            receiveResult(reply, pumping) {
-              if (
-                reply &&
-                typeof reply === "object" &&
-                "id" in reply &&
-                reply.id === claimRequest &&
-                "ok" in reply &&
-                reply.ok === false &&
-                stopClaimWorker &&
-                !stopped
-              ) {
-                stopped = stopClaimWorker();
-                return;
-              }
-              params.receiveResult(reply, pumping);
-            },
-          }),
-        );
+      const receiveReply = workerReplies.receiveSqliteWorkerReply;
+      const replies = vi
+        .spyOn(workerReplies, "receiveSqliteWorkerReply")
+        .mockImplementation((slot, reply, owner) => {
+          if (reply.id === claimRequest && !reply.ok && stopClaimWorker && !stopped) {
+            stopped = stopClaimWorker();
+            return;
+          }
+          receiveReply(slot, reply, owner);
+        });
       const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
       const admission = vi
         .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
@@ -212,7 +198,7 @@ describe("channel ingress claim ownership", () => {
       } finally {
         admission.mockRestore();
         post.mockRestore();
-        lifecycle.mockRestore();
+        replies.mockRestore();
         await stopped;
       }
     });
@@ -272,37 +258,6 @@ describe("channel ingress claim ownership", () => {
     });
   });
 
-  it("refreshes claimed rows only with the active claim token", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
-
-      expect(await queue.refreshClaim?.(claimed, { refreshedAt: 20 })).toBe(true);
-      expect(
-        (await queue.listClaims()).map((claim) => ({
-          id: claim.id,
-          claimedAt: claim.claim.claimedAt,
-          updatedAt: claim.updatedAt,
-        })),
-      ).toEqual([{ id: "event-1", claimedAt: 20, updatedAt: 20 }]);
-
-      expect(
-        await queue.refreshClaim?.(
-          { id: "event-1", claim: { token: "wrong" } },
-          {
-            refreshedAt: 30,
-          },
-        ),
-      ).toBe(false);
-      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(20);
-    });
-  });
-
   it("does not let old claim tokens refresh recovered and reclaimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createTestIngressQueue(stateDir, { now: () => 10 });
@@ -319,11 +274,11 @@ describe("channel ingress claim ownership", () => {
       }
 
       expect(await queue.refreshClaim?.(oldClaim, { refreshedAt: 30 })).toBe(false);
+      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(10);
       expect(await queue.refreshClaim?.(newClaim, { refreshedAt: 40 })).toBe(true);
-      expect((await queue.listClaims())[0]?.claim).toMatchObject({
-        ownerId: "worker-2",
-        claimedAt: 40,
-      });
+      expect(await queue.listClaims()).toMatchObject([
+        { id: "event-1", updatedAt: 40, claim: { ownerId: "worker-2", claimedAt: 40 } },
+      ]);
     });
   });
 

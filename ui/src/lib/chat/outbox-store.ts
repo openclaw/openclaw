@@ -3,8 +3,6 @@ import { bytesToHex } from "@noble/hashes/utils.js";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import {
-  DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
   hasUiSessionDefaults,
@@ -18,12 +16,18 @@ import {
   type StoredComposerSession,
 } from "./outbox-store-codec.ts";
 import { observeDraftRevision, rememberDraftRevision } from "./outbox-store-draft-state.ts";
+import {
+  storedChatOutboxScopeKey,
+  UNRESOLVED_GLOBAL_AGENT_SCOPE,
+  type StoredChatOutboxScope,
+} from "./outbox-store-scope.ts";
+
+export { storedChatOutboxScopeKey } from "./outbox-store-scope.ts";
 
 const LEGACY_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const PREVIOUS_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v2:";
 const BLOB_STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v3:";
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v4:";
-const UNRESOLVED_GLOBAL_AGENT_SCOPE = "@unresolved";
 const storedChatOutboxChangeListeners = new Set<() => void>();
 let storageChangeListenerInstalled = false;
 
@@ -44,11 +48,6 @@ type ComposerStorageTarget = {
   blobKey: string;
   gatewayOwner: string;
   legacyOwnerIsUnambiguous: boolean;
-};
-
-export type StoredChatOutboxScope = {
-  sessionKey: string;
-  agentId?: string;
 };
 
 export type StoredComposerState = {
@@ -254,22 +253,6 @@ export function captureChatOutboxAdmission(
     scope: resolveUiConversationIdentity(state, sessionKey, agentId),
     awaitingDefaults: !hasUiSessionDefaults(state),
   };
-}
-
-// Captured scopes never consult current defaults. Fill only an omitted agent;
-// explicit conflicting facts must remain visible to stored-scope validation.
-function storedChatOutboxAgentId(scope: StoredChatOutboxScope): string | undefined {
-  return scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
-}
-
-export function storedChatOutboxScopeKey(scope: StoredChatOutboxScope): string {
-  const normalizedSessionKey = scope.sessionKey.trim().toLowerCase();
-  const agentScope =
-    storedChatOutboxAgentId(scope) ??
-    (normalizedSessionKey === "global" || normalizedSessionKey === DEFAULT_MAIN_KEY
-      ? UNRESOLVED_GLOBAL_AGENT_SCOPE
-      : DEFAULT_AGENT_ID);
-  return `${scope.sessionKey}\u0000agent:${agentScope}`;
 }
 
 /** Logical client ownership plus this key fences a retained delivery's display. */
@@ -744,7 +727,7 @@ export function applyStoredChatOutboxScope(
   scope: StoredChatOutboxScope,
 ): ChatQueueItem {
   const { agentId: _agentId, ...withoutAgentId } = item;
-  const agentId = storedChatOutboxAgentId(scope);
+  const agentId = scope.agentId ?? parseAgentSessionKey(scope.sessionKey)?.agentId;
   return {
     ...withoutAgentId,
     sessionKey: scope.sessionKey,

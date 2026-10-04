@@ -76,6 +76,8 @@ import {
   resolveGatewayServiceRecovery,
   admitSystemdUpdate,
   joinSystemServiceUpdateHandoffs,
+  observeManagedServiceUpdateHandoffClose,
+  SYSTEM_SERVICE_UPDATE_SETTLED_MARKER,
 } from "./update-managed-service-handoff-service.js";
 import type {
   ActiveManagedServiceUpdateHandoff,
@@ -1388,6 +1390,7 @@ let automaticRequested = false;
     cleanupSensitiveFiles();
     stopTriageScope();
     appendLog("managed update helper completed code=" + (process.exitCode || 0));
+    if (params.operatorRestartWarning) fs.writeSync(1, ${JSON.stringify(SYSTEM_SERVICE_UPDATE_SETTLED_MARKER)});
     if (foregroundClosed && parentIdentityCurrent())
       fs.writeSync(1, "foreground-settled:" + (foregroundRespawn ? "respawn" : "stopped") + "\n");
     process.stdin.destroy();
@@ -1657,12 +1660,7 @@ async function spawnManagedServiceUpdateHandoff(
       stdio: ["pipe", "pipe", "ignore"],
     });
     owner.launcher = child;
-    owner.closed = new Promise((resolve) => {
-      child.once("close", () => {
-        owner.settled = child.exitCode !== null && child.signalCode === null;
-        resolve();
-      });
-    });
+    owner.closed = observeManagedServiceUpdateHandoffClose(owner, child);
     child.stdin.on("error", () => child.stdin.destroy()).once("close", () => child.stdin.destroy());
     // Failed spawn handles are not processes and must never be signalled.
     if (!child.pid) {
@@ -2017,6 +2015,8 @@ export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
   root: string;
   runId: string | undefined;
   env?: NodeJS.ProcessEnv;
+  /** Retain the executor's admitted physical store through the sentinel await. */
+  store?: ReturnType<typeof createManagedHandoffLeaseStore>;
 }): Promise<boolean> {
   const env = params.env ?? process.env;
   if (env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1" || !params.runId) {
@@ -2032,8 +2032,8 @@ export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
   ) {
     return false;
   }
-  const lease = readManagedServiceUpdateHandoffLease(root);
-  const store = createManagedHandoffLeaseStore();
+  const lease = readManagedServiceUpdateHandoffLease(root, undefined, params.store);
+  const store = params.store ?? createManagedHandoffLeaseStore();
   return (
     lease?.owner === meta.handoffId &&
     lease.executor.pid === process.pid &&
@@ -2289,15 +2289,13 @@ export async function completeForegroundUpdateHandoffAfterClose(
 function readManagedServiceUpdateHandoffLease(
   root: string,
   stale?: ActiveManagedServiceUpdateHandoff,
+  selectedStore?: ReturnType<typeof createManagedHandoffLeaseStore>,
 ): ManagedHandoffLease | null | undefined {
   const owner = stale ?? activeManagedServiceUpdateHandoffs.get(root);
-  const store = owner ? owner.leaseStore : createManagedHandoffLeaseStore();
-  if (!store) {
-    return undefined;
-  }
-  const result = store.read(root);
-  if (result.kind !== "current") {
-    return result.kind === "absent" ? null : undefined;
+  const store = selectedStore ?? (owner ? owner.leaseStore : createManagedHandoffLeaseStore());
+  const result = store?.read(root);
+  if (!store || result?.kind !== "current") {
+    return result?.kind === "absent" ? null : undefined;
   }
   const lease = result.lease;
   if (

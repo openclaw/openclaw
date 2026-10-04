@@ -145,6 +145,8 @@ final class DashboardManager {
                     {
                         let removed = notification
                             .userInfo?[MacGatewayProfileStore.removedProfileKey] as? Bool == true
+                        let renewed = notification
+                            .userInfo?[MacGatewayProfileStore.renewedBrowserSessionKey] as? Bool == true
                         let changeID = notification.userInfo?[MacGatewayProfileStore.changeIDKey] as? UUID
                         MainActor.assumeIsolated {
                             if removed, let changeID {
@@ -152,7 +154,12 @@ final class DashboardManager {
                                 self?.retireRemovedProfile(profileID, removalID: changeID)
                             } else {
                                 self?.unavailableProfileIDs.remove(profileID)
-                                self?.invalidateProfileDocument(profileID: profileID)
+                                if renewed {
+                                    self?.profileCredentialRevisions[profileID, default: 0] &+= 1
+                                } else {
+                                    self?.profileBrowserStores[profileID]?.invalidate()
+                                    self?.invalidateProfileDocument(profileID: profileID)
+                                }
                             }
                         }
                     }
@@ -880,7 +887,7 @@ extension DashboardManager {
                         return
                     }
                 } else if target == .primary || target == .local ||
-                    self.canFocusWithoutReload(controller, userGesture: true)
+                    self.canFocusWithoutReload(controller)
                 {
                     controller.show()
                 } else {
@@ -1052,6 +1059,33 @@ extension DashboardManager {
         }
     }
 
+    private func documentBrowserStore(
+        configuration: WindowConfiguration, target: DashboardGatewayTarget) -> DashboardBrowserSessionStore?
+    {
+        guard case let .profile(profileID) = target,
+              configuration.browserSession != nil || configuration.signedOut != nil
+        else { return nil }
+        return self.browserStore(profileID: profileID, currentSession: configuration.browserSession)
+    }
+
+    func conversationDocument(
+        for target: DashboardGatewayTarget,
+        installCapabilities: (WKUserContentController, URL) -> Void) async throws -> ControlUIDocumentHost
+    {
+        let (configuration, _) = try await self.windowConfiguration(for: target)
+        if configuration.signedOut != nil { throw GatewayBrowserSessionError.expired }
+        let store = self.documentBrowserStore(configuration: configuration, target: target)
+        return ControlUIDocumentHost(
+            url: configuration.url,
+            auth: configuration.auth,
+            websiteDataStore: store?.dataStore ?? self.websiteDataStore,
+            tlsParams: configuration.tlsParams,
+            browserSessionLease: store?.lease(for: configuration.browserSession))
+        {
+            installCapabilities($0, configuration.url)
+        }
+    }
+
     private func makeController(
         configuration: WindowConfiguration,
         target: DashboardGatewayTarget,
@@ -1060,14 +1094,7 @@ extension DashboardManager {
         reusingWindow: NSWindow? = nil) -> DashboardWindowController
     {
         let primaryLocal = !auxiliary && target == .primary && configuration.mode == .local
-        let browserStore: DashboardBrowserSessionStore? = if case let .profile(profileID) = target,
-                                                             configuration.browserSession != nil ||
-                                                             configuration.signedOut != nil
-        {
-            self.browserStore(profileID: profileID, currentSession: configuration.browserSession)
-        } else {
-            nil
-        }
+        let browserStore = self.documentBrowserStore(configuration: configuration, target: target)
         let controller = DashboardWindowController(
             url: configuration.url,
             auth: configuration.auth,
@@ -1207,12 +1234,6 @@ extension DashboardManager {
                 do {
                     let endpoint = try await profileEndpoint(profileID: profileID)
                     resolvedEndpoint = endpoint
-                    try endpoint.browserSession?.validate(for: endpoint.config.url)
-                    if Self.requiresBrowserSignIn(
-                        error: nil, expiresAt: endpoint.browserSession?.expiresAt, userGesture: userGesture)
-                    {
-                        throw GatewayBrowserSessionError.expired
-                    }
                     let configuration = try await dashboardConfiguration(
                         endpoint: endpoint, mode: .remote, target: target, token: endpoint.config.token)
                     guard self.profileCredentialRevisions[profileID, default: 0] == revision else { continue }
@@ -1367,7 +1388,7 @@ extension DashboardManager {
         }
         if let controller, mainTarget != .primary {
             if controller.isWindowOpen,
-               self.mainTarget == .local || self.canFocusWithoutReload(controller, userGesture: userGesture)
+               self.mainTarget == .local || self.canFocusWithoutReload(controller)
             {
                 controller.show()
                 await self.refreshGatewaySnapshots()
@@ -1492,7 +1513,13 @@ extension DashboardManager {
     @discardableResult
     func openOrFocusDashboard(for target: DashboardGatewayTarget) -> Task<Void, Never> {
         self.retireNavigation(for: target)
-        return self.openWindow(for: target, reuseExisting: true)
+        let opening = self.openWindow(for: target, reuseExisting: true)
+        return Task {
+            await opening.value
+            if self.observesGatewayChanges, self.automaticGatewayProfileRefreshEnabled {
+                await GatewayBrowserSignInCoordinator.shared.checkForRenewal()
+            }
+        }
     }
 
     @discardableResult

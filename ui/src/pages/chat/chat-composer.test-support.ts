@@ -49,15 +49,14 @@ export function findComposerButton(container: Element, label: string): HTMLButto
 
 export function findPrimaryButton(container: Element): HTMLButtonElement {
   const actions = container.querySelector(".agent-chat__composer-actions");
-  const result = actions?.querySelector<HTMLButtonElement>(
-    ":scope > .chat-desktop-primary-action > openclaw-tooltip > button",
-  );
+  const selector = ":scope > .chat-desktop-primary-action > openclaw-tooltip > button";
+  const sendSelector = `${selector}:not(.chat-send-btn--stop)`;
+  const selected = actions?.querySelector(sendSelector) ? sendSelector : selector;
+  const result = actions?.querySelector<HTMLButtonElement>(selected);
   if (!result) {
     throw new Error("expected one primary composer button");
   }
-  expect(
-    actions?.querySelectorAll(":scope > .chat-desktop-primary-action > openclaw-tooltip > button"),
-  ).toHaveLength(1);
+  expect(actions?.querySelectorAll(selected)).toHaveLength(1);
   return result;
 }
 

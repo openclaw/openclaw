@@ -170,17 +170,13 @@ function parseReceipt(sentinel: RestartSentinel | null): UpdateFailureReportRece
   };
 }
 
-function readReceipt(db: DatabaseSync, attemptId: string): UpdateFailureReportReceipt | null {
-  const current = readRestartSentinelRowForKeySync(db, receiptKey(attemptId));
-  return parseReceipt(current.kind === "valid" ? current.sentinel : null);
-}
-
 /** Reads one existing report receipt without creating state. */
 export function readUpdateFailureReportReceiptRowSync(
   db: DatabaseSync,
   attemptId: string,
 ): UpdateFailureReportReceipt | null {
-  return readReceipt(db, attemptId);
+  const current = readRestartSentinelRowForKeySync(db, receiptKey(attemptId));
+  return parseReceipt(current.kind === "valid" ? current.sentinel : null);
 }
 
 function buildReceiptPayload(receipt: UpdateFailureReportReceipt): RestartSentinelPayload {
@@ -214,6 +210,21 @@ function replaceReceiptAtRevision(
       .where("updated_at_ms", "=", revision),
   );
   return result.numAffectedRows === 1n;
+}
+
+function mutateReceipt(
+  db: DatabaseSync,
+  attemptId: string,
+  update: (receipt: UpdateFailureReportReceipt) => UpdateFailureReportReceipt | false,
+): boolean {
+  const sentinelKey = receiptKey(attemptId);
+  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
+  const receipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
+  if (current.kind !== "valid" || !receipt) {
+    return false;
+  }
+  const next = update(receipt);
+  return next && replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, next);
 }
 
 /** Atomically owns one report attempt in the canonical state database. */
@@ -261,7 +272,7 @@ export function reserveUpdateFailureReportReceiptRowSync(
     };
     return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, replacement)
       ? { receipt: replacement, reserved: true }
-      : { receipt: readReceipt(db, attemptId), reserved: false };
+      : { receipt: readUpdateFailureReportReceiptRowSync(db, attemptId), reserved: false };
   }
   return { receipt: currentReceipt, reserved: false };
 }
@@ -272,26 +283,22 @@ export function refreshUpdateFailureReportReceiptPreparationRowSync(
   attemptId: string,
   reservationId: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    (currentReceipt.status !== "prepared" && currentReceipt.status !== "pending") ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    currentReceipt.reservationId !== reservationId
-  ) {
-    return false;
-  }
-  const refreshed: UpdateFailureReportReceipt = {
-    ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
-    ...retainedArtifactSweep(currentReceipt),
-    reservationId,
-    status: currentReceipt.status,
-    ...(currentReceipt.status === "prepared" ? { preparingSinceMs: Date.now() } : {}),
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, refreshed);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    if (
+      (currentReceipt.status !== "prepared" && currentReceipt.status !== "pending") ||
+      currentReceipt.sweepOwnerId !== undefined ||
+      currentReceipt.reservationId !== reservationId
+    ) {
+      return false;
+    }
+    return {
+      ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
+      ...retainedArtifactSweep(currentReceipt),
+      reservationId,
+      status: currentReceipt.status,
+      ...(currentReceipt.status === "prepared" ? { preparingSinceMs: Date.now() } : {}),
+    };
+  });
 }
 
 /** Fences final artifact publication behind one process-owned preparation. */
@@ -301,27 +308,23 @@ export function markUpdateFailureReportReceiptPreparedRowSync(
   reservationId: string,
   previewDigest: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.status !== "preparing" ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    currentReceipt.reservationId !== reservationId ||
-    currentReceipt.previewDigest !== previewDigest
-  ) {
-    return false;
-  }
-  const prepared: UpdateFailureReportReceipt = {
-    preparingSinceMs: Date.now(),
-    previewDigest,
-    ...retainedArtifactSweep(currentReceipt),
-    reservationId,
-    status: "prepared",
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, prepared);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    if (
+      currentReceipt.status !== "preparing" ||
+      currentReceipt.sweepOwnerId !== undefined ||
+      currentReceipt.reservationId !== reservationId ||
+      currentReceipt.previewDigest !== previewDigest
+    ) {
+      return false;
+    }
+    return {
+      preparingSinceMs: Date.now(),
+      previewDigest,
+      ...retainedArtifactSweep(currentReceipt),
+      reservationId,
+      status: "prepared",
+    };
+  });
 }
 
 /** Makes one published preparation ambiguity-safe immediately before issue creation starts. */
@@ -331,26 +334,22 @@ export function markUpdateFailureReportReceiptPendingRowSync(
   reservationId: string,
   previewDigest: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.status !== "prepared" ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    currentReceipt.reservationId !== reservationId ||
-    currentReceipt.previewDigest !== previewDigest
-  ) {
-    return false;
-  }
-  const pending: UpdateFailureReportReceipt = {
-    ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
-    ...retainedArtifactSweep(currentReceipt),
-    reservationId,
-    status: "pending",
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, pending);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    if (
+      currentReceipt.status !== "prepared" ||
+      currentReceipt.sweepOwnerId !== undefined ||
+      currentReceipt.reservationId !== reservationId ||
+      currentReceipt.previewDigest !== previewDigest
+    ) {
+      return false;
+    }
+    return {
+      ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
+      ...retainedArtifactSweep(currentReceipt),
+      reservationId,
+      status: "pending",
+    };
+  });
 }
 
 /** Finalizes only a process-owned reservation in the required prior phase. */
@@ -362,28 +361,24 @@ export function finalizeUpdateFailureReportReceiptRowSync(
   if (!isValidTerminalReceipt(receipt)) {
     return false;
   }
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    // Auth can refuse creation while still prepared. Only created requires a pending transport.
-    (receipt.status === "fallback" || receipt.status === "retryable"
-      ? currentReceipt.status !== "prepared" && currentReceipt.status !== "pending"
-      : currentReceipt.status !== "pending") ||
-    currentReceipt.reservationId !== receipt.reservationId ||
-    currentReceipt.previewDigest === undefined ||
-    currentReceipt.previewDigest !== receipt.previewDigest
-  ) {
-    return false;
-  }
-  const terminalReceipt: UpdateFailureReportReceipt = {
-    ...receipt,
-    ...retainedArtifactSweep(currentReceipt),
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, terminalReceipt);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    if (
+      currentReceipt.sweepOwnerId !== undefined ||
+      // Auth can refuse creation while still prepared. Only created requires a pending transport.
+      (receipt.status === "fallback" || receipt.status === "retryable"
+        ? currentReceipt.status !== "prepared" && currentReceipt.status !== "pending"
+        : currentReceipt.status !== "pending") ||
+      currentReceipt.reservationId !== receipt.reservationId ||
+      currentReceipt.previewDigest === undefined ||
+      currentReceipt.previewDigest !== receipt.previewDigest
+    ) {
+      return false;
+    }
+    return {
+      ...receipt,
+      ...retainedArtifactSweep(currentReceipt),
+    };
+  });
 }
 
 /** Records post-commit cleanup intent without performing filesystem work in SQLite. */
@@ -392,29 +387,25 @@ export function beginUpdateFailureReportReceiptCleanupRowSync(
   attemptId: string,
   reservationId: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.sweepOwnerId !== undefined ||
-    (currentReceipt.status !== "preparing" &&
-      currentReceipt.status !== "prepared" &&
-      currentReceipt.status !== "retryable") ||
-    currentReceipt.cleanup !== undefined ||
-    currentReceipt.reservationId !== reservationId
-  ) {
-    return false;
-  }
-  const cleanupReceipt: UpdateFailureReportReceipt = {
-    cleanup: "pending",
-    ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
-    ...retainedArtifactSweep(currentReceipt),
-    reservationId,
-    status: "retryable",
-  };
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, cleanupReceipt);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    if (
+      currentReceipt.sweepOwnerId !== undefined ||
+      (currentReceipt.status !== "preparing" &&
+        currentReceipt.status !== "prepared" &&
+        currentReceipt.status !== "retryable") ||
+      currentReceipt.cleanup !== undefined ||
+      currentReceipt.reservationId !== reservationId
+    ) {
+      return false;
+    }
+    return {
+      cleanup: "pending",
+      ...(currentReceipt.previewDigest ? { previewDigest: currentReceipt.previewDigest } : {}),
+      ...retainedArtifactSweep(currentReceipt),
+      reservationId,
+      status: "retryable",
+    };
+  });
 }
 
 /** Atomically transfers an expired preparation into durable cleanup custody. */
@@ -491,7 +482,7 @@ export function hasUpdateFailureReportArtifactSweepLeaseRowSync(
   sweepOwnerId: string,
   sweepGeneration: string,
 ): boolean {
-  const currentReceipt = readReceipt(db, attemptId);
+  const currentReceipt = readUpdateFailureReportReceiptRowSync(db, attemptId);
   return (
     currentReceipt?.artifactSweep === "pending" &&
     currentReceipt.reservationId === expectedReservationId &&
@@ -508,25 +499,22 @@ export function releaseUpdateFailureReportArtifactSweepRowSync(
   sweepOwnerId: string,
   sweepGeneration: string,
 ): boolean {
-  const sentinelKey = receiptKey(attemptId);
-  const current = readRestartSentinelRowForKeySync(db, sentinelKey);
-  const currentReceipt = parseReceipt(current.kind === "valid" ? current.sentinel : null);
-  if (
-    current.kind !== "valid" ||
-    !currentReceipt ||
-    currentReceipt.reservationId !== expectedReservationId ||
-    currentReceipt.sweepOwnerId !== sweepOwnerId ||
-    currentReceipt.sweepGeneration !== sweepGeneration
-  ) {
-    return false;
-  }
-  const {
-    sweepGeneration: _generation,
-    sweepOwnerId: _owner,
-    sweepSinceMs: _since,
-    ...released
-  } = currentReceipt;
-  return replaceReceiptAtRevision(db, sentinelKey, current.sentinel.revision, released);
+  return mutateReceipt(db, attemptId, (currentReceipt) => {
+    if (
+      currentReceipt.reservationId !== expectedReservationId ||
+      currentReceipt.sweepOwnerId !== sweepOwnerId ||
+      currentReceipt.sweepGeneration !== sweepGeneration
+    ) {
+      return false;
+    }
+    const {
+      sweepGeneration: _generation,
+      sweepOwnerId: _owner,
+      sweepSinceMs: _since,
+      ...released
+    } = currentReceipt;
+    return released;
+  });
 }
 
 /** Completes one idempotent artifact cleanup after the cleanup intent has committed. */

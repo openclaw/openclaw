@@ -319,22 +319,6 @@ function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
   return resolveFetch(fetchImpl) ?? fetchImpl;
 }
 
-function logResolverNetworkDecisions(params: {
-  autoSelectDecision: ReturnType<typeof resolveTelegramAutoSelectFamilyDecision>;
-  dnsDecision: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
-}): void {
-  if (params.autoSelectDecision.value !== null) {
-    const sourceLabel = params.autoSelectDecision.source
-      ? ` (${params.autoSelectDecision.source})`
-      : "";
-    log.debug(`autoSelectFamily=${params.autoSelectDecision.value}${sourceLabel}`);
-  }
-  if (params.dnsDecision.value !== null) {
-    const sourceLabel = params.dnsDecision.source ? ` (${params.dnsDecision.source})` : "";
-    log.debug(`dnsResultOrder=${params.dnsDecision.value}${sourceLabel}`);
-  }
-}
-
 function collectErrorCodes(err: unknown): Set<string> {
   const codes = new Set<string>();
   for (const current of collectErrorGraphCandidates(err, (candidate) => [
@@ -506,10 +490,14 @@ export function resolveTelegramTransport(
   const dnsDecision = resolveTelegramDnsResultOrderDecision({
     network: options?.network,
   });
-  logResolverNetworkDecisions({
-    autoSelectDecision,
-    dnsDecision,
-  });
+  for (const [name, decision] of [
+    ["autoSelectFamily", autoSelectDecision],
+    ["dnsResultOrder", dnsDecision],
+  ] as const) {
+    if (decision.value !== null) {
+      log.debug(`${name}=${decision.value}${decision.source ? ` (${decision.source})` : ""}`);
+    }
+  }
 
   const effectiveProxyFetch =
     proxyFetch ??
@@ -720,7 +708,7 @@ export function resolveTelegramTransport(
           url: resolveRequestUrl(input),
           method: init?.method ?? "GET",
           requestHeaders: init?.headers as Headers | Record<string, string> | undefined,
-          requestBody: (init as RequestInit & { body?: BodyInit | null })?.body ?? null,
+          requestBody: init?.body ?? null,
           response,
           flowId: randomUUID(),
           meta:

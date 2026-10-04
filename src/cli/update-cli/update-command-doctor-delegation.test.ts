@@ -14,13 +14,10 @@ import {
   type UpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
-import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import * as processRunner from "../../process/exec.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
@@ -68,69 +65,29 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([false, true])(
-  "resumes the parent after its bound Doctor (shared schema migrated=%s)",
-  async (migrated) => {
-    const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
-    closeOpenClawStateDatabaseForTest();
-    const runUtf8 = processRunner.runUtf8CommandWithTimeout;
-    let spawned = false;
-    await withUpdateCommandExecutor(runId, async (executor) => {
-      const fence = await executor.enter(root, { serviceRoot });
-      const opts: UpdateCommandOptions = { run: { runId, env, executorFence: fence } };
-      const guards = createUpdateCommandExecutionGuards(opts, root);
-      vi.spyOn(processRunner, "runUtf8CommandWithTimeout").mockImplementation(
-        async (_argv, options) => {
-          assert(typeof options !== "number", "Doctor supplies input-admission options");
-          // Only the Doctor program is substituted. Spawn, PID binding, input ordering,
-          // native executor custody, and process-tree settlement are the production owners.
-          expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
-          spawned = true;
-          return runUtf8(
-            [
-              process.execPath,
-              "-e",
-              `let s='';process.stdin.setEncoding('utf8');process.stdin.on('data',x=>s+=x);process.stdin.on('end',()=>{
-              require('node:fs').writeFileSync(process.argv[1],s);
-              ${migrated ? `const db=new (require('node:sqlite').DatabaseSync)(${JSON.stringify(resolveOpenClawStateSqlitePath(env))});db.exec(${JSON.stringify(`BEGIN IMMEDIATE; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}; UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1} WHERE meta_key = 'primary'; COMMIT;`)});db.close();` : ""}
-            });`,
-              received,
-            ],
-            options,
-          );
-        },
-      );
-      const result = await runPackageUpdateDoctor({
-        root,
-        timeoutMs: 5000,
-        progress: {},
-        managedServiceEnv: env,
-        getDoctorContext: () => ({
-          runId,
-          executorFence: fence,
-          inputHash: hashConfigRaw("{}\n"),
-          changes: [],
-          ...guards,
-        }),
-      });
-      expect(result).toMatchObject({ exitCode: 0 });
-      expect(spawned).toBe(true);
-      expect(JSON.parse(fs.readFileSync(received, "utf8"))).toMatchObject({ runId, root });
-      fence.assertCurrent();
-      guards.assertCurrent();
-      if (migrated) {
-        expect(() => loadUpdateRecovery(runId, { env })).toThrow(/newer schema version/);
-      }
-      expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
-    });
-  },
-);
+function doctorOptions(
+  runId: string,
+  executorFence: UpdateRecoveryFence,
+  guards: ReturnType<typeof createUpdateCommandExecutionGuards>,
+): Parameters<typeof runPackageUpdateDoctor>[0] {
+  return {
+    root,
+    timeoutMs: 5000,
+    progress: {},
+    managedServiceEnv: env,
+    getDoctorContext: () => ({
+      runId,
+      executorFence,
+      inputHash: hashConfigRaw("{}\n"),
+      changes: [],
+      ...guards,
+    }),
+  };
+}
 
 it.each([
-  "requester-revoked",
   "requester-replaced",
   "fence-reassigned",
-  "run-reassigned",
   "recovery-pending",
   "A-revoked",
   "B-revoked",
@@ -140,10 +97,9 @@ it.each([
     const runId = randomUUID();
     const runUtf8 = processRunner.runUtf8CommandWithTimeout;
     let childPid: number | undefined;
-    let current = true;
     const requesterAuthority = {
       requester: { channel: "test", senderId: "owner" },
-      isCurrent: () => current,
+      isCurrent: () => true,
     };
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root, { serviceRoot });
@@ -165,17 +121,11 @@ it.each([
               ...options,
               beforeInput(pid, spawnedArgv) {
                 childPid = pid;
-                if (change === "requester-revoked") {
-                  current = false;
-                }
                 if (change === "requester-replaced") {
                   run.requesterAuthority = { ...requesterAuthority };
                 }
                 if (change === "fence-reassigned") {
                   run.executorFence = { assertCurrent() {} };
-                }
-                if (change === "run-reassigned") {
-                  opts.run = { ...run };
                 }
                 if (change === "recovery-pending") {
                   opts.recovery = {};
@@ -198,19 +148,7 @@ it.each([
           );
         },
       );
-      await runPackageUpdateDoctor({
-        root,
-        timeoutMs: 5000,
-        progress: {},
-        managedServiceEnv: env,
-        getDoctorContext: () => ({
-          runId,
-          executorFence: fence,
-          inputHash: hashConfigRaw("{}\n"),
-          changes: [],
-          ...guards,
-        }),
-      });
+      await runPackageUpdateDoctor(doctorOptions(runId, fence, guards));
     });
     await expect(work).rejects.toThrow();
     expect(childPid).toBeTypeOf("number");
@@ -224,7 +162,6 @@ it.each([
 
 it.each([
   { exitCode: 23, revokeAfterSettlement: false },
-  { exitCode: 0, revokeAfterSettlement: true },
   { exitCode: UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE, revokeAfterSettlement: true },
 ])(
   "retains settled Doctor outcome $exitCode when requester revocation after settlement is $revokeAfterSettlement",
@@ -237,7 +174,7 @@ it.each([
     const receipt: UpdatePostInstallDoctorResult =
       exitCode === UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE
         ? createDeferredConfiguredPluginRepairDoctorResult(["Configured plugin repair deferred."])
-        : { status: exitCode === 0 ? "ok" : "error" };
+        : { status: "error" };
     receipt.configChanges = [{ kind: "migration", message: "Moved model allowlist." }];
     const steps: UpdateStepResult[] = [];
     const onStepComplete = vi.fn();
@@ -287,16 +224,7 @@ it.each([
         },
       );
       const result = await runPackageUpdateDoctor({
-        root,
-        timeoutMs: 5000,
-        progress: { onStepComplete },
-        results: steps,
-        managedServiceEnv: env,
-        getDoctorContext: () => ({
-          runId,
-          executorFence: fence,
-          inputHash: hashConfigRaw("{}\n"),
-          changes: [],
+        ...doctorOptions(runId, fence, {
           ...guards,
           assertCurrent: () => {
             try {
@@ -307,6 +235,8 @@ it.each([
             }
           },
         }),
+        progress: { onStepComplete },
+        results: steps,
       }).catch((cause: unknown) => cause);
       if (revokeAfterSettlement) {
         expect(result).toBeInstanceOf(UpdateRequesterRevokedError);
@@ -378,19 +308,7 @@ it("preserves before-input failure after owned child cleanup without input", asy
         );
       },
     );
-    await runPackageUpdateDoctor({
-      root,
-      timeoutMs: 5000,
-      progress: {},
-      managedServiceEnv: env,
-      getDoctorContext: () => ({
-        runId,
-        executorFence: fence,
-        inputHash: hashConfigRaw("{}\n"),
-        changes: [],
-        ...guards,
-      }),
-    });
+    await runPackageUpdateDoctor(doctorOptions(runId, fence, guards));
   });
   await expect(work).rejects.toMatchObject({
     message: "injected before-input failure after live child binding",

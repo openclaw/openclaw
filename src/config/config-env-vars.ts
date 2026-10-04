@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   expandEnvNormalizationKeys,
   normalizeZaiEnv,
@@ -25,6 +26,7 @@ function isBlockedConfigEnvVar(key: string): boolean {
 
 /** Returns whether a config-controlled environment entry is safe to apply at runtime. */
 export function isConfigRuntimeEnvVarAllowed(key: string, value: string): boolean {
+  // Unresolved templates must not become literal process credentials before env substitution.
   return Boolean(value.trim()) && !isBlockedConfigEnvVar(key) && !containsEnvVarReference(value);
 }
 
@@ -159,6 +161,144 @@ export function restoreEnvChangesIfUnchanged(params: {
   appliedConfigEnvOwnership.set(params.env, owned);
 }
 
+type ConfigReadEnvChanges = {
+  env: NodeJS.ProcessEnv;
+  receipts: Array<() => void>;
+  active: boolean;
+};
+const configReadEnvChanges = new AsyncLocalStorage<ConfigReadEnvChanges>();
+
+/** Retain only synchronous reader effects for a containing write's compensation. */
+export async function withConfigReadEnvChanges<T>(
+  env: NodeJS.ProcessEnv,
+  run: (restore: () => void) => Promise<T>,
+): Promise<T> {
+  const scope: ConfigReadEnvChanges = { env, receipts: [], active: true };
+  try {
+    return await configReadEnvChanges.run(scope, () =>
+      run(() => {
+        for (const restore of scope.receipts.toReversed()) {
+          restore();
+        }
+      }),
+    );
+  } finally {
+    scope.active = false;
+  }
+}
+
+function snapshotEnvProperties(env: Readonly<NodeJS.ProcessEnv>): Map<string, EnvSnapshotEntry> {
+  return new Map(Object.entries(env).map(([key, value]) => [key, { key, value }]));
+}
+
+function snapshotConfigEnvOwnership(
+  env: NodeJS.ProcessEnv,
+  properties: Map<string, EnvSnapshotEntry>,
+): Map<string, EnvSnapshotEntry> {
+  return new Map(
+    Object.entries(appliedConfigEnvOwnership.get(env) ?? {}).map(([key, value]) => {
+      // Windows aliases may enumerate a different spelling than the config collector.
+      // Bind provenance to that actual slot, retaining its spelling for restoration.
+      const propertyKey =
+        !properties.has(key) && Object.hasOwn(env, key)
+          ? [...properties.keys()].find(
+              (candidate) => candidate.toUpperCase() === key.toUpperCase(),
+            )
+          : key;
+      return [propertyKey ?? key, { key, value }];
+    }),
+  );
+}
+
+/** Awaited validation may change other keys; the producer owns only its synchronous effects. */
+export function captureConfigReadEnvMutation<T>(
+  env: NodeJS.ProcessEnv,
+  run: () => T,
+  retainRestore?: (restore: () => void) => void,
+): T {
+  const before = snapshotEnvProperties(env);
+  const beforeOwned = snapshotConfigEnvOwnership(env, before);
+  const scope = configReadEnvChanges.getStore();
+  try {
+    return run();
+  } finally {
+    const after = snapshotEnvProperties(env);
+    const afterOwned = snapshotConfigEnvOwnership(env, after);
+    const changes = [
+      ...new Set([...before.keys(), ...after.keys(), ...beforeOwned.keys(), ...afterOwned.keys()]),
+    ]
+      .map((key) => ({
+        key,
+        before: before.get(key),
+        after: after.get(key),
+        beforeOwned: beforeOwned.get(key),
+        afterOwned: afterOwned.get(key),
+      }))
+      .filter(
+        (change) =>
+          !envSnapshotEntriesEqual(change.before, change.after) ||
+          !envSnapshotEntriesEqual(change.beforeOwned, change.afterOwned),
+      );
+    const pairedDestinations = new Set<string>();
+    for (const change of changes) {
+      const previous = change.before;
+      if (!previous || change.after || !Object.hasOwn(env, previous.key)) {
+        continue;
+      }
+      const destinations = changes.filter(
+        (candidate) =>
+          !candidate.before &&
+          candidate.after &&
+          !pairedDestinations.has(candidate.key) &&
+          candidate.key.toUpperCase() === previous.key.toUpperCase() &&
+          env[previous.key] === candidate.after.value,
+      );
+      if (destinations.length !== 1) {
+        continue;
+      }
+      const destination = destinations[0]!;
+      // Pair aliases only when this environment actually resolves them. Plain
+      // objects and Windows Worker environments can have separate case-sensitive keys.
+      change.after = destination.after;
+      change.afterOwned = destination.afterOwned;
+      pairedDestinations.add(destination.key);
+    }
+    let active = true;
+    const restore = () => {
+      if (!active) {
+        return;
+      }
+      active = false;
+      const owned = { ...appliedConfigEnvOwnership.get(env) };
+      const current = snapshotEnvProperties(env);
+      const currentOwned = snapshotConfigEnvOwnership(env, current);
+      for (const change of changes) {
+        if (pairedDestinations.has(change.key)) {
+          continue;
+        }
+        const key = change.after?.key ?? change.before?.key ?? change.key;
+        const unchanged = change.after
+          ? envSnapshotEntriesEqual(current.get(key), change.after)
+          : !Object.hasOwn(env, key);
+        if (!unchanged || !envSnapshotEntriesEqual(currentOwned.get(key), change.afterOwned)) {
+          continue;
+        }
+        if (!envSnapshotEntriesEqual(change.before, change.after)) {
+          replaceEnvSnapshotEntry(env, current.get(key), change.before);
+        }
+        // Equal-byte replacement can still transfer ownership from a lower-precedence layer.
+        replaceEnvSnapshotEntry(owned, currentOwned.get(key), change.beforeOwned);
+      }
+      appliedConfigEnvOwnership.set(env, owned);
+    };
+    // Snapshot rejection and include compensation consume the same receipt once.
+    retainRestore?.(restore);
+    if (scope?.active && scope.env === env) {
+      scope.receipts.push(restore);
+    }
+  }
+}
+
 export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const cloned = { ...env } as NodeJS.ProcessEnv;
   const ownedEnv = resolveAppliedConfigEnvOwnership(env);
@@ -215,10 +355,7 @@ export function cloneEnvWithPlatformSemantics(env: NodeJS.ProcessEnv): NodeJS.Pr
 }
 
 /** Collects config env vars safe to persist into managed service environments. */
-export function collectConfigServiceEnvVars(cfg?: OpenClawConfig): Record<string, string> {
-  // Runtime and service envs intentionally share filtering until a target-specific contract exists.
-  return collectConfigRuntimeEnvVars(cfg);
-}
+export const collectConfigServiceEnvVars = collectConfigRuntimeEnvVars;
 
 /** Builds a cloned environment with config env vars applied without mutating the base env. */
 export function createConfigRuntimeEnv(

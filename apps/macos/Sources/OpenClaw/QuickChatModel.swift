@@ -32,7 +32,8 @@ struct QuickChatAgentDisplay: Equatable, Sendable, Identifiable {
     }
 
     init(summary: AgentSummary) {
-        let emoji = (summary.identity?["emoji"]?.value as? String)?.nonEmptyTrimmed
+        let emoji = (summary.identity?["emoji"]?.value as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
         let avatarRendered = summary.identity?["avatarUrl"]?.value as? String
         self.init(
             id: summary.id,
@@ -267,8 +268,8 @@ final class QuickChatModel {
         },
         agentIdentityProvider: @escaping AgentIdentityProvider = { sessionKey in
             let identity = try await GatewayConnection.shared.agentIdentity(sessionKey: sessionKey)
-            let name = identity.name?.nonEmptyTrimmed ?? identity.agentid
-            let emoji = identity.emoji?.nonEmptyTrimmed
+            let name = identity.name?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty ?? identity.agentid
+            let emoji = identity.emoji?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             return QuickChatAgentDisplay(
                 id: identity.agentid,
                 name: name,
@@ -402,13 +403,7 @@ final class QuickChatModel {
     }
 
     var canToggleDictation: Bool {
-        self.isDictating || self.isStartingDictation || (
-            !self.sessionKey.isEmpty &&
-                self.connectionGate == .available &&
-                !self.isGrantingPermissions &&
-                !self.isCapturingTextContext &&
-                !self.isUpdatingModel &&
-                self.sendState != .sending)
+        self.isDictating || self.isStartingDictation || self.canCaptureWindow
     }
 
     func beginPresentation() -> UUID {
@@ -1311,17 +1306,8 @@ extension QuickChatModel {
     }
 
     private func resetDictationState() {
-        self.isStartingDictation = false
-        self.isDictating = false
+        self.stopDictation()
         self.dictationStatusMessage = nil
         self.dictationSelectionRange = nil
-        self.dictationTextSession = nil
-    }
-}
-
-extension String {
-    fileprivate var nonEmptyTrimmed: String? {
-        let trimmed = self.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

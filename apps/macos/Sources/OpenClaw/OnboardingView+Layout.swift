@@ -61,7 +61,6 @@ extension OnboardingView {
         }
         .task {
             await self.refreshCLIStatus()
-            self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
         .task {
             await self.configuredGatewayProbe.consumeReconnects {
@@ -455,28 +454,12 @@ extension OnboardingView {
                 .shadow(color: .black.opacity(0.06), radius: 8, y: 3))
     }
 
-    func featureActionRow(
-        title: String,
-        subtitle: String,
-        systemImage: String,
-        buttonTitle: String,
-        action: @escaping () -> Void) -> some View
-    {
-        self.featureRow(
-            title: title,
-            subtitle: subtitle,
-            systemImage: systemImage,
-            action: AnyView(
-                Button(buttonTitle, action: action)
-                    .buttonStyle(.link)
-                    .padding(.top, 2)))
-    }
-
     func featureRow(
         title: String,
         subtitle: String,
         systemImage: String,
-        action: AnyView? = nil) -> some View
+        buttonTitle: String? = nil,
+        action: (() -> Void)? = nil) -> some View
     {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: systemImage)
@@ -488,8 +471,10 @@ extension OnboardingView {
                 Text(subtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
-                if let action {
-                    action
+                if let buttonTitle, let action {
+                    Button(buttonTitle, action: action)
+                        .buttonStyle(.link)
+                        .padding(.top, 2)
                 }
             }
             Spacer(minLength: 0)

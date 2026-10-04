@@ -1,4 +1,4 @@
-/** Doctor status summary for workspace skills, plugins, and task-flow recovery hints. */
+/** Doctor status summary for workspace skills and plugins. */
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
   listAgentIds,
@@ -20,8 +20,6 @@ import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
 } from "../plugins/status.js";
-import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "../tasks/task-flow-registry.store.sqlite.js";
-import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionReadiness?: PluginVersionRestartReadiness;
@@ -50,70 +48,6 @@ function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDia
   }
   seen.add(key);
   return true;
-}
-
-type TaskFlowRecoveryFinding = {
-  flowId: string;
-  message: string;
-};
-
-function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
-  const flows = [...loadTaskFlowRegistryStateFromSqliteReadOnly().flows.values()].toSorted(
-    (left, right) => right.createdAt - left.createdAt,
-  );
-  const tasksById = loadTaskRegistryStateFromSqliteReadOnly().tasks;
-  const flowsWithTasks = new Set<string>();
-  for (const task of tasksById.values()) {
-    const flowId = task.parentFlowId?.trim();
-    if (flowId) {
-      flowsWithTasks.add(flowId);
-    }
-  }
-  const findings: TaskFlowRecoveryFinding[] = [];
-  for (const flow of flows) {
-    const hasLinkedTasks = flowsWithTasks.has(flow.flowId);
-    if (
-      flow.syncMode === "managed" &&
-      flow.status === "running" &&
-      !hasLinkedTasks &&
-      flow.waitJson === undefined
-    ) {
-      findings.push({
-        flowId: flow.flowId,
-        message: `${flow.flowId}: running managed TaskFlow has no linked tasks or wait state; inspect or cancel it manually.`,
-      });
-    }
-    if (
-      flow.endedAt == null &&
-      flow.status === "blocked" &&
-      flow.blockedTaskId &&
-      (!hasLinkedTasks || tasksById.get(flow.blockedTaskId)?.parentFlowId?.trim() !== flow.flowId)
-    ) {
-      findings.push({
-        flowId: flow.flowId,
-        message: `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
-      });
-    }
-  }
-  return findings;
-}
-
-function noteFlowRecoveryHints() {
-  const suspicious = collectTaskFlowRecoveryFindings();
-  if (suspicious.length === 0) {
-    return;
-  }
-  note(
-    [
-      ...suspicious.slice(0, 5).map((finding) => finding.message),
-      suspicious.length > 5 ? `...and ${suspicious.length - 5} more.` : null,
-      `Inspect: ${formatCliCommand("openclaw tasks flow show <flow-id>")}`,
-      `Cancel: ${formatCliCommand("openclaw tasks flow cancel <flow-id>")}`,
-    ]
-      .filter((line): line is string => Boolean(line))
-      .join("\n"),
-    "TaskFlow recovery",
-  );
 }
 
 function pluginVersionReadinessToHealthFindings(
@@ -237,21 +171,6 @@ export function collectPluginLoadHealthFindings(
     );
 }
 
-function taskFlowRecoveryToHealthFinding(finding: TaskFlowRecoveryFinding): HealthFinding {
-  return {
-    checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: "warning",
-    message: finding.message,
-    path: "tasks.flows",
-    target: finding.flowId,
-    requirement: "taskflow-recovery",
-    fixHint: [
-      formatCliCommand(`openclaw tasks flow show ${finding.flowId}`),
-      formatCliCommand(`openclaw tasks flow cancel ${finding.flowId}`),
-    ].join(" or "),
-  };
-}
-
 function visitWorkspacePluginStatus(
   cfg: OpenClawConfig,
   options: NoteWorkspaceStatusOptions,
@@ -314,7 +233,6 @@ export function collectWorkspaceStatusHealthFindings(
   return [
     ...pluginVersionReadinessToHealthFindings(options.pluginVersionReadiness),
     ...workspaceFindings,
-    ...collectTaskFlowRecoveryFindings().map(taskFlowRecoveryToHealthFinding),
   ];
 }
 
@@ -407,7 +325,7 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   );
 }
 
-/** Emits plugin and TaskFlow recovery problem notes for doctor. */
+/** Emits plugin recovery problem notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const scopes = visitWorkspacePluginStatus(
@@ -446,7 +364,6 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     },
   );
   notePluginVersionReadiness(options.pluginVersionReadiness);
-  noteFlowRecoveryHints();
 
   return {
     workspaceDir:

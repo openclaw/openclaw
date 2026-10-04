@@ -1,4 +1,3 @@
-// ClickClack plugin module implements non-interactive setup behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   defineChannelSetupContract,
@@ -85,6 +84,7 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
 
   let code = rawCode;
   let baseUrl: string;
+  let exactClaimUrl: string | undefined;
   if (/^[a-z][a-z\d+.-]*:\/\//iu.test(rawCode)) {
     let setupUrl: URL;
     try {
@@ -106,7 +106,6 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
       throw new Error("ClickClack setup URL is missing its #CODE fragment.");
     }
     setupUrl.hash = "";
-    let exactClaimUrl: string | undefined;
     if (setupUrl.pathname.endsWith(CLICKCLACK_SETUP_CODE_CLAIM_PATH)) {
       const exactEndpoint = requireClickClackSetupClaimUrl(setupUrl.toString());
       baseUrl = exactEndpoint.apiBaseUrl;
@@ -120,24 +119,19 @@ function parseClickClackSetupCodeInput(params: { code: string; baseUrl?: string 
         throw new Error("ClickClack --base-url does not match the server in the setup-code URL.");
       }
     }
-    const normalizedCode = normalizeClickClackSetupCode(code);
-    if (!normalizedCode) {
-      throw new Error("ClickClack setup code must contain 12 valid base32 characters.");
+  } else {
+    code = code.startsWith("#") ? code.slice(1) : code;
+    if (!params.baseUrl) {
+      throw new Error("A bare ClickClack setup code requires --base-url.");
     }
-    return { code: normalizedCode, baseUrl, ...(exactClaimUrl ? { exactClaimUrl } : {}) };
+    baseUrl = requireClickClackSetupCodeBaseUrl(params.baseUrl);
   }
-
-  code = code.startsWith("#") ? code.slice(1) : code;
-  if (!params.baseUrl) {
-    throw new Error("A bare ClickClack setup code requires --base-url.");
-  }
-  baseUrl = requireClickClackSetupCodeBaseUrl(params.baseUrl);
 
   const normalizedCode = normalizeClickClackSetupCode(code);
   if (!normalizedCode) {
     throw new Error("ClickClack setup code must contain 12 valid base32 characters.");
   }
-  return { code: normalizedCode, baseUrl };
+  return { code: normalizedCode, baseUrl, ...(exactClaimUrl ? { exactClaimUrl } : {}) };
 }
 
 function formatClickClackSetupCodeClaimError(error: unknown): Error {
@@ -224,7 +218,7 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
     if (setupInput.token?.trim() || setupInput.tokenFile?.trim() || setupInput.useEnv) {
       throw new Error(SETUP_CODE_CONFLICT_ERROR);
     }
-    let setup = parseClickClackSetupCodeInput({
+    const setup = parseClickClackSetupCodeInput({
       code: setupInput.code,
       baseUrl: setupInput.baseUrl,
     });
@@ -245,11 +239,10 @@ const clickClackSetupAdapter: ChannelSetupAdapter = {
     } catch (error) {
       throw formatClickClackSetupCodeClaimError(error);
     }
-    setup = { ...setup, baseUrl: claim.api_base_url ?? setup.baseUrl };
     const { code: _code, tokenFile: _tokenFile, useEnv: _useEnv, ...remainingInput } = setupInput;
     return {
       ...remainingInput,
-      baseUrl: setup.baseUrl,
+      baseUrl: claim.api_base_url ?? setup.baseUrl,
       token: claim.token,
       workspace: claim.workspace.id,
       ...(claim.defaults.defaultTo !== undefined ? { defaultTo: claim.defaults.defaultTo } : {}),

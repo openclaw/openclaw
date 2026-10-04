@@ -148,12 +148,13 @@ export async function compileNativeProject({
         },
       }),
     );
-    const nativeSnapshot = await api.updateSnapshot({
+    const nativeSnapshot = await api.createSnapshot({
       openProjects: [config],
-      fileChanges: { changed: [config] },
+      fileNotifications: { changed: [config] },
+      ensurePrograms: true,
     });
     view.assertValid();
-    const project = nativeSnapshot.getProject(config);
+    const project = nativeSnapshot.getConfiguredProject(config);
     if (!project) {
       throw new Error(`Native TypeScript did not open ${config}`);
     }

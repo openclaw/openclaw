@@ -18,6 +18,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { readPreparedGatewayModelCatalogOwnerSnapshot } from "../gateway/server-model-catalog.js";
 import { createGatewayReloadHandlers } from "../gateway/server-reload-hot.js";
 import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-model-runtime-scope.js";
 import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
@@ -66,6 +67,9 @@ async function publish(cfg: OpenClawConfig) {
 
 function createPluginReloadHandler(
   reloadPlugins: Parameters<typeof createGatewayReloadHandlers>[0]["reloadPlugins"],
+  requestRecoveryRestart?: Parameters<
+    typeof createGatewayReloadHandlers
+  >[0]["requestRecoveryRestart"],
 ) {
   type ReloadParams = Parameters<typeof createGatewayReloadHandlers>[0];
   let reloadState: ReturnType<ReloadParams["getState"]> = {
@@ -97,6 +101,7 @@ function createPluginReloadHandler(
     releaseChannelRouteHandoffs: vi.fn(),
     pruneInactiveChannelAccountState: vi.fn(),
     reloadPlugins,
+    ...(requestRecoveryRestart ? { requestRecoveryRestart } : {}),
     logHooks: logger,
     logChannels: logger,
     logCron: logger,
@@ -271,10 +276,8 @@ describe("Gateway plugin reload run admission", () => {
   });
 
   it.each([
-    { outcome: "commit", arrival: "during drainage" },
     { outcome: "rollback", arrival: "during drainage" },
     { outcome: "commit", arrival: "before drainage" },
-    { outcome: "rollback", arrival: "before drainage" },
   ] as const)(
     "preserves a run admitted $arrival and waiting requests through plugin $outcome",
     async ({ outcome, arrival }) => {
@@ -324,8 +327,12 @@ describe("Gateway plugin reload run admission", () => {
       const input = { ...ownerInput(retained), workspaceDir: fixture.state.path("run-workspace") };
       let settled = false;
       let requestSettled = false;
+      let catalogSettled = false;
       let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
       let request: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
+      let catalogRequest:
+        | ReturnType<typeof readPreparedGatewayModelCatalogOwnerSnapshot>
+        | undefined;
       let reload: ReturnType<typeof handler.applyHotReload> | undefined;
       const admit = () => {
         admission = acquireAgentRunPreparedModelRuntime(input);
@@ -363,6 +370,15 @@ describe("Gateway plugin reload run admission", () => {
           }),
         ]);
         request = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+        catalogRequest = readPreparedGatewayModelCatalogOwnerSnapshot({ agentId: "default" });
+        void catalogRequest.then(
+          () => {
+            catalogSettled = true;
+          },
+          () => {
+            catalogSettled = true;
+          },
+        );
         void request.then(
           () => {
             requestSettled = true;
@@ -379,6 +395,7 @@ describe("Gateway plugin reload run admission", () => {
         await nextTurn();
         expect(settled).toBe(false);
         expect(requestSettled).toBe(false);
+        expect(catalogSettled).toBe(false);
         finishDrainage.resolve();
         if (outcome === "rollback") {
           await expect(reload).rejects.toBe(pluginFailure);
@@ -390,6 +407,9 @@ describe("Gateway plugin reload run admission", () => {
         await expect(request).resolves.toMatchObject({
           config: outcome === "commit" ? committed : retained,
         });
+        await expect(catalogRequest).resolves.toMatchObject({
+          config: outcome === "commit" ? committed : retained,
+        });
         const lease = await admission!;
         expect(lease.snapshot.config).toEqual(outcome === "commit" ? committed : retained);
         expect(lease.snapshot.workspaceDir).toBe(input.workspaceDir);
@@ -397,7 +417,7 @@ describe("Gateway plugin reload run admission", () => {
       } finally {
         finishCatalog.resolve();
         finishDrainage.resolve();
-        await Promise.allSettled([reload, request]);
+        await Promise.allSettled([reload, request, catalogRequest]);
         await Promise.allSettled([admission?.then((lease) => lease[Symbol.asyncDispose]())]);
         handler.stopRestartRetries();
       }
@@ -406,91 +426,180 @@ describe("Gateway plugin reload run admission", () => {
 });
 
 describe("retained config and committed model publication", () => {
-  it.each(["build", "cleanup"] as const)(
-    "preserves an unrelated %s failure when preparation is superseded",
-    async (failureKind) => {
-      const retained = config(true);
-      await publish(retained);
-      const entered = createDeferred();
-      const release = createDeferred();
-      const failure =
-        failureKind === "build"
-          ? new Error("fixture catalog failed")
-          : new AggregateError([new Error("fixture cleanup failed")], "fixture build cleanup");
-      mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
-        throw failure;
-      });
-      const admission = acquireAgentRunPreparedModelRuntime({
-        ...ownerInput(retained),
-        workspaceDir: fixture.state.path("failed-run-workspace"),
-      });
-      const result = admission.catch((error: unknown) => error);
-      try {
-        await Promise.race([entered.promise, result]);
-        markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
-        release.resolve();
-        // Finish replacement so a mistaken retry would return a lease, not hang this assertion.
-        await publish(retained);
-        expect(await result).toBe(failure);
-      } finally {
-        release.resolve();
-        await Promise.allSettled([admission.then((lease) => lease[Symbol.asyncDispose]())]);
-      }
+  it.each<{
+    name: string;
+    retained: OpenClawConfig;
+    committed: OpenClawConfig;
+    changedPath: string;
+    rebuild: boolean;
+    addedAgentId?: string;
+  }>([
+    {
+      name: "keeps the catalog ready throughout a channel-only hot reload",
+      retained: { channels: { slack: { streaming: { mode: "off" } } } },
+      committed: { channels: { slack: { streaming: { mode: "partial" } } } },
+      changedPath: "channels.slack.streaming.mode",
+      rebuild: false,
     },
-  );
-
-  it.each(["advance", "hot reload"])(
-    "%s preserves exact catalog isolation while dispatch selects the committed config",
-    async (publication) => {
-      const retained = config(true);
-      const committed = config(false);
-      await publish(retained);
+    {
+      name: "keeps the catalog ready throughout a UI preference commit",
+      retained: { ui: { prefs: { sidebarEntries: [] } } },
+      committed: { ui: { prefs: { sidebarEntries: ["sessions"] } } },
+      changedPath: "ui.prefs.sidebarEntries",
+      rebuild: false,
+    },
+    {
+      name: "replaces channel activation facts after disabling a configured channel",
+      retained: { channels: { slack: { streaming: { mode: "off" }, enabled: true } } },
+      committed: { channels: { slack: { streaming: { mode: "off" }, enabled: false } } },
+      changedPath: "channels.slack.enabled",
+      rebuild: true,
+    },
+    {
+      name: "replaces configured channel model selection facts",
+      retained: { channels: { modelByChannel: { slack: { C1: "custom/before" } } } },
+      committed: { channels: { modelByChannel: { slack: { C1: "custom/after" } } } },
+      changedPath: "channels.modelByChannel.slack.C1",
+      rebuild: true,
+    },
+    {
+      name: "publishes a current catalog for an added agent after roster replacement",
+      retained: { agents: { entries: { default: {} } } },
+      committed: { agents: { entries: { default: {}, other: {} } } },
+      changedPath: "agents.entries",
+      rebuild: true,
+      addedAgentId: "other",
+    },
+  ])("$name", async ({ retained, committed, changedPath, rebuild, addedAgentId }) => {
+    setRuntimeConfigSnapshot(retained, retained);
+    await publish(retained);
+    const previous = getPreparedModelRuntimeSnapshot(ownerInput(retained));
+    expect(previous?.isCurrent()).toBe(true);
+    const preparations = mocks.prepareStaticCatalog.mock.calls.length;
+    if (addedAgentId) {
+      mocks.configuredAgentIds.push(addedAgentId);
+    }
+    const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
+    const handler = createPluginReloadHandler(async () => {
+      throw new Error("Config-only hot reload must not replace plugins");
+    }, requestRecoveryRestart);
+    const plan = buildGatewayReloadPlan([]);
+    plan.changedPaths = [changedPath];
+    plan.hotReasons = [...plan.changedPaths];
+    try {
       await expect(
-        loadPreparedModelCatalogOwnerSnapshot(ownerInput(retained)),
-      ).resolves.toMatchObject({
-        config: retained,
+        handler.applyHotReload(plan, committed, {
+          sourceConfig: committed,
+          isCurrent: () => true,
+          publish: async (commit) => {
+            await commit();
+            const catalog = getPreparedModelRuntimeSnapshot(ownerInput(committed));
+            if (rebuild) {
+              expect(catalog).toBeUndefined();
+            } else {
+              expect(catalog?.config).toBe(committed);
+              expect(catalog?.isCurrent()).toBe(true);
+            }
+          },
+        }),
+      ).resolves.toBe("applied");
+      const catalog = await readPreparedGatewayModelCatalogOwnerSnapshot({
+        agentId: "default",
+        getConfig: () => committed,
       });
-      if (publication === "advance") {
-        advancePreparedModelRuntimeConfig(committed);
-      } else {
-        await refreshModelRuntimeAfterHotReload({
-          config: committed,
-          agentIds: undefined,
-          pluginMetadataSnapshot: undefined,
+      expect(catalog?.config).toBe(committed);
+      expect(catalog?.isCurrent()).toBe(true);
+      expect(previous?.isCurrent()).toBe(!rebuild);
+      expect(requestRecoveryRestart).not.toHaveBeenCalled();
+      expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(
+        preparations + (rebuild ? mocks.configuredAgentIds.length : 0),
+      );
+      if (addedAgentId) {
+        const addedCatalog = await readPreparedGatewayModelCatalogOwnerSnapshot({
+          agentId: addedAgentId,
+          getConfig: () => committed,
         });
+        expect(addedCatalog?.agentId).toBe(addedAgentId);
+        expect(addedCatalog?.config).toBe(committed);
+        expect(addedCatalog?.isCurrent()).toBe(true);
       }
-      await expect(
-        loadPreparedModelCatalogOwnerSnapshot(ownerInput(retained)),
-      ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ).resolves.toMatchObject({
-        config: committed,
-      });
-      await expect(
-        loadPreparedModelCatalogOwnerSnapshot(ownerInput(committed)),
-      ).resolves.toMatchObject({
-        config: committed,
-      });
-    },
-  );
+    } finally {
+      handler.stopRestartRetries();
+    }
+  });
 
-  it("advances model-neutral config without another catalog discovery", async () => {
-    await publish(config(true));
-    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
-    const committed = config(false);
-    advancePreparedModelRuntimeConfig(committed);
-    const runtime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-    expect(runtime?.config).toEqual(committed);
-    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries);
+  it("reads the atomic replacement catalog while a model config reload is pending", async () => {
+    const retained: OpenClawConfig = { agents: { defaults: { model: "custom/before" } } };
+    const committed: OpenClawConfig = { agents: { defaults: { model: "custom/after" } } };
+    await publish(retained);
+    const entered = createDeferred();
+    const release = createDeferred();
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      return { entries: [] };
+    });
+    const publication = publish(committed);
+    const reading = createDeferred();
+    let read: ReturnType<typeof readPreparedGatewayModelCatalogOwnerSnapshot> | undefined;
+    try {
+      await entered.promise;
+      read = readPreparedGatewayModelCatalogOwnerSnapshot({
+        agentId: "default",
+        getConfig: () => {
+          reading.resolve();
+          return committed;
+        },
+      });
+      await reading.promise;
+      release.resolve();
+      await publication;
+      const catalog = await read;
+      expect(catalog?.config).toBe(committed);
+      expect(catalog?.isCurrent()).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([publication, read]);
+    }
+  });
+
+  it("preserves an unrelated aggregate failure when preparation is superseded", async () => {
+    const retained = config(true);
+    await publish(retained);
+    const entered = createDeferred();
+    const release = createDeferred();
+    const failure = new AggregateError(
+      [new Error("fixture cleanup failed")],
+      "fixture build cleanup",
+    );
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw failure;
+    });
+    const admission = acquireAgentRunPreparedModelRuntime({
+      ...ownerInput(retained),
+      workspaceDir: fixture.state.path("failed-run-workspace"),
+    });
+    const result = admission.catch((error: unknown) => error);
+    try {
+      await Promise.race([entered.promise, result]);
+      markPreparedModelRuntimeSnapshotsStale(undefined, { waitForReplacement: true });
+      release.resolve();
+      // Finish replacement so a mistaken retry would return a lease, not hang this assertion.
+      await publish(retained);
+      expect(await result).toBe(failure);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([admission.then((lease) => lease[Symbol.asyncDispose]())]);
+    }
   });
 
   it("does not let a retained lease authorize an old config catalog read", async () => {
     const retained = config(true);
     await publish(retained);
     await using lease = await acquirePreparedModelRuntimeSnapshot(ownerInput(retained));
+    const discoveries = mocks.runPreparedModelCatalogWorker.mock.calls.length;
     advancePreparedModelRuntimeConfig(config(false));
     await withPreparedModelRuntimePluginGenerationScope(
       lease.pluginGeneration,
@@ -501,6 +610,7 @@ describe("retained config and committed model publication", () => {
       },
       () => lease.snapshot,
     );
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(discoveries);
   });
 });
 

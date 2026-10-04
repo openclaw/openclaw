@@ -14,11 +14,9 @@
    bubble only, not the virtual row positioning or measured layout dimensions. */
 @keyframes chat-message-enter {
   from {
-    opacity: 0;
     transform: translateY(8px);
   }
   to {
-    opacity: 1;
     transform: translateY(0);
   }
 }
@@ -1061,6 +1059,89 @@ img.chat-avatar {
   white-space: nowrap;
 }
 
+.agent-chat__typing-overflow {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 0 12px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+/* The stack starts at the shared avatar edge and takes only its intrinsic width. */
+.agent-chat__typing-identities {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  height: 20px;
+}
+
+.agent-chat__typing-person {
+  display: inline-flex;
+  flex: 0 0 20px;
+}
+
+.agent-chat__typing-person + .agent-chat__typing-person {
+  margin-inline-start: -6px;
+}
+
+.agent-chat__typing-person .chat-author-avatar {
+  border-color: var(--bg);
+  box-shadow: 0 0 0 1px var(--bg);
+}
+
+.agent-chat__typing-overflow--no-avatars {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.agent-chat__typing-summary {
+  min-width: 0;
+  min-block-size: 2lh;
+  container-type: inline-size;
+  overflow-wrap: anywhere;
+}
+
+/* Keep real names in the sentence, while leaving room for its activity verb. */
+.agent-chat__typing-name {
+  display: inline-block;
+  max-inline-size: 30cqi;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+  color: var(--text);
+}
+
+/* Reuse the shared text-shimmer owner; accessibility modes keep static text. */
+@media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
+  .agent-chat__typing-text[data-typing] {
+    background-image: linear-gradient(
+      90deg,
+      var(--muted) 0%,
+      var(--muted) 35%,
+      var(--text) 50%,
+      var(--muted) 65%,
+      var(--muted) 100%
+    );
+    background-size: 200% 100%;
+    background-repeat: repeat-x;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: text-shimmer 2.4s ease-in-out infinite;
+  }
+
+  .agent-chat__typing-text[data-typing] .agent-chat__typing-name {
+    color: inherit;
+  }
+}
+
 .agent-chat__typing-preview-text {
   display: block;
   white-space: pre-wrap;
@@ -1272,7 +1353,7 @@ img.chat-avatar {
   padding: 12px;
   min-width: 200px;
   max-width: calc(100vw - 48px);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--overlay-shadow);
   /* Above the still-connected .chat-reply-context-menu (9999). */
   z-index: 10000;
   animation: scale-in 0.15s ease-out;

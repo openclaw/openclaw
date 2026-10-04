@@ -72,7 +72,11 @@ import type {
 } from "./system-prompt-contribution.js";
 import { buildMessagingSection } from "./system-prompt-messaging.js";
 import { buildSystemPromptToolLines } from "./system-prompt-tool-list.js";
-import type { PromptMode, SilentReplyPromptMode } from "./system-prompt.types.js";
+import type {
+  PromptMode,
+  SilentReplyPromptMode,
+  SystemPromptRuntimeInfo,
+} from "./system-prompt.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { buildUiPresentationPrompt } from "./ui-presentation-prompt.js";
 import { buildProactiveSubagentOrchestrationSection } from "./ultra-orchestration.js";
@@ -84,27 +88,6 @@ import {
 type OwnerIdDisplay = "raw" | "hash";
 
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;
-
-export type SystemPromptRuntimeInfo = {
-  agentId?: string;
-  agentName?: string;
-  sessionKey?: string;
-  sessionId?: string;
-  sessionUrl?: string;
-  gitCoauthorPrompt?: string;
-  host?: string;
-  os?: string;
-  arch?: string;
-  node?: string;
-  model?: string;
-  defaultModel?: string;
-  shell?: string;
-  channel?: string;
-  chatType?: string;
-  capabilities?: string[];
-  repoRoot?: string;
-  activeNode?: string;
-};
 
 const stablePromptPrefixCache = new Map<string, string>();
 
@@ -1227,6 +1210,7 @@ function buildRuntimeLine(
     runtimeInfo?.activeNode
       ? `active_node=${sanitizeForPromptLiteral(runtimeInfo.activeNode)}`
       : "",
+    runtimeInfo?.activeNodeIdentity ? `active_node_identity=${runtimeInfo.activeNodeIdentity}` : "",
     runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
     runtimeInfo?.defaultModel ? `default_model=${runtimeInfo.defaultModel}` : "",
     runtimeInfo?.shell ? `shell=${runtimeInfo.shell}` : "",

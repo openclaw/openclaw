@@ -48,7 +48,14 @@ do not clear site data while drafts or queued messages still need recovery.
 
 Unsaved file edits block automatic and in-app reloads, even after you close their
 previews or switch conversations. Reopen each edited file and save or discard its
-changes, then retry the reload. File edits stay in memory in the current page;
+changes, then retry the reload. If a server update makes the editor unavailable,
+choose **Review file drafts** in the reload notification. You can copy or download
+each retained draft without connecting to the Gateway, explicitly discard resolved
+drafts, then try **Refresh** again. **Keep drafts** leaves them protected in this tab.
+Each draft shows the session title, session key, and pane position captured when
+the file was opened, so matching filenames remain distinguishable. Newer edits
+remain protected if they change while you review an older draft.
+File edits stay in memory in the current page;
 an explicit browser reload or closing the browser tab discards them.
 
 ## Connection loss and reconnect
@@ -151,8 +158,16 @@ uncertain-delivery warning without sending the message again. The browser keeps 
 payload until consumption or cancellation is confirmed. If delivery is still unknown,
 the review warning remains.
 If the Gateway is holding that input for a later turn, it appears in the queue
-above the composer. Canceling that row withdraws the exact queued message without
-stopping the active turn. Server-held messages cannot be edited or reordered.
+above the composer. Removing that row withdraws the exact queued message without
+stopping the active turn. Once cancellation is confirmed, the removed prompt and
+its attachments disappear from the queue and conversation, including after a
+reconnect or reload. Server-held messages cannot be edited or reordered.
+If the message has already started, Remove leaves the active run alone; use Stop
+to interrupt it.
+Stopping a turn or an unsuccessful send can still leave a cancelled prompt with
+recovery guidance; those actions do not remove the prompt.
+Incognito chats keep their existing cancellation behavior: Remove cancels queued
+work, but the cancelled-message notice remains until the private session ends.
 
 If automatic restart recovery is interrupted or cancelled before the agent resumes,
 the **System · restart recovery** notice shows that outcome and asks you to send a

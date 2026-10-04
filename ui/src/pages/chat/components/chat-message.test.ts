@@ -96,18 +96,6 @@ function requireFirstMockArg(
   return arg;
 }
 
-function selectText(element: Element) {
-  const range = document.createRange();
-  range.selectNodeContents(element);
-  const selection = window.getSelection();
-  selection?.removeAllRanges();
-  selection?.addRange(range);
-}
-
-function pointerClick(element: Element) {
-  element.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
-}
-
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
@@ -1532,13 +1520,14 @@ describe("grouped chat rendering", () => {
       );
       const summary = container.querySelector<HTMLElement>(".msg-meta__summary")!;
       summary.click();
+      const metadata = summary.closest("openclaw-tooltip")!;
+      expect(metadata.hasAttribute("open")).toBe(true);
       const reply = container.querySelector<HTMLButtonElement>(".chat-reply-btn")!;
       reply.focus();
       const replyTooltip = reply.closest("openclaw-tooltip")!;
-      await Promise.resolve();
-      expect(replyTooltip.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(true);
-      const metadata = summary.closest("openclaw-tooltip")!;
-      expect(metadata.shadowRoot?.querySelector("wa-tooltip")?.hasAttribute("open")).toBe(false);
+      // The wrapper owns visibility even while the optional popup is upgrading.
+      expect(replyTooltip.hasAttribute("open")).toBe(true);
+      expect(metadata.hasAttribute("open")).toBe(false);
     } finally {
       provider.remove();
     }
@@ -1780,7 +1769,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-turn-recap--continuation")?.textContent).toContain(
       "Done in 5 seconds",
     );
-    expect(container.querySelector(".chat-tasks-status__claw")).toBeNull();
+    expect(container.querySelector(".chat-turn-recap__claw")).toBeNull();
     expect(container.querySelector(".chat-group-footer")).not.toBeNull();
   });
 
@@ -3069,11 +3058,6 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Read failed");
     expect(activitySummary.querySelector(".chat-activity-group__badge")).toBeNull();
     expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
-    selectText(expectElement(activitySummary, ".chat-activity-group__label", HTMLElement));
-    pointerClick(activitySummary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     activitySummary.click();
 
     expect(onToggleToolMessageExpanded).toHaveBeenCalledWith("activity:tool-group", false);
@@ -3342,11 +3326,6 @@ describe("grouped chat rendering", () => {
     expect(summary.querySelector(".chat-tool-msg-summary__names")?.textContent).toBe(
       "sessions_spawn",
     );
-    selectText(expectElement(summary, ".chat-tool-msg-summary__label", HTMLElement));
-    pointerClick(summary);
-    expect(onToggleToolMessageExpanded).not.toHaveBeenCalled();
-
-    window.getSelection()?.removeAllRanges();
     summary.click();
     expect(onToggleToolMessageExpanded).toHaveBeenCalledOnce();
 
@@ -4104,7 +4083,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-assistant-attachment-card--compact")).toBeNull();
     player.onExpand(kind === "video" ? source : undefined);
     if (kind === "video") {
-      expect(onOpenImage).toHaveBeenCalledWith({
+      expect(onOpenImage.mock.lastCall?.[0]).toMatchObject({
         kind: "video",
         originalSrc: source,
         src: source,

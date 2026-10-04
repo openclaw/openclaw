@@ -1,4 +1,3 @@
-// Resolves common install/update mode options.
 type InstallMode = "install" | "update";
 
 type InstallModeOptions<TLogger> = {
@@ -21,7 +20,6 @@ export function resolveInstallWorkTimeoutMs(
   return workTimeoutMs === null ? undefined : (workTimeoutMs ?? defaultTimeoutMs);
 }
 
-/** Resolves shared install/update mode options with a required logger fallback. */
 export function resolveInstallModeOptions<TLogger>(
   params: InstallModeOptions<TLogger>,
   defaultLogger: TLogger,
@@ -37,7 +35,6 @@ export function resolveInstallModeOptions<TLogger>(
   };
 }
 
-/** Resolves install/update mode options plus an operation timeout default. */
 export function resolveTimedInstallModeOptions<TLogger>(
   params: TimedInstallModeOptions<TLogger>,
   defaultLogger: TLogger,

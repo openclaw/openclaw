@@ -3,7 +3,7 @@ import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { asPositiveFiniteNumber, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { SignalRpcOptions } from "./client-types.js";
 import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
@@ -108,13 +108,6 @@ function assertSignalHttpProtocol(url: URL, label: string): void {
   }
 }
 
-function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
-  }
-  return Math.floor(value);
-}
-
 function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
@@ -163,7 +156,9 @@ function requestSignalHttp(
       cleanup();
       resolve(response);
     };
-    const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
+    const maxResponseBytes = Math.floor(
+      asPositiveFiniteNumber(options.maxResponseBytes) ?? DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES,
+    );
     const request: ClientRequest | undefined = client.request(
       url,
       {

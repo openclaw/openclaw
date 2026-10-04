@@ -7,6 +7,10 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { redactSupportDiagnosticLine } from "../../logging/diagnostic-support-redaction.js";
+import {
+  CommandProcessCleanupError,
+  hasCommandProcessCleanupError,
+} from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createGatewayRestartDeadline,
@@ -202,6 +206,8 @@ export type UpdateGatewayReadinessParams = {
   requireRunningService?: boolean;
   requirePluginHealth?: boolean;
   health?: GatewayRestartSnapshot;
+  /** Installation observes native startup; final verification owns HTTP and identity proof. */
+  healthOnly?: boolean;
   /** A failure before activation observes existing health without waiting for startup. */
   waitForStartup?: boolean;
   settle?: { probes: number };
@@ -210,6 +216,7 @@ export type UpdateGatewayReadinessParams = {
   recoverHealth?: (
     health: GatewayRestartSnapshot,
     reinspect: () => Promise<GatewayRestartSnapshot>,
+    assertCurrent: () => void,
   ) => Promise<{
     health: GatewayRestartSnapshot;
     launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null;
@@ -245,21 +252,23 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     ? (Math.max(1, settle.probes) - 1) * DEFAULT_RESTART_HEALTH_DELAY_MS
     : 0;
   const startedAtMs = performance.now();
-  const remainingMs = () =>
-    Math.max(
+  const deadline = createGatewayRestartDeadline({
+    timeoutMs: Math.max(
       0,
-      Math.min(startedAtMs + timeoutMs + settleDurationMs, params.deadlineMs ?? Infinity) -
-        performance.now(),
-    );
+      Math.min(timeoutMs + settleDurationMs, (params.deadlineMs ?? Infinity) - startedAtMs),
+    ),
+    signal: params.signal,
+  });
+  const remainingMs = deadline.remainingMs;
+  const inspectionTimeoutMs = () => Math.min(remainingMs(), params.probeTimeoutMs ?? Infinity);
   const probeTimeoutMs = () =>
     waitForStartup && params.probeTimeoutMs === undefined
       ? remainingMs()
       : Math.min(remainingMs(), params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS);
   const assertCurrent = () => {
-    params.signal?.throwIfAborted();
+    deadline.signal.throwIfAborted();
     params.assertCurrent?.();
   };
-  assertCurrent();
   const service = resolveGatewayService();
   const probeParams = {
     service,
@@ -268,115 +277,184 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
     ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     requirePluginHealth: params.requirePluginHealth ?? false,
     env: params.serviceEnv,
-    ...(params.signal ? { signal: params.signal } : {}),
+    signal: deadline.signal,
+    deadline,
+    // One-shot recovery caps network waits, not the preceding native inspection.
+    ...(!waitForStartup
+      ? { probeTimeoutMs: params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS }
+      : {}),
   };
+  let health: GatewayRestartSnapshot = params.health ?? {
+    runtime: { status: "unknown" },
+    portUsage: { port: params.gatewayPort, status: "unknown", listeners: [], hints: [] },
+    healthy: false,
+    staleGatewayPids: [],
+  };
+  let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
+  let http: Awaited<ReturnType<typeof waitForGatewayHttpReadiness>> | undefined;
   const readHealth = async () => {
     assertCurrent();
     if (!waitForStartup) {
-      const health = await inspectGatewayRestart({
+      const inspectedHealth = await inspectGatewayRestart({
         ...probeParams,
-        timeoutMs: Math.max(1, probeTimeoutMs()),
+        timeoutMs: Math.max(1, inspectionTimeoutMs()),
       });
       assertCurrent();
-      return health;
+      return inspectedHealth;
     }
-    const supervisorKeepsAlive = await hasLoadedLaunchdKeepAliveSupervisor({
-      service,
-      env: params.serviceEnv,
-    });
+    const supervisorKeepsAlive = await deadline.read("service supervisor", () =>
+      hasLoadedLaunchdKeepAliveSupervisor({ service, env: params.serviceEnv }),
+    );
     assertCurrent();
-    const health = await waitForGatewayHealthyRestart({
+    const observed = await waitForGatewayHealthyRestart({
       ...probeParams,
+      deadlineOutcome: "snapshot",
       // The restart owner adds settling itself; reserve it once in the shared deadline.
       timeoutMs: Math.max(1, remainingMs() - settleDurationMs),
-      deadlineMs: params.deadlineMs,
       probeTimeoutMs: params.probeTimeoutMs,
-      onObservation: (snapshot) =>
+      onObservation: (snapshot) => {
+        health = snapshot;
         params.onProgress?.(
           "readiness",
           `${snapshot.startupPhase}; service=${snapshot.runtime.status} PID=${snapshot.runtime.pid ?? "unknown"}${snapshot.runtime.inspectionFailure ? `; native inspection=${snapshot.runtime.inspectionFailure.timeoutMs === undefined ? "unavailable" : `timed out (${snapshot.runtime.inspectionFailure.timeoutMs}ms)`}` : ""}; listener=${snapshot.portUsage.status}; listener PIDs=${snapshot.portUsage.listeners.map(({ pid }) => pid ?? "unknown").join(",") || "none"}; health=${snapshot.healthy ? "ready" : "unverified"}${snapshot.probeError ? `; ${snapshot.probeError}` : ""}`,
-        ),
+        );
+      },
       requireRunningService: params.requireRunningService,
       settle,
       supervisorKeepsAlive,
     });
+    health = observed;
     assertCurrent();
-    return health;
+    return observed;
   };
-  let health = params.health ?? (await readHealth());
-  let launchAgentRecovery: PostUpdateLaunchAgentRecoveryResult | null = null;
-  if (params.recoverHealth && !gatewayReadinessPending(health)) {
-    ({ health, launchAgentRecovery } = await params.recoverHealth(health, readHealth));
-    assertCurrent();
-  }
-  if (
-    !health.healthy &&
-    (!waitForStartup ||
-      (health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
-      health.versionMismatch ||
-      health.buildIdMismatch ||
-      health.activatedPluginErrors?.length ||
-      health.channelProbeErrors?.length ||
-      health.staleGatewayPids.length > 0)
-  ) {
-    return { health, readyz: false, http: undefined, launchAgentRecovery };
-  }
-  params.onProgress?.("http", "checking Gateway HTTP healthz and readyz endpoints");
-  const context = await resolveGatewayRestartProbeContext(params.serviceEnv);
-  assertCurrent();
-  const http = await waitForGatewayHttpReadiness({
-    config: context.config,
-    port: params.gatewayPort,
-    attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
-    deadlineAt: Date.now() + remainingMs(),
-    probeTimeoutMs: probeTimeoutMs(),
-    delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
-    onObservation: (observation) =>
-      params.onProgress?.(
-        "http",
-        `HTTP healthz=${observation.healthz ?? "unavailable"}; readyz=${observation.readyz ?? "unavailable"}`,
-      ),
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  assertCurrent();
-  const readyz = http.readyz === 200;
-  if (health.healthy && (!params.requireRunningService || health.runtime.status === "running")) {
-    // HTTP readiness cannot transfer an earlier settle to a replacement boot.
-    const settled = health;
-    const inspect = () =>
-      inspectGatewayRestart({
-        ...probeParams,
-        probeContext: context,
-        timeoutMs: Math.max(1, probeTimeoutMs()),
-      });
-    const inspected = await inspect();
-    assertCurrent();
-    // Bracket the final native observation with health/hello probes so a same-PID
-    // or PID-less reboot during that observation cannot inherit the old boot.
-    health = inspected.healthy ? await inspect() : inspected;
-    assertCurrent();
-    health.startupPhase = settled.startupPhase;
-    const sameGeneration =
-      isSameGatewayRestartGeneration(settled, inspected) &&
-      isSameGatewayRestartGeneration(inspected, health);
-    if (!sameGeneration) {
-      health.healthy = false;
-      health.waitOutcome = "generation-changed";
-      health.probeError = "Gateway process changed during final readiness verification.";
+  try {
+    return await deadline.run(async () => {
+      assertCurrent();
+      health = params.health ?? (await readHealth());
+      if (params.healthOnly) {
+        return { health, readyz: false, http: undefined, launchAgentRecovery };
+      }
+      const recoverHealth = params.recoverHealth;
+      if (recoverHealth && !gatewayReadinessPending(health)) {
+        ({ health, launchAgentRecovery } = await deadline.read("Gateway recovery", () =>
+          recoverHealth(health, readHealth, assertCurrent),
+        ));
+        assertCurrent();
+      }
+      if (
+        !health.healthy &&
+        (!waitForStartup ||
+          (health.waitOutcome !== undefined && health.waitOutcome !== "healthy") ||
+          health.versionMismatch ||
+          health.buildIdMismatch ||
+          health.activatedPluginErrors?.length ||
+          health.channelProbeErrors?.length ||
+          health.staleGatewayPids.length > 0)
+      ) {
+        return { health, readyz: false, http: undefined, launchAgentRecovery };
+      }
+      params.onProgress?.("http", "checking Gateway HTTP healthz and readyz endpoints");
+      const context = await deadline.read("HTTP probe context", () =>
+        resolveGatewayRestartProbeContext(params.serviceEnv, undefined, deadline.signal),
+      );
+      assertCurrent();
+      http = await deadline.read("HTTP readiness", () =>
+        waitForGatewayHttpReadiness({
+          config: context.config,
+          port: params.gatewayPort,
+          attempts: waitForStartup ? Math.ceil(remainingMs() / DEFAULT_RESTART_HEALTH_DELAY_MS) : 1,
+          deadlineAt: Date.now() + remainingMs(),
+          probeTimeoutMs: probeTimeoutMs(),
+          delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
+          onObservation: (observation) =>
+            params.onProgress?.(
+              "http",
+              `HTTP healthz=${observation.healthz ?? "unavailable"}; readyz=${observation.readyz ?? "unavailable"}`,
+            ),
+          signal: deadline.signal,
+        }),
+      );
+      assertCurrent();
+      const readyz = http.readyz === 200;
+      if (
+        health.healthy &&
+        (!params.requireRunningService || health.runtime.status === "running")
+      ) {
+        // HTTP readiness cannot transfer an earlier settle to a replacement boot.
+        const settled = health;
+        const inspect = () =>
+          inspectGatewayRestart({
+            ...probeParams,
+            probeContext: context,
+            timeoutMs: Math.max(1, inspectionTimeoutMs()),
+          });
+        const inspected = await deadline.read("final Gateway identity", inspect);
+        assertCurrent();
+        // Bracket the final native observation with health/hello probes so a same-PID
+        // or PID-less reboot during that observation cannot inherit the old boot.
+        health = inspected.healthy
+          ? await deadline.read("final Gateway health", inspect)
+          : inspected;
+        assertCurrent();
+        health.startupPhase = settled.startupPhase;
+        const sameGeneration =
+          isSameGatewayRestartGeneration(settled, inspected) &&
+          isSameGatewayRestartGeneration(inspected, health);
+        if (!sameGeneration) {
+          health.healthy = false;
+          health.waitOutcome = "generation-changed";
+          health.probeError = "Gateway process changed during final readiness verification.";
+        }
+      }
+      if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
+        health = {
+          ...health,
+          healthy: false,
+          ...(waitForStartup
+            ? {
+                waitOutcome: "timeout" as const,
+                elapsedMs: performance.now() - startedAtMs,
+                ...(!readyz ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
+              }
+            : {}),
+        };
+      }
+      return { health, readyz, http, launchAgentRecovery };
+    });
+  } catch (error) {
+    const cleanup = await deadline.cleanup;
+    if (hasCommandProcessCleanupError(error)) {
+      throw error;
     }
-  }
-  if (health.waitOutcome !== "generation-changed" && (!readyz || remainingMs() === 0)) {
-    health = {
-      ...health,
-      healthy: false,
-      ...(waitForStartup
-        ? {
-            waitOutcome: "timeout" as const,
-            elapsedMs: performance.now() - startedAtMs,
-            ...(!readyz ? { startupPhase: "waiting for Gateway HTTP readiness" } : {}),
-          }
-        : {}),
+    if (cleanup === "unknown") {
+      throw new CommandProcessCleanupError({ cause: error });
+    }
+    if (!(error instanceof GatewayRestartDeadlineError)) {
+      throw error;
+    }
+    const interval = error.phase === "health-wait:interval";
+    const waitOutcome: GatewayRestartSnapshot["waitOutcome"] =
+      health.waitOutcome === "generation-changed"
+        ? "generation-changed"
+        : interval && health.waitOutcome === "still-starting"
+          ? "still-starting"
+          : "timeout";
+    return {
+      health: {
+        ...health,
+        healthy: false,
+        waitOutcome,
+        // Only the wait owner's interval may retain startup progress. A hung
+        // observation cannot inherit an earlier snapshot's startup phase.
+        startupPhase: interval ? health.startupPhase : `timed out during ${error.phase}`,
+        elapsedMs: performance.now() - startedAtMs,
+        probeError: interval ? health.probeError : error.message,
+      },
+      readyz: false,
+      http,
+      launchAgentRecovery,
     };
+  } finally {
+    deadline.dispose();
   }
-  return { health, readyz, http, launchAgentRecovery };
 }

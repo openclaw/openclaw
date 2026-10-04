@@ -3,7 +3,10 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  SessionOwnerSessionCount,
+  SessionsListParams,
+} from "../../packages/gateway-protocol/src/index.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -19,7 +22,7 @@ import {
   isCronSessionDisplayKey,
   isSystemCreatedSessionRow,
 } from "../shared/session-list-visibility.js";
-import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
+import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import type { SynchronousWork } from "../shared/synchronous-work.js";
 import {
   projectSessionOwner,
@@ -48,9 +51,11 @@ export type SessionListFilteredEntries = {
   entries: SessionEntryPair[];
   ownerEntries: SessionEntryPair[];
   ownerFacet: SessionOwnerFacetIdentity[];
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionsListResult["people"];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  activityPulse?: SessionActivityPulse;
   involvingProfileId?: string;
 };
 
@@ -125,6 +130,8 @@ export function* filterSessionCandidateEntries(
           label: entry.label,
           displayName: entry.displayName,
           subject: entry.subject,
+          // Same provenance fact sessionClassificationForRow projects to clients.
+          classification: entry.heartbeatIsolatedBaseSessionKey ? "heartbeat" : undefined,
         })) ||
       (opts.excludeSubagents === true && selection.isSubagent) ||
       (!includeGlobal && storeKey === "global") ||
@@ -203,6 +210,32 @@ export function* filterSessionCandidateEntries(
   return candidateEntries;
 }
 
+const ACTIVITY_PULSE_MAX_WINDOW_MS = 25 * 3_600_000;
+
+function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
+  const since = opts.activityPulseSince;
+  if (since === undefined || !Number.isFinite(since) || since < 0) {
+    return undefined;
+  }
+  // The window sizes the bucket array, so a caller-supplied end is only honored within the
+  // longest civil day (25 hours on a DST fall-back day); anything else falls back to 24 hours.
+  const until =
+    opts.activityPulseUntil !== undefined &&
+    Number.isFinite(opts.activityPulseUntil) &&
+    opts.activityPulseUntil > since &&
+    opts.activityPulseUntil - since <= ACTIVITY_PULSE_MAX_WINDOW_MS
+      ? opts.activityPulseUntil
+      : since + 24 * 3_600_000;
+  return {
+    since,
+    until,
+    hours: Array.from({ length: Math.max(1, Math.ceil((until - since) / 3_600_000)) }, () => 0),
+    sessions: 0,
+    started: 0,
+    running: 0,
+  };
+}
+
 export function* filterSessionEntries(
   params: SessionListFilterParams,
 ): SynchronousWork<SessionListFilteredEntries> {
@@ -221,15 +254,21 @@ export function* filterSessionEntries(
   const entries: SessionEntryPair[] = [];
   const ownerEntries: SessionEntryPair[] = [];
   const ownerFacet = new Map<string, SessionOwnerFacetIdentity>();
+  const ownerSessionCounts = opts.includeOwnerSessionCounts
+    ? new Map<string, SessionOwnerSessionCount>()
+    : undefined;
   const people = new Map<string, NonNullable<SessionsListResult["people"]>[number]>();
   let peopleSessionCount = 0;
   let peopleIncomplete = false;
+  const activityPulse = createActivityPulse(opts);
+  const pulsePeople = activityPulse && opts.includePeople ? new Set<string>() : undefined;
   const configuredAgentIds = params.configuredAgentIds ?? new Set(listAgentIds(cfg));
   const identities =
     params.userProfileIdentityById ?? new Map<string, SessionActorProfileIdentity | undefined>();
   const identityProjection = getRowContext().identityProjection;
   const projectOwner = identityProjection?.owner ?? projectSessionOwner;
   const projectParticipants = identityProjection?.participants ?? projectSessionParticipants;
+  const projectInvolvement = identityProjection?.involvement ?? projectSessionProfileInvolvement;
   const projectPeople = identityProjection?.people ?? projectSessionPeople;
   const profileRelation = opts.profileRelation
     ? {
@@ -306,21 +345,25 @@ export function* filterSessionEntries(
         projectActiveRun: params.projectActiveRun,
       })
     : undefined;
+  const participantKeys = new Map<string, string>();
   const matchesInvolvement = (
     entry: SessionEntry,
     effectiveOwner: NonNullable<ReturnType<typeof projectOwner>>["actor"] | undefined,
     profileId: string,
     personal: boolean,
   ) => {
-    const state = projectSessionProfileInvolvement(entry, profileId, identities);
+    const state = projectInvolvement(entry, profileId, identities);
+    let participantKey = participantKeys.get(profileId);
+    if (!participantKey) {
+      participantKey = JSON.stringify({ type: "profile", id: profileId });
+      participantKeys.set(profileId, participantKey);
+    }
     return (
       !(personal && state?.hidden) &&
       (Boolean(state?.lastMention || (personal && state?.hidden === false)) ||
         (effectiveOwner?.identity?.type === "profile" &&
           effectiveOwner.identity.id === profileId) ||
-        projectParticipants(entry, identities, cfg).has(
-          JSON.stringify({ type: "profile", id: profileId }),
-        ))
+        projectParticipants(entry, identities, cfg).has(participantKey))
     );
   };
 
@@ -380,6 +423,11 @@ export function* filterSessionEntries(
     if (involvingActorId && !matchesInvolvement(entry, effectiveOwner, involvingActorId, true)) {
       continue;
     }
+    const activityTs = activityPulse ? sessionActivityTimestamp(entry) : 0;
+    const inPulse =
+      activityPulse !== undefined &&
+      activityTs >= activityPulse.since &&
+      activityTs < activityPulse.until;
     if (opts.includePeople || opts.involvingProfileId) {
       const associated = projectPeople(entry, identities, effectiveOwner);
       peopleSessionCount += 1;
@@ -403,6 +451,40 @@ export function* filterSessionEntries(
           continue;
         }
       }
+      if (inPulse && pulsePeople) {
+        for (const person of associated) {
+          pulsePeople.add(person.identity.id);
+        }
+      }
+    }
+    if (
+      ownerSessionCounts &&
+      entry.archivedAt === undefined &&
+      effectiveOwner?.identity?.type === "profile"
+    ) {
+      const profileId = effectiveOwner.identity.id;
+      const counts = ownerSessionCounts.get(profileId) ?? { profileId, open: 0, running: 0 };
+      const agentId = expectDefined(params.getTarget(key), "counted row owner").agentId;
+      const active = params.projectActiveRun?.(key, entry, agentId);
+      counts.open += 1;
+      counts.running += Number(active?.active === true && active.status !== "queued");
+      ownerSessionCounts.set(profileId, counts);
+    }
+    if (activityPulse) {
+      // "Running now" is present tense: a run that started before midnight still counts.
+      const agentId = expectDefined(params.getTarget(key), "pulse row owner").agentId;
+      activityPulse.running += Number(
+        params.projectActiveRun?.(key, entry, agentId)?.active === true,
+      );
+    }
+    if (inPulse) {
+      const hour = Math.min(
+        activityPulse.hours.length - 1,
+        Math.floor((activityTs - activityPulse.since) / 3_600_000),
+      );
+      activityPulse.hours[hour] = (activityPulse.hours[hour] ?? 0) + 1;
+      activityPulse.sessions += 1;
+      activityPulse.started += Number((entry.createdAt ?? -1) >= activityPulse.since);
     }
     if (
       effectiveOwner?.identity?.type === "profile" &&
@@ -417,12 +499,23 @@ export function* filterSessionEntries(
     people.values(),
     selectedProfileId,
   );
+  if (activityPulse && pulsePeople) {
+    activityPulse.people = pulsePeople.size;
+  }
   return {
     entries,
     ownerEntries,
     ownerFacet: sortSessionOwnerFacet(ownerFacet),
+    ...(ownerSessionCounts
+      ? {
+          ownerSessionCounts: [...ownerSessionCounts.values()].toSorted((a, b) =>
+            a.profileId.localeCompare(b.profileId),
+          ),
+        }
+      : {}),
     // Empty time/search windows do not invalidate a resolved person link.
     involvingProfileId: selectedProfileId,
+    ...(activityPulse ? { activityPulse } : {}),
     ...(opts.includePeople
       ? {
           people: visiblePeople,

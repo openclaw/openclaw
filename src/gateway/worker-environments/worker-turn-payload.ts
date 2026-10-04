@@ -4,6 +4,7 @@ import {
   WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES,
 } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  getAdmittedRunDelegatedAuthority,
   readAdmittedRunOperatorAuthority,
   resolvePreparedRunAdmission,
   resolveAdmittedRunActiveAssertion,
@@ -13,6 +14,7 @@ import {
   normalizeOptionalAgentRuntimeId,
   OPENCLAW_AGENT_RUNTIME_ID,
 } from "../../agents/agent-runtime-id.js";
+import { bindActiveOperatorTurnAuthority } from "../../agents/cron-creator-authority-context.js";
 import {
   buildUsageAgentMetaFields,
   resolveFinalAssistantRawText,
@@ -28,6 +30,7 @@ import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-authority.js";
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import type { WorkerLaunchPlan } from "../../worker/launch-descriptor.js";
@@ -51,7 +54,10 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnOwner } from "./placement-turn-claim-events.js";
+import {
+  bindWorkerTurnOwner,
+  type WorkerTurnPromptCacheContext,
+} from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -68,6 +74,7 @@ type PrepareWorkerAgentRuntimeIdentityParams = {
   turn: SessionPlacementTurnParams;
   placements: WorkerSessionPlacementStore;
   sessionTarget: BoundAgentRunSessionTarget;
+  promptCacheContext: WorkerTurnPromptCacheContext;
   assertSourceCurrent: () => void;
 };
 
@@ -93,6 +100,14 @@ export async function prepareWorkerAgentRuntimeIdentity(
     assertAdmittedActive();
   };
   assertAdmittedActive();
+  const operatorAuthority = readAdmittedRunOperatorAuthority(admittedRunContext);
+  const assertPresenceSourceCurrent = capturePresenceToolAuthority({
+    runId: params.turn.runId,
+    ownerAuthority: bindActiveOperatorTurnAuthority(params.turn.runId),
+    operatorAuthority,
+    delegatedAuthority: getAdmittedRunDelegatedAuthority(admittedRunContext),
+    assertCurrent: assertActive,
+  });
   // Stop closes the operational run before its placement claim finishes draining.
   // Worker tools must retain both owners even when audit collection is disabled.
   const { capability, takeFinishingOutcome } = await bindWorkerTurnOwner(
@@ -103,7 +118,9 @@ export async function prepareWorkerAgentRuntimeIdentity(
     params.sessionTarget,
     assertActive,
     params.turn.prepareAssistantTranscriptMessage,
-    readAdmittedRunOperatorAuthority(admittedRunContext),
+    operatorAuthority,
+    assertPresenceSourceCurrent,
+    params.promptCacheContext,
   );
   capability.receiptAuthority();
   // Worker-local process keys isolate ephemeral state only. The signed caller
@@ -260,13 +277,6 @@ export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   return result;
 }
 
-export function assistantText(message: AgentMessage): string {
-  if (message.role !== "assistant") {
-    return "";
-  }
-  return message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
-}
-
 export function buildWorkerTurnResult(params: {
   messages: AgentMessage[];
   modelRef: { provider: string; model: string };
@@ -324,22 +334,6 @@ export function buildWorkerTurnResult(params: {
   };
 }
 
-function resolveTurnModelRef(params: SessionPlacementTurnParams): {
-  provider: string;
-  model: string;
-} {
-  const explicitProvider = params.provider?.trim();
-  const explicitModel = params.model?.trim();
-  const defaults =
-    explicitProvider && explicitModel
-      ? undefined
-      : resolveDefaultModelForAgent({ cfg: params.config ?? {}, agentId: params.agentId });
-  return {
-    provider: explicitProvider ?? defaults?.provider ?? "",
-    model: explicitModel ?? defaults?.model ?? "",
-  };
-}
-
 export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   provider: string;
   model: string;
@@ -347,7 +341,16 @@ export function assertSupportedTurn(params: SessionPlacementTurnParams): {
   if (params.clientTools?.length) {
     throw new Error("Cloud worker turns do not support client-provided tools");
   }
-  const modelRef = resolveTurnModelRef(params);
+  const explicitProvider = params.provider?.trim();
+  const explicitModel = params.model?.trim();
+  const defaults =
+    explicitProvider && explicitModel
+      ? undefined
+      : resolveDefaultModelForAgent({ cfg: params.config ?? {}, agentId: params.agentId });
+  const modelRef = {
+    provider: explicitProvider ?? defaults?.provider ?? "",
+    model: explicitModel ?? defaults?.model ?? "",
+  };
   const explicitRuntime =
     normalizeOptionalAgentRuntimeId(params.agentHarnessId) ??
     normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);

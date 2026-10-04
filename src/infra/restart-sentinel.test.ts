@@ -151,7 +151,24 @@ describe("restart sentinel", () => {
           kind: "agentTurn" as const,
           message: "Reply with exactly: Yay! I did it!",
         },
-        stats: { mode: "git" },
+        stats: {
+          mode: "git",
+          before: null,
+          after: { version: "2026.9.4", detail: { retained: true } },
+          steps: [
+            {
+              name: "install",
+              command: "install",
+              failureFacts: [{ check: "installation", code: "retained" }],
+              cwd: null,
+              durationMs: 0.5,
+              log: { stdoutTail: null, stderrTail: "", exitCode: null },
+              advisory: false,
+            },
+          ],
+          reason: null,
+          durationMs: null,
+        },
       };
       await writeRestartSentinel(payload);
       expect(readSentinelRow()).toMatchObject({
@@ -163,8 +180,7 @@ describe("restart sentinel", () => {
       });
 
       const read = await readRestartSentinel();
-      expect(read?.payload.kind).toBe("update");
-      expect(read?.payload.continuation).toEqual(payload.continuation);
+      expect(read?.payload).toEqual(payload);
     });
   });
 
@@ -323,14 +339,25 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("rejects malformed typed JSON columns even when the shadow payload is valid", async () => {
+  it.each([
+    { continuation_json: JSON.stringify({ kind: "agentTurn", message: 42 }) },
+    { stats_json: JSON.stringify({ mode: null }) },
+    { stats_json: JSON.stringify({ before: [] }) },
+    {
+      stats_json: JSON.stringify({
+        steps: [{ name: "install", command: "install", log: { exitCode: 0.5 } }],
+      }),
+    },
+    {
+      stats_json: JSON.stringify({
+        steps: [{ name: "install", command: "install", advisory: null }],
+      }),
+    },
+  ])("rejects malformed typed JSON columns with a valid shadow payload: %j", async (columns) => {
     await withRestartSentinelStateDir(async () => {
       const payload = { kind: "update" as const, status: "ok" as const, ts: 1 };
       await writeRestartSentinel(payload);
-      updateSentinelRow({
-        continuation_json: JSON.stringify({ kind: "agentTurn", message: 42 }),
-        payload_json: JSON.stringify(payload),
-      });
+      updateSentinelRow({ ...columns, payload_json: JSON.stringify(payload) });
 
       await expect(readRestartSentinel()).resolves.toBeNull();
       await expect(hasRestartSentinel()).resolves.toBe(false);

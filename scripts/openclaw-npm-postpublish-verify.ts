@@ -1,5 +1,4 @@
 #!/usr/bin/env -S node --import tsx
-// Openclaw Npm Postpublish Verify script supports OpenClaw repository automation.
 
 import { createHash } from "node:crypto";
 import {
@@ -44,9 +43,9 @@ import {
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
 import { escapeRegExp } from "./lib/regexp.mjs";
-import { classifyReleaseTrain } from "./lib/release-version.mjs";
+import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
-import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
@@ -907,32 +906,24 @@ function isInstalledCompanionExtensionOwnedRuntimeImport(params: {
   for (const manifestRoot of params.manifestRoots) {
     const cacheKey = `${manifestRoot}\0${extensionId}`;
     let manifest = params.manifestCache.get(cacheKey);
-    if (manifest !== undefined) {
-      if (
-        manifest &&
-        (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
-          Object.hasOwn(manifest.optionalDependencies ?? {}, params.dependencyName))
-      ) {
-        return true;
-      }
-      continue;
-    }
-    const manifestPath = join(manifestRoot, extensionId, "package.json");
-    manifest = null;
-    if (existsSync(manifestPath)) {
-      const stat = lstatSync(manifestPath);
-      if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
-        try {
-          const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
-          if (parsed.name === `@openclaw/${extensionId}`) {
-            manifest = parsed;
+    if (manifest === undefined) {
+      const manifestPath = join(manifestRoot, extensionId, "package.json");
+      manifest = null;
+      if (existsSync(manifestPath)) {
+        const stat = lstatSync(manifestPath);
+        if (stat.isFile() && stat.size <= MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES) {
+          try {
+            const parsed = JSON.parse(readFileSync(manifestPath, "utf8")) as InstalledPackageJson;
+            if (parsed.name === `@openclaw/${extensionId}`) {
+              manifest = parsed;
+            }
+          } catch {
+            // Invalid companion manifests cannot authorize root runtime imports.
           }
-        } catch {
-          // Invalid companion manifests cannot authorize root runtime imports.
         }
       }
+      params.manifestCache.set(cacheKey, manifest);
     }
-    params.manifestCache.set(cacheKey, manifest);
     if (
       manifest &&
       (Object.hasOwn(manifest.dependencies ?? {}, params.dependencyName) ||
@@ -1097,16 +1088,8 @@ function npmExec(args: string[], cwd: string): string {
   return runNpmVerifyCommand(invocation, cwd);
 }
 
-function resolveGlobalRoot(prefixDir: string, cwd: string): string {
-  return npmExec(["root", "-g", "--prefix", prefixDir], cwd);
-}
-
 export function buildPublishedInstallCommandArgs(prefixDir: string, spec: string): string[] {
   return ["install", "-g", "--prefix", prefixDir, spec, "--no-fund", "--no-audit"];
-}
-
-function installSpec(prefixDir: string, spec: string, cwd: string): void {
-  npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), cwd);
 }
 
 export async function fetchRegistryJson(
@@ -1281,25 +1264,16 @@ async function verifyPublishedRegistryProvenanceOnce(version: string): Promise<v
   );
 }
 
-async function verifyPublishedRegistryProvenance(version: string): Promise<void> {
-  await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
-}
-
-function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
-  const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
-  return runNpmVerifyCommand(invocation, cwd);
-}
-
 function verifyScenario(version: string, scenario: PublishedInstallScenario): void {
   const workingDir = mkdtempSync(join(tmpdir(), `openclaw-postpublish-${scenario.name}.`));
   const prefixDir = join(workingDir, "prefix");
 
   try {
     for (const spec of scenario.installSpecs) {
-      installSpec(prefixDir, spec, workingDir);
+      npmExec(buildPublishedInstallCommandArgs(prefixDir, spec), workingDir);
     }
 
-    const globalRoot = resolveGlobalRoot(prefixDir, workingDir);
+    const globalRoot = npmExec(["root", "-g", "--prefix", prefixDir], workingDir);
     const packageRoot = join(globalRoot, "openclaw");
     const pkg = JSON.parse(
       readFileSync(join(packageRoot, "package.json"), "utf8"),
@@ -1309,7 +1283,10 @@ function verifyScenario(version: string, scenario: PublishedInstallScenario): vo
       installedVersion: pkg.version?.trim() ?? "",
       packageRoot,
     });
-    const installedBinaryVersion = readInstalledBinaryVersion(prefixDir, workingDir);
+    const installedBinaryVersion = runNpmVerifyCommand(
+      resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]),
+      workingDir,
+    );
 
     if (normalizeInstalledBinaryVersion(installedBinaryVersion) !== scenario.expectedVersion) {
       errors.push(
@@ -1340,7 +1317,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
   const { version } = args;
   const scenarios = buildPublishedInstallScenarios(version);
-  await verifyPublishedRegistryProvenance(version);
+  await retryNpmRegistryProvenanceRead(() => verifyPublishedRegistryProvenanceOnce(version));
   for (const scenario of scenarios) {
     verifyScenario(version, scenario);
   }

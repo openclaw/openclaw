@@ -19,12 +19,15 @@ import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-h
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import {
-  claimCronRunReceiptInDatabase,
   finishCronRunReceipt,
   finishCronRunReceiptInDatabase,
   prepareCronRunReceiptClaim,
 } from "../store/run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "../store/run-receipt-store.test-support.js";
+import {
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "../store/run-receipt-store.test-support.js";
+import { prepareCronRunReceiptWriteSchema } from "../store/run-receipt-write-admission.js";
 import type { CronRunReceiptHandle } from "../store/run-receipt.types.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { locked } from "./locked.js";
@@ -32,7 +35,6 @@ import { start, stop } from "./ops-lifecycle.js";
 import { remove, update } from "./ops-mutations.js";
 import { run } from "./ops-run.js";
 import { createCronServiceState, type CronServiceDeps } from "./state.js";
-import { tryCreateCronTaskRunHandle } from "./task-runs.js";
 import { MIN_REFIRE_GAP_MS } from "./timer-execution-timeout.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-recovery-lifecycle-" });
@@ -105,9 +107,6 @@ describe("one-shot recovery", () => {
           sendCronFailureAlert,
         });
       const first = freshState();
-      // An earlier repair can commit before its interrupted-task notification.
-      // That orphan shares this start millisecond, but not this run's receipt.
-      tryCreateCronTaskRunHandle({ state: first, job, startedAt: nowMs });
       const startup = manual
         ? run(
             first,
@@ -177,19 +176,21 @@ describe("one-shot recovery", () => {
           runOpenClawStateWriteTransaction(({ db }) =>
             finishCronRunReceiptInDatabase({
               database: db,
+              receiptSchema: prepareCronRunReceiptWriteSchema(db),
               handle: previous,
               status: "superseded",
               finishedAtMs: nowMs,
             }),
           );
           const prepared = prepareCronRunReceiptClaim({
+            observed: undefined,
             storePath,
             job,
             agentId: "alpha",
             startedAtMs: nowMs,
           });
           successor = runOpenClawStateWriteTransaction(({ db }) =>
-            claimCronRunReceiptInDatabase({
+            claimCronRunReceiptInDatabaseForTest({
               database: db,
               prepared,
               resolveAgentId: () => "alpha",

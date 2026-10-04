@@ -25,8 +25,6 @@ type CliOptions = {
 
 const DEFAULT_PROMPT = "Reply with a single word: ok. No punctuation or extra text.";
 const DEFAULT_RUNS = 10;
-const BOOLEAN_FLAGS = new Set(["--help", "-h"]);
-const VALUE_FLAGS = new Set(["--prompt", "--runs"]);
 
 class CliArgumentError extends Error {
   override name = "CliArgumentError";
@@ -40,49 +38,34 @@ function readValue(argv: string[], index: number, flag: string): string {
   return value;
 }
 
-function validateCliArgs(argv: string[]): void {
-  const seenValueFlags = new Set<string>();
+function parseArgs(argv = process.argv.slice(2)): CliOptions {
+  let help = false;
+  const values = new Map<string, string>();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index] ?? "";
-    if (BOOLEAN_FLAGS.has(arg)) {
+    if (arg === "--help" || arg === "-h") {
+      help = true;
       continue;
     }
-    if (VALUE_FLAGS.has(arg)) {
-      if (seenValueFlags.has(arg)) {
+    if (arg === "--prompt" || arg === "--runs") {
+      if (values.has(arg)) {
         throw new CliArgumentError(`${arg} was provided more than once`);
       }
-      seenValueFlags.add(arg);
-      readValue(argv, index, arg);
+      values.set(arg, readValue(argv, index, arg));
       index += 1;
       continue;
     }
     throw new CliArgumentError(`Unknown argument: ${arg}`);
   }
-}
-
-function parseArg(argv: string[], flag: string): string | undefined {
-  const index = argv.indexOf(flag);
-  if (index === -1) {
-    return undefined;
-  }
-  return readValue(argv, index, flag);
-}
-
-function parseRuns(raw: string | undefined): number {
-  return parseStrictIntegerOption({
-    fallback: DEFAULT_RUNS,
-    label: "--runs",
-    min: 1,
-    raw,
-  });
-}
-
-function parseArgs(argv = process.argv.slice(2)): CliOptions {
-  validateCliArgs(argv);
   return {
-    help: argv.includes("--help") || argv.includes("-h"),
-    prompt: parseArg(argv, "--prompt") ?? DEFAULT_PROMPT,
-    runs: parseRuns(parseArg(argv, "--runs")),
+    help,
+    prompt: values.get("--prompt") ?? DEFAULT_PROMPT,
+    runs: parseStrictIntegerOption({
+      fallback: DEFAULT_RUNS,
+      label: "--runs",
+      min: 1,
+      raw: values.get("--runs"),
+    }),
   };
 }
 
@@ -109,7 +92,7 @@ function median(values: number[]): number {
   if (values.length === 0) {
     return 0;
   }
-  const sorted = [...values].toSorted((a, b) => a - b);
+  const sorted = values.toSorted((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
   if (sorted.length % 2 === 0) {
     return Math.round(

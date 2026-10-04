@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import type { IncomingMessage } from "node:http";
-import { isIP, type AddressInfo } from "node:net";
+import { isIP } from "node:net";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
@@ -291,7 +291,7 @@ async function startOpenClawExecServer(sandbox: SandboxContext): Promise<OpenCla
   }
   const environmentId = buildEnvironmentId(sandbox);
   const authPath = `/openclaw-${randomUUID()}`;
-  const url = `ws://127.0.0.1:${(address as AddressInfo).port}${authPath}`;
+  const url = `ws://127.0.0.1:${address.port}${authPath}`;
   const common = {
     authPath,
     closed: false,
@@ -431,16 +431,10 @@ function handleNodeConnection(
   }
   // stdio has exactly one connection; a fresh attempt always owns a fresh channel.
   lease.claimed = true;
-  const cleanup = startCodexNodeExecServerRelay({ lease, socket });
-  execServer.cleanupTasks.add(cleanup);
-  void cleanup.then(
-    () => execServer.cleanupTasks.delete(cleanup),
-    (error: unknown) => {
-      execServer.cleanupTasks.delete(cleanup);
-      embeddedAgentLog.warn("codex paired-device exec-server relay failed", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-    },
+  trackExecServerCleanup(
+    execServer,
+    startCodexNodeExecServerRelay({ lease, socket }),
+    "codex paired-device exec-server relay failed",
   );
 }
 
@@ -499,18 +493,29 @@ function handleConnection(
     });
   });
   socket.on("close", () => {
-    const cleanup = session.close();
-    execServer.cleanupTasks.add(cleanup);
-    void cleanup.then(
-      () => execServer.cleanupTasks.delete(cleanup),
-      (error: unknown) => {
-        execServer.cleanupTasks.delete(cleanup);
-        embeddedAgentLog.warn("codex sandbox exec-server socket cleanup failed", {
-          error: error instanceof Error ? error.message : String(error),
-        });
-      },
+    trackExecServerCleanup(
+      execServer,
+      session.close(),
+      "codex sandbox exec-server socket cleanup failed",
     );
   });
+}
+
+function trackExecServerCleanup(
+  execServer: OpenClawLeasedExecServer,
+  cleanup: Promise<void>,
+  failureMessage: string,
+): void {
+  execServer.cleanupTasks.add(cleanup);
+  void cleanup.then(
+    () => execServer.cleanupTasks.delete(cleanup),
+    (error: unknown) => {
+      execServer.cleanupTasks.delete(cleanup);
+      embeddedAgentLog.warn(failureMessage, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
 }
 
 function handleExecServerSocketError(error: unknown): void {

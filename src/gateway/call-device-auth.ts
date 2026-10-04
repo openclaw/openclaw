@@ -34,6 +34,31 @@ export type GatewayCallDeviceAuthOptions = Pick<
   allowLocalBackendAuthNone?: boolean;
 };
 
+export class GatewayCredentialsRequiredError extends Error {
+  readonly method: string;
+  readonly configPath: string;
+
+  constructor(params: { method: string; configPath: string }) {
+    super(
+      [
+        `gateway ${params.method} requires credentials before opening a websocket`,
+        "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
+        `Config: ${params.configPath}`,
+      ].join("\n"),
+    );
+    this.name = "GatewayCredentialsRequiredError";
+    this.method = params.method;
+    this.configPath = params.configPath;
+  }
+}
+
+export class GatewayStoredDeviceAuthUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GatewayStoredDeviceAuthUnavailableError";
+  }
+}
+
 export class GatewayLocalBackendSharedAuthUnavailableError extends Error {
   constructor(message: string) {
     super(message);

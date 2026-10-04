@@ -387,6 +387,7 @@ export function createInternalAgentTurnFacade(
               isWebchatConnect,
               methodRegistry,
               reject: (error) => throwEnvelopeRejection(method, error),
+              signal,
             },
           );
         } finally {

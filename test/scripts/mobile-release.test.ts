@@ -51,6 +51,7 @@ function fixture(platform = "ios") {
   );
   for (const file of [
     "scripts/mobile-release-notes.ts",
+    "scripts/lib/mobile-release-evidence.ts",
     "scripts/lib/mobile-release-notes.ts",
     "scripts/mobile-release-ref.ts",
     "scripts/lib/android-store-version.ts",
@@ -97,6 +98,7 @@ console.log(stageOnly ? "Synthetic notes staged" : "Synthetic store upload accep
       "scripts/android-version.ts",
       "scripts/lib/android-version.ts",
       "scripts/lib/mobile-changelog.ts",
+      "scripts/lib/mobile-version.ts",
       "scripts/lib/release-version.mjs",
       "scripts/lib/version-script-args.ts",
       "scripts/lib/arg-utils.mts",

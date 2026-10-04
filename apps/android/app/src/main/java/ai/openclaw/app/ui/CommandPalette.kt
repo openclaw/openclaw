@@ -13,6 +13,7 @@ import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
 import ai.openclaw.app.ui.design.ClawAvatarMark
 import ai.openclaw.app.ui.design.ClawEmptyState
+import ai.openclaw.app.ui.design.ClawIcons
 import ai.openclaw.app.ui.design.ClawListItem
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPlainIconButton
@@ -39,8 +40,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.outlined.AccessTime
-import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.MicNone
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -137,7 +136,7 @@ internal fun CommandPalette(
             if (actionRows.isEmpty()) {
               ClawEmptyState(title = nativeString("No actions found"), body = nativeString("Try Chat, Voice, Threads, Providers, or Settings."))
             } else {
-              CommandActionList(rows = actionRows, onOpen = onOpen)
+              CommandList(rows = actionRows) { row -> CommandActionRow(row = row, onOpen = onOpen) }
             }
           }
         }
@@ -156,10 +155,9 @@ internal fun CommandPalette(
               )
             }
           } else {
-            CommandSessionList(
-              rows = sessionRows,
-              onOpen = onOpenSession,
-            )
+            CommandList(rows = sessionRows) { row ->
+              CommandSessionListRow(row = row, onClick = { onOpenSession(row.key, row.ownerAgentId) })
+            }
           }
         }
       }
@@ -196,11 +194,11 @@ internal fun commandItems(
     .map { action ->
       when (action) {
         CommandAction.Chat -> {
-          CommandItem(action, nativeText("Open Chat"), nativeText("Start or continue a conversation"), Icons.Outlined.ChatBubbleOutline)
+          CommandItem(action, nativeText("Open Chat"), nativeText("Start or continue a conversation"), ClawIcons.Chat)
         }
 
         CommandAction.Voice -> {
-          CommandItem(action, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), Icons.Outlined.MicNone)
+          CommandItem(action, nativeText("Start Voice"), nativeText("Talk or dictate with OpenClaw"), ClawIcons.Mic)
         }
 
         CommandAction.Sessions -> {
@@ -213,6 +211,7 @@ internal fun commandItems(
             when (route) {
               SettingsRoute.Home -> nativeText("Gateway, voice, notifications, privacy")
               SettingsRoute.ProvidersModels -> verbatimText(providerSubtitle)
+              SettingsRoute.SystemAgent -> nativeText("Setup, status, and repair")
               else -> checkNotNull(route.category).title
             }
           CommandItem(action, route.title, subtitle, route.icon)
@@ -258,14 +257,12 @@ internal fun commandActionAccessibilityDescription(
   }
 
 @Composable
-private fun CommandActionList(
-  rows: List<CommandItem>,
-  onOpen: (CommandAction) -> Unit,
+private fun <T> CommandList(
+  rows: List<T>,
+  content: @Composable (T) -> Unit,
 ) {
   ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      CommandActionRow(row = row, onOpen = onOpen)
-    }
+    ClawSeparatedColumn(items = rows, row = content)
   }
 }
 
@@ -291,18 +288,6 @@ private fun CommandActionRow(
 }
 
 @Composable
-private fun CommandSessionList(
-  rows: List<ChatSessionEntry>,
-  onOpen: (String, String?) -> Unit,
-) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      CommandSessionListRow(row = row, onClick = { onOpen(row.key, row.ownerAgentId) })
-    }
-  }
-}
-
-@Composable
 private fun CommandSessionListRow(
   row: ChatSessionEntry,
   onClick: () -> Unit,
@@ -319,7 +304,7 @@ private fun CommandSessionListRow(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-      CommandRowIcon(icon = Icons.Outlined.ChatBubbleOutline)
+      CommandRowIcon(icon = ClawIcons.Chat)
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = sessionPresentationTitle(row) { nativeString("Main thread") }, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(text = sessionListSubtitle(row, fallback = nativeString("OpenClaw thread"), activeRunLabel = nativeString("Assistant working")), style = ClawTheme.type.caption, color = ClawTheme.colors.textSubtle, maxLines = 1, overflow = TextOverflow.Ellipsis)

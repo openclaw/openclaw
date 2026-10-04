@@ -61,7 +61,7 @@ vi.mock("../infra/worker-cpu.js", async (importOriginal) => {
     const prepare = DatabaseSync.prototype.prepare;
     DatabaseSync.prototype.prepare = function(sql) {
       const statement = prepare.call(this, sql);
-      const match = /^PRAGMA (integrity_check|foreign_key_check);?$/i.exec(sql.trim());
+      const match = /^PRAGMA (integrity_check|foreign_key_check)(?:[(]'sqlite_schema'[)])?;?$/i.exec(sql.trim());
       if (this.location() === workerData.testIntegrityPath && match) {
         for (const method of ["all", "get", "iterate", "run"]) {
           const execute = statement[method].bind(statement);
@@ -317,7 +317,7 @@ it.each([
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
       expect(database.walMaintenance.health?.state).toBe("blocked");
       expect(database.db.isOpen).toBe(false);
-      expect(readOpenClawAgentIntegrityVerification(database.path, env)).toBeUndefined();
+      expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(0);
     } finally {
       reader.close();
     }
@@ -419,5 +419,8 @@ it.each([
         releaseOpenClawAgentDatabaseLease(siblingLease, { env }, "read-only");
       }
     }
+  }
+  if (proof === "closed-host-blocked-last") {
+    expect(readOpenClawAgentIntegrityVerification(database.path, env)?.clean_close).toBe(1);
   }
 });

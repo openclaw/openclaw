@@ -48,6 +48,11 @@ export async function runCliDisposer(
 
 export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<void> {
   const runCleanup = cleanup?.pluginResources?.runCleanup;
+  if (cleanup) {
+    const scheduledWork = cleanup.scheduler.stop();
+    await runCliDisposer("scheduled-work", () => scheduledWork, runCleanup);
+    await scheduledWork;
+  }
   const finalizers: Record<string, () => Promise<void>> = {
     "agent-harnesses": async () => {
       const { listRegisteredAgentHarnesses, disposeRegisteredAgentHarnesses } =

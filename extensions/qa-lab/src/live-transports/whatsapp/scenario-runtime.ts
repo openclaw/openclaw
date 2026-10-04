@@ -1,4 +1,5 @@
 import type { WhatsAppQaDriverObservedMessage } from "@openclaw/whatsapp/api.js";
+import { buildLiveTransportRttResult } from "../shared/live-transport-rtt.js";
 import type { WhatsAppQaScenarioEnvironment } from "./scenario-environment.js";
 import { runWhatsAppApprovalScenario } from "./whatsapp-live.approvals.js";
 import {
@@ -67,15 +68,7 @@ async function runWhatsAppScenarioAttempt(params: {
       ...buildWhatsAppQaScenarioResultBase(params.scenario, params.implementation),
       status: "pass",
       details: `${scenarioRun.approvalKind} approval ${approval.approvalId} resolved ${scenarioRun.decision} in ${approval.rttMs}ms`,
-      rttMs: approval.rttMs,
-      requestStartedAt: approval.requestStartedAt.toISOString(),
-      responseObservedAt: approval.responseObservedAt.toISOString(),
-      rttMeasurement: {
-        finalMatchedReplyRttMs: approval.rttMs,
-        requestStartedAt: approval.requestStartedAt.toISOString(),
-        responseObservedAt: approval.responseObservedAt.toISOString(),
-        source: "approval-request-to-resolution",
-      },
+      ...buildLiveTransportRttResult(approval, "approval-request-to-resolution"),
     };
   }
   if (scenarioRun.quietInput !== undefined) {
@@ -193,15 +186,10 @@ async function runWhatsAppScenarioAttempt(params: {
     details: [`reply matched in ${rttMs}ms`, afterSendDetails, afterReplyDetails, batchDetails]
       .filter(Boolean)
       .join("; "),
-    rttMs,
-    requestStartedAt: requestStartedAt.toISOString(),
-    responseObservedAt: responseObservedAt.toISOString(),
-    rttMeasurement: {
-      finalMatchedReplyRttMs: rttMs,
-      requestStartedAt: requestStartedAt.toISOString(),
-      responseObservedAt: responseObservedAt.toISOString(),
-      source: "request-to-observed-message",
-    },
+    ...buildLiveTransportRttResult(
+      { requestStartedAt, responseObservedAt, rttMs },
+      "request-to-observed-message",
+    ),
   };
 }
 

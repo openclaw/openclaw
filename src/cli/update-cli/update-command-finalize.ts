@@ -36,7 +36,6 @@ import { formatCliCommand } from "../command-format.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
-  parseTimeoutMsOrExit,
   parseUpdateTimeoutMs,
   readPackageVersion,
   resolveNodeRunner,
@@ -87,10 +86,7 @@ export async function updateFinalizeCommand(
 ): Promise<void> {
   const invocationCwd = tryProcessCwd();
   suppressDeprecations();
-  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
-  if (timeoutMs === null) {
-    return;
-  }
+  const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel !== undefined && !requestedChannel) {
     defaultRuntime.error(
@@ -142,8 +138,7 @@ export async function updateFinalizeCommand(
         recoveryRunIds === undefined ? "finalize" : "unknown",
       );
       lifecycle.root = root;
-      // A custom Bun executable may not be named "bun".
-      const nodeRunner = process.versions.bun ? process.execPath : resolveNodeRunner();
+      const nodeRunner = resolveNodeRunner();
       const target: UpdateTriageTarget = {
         root,
         nodeRunner,

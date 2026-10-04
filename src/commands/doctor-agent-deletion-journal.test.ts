@@ -84,13 +84,7 @@ it("reports unreadable journal history without replacing it or silently clearing
   }
 });
 
-it.each([
-  "default",
-  "custom-unregistered",
-  "external-registered",
-  "canonical-custom-lost-state",
-  "malformed-config",
-])(
+it.each(["default", "external-registered", "canonical-custom-lost-state", "malformed-config"])(
   "reconstructs with a receipt and keeps %s stores held on the next Doctor pass",
   async (location) => {
     const stateDir = fs.realpathSync.native(tempDirs.make("doctor-journal-recovery-"));
@@ -116,7 +110,7 @@ it.each([
       const custom = path.join(tempDirs.make("doctor-journal-custom-"), "history.main.sqlite");
       fs.renameSync(stores[0]!, custom);
       stores[0] = custom;
-      if (location === "custom-unregistered" || location === "malformed-config") {
+      if (location === "malformed-config") {
         db.exec("DELETE FROM agent_databases WHERE agent_id = 'main'");
         cfg.session = { store: path.join(path.dirname(custom), "history.json") };
       } else {

@@ -13,6 +13,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { SkillProposalRevisionChangedError } from "../../skills/workshop/service-evaluation.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -89,6 +90,10 @@ export function defineSkillsProposalWorkspaceHandler<TParams>(
         respond(true, result, undefined);
       }
     } catch (error) {
+      if (error instanceof SessionMutationAuthorizationChangedError) {
+        respond(false, undefined, error.error);
+        return;
+      }
       const details =
         error instanceof SkillProposalRevisionChangedError
           ? buildSkillProposalRevisionChangedErrorDetails({

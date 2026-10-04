@@ -656,7 +656,6 @@ describe("triage --run", () => {
           error: "Operator requested installation triage",
           phase: "verifying",
         }),
-        budget: { maxTurns: 1 },
       }),
     );
     expect(mocks.collectDoctorFindings).toHaveBeenCalledOnce();

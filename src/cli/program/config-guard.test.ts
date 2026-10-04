@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
 import type { ConfigSnapshotReadMeasure } from "../../config/io.js";
+import type { ConfigValidationIssue } from "../../config/types.js";
 import { getGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
 import {
   adoptProcessPluginCache,
@@ -37,7 +38,7 @@ vi.mock("../../config/config.js", () => ({
   setRuntimeConfigSnapshot: setRuntimeConfigSnapshotMock,
 }));
 
-type ConfigIssue = { path: string; pathSegments?: Array<string | number>; message: string };
+type ConfigIssue = ConfigValidationIssue;
 
 function makeSnapshot() {
   return {
@@ -389,22 +390,30 @@ describe("ensureConfigReady", () => {
     expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, {});
   });
 
-  it("exits for invalid config on non-allowlisted commands", async () => {
-    setInvalidSnapshot();
-    const runtime = await runEnsureConfigReady(["message"]);
+  it.each([
+    { commandPath: ["message"] },
+    { commandPath: ["tasks"] },
+    { commandPath: ["tasks", "list"] },
+    { commandPath: ["tasks", "audit"] },
+  ])(
+    "exits for invalid config on non-allowlisted command: $commandPath",
+    async ({ commandPath }) => {
+      setInvalidSnapshot();
+      const runtime = await runEnsureConfigReady(commandPath);
 
-    expect(plainErrorCalls(runtime)).toEqual([
-      "OpenClaw config is invalid",
-      "File: /tmp/openclaw.json",
-      "Problem:",
-      "  - channels.quietchat: invalid",
-      "",
-      `Inspect: ${formatCliCommand("openclaw config validate")}`,
-      "Audit, status, health, logs, tasks list/audit, and doctor commands still run with invalid config.",
-      `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
-    ]);
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-  });
+      expect(plainErrorCalls(runtime)).toEqual([
+        "OpenClaw config is invalid",
+        "File: /tmp/openclaw.json",
+        "Problem:",
+        "  - channels.quietchat: invalid",
+        "",
+        `Inspect: ${formatCliCommand("openclaw config validate")}`,
+        "Audit, status, health, logs, and doctor commands still run with invalid config.",
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to repair the config, then retry.`,
+      ]);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
 
   it("renders unknown keys and received values with the shared source diagnostics", async () => {
     setInvalidSnapshot({
@@ -635,23 +644,29 @@ describe("ensureConfigReady", () => {
     const gatewayRuntime = await runEnsureConfigReady(["gateway", "health"]);
     expect(gatewayRuntime.exit).not.toHaveBeenCalled();
 
-    const tasksListRuntime = await runEnsureConfigReady(["tasks", "list"]);
-    expect(tasksListRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksParentRuntime = await runEnsureConfigReady(["tasks"]);
-    expect(tasksParentRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksAuditRuntime = await runEnsureConfigReady(["tasks", "audit"]);
-    expect(tasksAuditRuntime.exit).not.toHaveBeenCalled();
-
-    const tasksRunRuntime = await runEnsureConfigReady(["tasks", "run"]);
-    expect(tasksRunRuntime.exit).toHaveBeenCalledWith(1);
-
     const doctorRuntime = await runEnsureConfigReady(["doctor", "fix"]);
     expect(doctorRuntime.exit).not.toHaveBeenCalled();
     expect(doctorRuntime.error).toHaveBeenCalledWith(expect.stringContaining("agentRuntime"));
     expect(getProcessPluginCache()).toBe(processCache);
   });
+
+  it.each(["", "run", "start", "restart"])(
+    "keeps gateway %s restartable when configuration could not be read",
+    async (subcommand) => {
+      setInvalidSnapshot({
+        issues: [{ path: "", errorCode: "CONFIG_READ_FAILED", message: "read failed: ENOSPC" }],
+      });
+      const runtime = makeRuntime();
+      const confirm = vi.fn(async () => true);
+      await ensureConfigReady(
+        { runtime, commandPath: subcommand ? ["gateway", subcommand] : ["gateway"] },
+        { confirm, isInteractive: () => true },
+      );
+      expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(plainErrorCalls(runtime).join("\n")).not.toContain("doctor --fix");
+    },
+  );
 
   it("allows an explicit invalid-config override", async () => {
     setInvalidSnapshot();

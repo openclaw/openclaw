@@ -11,12 +11,11 @@ import { setupCronServiceSuite } from "../service.test-harness.js";
 import type { CronServiceDeps } from "../service/state.js";
 import { loadCronStore } from "../store.js";
 import { cronStoreKey } from "./key.js";
+import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "./run-receipt-store.js";
 import {
-  claimCronRunReceiptInDatabase,
-  finishCronRunReceipt,
-  prepareCronRunReceiptClaim,
-} from "./run-receipt-store.js";
-import { inspectActiveCronRunReceipt } from "./run-receipt-store.test-support.js";
+  claimCronRunReceiptInDatabaseForTest,
+  inspectActiveCronRunReceipt,
+} from "./run-receipt-store.test-support.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({ prefix: "cron-pending-retention-" });
 
@@ -62,13 +61,14 @@ describe("pending cron receipt retention", () => {
     // next admitted run. Its pending job association must keep the receipt.
     for (let index = 0; index < 64; index += 1) {
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath,
         job,
         agentId: "alpha",
         startedAtMs: now + 100 + index * 2,
       });
       const receipt = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
           resolveAgentId: (current) => current.agentId!,

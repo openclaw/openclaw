@@ -173,12 +173,7 @@ function resolveAssembledReplyPipeline(
 }
 
 function isExplicitlyNonVisibleChannelDelivery(result: unknown): boolean {
-  return (
-    typeof result === "object" &&
-    result !== null &&
-    !Array.isArray(result) &&
-    (result as { visibleReplySent?: unknown }).visibleReplySent === false
-  );
+  return isRecord(result) && result.visibleReplySent === false;
 }
 
 function markChannelDeliveryErrorVisible(error: unknown): unknown {

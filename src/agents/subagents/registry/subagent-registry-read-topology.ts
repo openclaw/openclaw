@@ -1,6 +1,8 @@
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { latestSubagentRun, recordLatestSubagentRun } from "./subagent-run-generation.js";
 
+const NO_DESCENDANTS: readonly never[] = Object.freeze([]);
+
 export function resolveControllerSessionKey(
   entry: Pick<SubagentRunReadRecord, "controllerSessionKey" | "requesterSessionKey">,
 ): string {
@@ -19,6 +21,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
   const runsByControllerSessionKey = new Map<string, T[]>();
   const swarmRunsByRequesterSessionKey = new Map<string, T[]>();
   const latestRunByRequesterAndChildSessionKey = new Map<string, Map<string, T>>();
+  const descendantsBySessionKey = new Map<string, readonly T[]>();
+  let revision = {};
   const snapshotRunsByChildSessionKey = new Map<string, T[]>();
   const memoryRunsByChildSessionKey = new Map<string, T[]>();
   const memoryChildKeys = new Map<string, string>();
@@ -71,6 +75,8 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
     changes: ReadonlyMap<string, T | undefined>,
     inMemoryChanges: ReadonlyMap<string, T | undefined>,
   ): void {
+    descendantsBySessionKey.clear();
+    revision = {};
     const affected = new Map<string, Set<string>>();
     const touch = (child: string) => {
       if (child && !affected.has(child)) {
@@ -190,14 +196,47 @@ export function buildSubagentRunReadTopology<T extends SubagentRunReadRecord>(pa
       runsByChildSessionKey.set(key, [entry]);
     }
   }
+  function getDescendantRuns(rootSessionKey: string): readonly T[] {
+    const root = rootSessionKey.trim();
+    if (!root || !latestRunByRequesterAndChildSessionKey.has(root)) {
+      return NO_DESCENDANTS;
+    }
+    const cached = descendantsBySessionKey.get(root);
+    if (cached) {
+      return cached;
+    }
+    const descendants: T[] = [];
+    const pending = [root];
+    const visited = new Set(pending);
+    for (const requester of pending) {
+      for (const [childSessionKey, entry] of latestRunByRequesterAndChildSessionKey.get(
+        requester,
+      ) ?? []) {
+        // Superseded generations cannot keep their former parent's descendants alive.
+        if (latestRunsByChildSessionKey.get(childSessionKey) !== entry) {
+          continue;
+        }
+        descendants.push(entry);
+        if (!visited.has(childSessionKey)) {
+          visited.add(childSessionKey);
+          pending.push(childSessionKey);
+        }
+      }
+    }
+    descendantsBySessionKey.set(root, Object.freeze(descendants));
+    return descendants;
+  }
   return {
     inputs,
+    get revision() {
+      return revision;
+    },
+    getDescendantRuns,
     inMemoryDisplayByChildSessionKey,
     runsByChildSessionKey,
     latestRunsByChildSessionKey,
     runsByControllerSessionKey,
     swarmRunsByRequesterSessionKey,
-    latestRunByRequesterAndChildSessionKey,
     patch,
   };
 }

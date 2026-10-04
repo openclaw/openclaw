@@ -92,6 +92,7 @@ function createHealthSummary(): HealthSummary {
 const revisionProjector = {
   projectRawHash: (hash: string) => `raw-token:${hash}`,
   projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+  hashResponseSessionBearer: () => "unused-test-scope",
 };
 
 async function loadHealthState() {

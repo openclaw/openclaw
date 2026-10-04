@@ -9,7 +9,7 @@ import type {
   AcpSessionStatus,
   EnsureManagerRuntimeHandle,
   ReconcileManagerRuntimeSessionIdentifiers,
-  ResolveManagerSession,
+  ResolveManagerSessionAsync,
 } from "./manager.types.js";
 import { requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
@@ -22,22 +22,27 @@ export async function runManagerGetSessionStatus(params: {
   agentId: string;
   signal?: AbortSignal;
   throwIfAborted: (signal?: AbortSignal) => void;
-  resolveSession: ResolveManagerSession;
+  resolveSession: ResolveManagerSessionAsync;
   ensureRuntimeHandle: EnsureManagerRuntimeHandle;
   reconcileRuntimeSessionIdentifiers: ReconcileManagerRuntimeSessionIdentifiers;
   isCurrentActor?: () => boolean;
 }): Promise<AcpSessionStatus> {
   const isCurrentActor = params.isCurrentActor ?? (() => true);
-  if (!isCurrentActor()) {
-    throw createSupersededActorError(params.sessionKey);
-  }
-  params.assertActive?.();
-  params.throwIfAborted(params.signal);
-  const resolution = params.resolveSession({
+  const assertCurrent = () => {
+    if (!isCurrentActor()) {
+      throw createSupersededActorError(params.sessionKey);
+    }
+    params.assertActive?.();
+    params.throwIfAborted(params.signal);
+  };
+  assertCurrent();
+  const resolution = await params.resolveSession({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    assertCurrent,
   });
+  assertCurrent();
   const resolvedMeta = requireReadySessionMeta(resolution);
   const {
     runtime,

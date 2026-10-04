@@ -122,14 +122,15 @@ setInterval(() => {
 }, 20);
 `,
       );
-      const runnerUrl = pathToFileURL(path.resolve("scripts/run-node.mts")).href;
+      const sourceRoot = process.cwd();
+      const runnerUrl = pathToFileURL(path.join(sourceRoot, "scripts/run-node.mts")).href;
       writeFileSync(
         implementationPath,
         `import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { runNodeMain } from ${JSON.stringify(runnerUrl)};
 import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
-registerSourceRunnerServiceFixture(${JSON.stringify(process.cwd())});
+registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+const { runNodeMain } = await import(${JSON.stringify(runnerUrl)});
 fs.appendFileSync(${JSON.stringify(invocationsPath)}, JSON.stringify(process.argv.slice(2)) + "\\n");
 // Let a regressed watcher finish after recording its doctor or restart invocation.
 if (fs.existsSync(${JSON.stringify(childPidPath)})) process.exit(0);
@@ -172,6 +173,9 @@ else process.exit(outcome);
         PNPM_CONFIG_MODULES_DIR: path.dirname(
           path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
         ),
+        // The copied shim runs from a fixture cwd with no tsconfig; pin this
+        // checkout so run-node.mts's profile graph resolves workspace imports.
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       };
       delete env.NODE_OPTIONS;
       delete env.NODE_DISABLE_COMPILE_CACHE;
@@ -355,14 +359,15 @@ fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));
 setInterval(() => {}, 1000);
 `,
       );
-      const implementationUrl = pathToFileURL(path.resolve("scripts/run-node.mts")).href;
+      const sourceRoot = process.cwd();
+      const implementationUrl = pathToFileURL(path.join(sourceRoot, "scripts/run-node.mts")).href;
       writeFileSync(
         implementationPath,
         `import fs from "node:fs";
 import { spawn } from "node:child_process";
-import { runNodeMain } from ${JSON.stringify(implementationUrl)};
 import { registerSourceRunnerServiceFixture } from ${JSON.stringify(sourceRunnerServiceFixtureUrl)};
-registerSourceRunnerServiceFixture(${JSON.stringify(process.cwd())});
+registerSourceRunnerServiceFixture(${JSON.stringify(sourceRoot)});
+const { runNodeMain } = await import(${JSON.stringify(implementationUrl)});
 fs.writeFileSync(${JSON.stringify(wrapperPidPath)}, String(process.ppid));
 const outcome = await runNodeMain({
   cwd: ${JSON.stringify(checkoutRoot)},
@@ -380,6 +385,9 @@ else process.exit(outcome);
         PNPM_CONFIG_MODULES_DIR: path.dirname(
           path.dirname(createRequire(import.meta.url).resolve("tsx/package.json")),
         ),
+        // The copied shim runs from a fixture cwd with no tsconfig; pin this
+        // checkout so run-node.mts's profile graph resolves workspace imports.
+        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       };
       delete env.NODE_OPTIONS;
       const command = runNode(
@@ -388,7 +396,14 @@ else process.exit(outcome);
         checkoutRoot,
       );
       try {
-        const childPid = await waitForPidFile(childPidPath, 5_000);
+        const childPid = await Promise.race([
+          waitForPidFile(childPidPath, 5_000),
+          command.then((result) => {
+            throw new Error(
+              `Dev runner exited before its child started: ${formatShimResult(result)}`,
+            );
+          }),
+        ]);
         const wrapperPid = await waitForPidFile(wrapperPidPath, 5_000);
         process.kill(wrapperPid, signal);
         const result = await command;

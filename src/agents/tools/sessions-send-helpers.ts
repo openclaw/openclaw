@@ -6,7 +6,6 @@ import { resolveSessionConversationRef } from "../../channels/plugins/session-co
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { parseSessionDeliveryRoute } from "../../sessions/session-key-utils.js";
 import { ANNOUNCE_SKIP_TOKEN, REPLY_SKIP_TOKEN } from "./sessions-send-tokens.js";
-export { isNonDeliverableSessionsReply } from "./sessions-send-tokens.js";
 
 export type AnnounceTarget = {
   channel: string;

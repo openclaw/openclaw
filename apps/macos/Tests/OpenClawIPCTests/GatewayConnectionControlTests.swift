@@ -1350,6 +1350,31 @@ extension GatewayConnectionControlTests {
         #expect((params?["voiceWakeTrigger"] as? String)?.isEmpty == true)
     }
 
+    @Test func `independent chat sends remain available while a web conversation owns the session`() async throws {
+        let (connection, recorder) = makeRecordingGatewayConnection { Self.chatSendOkResponseData(id: $0) }
+        let scope = await connection.conversationOwnershipScope(sessionKey: "agent:main:main", agentID: nil)
+        let webOwner = UUID()
+        try #require(connection.chatSendOwnership.beginWeb(scope, owner: webOwner))
+        defer { connection.chatSendOwnership.endWeb(scope, owner: webOwner) }
+        do {
+            // Quick Chat carries its selected agent; Talk uses the active session key alone.
+            for agentID in ["main", nil] as [String?] {
+                let response = try await connection.chatSend(
+                    sessionKey: "agent:main:main", agentID: agentID,
+                    message: "hello", thinking: nil, idempotencyKey: UUID().uuidString, attachments: [])
+                #expect(response.status == "ok")
+            }
+            await connection.shutdown()
+        } catch {
+            await connection.shutdown()
+            throw error
+        }
+        let chatRequests = recorder.snapshot().filter {
+            GatewayWebSocketTestSupport.requestMethod(from: $0) == "chat.send"
+        }
+        #expect(chatRequests.count == 2)
+    }
+
     @Test func `chat send carries route bound routing and settings preconditions`() async throws {
         let (connection, recorder) = makeRecordingGatewayConnection(
             capabilities: [GatewayServerCapability.sessionSettingsCAS.rawValue])

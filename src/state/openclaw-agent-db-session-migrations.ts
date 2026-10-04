@@ -357,10 +357,7 @@ export function readSqliteTableColumns(db: DatabaseSync, tableName: string): Set
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(tableName)) {
     throw new Error(`invalid SQLite table identifier: ${tableName}`);
   }
-  const table = db
-    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-    .get(tableName);
-  if (!table) {
+  if (!tableExists(db, tableName)) {
     return null;
   }
   const rows = db.prepare(`PRAGMA table_info(${tableName})`).all() as Array<{

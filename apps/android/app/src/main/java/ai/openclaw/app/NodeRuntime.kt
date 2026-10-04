@@ -21,7 +21,6 @@ import ai.openclaw.app.chat.SESSION_UNREAD_ACK_CAPABILITY
 import ai.openclaw.app.chat.SessionDiffSnapshot
 import ai.openclaw.app.chat.SessionForkResult
 import ai.openclaw.app.chat.SessionRewindResult
-import ai.openclaw.app.chat.parseSessionDiff
 import ai.openclaw.app.gateway.DeviceAuthEntry
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.DeviceIdentityStore
@@ -55,6 +54,7 @@ import ai.openclaw.app.gateway.isTailscaleGatewayHost
 import ai.openclaw.app.gateway.normalizeGatewayApprovalRequestId
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.gateway.parseChatSendAck
+import ai.openclaw.app.gateway.parseGatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.resolveGatewaySourcePreviewConfig
 import ai.openclaw.app.i18n.NativeText
@@ -93,7 +93,6 @@ import ai.openclaw.app.node.resolveGatewayThemeFamily
 import ai.openclaw.app.node.resolveGatewayThemeMode
 import ai.openclaw.app.node.resolveProfileAccentArgb
 import ai.openclaw.app.systemagent.SystemAgentChatController
-import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.systemagent.SystemAgentGatewayAccess
 import ai.openclaw.app.voice.AndroidOnDeviceVoiceWakeRecognizer
 import ai.openclaw.app.voice.GatewayTranscriptionSession
@@ -141,7 +140,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
@@ -168,6 +166,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.decodeFromString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -245,26 +244,7 @@ private data class SessionCatalogProgressOwner(
 
 internal const val WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS = 8_000L
 
-internal data class WearAgentPulseReads<Tasks, Swarm>(
-  val tasks: Tasks?,
-  val swarm: Swarm?,
-)
-
-internal suspend fun <Tasks, Swarm> readWearAgentPulseConcurrently(
-  readTasks: suspend () -> Tasks,
-  readSwarm: suspend () -> Swarm,
-  budgetMillis: Long = WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS,
-): WearAgentPulseReads<Tasks, Swarm> =
-  coroutineScope {
-    val tasks = async { readWearAgentPulseComponent(budgetMillis, readTasks) }
-    val swarm = async { readWearAgentPulseComponent(budgetMillis, readSwarm) }
-    WearAgentPulseReads(
-      tasks = tasks.await(),
-      swarm = swarm.await(),
-    )
-  }
-
-private suspend fun <T> readWearAgentPulseComponent(
+internal suspend fun <T> readWearAgentPulseComponent(
   budgetMillis: Long,
   read: suspend () -> T,
 ): T? =
@@ -1127,6 +1107,7 @@ class NodeRuntime private constructor(
     val token: String?,
     val password: String?,
     val tlsFingerprintSha256: String?,
+    val browserFocusAvailable: Boolean = false,
   )
 
   private val appContext = context.applicationContext
@@ -1694,7 +1675,7 @@ class NodeRuntime private constructor(
           // device-owned session without changing the shipped key or its existing transcript.
           chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
         }
-        refreshGatewayControlPage()
+        refreshGatewayControlPage(browserFocusAvailable = hello.capabilities?.contains("control-ui-browser-focus") == true)
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
@@ -1766,7 +1747,7 @@ class NodeRuntime private constructor(
       captureLease = { operatorSession.captureRequestLease() },
     )
 
-  private val systemAgentChatController by lazy {
+  internal val systemAgentChatController by lazy {
     SystemAgentChatController(
       scope = scope,
       access = {
@@ -1798,8 +1779,6 @@ class NodeRuntime private constructor(
       json = json,
     )
   }
-  internal val systemAgentChatState: StateFlow<SystemAgentChatState>
-    get() = systemAgentChatController.state
 
   private data class SecondaryOperatorRuntime(
     val endpoint: GatewayEndpoint?,
@@ -1904,23 +1883,16 @@ class NodeRuntime private constructor(
     val gatewayScope = captureGatewayDataScope()
     val agentId = currentWearAgentId()
     val connected = gatewayScope != null && operatorSession.isReady()
-    val reads =
-      if (connected && agentId != null) {
-        readWearAgentPulseConcurrently(
-          readTasks = { chat.listBackgroundTasks(agentId) },
-          readSwarm = {
-            requestedSessionKey?.let { sessionKey ->
-              chat.readSwarmSnapshotFor(sessionKey, agentId)
-            }
-          },
-        )
+    val swarmSnapshot =
+      if (connected && agentId != null && requestedSessionKey != null) {
+        readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+          chat.readSwarmSnapshotFor(requestedSessionKey, agentId)
+        }
       } else {
         null
       }
-    val tasks = reads?.tasks
-    val swarmSnapshot = reads?.swarm
     // Capture every projection input before the final route check so a route
-    // change cannot mix a current task result with later-route aggregates.
+    // change cannot mix a current swarm result with later-route aggregates.
     val approvals = currentWearAgentPulseApprovals()
     val routeStillCurrent =
       gatewayScope?.let { capturedScope ->
@@ -1935,7 +1907,6 @@ class NodeRuntime private constructor(
         swarmSnapshot?.isAvailableFor(requestedSessionKey) == true
     return projectWearAgentPulse(
       gatewayConnected = routeStillCurrent,
-      tasks = tasks.takeIf { routeStillCurrent },
       swarmAvailable = swarmAvailable,
       swarmGroups = if (swarmAvailable) swarmSnapshot.groups else emptyList(),
       pendingApprovalCount = approvals.pendingCount,
@@ -1999,6 +1970,7 @@ class NodeRuntime private constructor(
     _gatewayUpdateAvailable.value = null
     replaceGatewayMethods(null, present = false)
     replaceGatewayCapabilities(null)
+    _gatewayControlPage.value = _gatewayControlPage.value?.copy(browserFocusAvailable = false)
     _operatorScopes.value = emptyList()
     _devicePairingCapabilities.value = GatewayDevicePairingCapabilities()
     _gatewayAccentArgb.value = null
@@ -3258,6 +3230,7 @@ class NodeRuntime private constructor(
         token = null,
         password = null,
         tlsFingerprintSha256 = null,
+        browserFocusAvailable = AndroidScreenshotFixture.browserFocusAvailable,
       )
     _gatewaySourcePreviewConfig.value = AndroidScreenshotFixture.sourcePreviewConfig
     updateGatewayDefaultAgentId("main")
@@ -5109,7 +5082,7 @@ class NodeRuntime private constructor(
               GatewayTlsTrustDecision.SystemTrusted -> {
                 // Automatic platform trust only applies where no user-accepted pin exists.
                 // Replacing a pin always requires explicit confirmation in the trust prompt.
-                registerGateway(endpoint, setActive = true)
+                registerGateway(endpoint)
                 connectAfterTlsCheckLocked(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
               }
 
@@ -5210,6 +5183,7 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint? = connectedEndpoint,
     auth: GatewayConnectAuth? = activeGatewayConnection?.auth,
     storedOperatorToken: String? = endpoint?.let { loadStoredRoleDeviceAuthEntry(it, "operator")?.token },
+    browserFocusAvailable: Boolean = false,
   ) {
     if (endpoint == null) {
       _gatewayControlPage.value = null
@@ -5222,6 +5196,7 @@ class NodeRuntime private constructor(
         token = pageAuth.token,
         password = pageAuth.password,
         tlsFingerprintSha256 = gatewayControlPageTlsFingerprint(prefs, endpoint),
+        browserFocusAvailable = browserFocusAvailable,
       )
   }
 
@@ -5316,7 +5291,7 @@ class NodeRuntime private constructor(
         if (_pendingGatewayTrust.value !== prompt) return@launchGatewayLifecycle
         _pendingGatewayTrust.value = null
         persistTrust()
-        registerGateway(prompt.endpoint, setActive = true)
+        registerGateway(prompt.endpoint)
         connectAfterTlsCheckLocked(endpoint = prompt.endpoint, auth = prompt.auth, connectAttemptId = connectAttemptId)
       }
     }
@@ -5540,20 +5515,17 @@ class NodeRuntime private constructor(
 
   private fun recordConnectedGateway() {
     val endpoint = connectedEndpoint ?: return
-    registerGateway(endpoint, setActive = true)
+    registerGateway(endpoint)
     prefs.gatewayRegistry.markConnected(endpoint.stableId, System.currentTimeMillis())
   }
 
-  private fun registerGateway(
-    endpoint: GatewayEndpoint,
-    setActive: Boolean,
-  ) {
+  private fun registerGateway(endpoint: GatewayEndpoint) {
     val existing =
       prefs.gatewayRegistry.entries.value
         .firstOrNull { it.stableId == endpoint.stableId }
     val entry = gatewayRegistryEntry(endpoint, existing)
     prefs.gatewayRegistry.upsert(entry)
-    if (setActive) prefs.gatewayRegistry.setActive(endpoint.stableId)
+    prefs.gatewayRegistry.setActive(endpoint.stableId)
   }
 
   private suspend fun drainGatewayConnectionsForConnect(
@@ -5727,39 +5699,6 @@ class NodeRuntime private constructor(
     retirePendingChatSelection()
     chat.switchSession(sessionKey, ownerAgentId)
   }
-
-  internal fun refreshSystemAgentChat() {
-    systemAgentChatController.refresh()
-  }
-
-  internal fun clearSystemAgentChatInput() {
-    systemAgentChatController.clearInputForBackground()
-  }
-
-  internal fun sendSystemAgentChatInput() {
-    systemAgentChatController.sendInput()
-  }
-
-  internal fun setSystemAgentChatInput(value: String) {
-    systemAgentChatController.setInput(value)
-  }
-
-  internal fun answerSystemAgentQuestion(
-    messageId: String,
-    optionLabel: String,
-  ) {
-    systemAgentChatController.answerQuestion(messageId, optionLabel)
-  }
-
-  internal fun skipSystemAgentQuestion(messageId: String) {
-    systemAgentChatController.skipQuestion(messageId)
-  }
-
-  internal fun restartSystemAgentChat() {
-    systemAgentChatController.restart()
-  }
-
-  internal fun consumeSystemAgentChatHandoff() = systemAgentChatController.openHandoff()
 
   fun selectChatAgent(agentId: String) {
     val normalizedAgentId = agentId.trim()
@@ -6154,19 +6093,13 @@ class NodeRuntime private constructor(
       null
     }
 
-  private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? {
-    return try {
+  private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? =
+    try {
       val root = payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() }
-      val update = root?.get("updateAvailable").asObjectOrNull() ?: return null
-      GatewayUpdateAvailableSummary(
-        currentVersion = update.nonBlankString("currentVersion"),
-        latestVersion = update.nonBlankString("latestVersion"),
-        channel = update.nonBlankString("channel"),
-      )
+      parseGatewayUpdateAvailableSummary(root?.get("updateAvailable").asObjectOrNull())
     } catch (_: Throwable) {
       null
     }
-  }
 
   private fun parseTalkSessionId(response: String): String {
     val root = json.parseToJsonElement(response).asObjectOrNull()
@@ -6953,7 +6886,7 @@ class NodeRuntime private constructor(
         put("scope", JsonPrimitive("uncommitted"))
       }
     val payload = requestGatewayData(gatewayScope, GatewayMethod.SessionsDiff.rawValue, params.toString(), timeoutMs = 30_000)
-    val snapshot = withContext(Dispatchers.Default) { parseSessionDiff(json, payload) }
+    val snapshot = withContext(Dispatchers.Default) { json.decodeFromString<SessionDiffSnapshot>(payload) }
     if (!isGatewayDataScopeCurrent(gatewayScope)) throw CancellationException("gateway scope changed")
     check(snapshot.sessionKey == sessionKey) { "The gateway returned changes for a different conversation." }
     return snapshot
@@ -9231,7 +9164,7 @@ class NodeRuntime private constructor(
           id = id,
           name = name,
           enabled = obj.boolean("enabled"),
-          scheduleLabel = cronScheduleLabel(schedule),
+          scheduleLabel = cronScheduleLabel(schedule?.get("kind").asStringOrNull(), schedule),
           promptPreview = cronPayloadPreview(payload),
           nextRunAtMs = state.long("nextRunAtMs"),
           lastRunStatus = cronJobLastRunStatus(state),
@@ -9458,38 +9391,25 @@ class NodeRuntime private constructor(
     return ids
       .map { id ->
         val summary = channels?.get(id).asObjectOrNull()
-        val accountRows = parseChannelAccounts(accounts?.get(id) as? JsonArray)
+        val accountRows =
+          (accounts?.get(id) as? JsonArray)
+            ?.mapNotNull { it.asObjectOrNull()?.takeIf { account -> account.nonBlankString("accountId") != null } }
+            .orEmpty()
         GatewayChannelSummary(
           id = id,
           label = labels[id] ?: channelDisplayLabel(id),
           accountCount = accountRows.size,
-          enabled = summary.boolean("enabled") || accountRows.any { it.enabled },
-          configured = summary.boolean("configured") || accountRows.any { it.configured },
-          linked = summary.boolean("linked") || accountRows.any { it.linked },
-          running = summary.boolean("running") || accountRows.any { it.running },
-          connected = summary.boolean("connected") || accountRows.any { it.connected },
+          enabled = summary.boolean("enabled") || accountRows.any { it.boolean("enabled") },
+          configured = summary.boolean("configured") || accountRows.any { it.boolean("configured") },
+          linked = summary.boolean("linked") || accountRows.any { it.boolean("linked") },
+          running = summary.boolean("running") || accountRows.any { it.boolean("running") },
+          connected = summary.boolean("connected") || accountRows.any { it.boolean("connected") },
           error =
             summary.nonBlankString("lastError")
-              ?: accountRows.firstNotNullOfOrNull { it.error },
+              ?: accountRows.firstNotNullOfOrNull { it.nonBlankString("lastError") },
         )
       }.sortedWith(compareByDescending<GatewayChannelSummary> { it.enabled || it.configured }.thenBy { it.label.lowercase() })
   }
-
-  private fun parseChannelAccounts(accounts: JsonArray?): List<GatewayChannelAccountSummary> =
-    accounts
-      ?.mapNotNull { item ->
-        val obj = item.asObjectOrNull() ?: return@mapNotNull null
-        obj.nonBlankString("accountId") ?: return@mapNotNull null
-        GatewayChannelAccountSummary(
-          enabled = obj.boolean("enabled"),
-          configured = obj.boolean("configured"),
-          linked = obj.boolean("linked"),
-          running = obj.boolean("running"),
-          connected = obj.boolean("connected"),
-          error =
-            obj.nonBlankString("lastError"),
-        )
-      }.orEmpty()
 
   private fun parseStringMap(map: JsonObject?): Map<String, String> =
     map
@@ -9553,28 +9473,6 @@ class NodeRuntime private constructor(
       .asReversed()
       .take(4)
   }
-
-  private fun cronScheduleLabel(schedule: JsonObject?): NativeText =
-    when (schedule?.get("kind").asStringOrNull()) {
-      "at" -> {
-        nativeText("One time")
-      }
-
-      "every" -> {
-        schedule.long("everyMs")?.let(::formatCronInterval) ?: nativeText("Repeating")
-      }
-
-      "cron" -> {
-        schedule
-          .nonBlankString("expr")
-          ?.let(::verbatimText)
-          ?: nativeText("Cron")
-      }
-
-      else -> {
-        nativeText("Scheduled")
-      }
-    }
 
   private fun cronPayloadPreview(payload: JsonObject?): NativeText {
     val text =
@@ -9784,6 +9682,9 @@ internal fun gatewayRegistryEntry(
       stableId = endpoint.stableId,
       kind = GatewayRegistryEntryKind.DISCOVERED,
       name = endpoint.name,
+      host = endpoint.host,
+      port = endpoint.port,
+      contextPath = endpoint.contextPath,
       tls = true,
       lastConnectedAtMs = existing?.lastConnectedAtMs ?: 0L,
     )
@@ -10091,15 +9992,6 @@ data class GatewayChannelSummary(
   val id: String,
   val label: String,
   val accountCount: Int,
-  val enabled: Boolean,
-  val configured: Boolean,
-  val linked: Boolean,
-  val running: Boolean,
-  val connected: Boolean,
-  val error: String?,
-)
-
-private data class GatewayChannelAccountSummary(
   val enabled: Boolean,
   val configured: Boolean,
   val linked: Boolean,

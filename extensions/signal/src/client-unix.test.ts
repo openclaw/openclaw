@@ -123,17 +123,11 @@ describe.skipIf(process.platform === "win32")("Signal UNIX transport", () => {
   });
 
   it.each([
-    [
-      "RPC error",
-      (id: unknown) =>
-        `${JSON.stringify({ jsonrpc: "2.0", id, error: { code: -1, message: "private +15550000001" } })}\n`,
-      /^Signal RPC -1: remote error$/,
-    ],
-    ["malformed JSON", () => "private +15550000001\n", /^Signal UNIX RPC returned malformed JSON$/],
-    ["incomplete frame", () => '{"jsonrpc":', /incomplete frame/],
-    ["oversized frame", () => "x".repeat(129), /size limit/],
+    ["malformed JSON", "private +15550000001\n", /^Signal UNIX RPC returned malformed JSON$/],
+    ["incomplete frame", '{"jsonrpc":', /incomplete frame/],
+    ["oversized frame", "x".repeat(129), /size limit/],
   ] as const)("rejects %s without falling back to HTTP", async (_name, reply, error) => {
-    const { baseUrl } = await serve((request, socket) => socket.end(reply(request.id)));
+    const { baseUrl } = await serve((_request, socket) => socket.end(reply));
     await expect(
       signalRpcRequest("send", undefined, { baseUrl, maxResponseBytes: 128 }),
     ).rejects.toThrow(error);

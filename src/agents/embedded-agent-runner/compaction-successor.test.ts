@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { HookRunner } from "../../plugins/hooks.js";
@@ -11,6 +11,7 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
 import type {
@@ -252,8 +253,11 @@ describe("acceptCompactionSuccessor", () => {
       await withAcceptanceFixture({}, async (fixture) => {
         const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
           await import("../agent-bundle-mcp-manager.test-support.js");
-        const { getSessionMcpRuntimeManagerForTesting } =
+        const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
           await import("../agent-bundle-mcp-manager-api.js");
+        const scheduler = createTestGatewayScheduler();
+        onTestFinished(() => scheduler.stop());
+        await setSessionMcpRuntimeScheduler(scheduler);
         const manager = getSessionMcpRuntimeManagerForTesting();
         const create = (sessionId: string) =>
           getOrCreateSessionMcpRuntime({

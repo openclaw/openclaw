@@ -118,11 +118,7 @@ export async function collectOutputs(
   assertCurrent: () => void,
   signal: AbortSignal,
   prepareReplyMedia: AgentHarnessAttemptParamsV2["hostCapabilities"]["prepareReplyMedia"],
-): Promise<{
-  toolMediaUrls: string[];
-  hostOwnedToolMediaUrls: string[];
-  toolTrustedLocalMedia?: true;
-}> {
+): Promise<string[]> {
   assertCurrent();
   signal.throwIfAborted();
   const turn = await client.turn(remoteSessionId, rootTurnId, signal);
@@ -182,11 +178,7 @@ export async function collectOutputs(
     }
     toolMediaUrls.push(prepared.payload.mediaUrl);
   }
-  return {
-    toolMediaUrls,
-    hostOwnedToolMediaUrls: [...toolMediaUrls],
-    ...(toolMediaUrls.length ? { toolTrustedLocalMedia: true as const } : {}),
-  };
+  return toolMediaUrls;
 }
 
 function managedMediaIdentity(fact: NonNullable<AgentHarnessAttemptParamsV2["media"]>[number]):

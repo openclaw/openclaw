@@ -1,6 +1,7 @@
 // @vitest-environment node
 // Control UI tests cover message normalizer behavior.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import * as importedMessageDisplay from "./imported-message-display.ts";
 import {
   isStandaloneToolMessageForDisplay,
   isToolResultMessage,
@@ -99,7 +100,49 @@ describe("message-normalizer", () => {
 
     afterEach(() => {
       vi.useRealTimers();
+      vi.restoreAllMocks();
     });
+
+    it("normalizes retained message identities once and replacements afresh", () => {
+      const projection = vi.spyOn(importedMessageDisplay, "projectImportedMessageForDisplay");
+      const messages = [
+        { role: "user", content: "question", timestamp: 1 },
+        { role: "assistant", content: "answer", timestamp: 2 },
+      ];
+      const initial = messages.map(normalizeMessage);
+      for (const normalized of initial) {
+        normalized.content.forEach(Object.freeze);
+        Object.freeze(normalized.content);
+        Object.freeze(normalized);
+      }
+      expect(projection).toHaveBeenCalledTimes(2);
+      const older = { role: "user", content: "older", timestamp: 0 };
+      const prepended = [older, ...messages].map(normalizeMessage);
+      expect(projection).toHaveBeenCalledTimes(3);
+      expect(prepended[1]).toBe(initial[0]);
+      expect(prepended[2]).toBe(initial[1]);
+      const replacement = { ...messages[1], content: "finished answer" };
+      const rebuilt = [older, messages[0], replacement].map(normalizeMessage);
+      expect(projection).toHaveBeenCalledTimes(4);
+      expect(rebuilt[0]).toBe(prepended[0]);
+      expect(rebuilt[1]).toBe(initial[0]);
+      expect(rebuilt[2]).not.toBe(initial[1]);
+      expect(rebuilt[2]?.content).toEqual([{ type: "text", text: "finished answer" }]);
+    });
+
+    it.each([undefined, null, Number.NaN, Infinity, "not-a-timestamp"])(
+      "keeps the clock fallback current for timestamp %s",
+      (timestamp) => {
+        const message = { role: "assistant", content: "answer", timestamp };
+        vi.setSystemTime(100);
+        const first = normalizeMessage(message);
+        vi.setSystemTime(200);
+        const second = normalizeMessage(message);
+        expect(first.timestamp).toBe(100);
+        expect(second.timestamp).toBe(200);
+        expect(second).not.toBe(first);
+      },
+    );
 
     it("does not reinterpret directive-like user string content", () => {
       const result = normalizeMessage({

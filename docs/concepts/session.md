@@ -124,7 +124,7 @@ context, and replies to the source room remain unchanged.
 
 Incognito sessions are available only from the Control UI's **New thread** screen. Turn on **Incognito** before starting the thread to keep its session entry, transcript, and compaction state in process memory instead of on disk. The thread expires 24 hours after creation or when the Gateway restarts, whichever comes first. Activity does not extend its lifetime. Expiry stops active work and deletes the session and transcript without an archive. Incognito does not run OpenClaw's automatic memory flush, and does not create a transcript archive when you reset or delete it. Codex-backed runs also start their harness thread in ephemeral mode, so Codex writes no rollout or local session-state files; other model providers use HTTP APIs and keep no local provider transcript in OpenClaw.
 
-Agent RPC runs and delegated tasks keep content-free task records for lifecycle, cancellation, and completion tracking. Their prompts, labels, progress summaries, results, and free-form errors are not saved in those records. Live task activity and completion delivery remain available.
+Delegated work uses its native execution and completion owners. Live subagent activity and completion delivery remain available.
 
 The `incognito-` segment is reserved for dashboard, subagent, and hidden internal session keys; `openclaw doctor --fix` renames any colliding legacy durable keys.
 
@@ -301,7 +301,7 @@ therefore remain above the cap when protected rows alone exceed it.
 Root sessions and sessions auto-parented to the agent's Home root can be pinned;
 genuine child sessions and subagent runs reject pin requests. Persistent child
 sessions retain their sidebar nesting; subagent runs appear in transcript activity
-and Tasks views. Existing child pins disappear and no longer protect the session
+and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
 Gateway model-run probe sessions are short-lived by default. Rows matching
@@ -403,5 +403,4 @@ Preview any maintenance run with `openclaw sessions cleanup --dry-run`.
 - [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools) - per-agent sandbox and tool restrictions, including session visibility
 - [Transcript hygiene](/reference/transcript-hygiene) - in-memory, provider-specific transcript sanitization applied before a run
 - [Command queue](/concepts/queue)
-- [Background Tasks](/automation/tasks) - how detached work creates task records with session references
 - [Channel routing](/channels/channel-routing) - how inbound messages are routed to sessions

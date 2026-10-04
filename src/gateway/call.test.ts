@@ -389,24 +389,23 @@ function makeRemotePasswordGatewayConfig(remotePassword: string, localPassword =
 }
 
 describe("callGateway url resolution", () => {
-  const envSnapshot = captureEnv([
+  const envKeys = [
     "OPENCLAW_ALLOW_INSECURE_PRIVATE_WS",
     "OPENCLAW_CONFIG_PATH",
     "OPENCLAW_GATEWAY_PORT",
     "OPENCLAW_GATEWAY_URL",
     "OPENCLAW_GATEWAY_TOKEN",
+    "OPENCLAW_GATEWAY_PASSWORD",
     "OPENCLAW_STATE_DIR",
-  ]);
+  ];
+  const envSnapshot = captureEnv(envKeys);
 
   beforeEach(() => {
     resetConfigRuntimeState();
     envSnapshot.restore();
-    deleteTestEnvValue("OPENCLAW_ALLOW_INSECURE_PRIVATE_WS");
-    deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
-    deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
-    deleteTestEnvValue("OPENCLAW_STATE_DIR");
+    for (const key of envKeys) {
+      deleteTestEnvValue(key);
+    }
     resetGatewayCallMocks();
   });
 
@@ -1217,12 +1216,12 @@ describe("callGateway url resolution", () => {
     await expect(
       callGatewayCli({
         method: "node.list",
-        url: "wss://second.example/rpc",
+        url: "wss://fixture-user:fixture-password@second.example/rpc?token=fixture-query-secret",
         useStoredDeviceAuth: true,
       }),
     ).rejects.toMatchObject({
       name: "GatewayStoredDeviceAuthUnavailableError",
-      message: expect.stringMatching(/tui --url.*Settings -> Devices.*devices approve --latest/s),
+      message: expect.stringMatching(/^(?!.*fixture-).*tui --url/s),
     });
 
     expect(loadOriginDeviceTokenMock).toHaveBeenCalledWith({

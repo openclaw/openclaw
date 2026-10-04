@@ -12,6 +12,7 @@ import {
   normalizeAgentId,
   resolveUiSelectedSessionAgentId,
 } from "../../lib/sessions/session-key.ts";
+import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import { buildChatApiAttachments } from "./attachment-api.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { chatProviderReviewRow } from "./chat-provider-review.ts";
@@ -35,6 +36,9 @@ export async function requestChatSend(
     expectedLeafEntryId?: string | null;
   },
 ): Promise<ChatSendAck> {
+  if (params.attachments?.length) {
+    assertUploadsEnabled(state.uploadConfig);
+  }
   const routing = resolveChatSendRouting(state, params);
   if (chatProviderReviewRow(state, routing.sessionKey, routing.selectedAgentId)?.providerReview) {
     throw new Error(t("chat.providerReview.pausedBody"));

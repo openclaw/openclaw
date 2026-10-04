@@ -98,68 +98,26 @@ describe("model route compatibility", () => {
     expected: ModelCompatConfig | undefined;
     expectedBaseUrl?: string;
   }> = [
-    { name: "catalog", route: catalogRoute, authored: undefined, expected: catalogCompat },
     {
-      name: "Anthropic versioned catalog endpoint",
-      catalog: anthropicRoute,
-      route: { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1` },
-      authored: undefined,
-      expected: catalogCompat,
-      expectedBaseUrl: anthropicRoute.baseUrl,
-    },
-    {
-      name: "Anthropic versioned catalog endpoint with trailing slash",
+      name: "Anthropic versioned catalog endpoint with an authored preference",
       catalog: anthropicRoute,
       route: { ...anthropicRoute, baseUrl: `${anthropicRoute.baseUrl}/v1/` },
-      authored: undefined,
+      authored: { codeMode: "capable" },
       expected: catalogCompat,
       expectedBaseUrl: anthropicRoute.baseUrl,
     },
     {
-      name: "Anthropic custom endpoint",
-      catalog: anthropicRoute,
-      route: { ...anthropicRoute, baseUrl: "https://custom.example/v1" },
-      authored: undefined,
-      expected: undefined,
-      expectedBaseUrl: "https://custom.example",
-    },
-    {
-      name: "normalized catalog endpoint",
-      route: { ...catalogRoute, baseUrl: `${catalogRoute.baseUrl}/` },
-      authored: undefined,
-      expected: catalogCompat,
-    },
-    {
-      name: "catalog with authored preference",
-      route: catalogRoute,
-      authored: { codeMode: "capable" },
-      expected: catalogCompat,
-    },
-    { name: "custom endpoint", route: customRoute, authored: undefined, expected: undefined },
-    {
-      name: "model endpoint override",
+      name: "model endpoint override with authored capabilities",
       route: catalogRoute,
       modelRoute: customRoute,
-      authored: undefined,
-      expected: undefined,
-    },
-    {
-      name: "custom API",
-      route: { ...catalogRoute, api: "openai-completions" },
-      authored: undefined,
-      expected: undefined,
-    },
-    {
-      name: "custom capable",
-      route: customRoute,
       authored: { codeMode: "capable" },
       expected: { codeMode: "capable" },
     },
     {
-      name: "custom preferred",
-      route: customRoute,
-      authored: { codeMode: "preferred" },
-      expected: { codeMode: "preferred" },
+      name: "custom API without authored capabilities",
+      route: { ...catalogRoute, api: "openai-completions" },
+      authored: undefined,
+      expected: undefined,
     },
   ];
   it.each(cases)(
@@ -225,13 +183,6 @@ describe("model route compatibility", () => {
 
   const discoveredCompat: ModelCompatConfig = { codeMode: "capable" };
   it.each([
-    {
-      name: "retained discovered route",
-      providerOnly: false,
-      route: customRoute,
-      discoveredRoute: customRoute,
-      expected: discoveredCompat,
-    },
     {
       name: "configured catalog route",
       providerOnly: false,

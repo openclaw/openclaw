@@ -396,14 +396,17 @@ private fun clawTypography(fontFamily: FontFamily): ClawTypography {
 }
 
 private fun materialTypography(type: ClawTypography) =
-  Typography(
-    displayMedium = type.display,
-    titleLarge = type.title,
-    titleMedium = type.section,
-    bodyLarge = type.body,
-    labelLarge = type.label,
-    labelSmall = type.caption,
-  )
+  Typography().run {
+    copy(
+      displayMedium = type.display,
+      headlineSmall = headlineSmall.copy(fontSize = type.section.fontSize),
+      titleLarge = type.title,
+      titleMedium = type.section,
+      bodyLarge = type.body,
+      labelLarge = type.label,
+      labelSmall = type.caption,
+    )
+  }
 
 private fun clawMaterialColorScheme(
   colors: ClawColors,

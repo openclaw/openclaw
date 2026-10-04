@@ -367,6 +367,7 @@ describe("post-activation failure settlement without inference", () => {
           windowsTaskAutoStartRecovery: {
             suspended: Promise.resolve(true),
             beginMutation: () => {},
+            assertRecoveryCurrent: () => {},
             restore: vi.fn(async () => {}),
             handoff: () => {},
             complete: completeRecovery,

@@ -1,11 +1,6 @@
 /**
- * Extension relay CDP bridge.
- *
- * Presents a CDP browser endpoint (compatible with Playwright connectOverCDP)
- * on one side and the OpenClaw Chrome extension's chrome.debugger transport on
- * the other. The bridge owns all Target.* synthesis so the extension stays a
- * thin forwarder — the old assets/chrome-extension put this logic in an
- * untestable MV3 service worker, which is why it rotted and was removed.
+ * Bridge Playwright's CDP browser endpoint to the extension's chrome.debugger
+ * transport. The bridge owns Target.* synthesis.
  */
 import { addAbortListener, once } from "node:events";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
@@ -26,12 +21,10 @@ const log = createSubsystemLogger("browser").child("extension-relay");
 /** App-level keepalive interval; message traffic keeps the MV3 worker alive. */
 const EXTENSION_PING_INTERVAL_MS = 20_000;
 
-/** Synthetic targetId for the emulated browser target. */
 const BROWSER_TARGET_ID = "openclaw-extension-relay";
 /** Playwright requires every attached page target to identify its browser context. */
 const BROWSER_CONTEXT_ID = "openclaw-extension-context";
 
-/** Minimal socket seam so tests can drive the bridge without real WebSockets. */
 type BridgeSocket = {
   send: (data: string) => void;
   close: (code?: number, reason?: string) => void;
@@ -69,7 +62,6 @@ type CdpClientState = RelaySessionClient & {
   creating: Set<Promise<void>>;
 };
 
-/** Browser identity reported by the paired extension. */
 type ExtensionIdentity = {
   userAgent: string;
   browserVersion: string;
@@ -150,12 +142,10 @@ export class ExtensionRelayBridge {
     }
   }
 
-  /** Identity of the paired browser, when connected. */
   get identity(): ExtensionIdentity | null {
     return this.extension?.identity ?? null;
   }
 
-  /** Tabs currently reported as accessible by the extension. */
   accessibleTabs(): RelayTabInfo[] {
     return [...this.tabs.values()].map((tab) => tab.info);
   }
@@ -198,16 +188,10 @@ export class ExtensionRelayBridge {
     }));
   }
 
-  /** Number of connected CDP clients (diagnostics). */
   get cdpClientCount(): number {
     return this.clients.size;
   }
 
-  // ---------------------------------------------------------------------
-  // Extension side
-  // ---------------------------------------------------------------------
-
-  /** Wire up a newly accepted extension WebSocket. */
   attachExtensionSocket(socket: BridgeSocket): {
     onMessage: (raw: string) => void;
     onClose: () => void;
@@ -688,11 +672,6 @@ export class ExtensionRelayBridge {
     }
   }
 
-  // ---------------------------------------------------------------------
-  // CDP client side (Playwright connectOverCDP)
-  // ---------------------------------------------------------------------
-
-  /** Wire up a newly accepted CDP client WebSocket. */
   attachCdpClientSocket(socket: BridgeSocket): {
     onMessage: (raw: string) => void;
     onClose: () => Promise<void>;
@@ -1134,7 +1113,6 @@ export class ExtensionRelayBridge {
       case "Target.attachToTarget": {
         const targetId = request.params?.targetId as string | undefined;
         const found = targetId ? this.tabByTargetId(targetId) : null;
-        // Also allow attach by tab that is accessible but not yet debugger-attached.
         if (!found && targetId) {
           this.respondError(client, request, `No target with given id found: ${targetId}`, -32602);
           return;

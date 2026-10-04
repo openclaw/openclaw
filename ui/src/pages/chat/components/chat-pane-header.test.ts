@@ -15,7 +15,6 @@ import {
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
-import { createBackgroundTasksProps } from "./chat-background-tasks.ts";
 import {
   chatPaneHeaderSessionRow as row,
   mountChatPaneHeader,
@@ -75,7 +74,6 @@ function mountIntegratedPresenceHeader(params: {
     render(
       pane.renderPaneHeader(
         createSessionWorkspaceProps(state),
-        createBackgroundTasksProps(state),
         session,
         false,
         undefined,
@@ -146,7 +144,6 @@ describe("chat pane header", () => {
       panelLayoutActions: html`<button aria-label="Swap Chat and Dashboard"></button>`,
       discussionAction: html`<button data-action="discussion"></button>`,
       diffAction: html`<button data-action="diff"></button>`,
-      backgroundTasksAction: html`<button data-action="tasks"></button>`,
       workspaceAction: html`<button data-action="workspace"></button>`,
       sessionRailAction: html`<button data-action="rail"></button>`,
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
@@ -277,7 +274,7 @@ describe("chat pane header", () => {
     expect(crumbs?.nextElementSibling?.getAttribute("data-slot")).toBe("placement");
   });
 
-  it("places visibility in the owner slot while the face switch stays centered", () => {
+  it("places visibility beside ownership while the face switch stays centered", () => {
     const { container } = mountHeader({
       placementControl: html`<span data-slot="placement"></span>`,
       presence: html`<span data-slot="presence"></span>`,
@@ -296,7 +293,7 @@ describe("chat pane header", () => {
     );
   });
 
-  it("keeps visibility in the owner slot when the session has no face switch", () => {
+  it("keeps visibility beside ownership when the session has no face switch", () => {
     const { container } = mountHeader({
       faceControl: nothing,
       sharingControl: html`<span data-slot="sharing"></span>`,
@@ -320,7 +317,7 @@ describe("chat pane header", () => {
     );
   });
 
-  it("replaces the header owner avatar when visibility is available", () => {
+  it("keeps the header owner avatar when visibility is available", () => {
     const actor = {
       type: "human" as const,
       id: "profile-ada",
@@ -333,7 +330,7 @@ describe("chat pane header", () => {
       sharingControl: html`<span data-slot="sharing"></span>`,
     });
 
-    expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
+    expect(container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
     expect(container.querySelector('[data-slot="sharing"]')?.parentElement?.className).toBe(
       "chat-pane__header-leading",
     );
@@ -608,7 +605,6 @@ describe("chat pane header", () => {
       session: undefined,
       panelActions: html`<span data-action="terminal"></span>`,
       diffAction: html`<span data-action="diff"></span>`,
-      backgroundTasksAction: html`<span data-action="tasks"></span>`,
       workspaceAction: html`<span data-action="workspace"></span>`,
       sessionRailAction: html`<span data-action="rail"></span>`,
     });
