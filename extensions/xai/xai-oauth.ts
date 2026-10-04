@@ -50,7 +50,9 @@ type XaiDeviceCodeDiscovery = {
 type XaiOAuthTokenResponse = {
   accessToken: string;
   refreshToken?: string;
-  expires?: number;
+  // Required: an accepted token response must carry its own Date-safe expiry so a
+  // refreshed access token can never inherit the previous token's lifetime.
+  expires: number;
   idToken?: string;
 };
 
@@ -205,11 +207,16 @@ function parseXaiOAuthTokenResponse(
   const expires =
     resolveExpiresAtMsFromDurationSeconds(json.expires_in, { nowMs: now() }) ??
     resolveExpiresAtMsFromEpochSeconds(decodeJwtPayload(accessToken).exp);
+  if (!expires) {
+    throw new Error(
+      "xAI OAuth token response is missing a usable access-token lifetime (no valid expires_in and no safe exp claim on the access token). Re-run the login.",
+    );
+  }
   return {
     accessToken,
     ...(refreshToken ? { refreshToken } : {}),
     ...(idToken ? { idToken } : {}),
-    ...(expires ? { expires } : {}),
+    expires,
   };
 }
 
@@ -602,7 +609,8 @@ export async function refreshXaiOAuthCredential(
     provider: PROVIDER_ID,
     access: tokens.accessToken,
     refresh: tokens.refreshToken ?? refreshToken,
-    ...(tokens.expires ? { expires: tokens.expires } : {}),
+    // Always publish the new token's own expiry; never retain the previous one.
+    expires: tokens.expires,
     ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
     ...resolveXaiOAuthIdentity(tokens),
     tokenEndpoint,
