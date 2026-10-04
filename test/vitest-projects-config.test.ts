@@ -106,6 +106,31 @@ describe("projects vitest config", () => {
     });
   });
 
+  it("resolves the complete root watch project graph", () => {
+    const result = spawnNodeEvalSync(
+      `
+        import { resolveConfig } from "vitest/node";
+        import rootConfig from "./vitest.config.ts";
+        const resolved = await resolveConfig({ config: false }, rootConfig);
+        console.log("ROOT_PROJECT_RESOLUTION " + resolved.test.resolvedProjects.length);
+      `,
+      {
+        imports: ["tsx"],
+        env: { ...process.env, GITHUB_ACTIONS: "true", OPENCLAW_VITEST_INCLUDE_FILE: undefined },
+        timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS,
+      },
+    );
+    const output = JSON.stringify({ stdout: result.stdout, stderr: result.stderr });
+    expect(result.error, output).toBeUndefined();
+    expect(result.signal, output).toBeNull();
+    expect(result.status, output).toBe(0);
+    const report = result.stdout
+      .split("\n")
+      .find((line) => line.startsWith("ROOT_PROJECT_RESOLUTION "));
+    expect(report, result.stdout).toBeDefined();
+    expect(Number(report!.slice("ROOT_PROJECT_RESOLUTION ".length))).toBeGreaterThan(0);
+  });
+
   it.each(["all", "worker", "mixed"] as const)(
     "preserves Gateway fallback coverage for %s selection",
     async (selection) => {
