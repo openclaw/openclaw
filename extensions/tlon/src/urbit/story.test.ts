@@ -89,6 +89,15 @@ describe("markdownToStory inline formatting", () => {
       inline: [{ link: { href: "https://example.com", content: "https://example.com" } }],
     },
     { markdown: "_word_suffix *unfinished", inline: ["_word_suffix *unfinished"] },
+    {
+      markdown: "see https://example.com/guide for details",
+      inline: [
+        "see ",
+        { link: { href: "https://example.com/guide", content: "https://example.com/guide" } },
+        " for details",
+      ],
+    },
+    { markdown: "Hello! time 10:30 a/b", inline: ["Hello! time 10:30 a/b"] },
   ])("renders %j without losing literal text or nested styles", ({ markdown, inline }) => {
     expect(markdownToStory(markdown)).toEqual([{ inline }]);
   });
@@ -98,6 +107,17 @@ describe("markdownToStory inline formatting", () => {
       {
         block: {
           image: { src: "https://example.com/diagram.png", alt: "diagram", height: 0, width: 0 },
+        },
+      },
+    ]);
+  });
+
+  it("hoists an image that follows text in the same inline run", () => {
+    expect(markdownToStory("Here is the chart ![chart](https://example.com/chart.png)")).toEqual([
+      { inline: ["Here is the chart "] },
+      {
+        block: {
+          image: { src: "https://example.com/chart.png", alt: "chart", height: 0, width: 0 },
         },
       },
     ]);
@@ -203,11 +223,11 @@ describe("markdownToStory list rendering", () => {
       name: "images inside list items",
       markdown: "- ![diagram](https://example.com/diagram.png)",
       expected: [
+        { inline: ["- "] },
         {
-          inline: [
-            "- !",
-            { link: { href: "https://example.com/diagram.png", content: "diagram" } },
-          ],
+          block: {
+            image: { src: "https://example.com/diagram.png", alt: "diagram", height: 0, width: 0 },
+          },
         },
       ],
     },

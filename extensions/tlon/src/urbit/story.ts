@@ -95,7 +95,7 @@ const INLINE_MARKDOWN_RULES: ReadonlyArray<{
   },
   {
     // Stop before special characters and URL separators so earlier rules get priority.
-    pattern: /^[^*_`~[#\n:/]+/,
+    pattern: /^(?:(?!https?:\/\/|!\[)[^*_`~[#\n:/])+/,
     render: (match) => expectDefined(match[0], "plain text match"),
   },
 ];
