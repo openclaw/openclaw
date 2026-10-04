@@ -21,12 +21,15 @@ const TELEGRAM_ACCOUNT_STATUS_FIELDS = [
   "lastTransportActivityAt",
   "lastError",
   "allowUnmentionedGroups",
+  "probe",
   "audit",
 ] as const;
 
 type TelegramAccountStatus = AccountStatusSnapshot<(typeof TELEGRAM_ACCOUNT_STATUS_FIELDS)[number]>;
 
 type TelegramGroupMembershipAuditSummary = {
+  ok?: boolean;
+  checkedGroups?: number;
   unresolvedGroups?: number;
   hasWildcardUnmentionedGroups?: boolean;
   groups?: Array<{
@@ -145,7 +148,10 @@ function readTelegramGroupMembershipAuditSummary(
         })
         .filter((entry) => entry !== null)
     : undefined;
-  return { unresolvedGroups, hasWildcardUnmentionedGroups, groups };
+  // Discarded malformed rows must not count as a complete membership audit.
+  const ok = value.ok === true && Array.isArray(groupsRaw) && groups?.length === groupsRaw.length;
+  const checkedGroups = asFiniteNumber(value.checkedGroups);
+  return { ok, checkedGroups, unresolvedGroups, hasWildcardUnmentionedGroups, groups };
 }
 
 export function collectTelegramStatusIssues(
@@ -170,18 +176,36 @@ export function collectTelegramStatusIssues(
       now,
     });
 
-    if (account.allowUnmentionedGroups === true) {
+    const probe = account.probe;
+    const privacyDisabled =
+      isRecord(probe) &&
+      probe.ok === true &&
+      isRecord(probe.bot) &&
+      probe.bot.canReadAllGroupMessages === true;
+    const audit = readTelegramGroupMembershipAuditSummary(account.audit);
+    const adminInAllGroups =
+      audit.ok === true &&
+      (audit.checkedGroups ?? 0) > 0 &&
+      audit.unresolvedGroups === 0 &&
+      audit.hasWildcardUnmentionedGroups === false &&
+      audit.groups?.length === audit.checkedGroups &&
+      audit.groups?.every(
+        (group) =>
+          group.ok === true && (group.status === "administrator" || group.status === "creator"),
+      );
+    if (account.allowUnmentionedGroups === true && !adminInAllGroups) {
       issues.push({
         channel: "telegram",
         accountId,
         kind: "config",
-        message:
-          "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
-        fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+        message: privacyDisabled
+          ? "BotFather reports privacy mode is disabled. Existing Telegram groups may still require removing and re-adding the bot for unmentioned messages; group admin access is not fully verified."
+          : "Config allows unmentioned group messages (requireMention=false). Telegram privacy mode may block these messages unless disabled or the bot is a group admin.",
+        fix: privacyDisabled
+          ? `If privacy mode was disabled after the bot joined, remove and re-add it to those groups, or make it a group admin. Run ${formatCliCommand("openclaw channels status --probe")} to verify group membership.`
+          : `Run ${formatCliCommand("openclaw channels status --probe")} to check group visibility. If needed, make the bot a group admin, or disable privacy in BotFather (/setprivacy) and remove/re-add the bot to each group.`,
       });
     }
-
-    const audit = readTelegramGroupMembershipAuditSummary(account.audit);
     if (audit.hasWildcardUnmentionedGroups === true) {
       issues.push({
         channel: "telegram",
