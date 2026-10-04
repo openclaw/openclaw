@@ -369,6 +369,15 @@ run("node server.js");
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects exec destructured from a child_process namespace",
+      source: `
+const cp = require("node:child_process");
+const { exec } = cp;
+exec("node server.js");
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects child_process call through a computed member",
       source: `
 import cp from "node:child_process";

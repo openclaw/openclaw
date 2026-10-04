@@ -288,6 +288,13 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
     }
   }
   for (const namespaceAlias of namespaceAliases) {
+    const destructuredNamespaceMethods = new RegExp(
+      String.raw`\b(?:const|let|var)\s*\{([^}]*)\}\s*=\s*${escapeRegExp(namespaceAlias)}(?=\s*(?:;|\r?\n|$))`,
+      "g",
+    );
+    for (const match of source.matchAll(destructuredNamespaceMethods)) {
+      collectSpecifiers(expectDefined(match[1], "child_process namespace method specifiers"));
+    }
     const extractedNamespaceMethod = new RegExp(
       String.raw`\b(?:const|let|var)\s+(\w+)\s*=\s*${escapeRegExp(namespaceAlias)}\s*\.\s*(\w+)`,
       "g",
