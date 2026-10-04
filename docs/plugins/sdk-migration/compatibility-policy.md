@@ -578,6 +578,23 @@ displays either the date or named gate, counts local code/doc references, lists
 references, and summarizes the private memory-host SDK bridge. Those reader
 references are triage signals, not published-artifact proof.
 
+### TTS preference resolution
+
+Host reply dispatch now prepares the machine-owned TTS preference path through
+the shared-state reader and carries that fact through prompt and delivery work.
+The released `resolveTtsPrefsPath(config)` call in
+`openclaw/plugin-sdk/agent-runtime` and `openclaw/plugin-sdk/tts-runtime` still
+returns a `string` synchronously. `buildTtsSystemPromptHint(config, agentId,
+options)` also keeps its synchronous return value, and the existing asynchronous
+`maybeApplyTtsToPayload` call does not require prepared preferences.
+
+The `tts-preferences-sync-resolution` compatibility record retains the legacy
+synchronous resolution path. Removal requires a public preparation contract,
+migration of published plugin readers, and explicit approval for a breaking
+Plugin SDK release at the next major-version gate. No removal date or runtime
+warning is introduced. Existing plugins need no change for this host update;
+preference-file reads, stored data, and update behavior stay the same.
+
 ### Media legacy projection
 
 The `media-legacy-projection` compatibility record covers the old parallel

@@ -532,8 +532,12 @@ export async function buildPreparedCompactionRuntime(
       assertCurrent: () => params.abortSignal?.throwIfAborted(),
     });
     const activeProjectKeys = params.preparedModelRuntime?.activeProjectKeys ?? [];
+    const { prepareTtsPreferences } = await import("../../tts/tts-preferences.js");
+    const preparedTtsPreferences =
+      promptMode === "full" ? await prepareTtsPreferences() : undefined;
     const buildSystemPromptText = () => {
       const builtSystemPrompt = buildConfiguredAgentSystemPrompt({
+        preparedTtsPreferences,
         config: params.config,
         preparedModelRuntime: params.preparedModelRuntime,
         agentId: sessionAgentId,

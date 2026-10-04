@@ -8,6 +8,7 @@ import {
   SessionGoalOperationError,
   type SessionGoalOperationErrorCode,
 } from "../config/sessions/goals-operations.types.js";
+import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
 import {
   SessionEntryLifecycleUpsertConflictError,
   SqliteSessionMutationConflictError,
@@ -54,6 +55,7 @@ const MESSAGE_ONLY_ERRORS = {
   "model-account-authority": ModelAccountConnectAuthorityError,
   "duplicate-agent": DuplicateAgentError,
   "model-selection-locked": ModelSelectionLockedError,
+  "session-canonical-key-migration": SessionCanonicalKeyMigrationRequiredError,
   "session-pending-input-custody": SessionPendingInputCustodyError,
   "skill-upload-request": SkillUploadRequestError,
   coordinator: SqliteCoordinatorError,

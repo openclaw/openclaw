@@ -567,6 +567,7 @@ src/config/sessions/session-accessor.sqlite-entry-inventory.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
 src/config/sessions/session-accessor.sqlite-status.ts
+src/config/sessions/session-canonical-key-error.ts
 src/config/sessions/session-canonical-key.ts
 src/config/sessions/session-canonical-row.ts
 src/config/sessions/session-canonical-validation-deferral.ts
@@ -1179,6 +1180,7 @@ src/plugins/compat/plugin-sdk-subpath-records.ts
 src/plugins/compat/registry-records.ts
 src/plugins/compat/registry.ts
 src/plugins/compat/session-persistence-records.ts
+src/plugins/compat/tts-preferences-record.ts
 src/plugins/compat/watched-sessions.ts
 src/plugins/compat/workspace-mutation-guard.ts
 src/plugins/config-activation-shared.ts

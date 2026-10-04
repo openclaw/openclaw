@@ -354,6 +354,7 @@ export async function runCliFallbackCandidate(
                   })
               : undefined,
           runParams: {
+            preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
             preparedRunAdmission: params.preparedRunAdmission,
             messageActionTurnCapability: params.messageActionTurnCapability,
             diagnosticOwner,
