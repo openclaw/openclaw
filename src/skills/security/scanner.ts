@@ -252,6 +252,10 @@ function collectChildProcessBindings(source: string): ChildProcessBindings {
       // Renamed binding: `spawn as launch` (ESM) or `exec: run` (CJS)
       const asMatch = spec.match(/^(\w+)\s+(?:as)\s+(\w+)$/) ?? spec.match(/^(\w+)\s*:\s*(\w+)$/);
       if (asMatch?.[1] && asMatch[2]) {
+        if (asMatch[1] === "default") {
+          namespaceAliases.add(asMatch[2]);
+          continue;
+        }
         if (CHILD_PROCESS_EXEC_METHODS.has(asMatch[1])) {
           methodAliases.add(asMatch[2]);
         }
@@ -307,8 +311,9 @@ function isBenignDangerousExecMatch(
   const matchIndex = match.index;
   const charAtMatch = line[matchIndex];
   const prefix = line.slice(0, matchIndex);
-  const inlineChildProcessReceiver =
-    /\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*(?:\.\s*|\[\s*)$/.test(prefix);
+  const inlineChildProcessReceiver = new RegExp(
+    String.raw`(?:\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)|(?:\(\s*)?(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\)?)\s*(?:\.\s*|\[\s*)$`,
+  ).test(prefix);
   let receiver: string | undefined;
   // Computed and member calls require a known receiver for every watched
   // method. This excludes RegExp.exec and similarly named bundled helpers.

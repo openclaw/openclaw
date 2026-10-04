@@ -298,6 +298,21 @@ require("node:child_process").spawn("node", ["server.js"]);
       expected: { ruleId: "dangerous-exec", severity: "critical" as const },
     },
     {
+      name: "detects child_process call through an inline dynamic import receiver",
+      source: `
+(await import("node:child_process")).spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
+      name: "detects child_process call through a default-as-namespace import",
+      source: `
+import { default as proc } from "node:child_process";
+proc.spawn("node", ["server.js"]);
+`,
+      expected: { ruleId: "dangerous-exec", severity: "critical" as const },
+    },
+    {
       name: "detects child_process call through a computed member",
       source: `
 import cp from "node:child_process";
