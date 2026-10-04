@@ -4598,14 +4598,14 @@ class NodeRuntime private constructor(
         }
         return@launchGatewayLifecycle
       }
-      finishGatewayConnectionOperation(intent)
-      updateStatus {
-        operatorStatusText = "Connecting…"
-        operatorConnectionProblem = null
-      }
-      connectWithAuth(endpoint = endpoint, auth = resolveGatewayConnectAuth(endpoint)) {
-        beginConnectAttempt(endpoint)
-      }
+      // Reuse standard TLS/trust admission without switching the current gateway's Chat scope.
+      // A target-switch beginConnect resets the selected session to main.
+      beginConnect(
+        endpoint = endpoint,
+        auth = resolveGatewayConnectAuth(endpoint),
+        intent = intent,
+        preserveExistingGatewayScope = true,
+      )
     }
   }
 
@@ -4897,30 +4897,35 @@ class NodeRuntime private constructor(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
     intent: GatewayConnectionOperation,
+    preserveExistingGatewayScope: Boolean = false,
   ) {
     synchronized(gatewayAuthLifecycleLock) {
       if (gatewayAuthResetInProgress) return
     }
     // A user-selected connect target must never inherit notification content from another gateway.
-    if (gatewayDefaultAgentStableId?.let { it != endpoint.stableId } == true) {
+    if (!preserveExistingGatewayScope && gatewayDefaultAgentStableId?.let { it != endpoint.stableId } == true) {
       updateGatewayDefaultAgentId(null)
     }
-    notificationOutbox.clear()
-    invalidateNodeCapabilityApprovalState()
+    if (!preserveExistingGatewayScope) {
+      notificationOutbox.clear()
+      invalidateNodeCapabilityApprovalState()
+    }
     val connectAttemptId = beginConnectAttempt(endpoint, intent)
     connectingEndpoint = endpoint
-    chat.onGatewayScopeChanging()
-    val attempt = checkNotNull(acceptedConnectAttempt.value)
-    val restoration = scope.launch(start = CoroutineStart.LAZY) { chat.restoreSelectedGatewayOfflineState() }
-    attempt.chatRestoration = restoration
-    restoration.invokeOnCompletion {
-      synchronized(gatewayLifecycleIntentLock) {
-        if (acceptedConnectAttempt.value === attempt) publishGatewayConnectionHandoff()
+    if (!preserveExistingGatewayScope) {
+      chat.onGatewayScopeChanging()
+      val attempt = checkNotNull(acceptedConnectAttempt.value)
+      val restoration = scope.launch(start = CoroutineStart.LAZY) { chat.restoreSelectedGatewayOfflineState() }
+      attempt.chatRestoration = restoration
+      restoration.invokeOnCompletion {
+        synchronized(gatewayLifecycleIntentLock) {
+          if (acceptedConnectAttempt.value === attempt) publishGatewayConnectionHandoff()
+        }
       }
+      // The real local-hydration job belongs to this attempt, independently of TLS admission.
+      // Do not hold the switch mutex or prevent a trust decision while the local cache loads.
+      restoration.start()
     }
-    // The real local-hydration job belongs to this attempt, independently of TLS admission.
-    // Do not hold the switch mutex or prevent a trust decision while the local cache loads.
-    restoration.start()
     _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true) {
