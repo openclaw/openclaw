@@ -14,6 +14,7 @@ import {
   isAgentsApiOptionalHistoryReadFailure,
   isAgentsApiTransportDisconnect,
 } from "./agentsapi-errors.js";
+import { createAgentsApiSessionHistory } from "./agentsapi-session-history.js";
 import type { AgentsApiToolExecutionResult } from "./agentsapi-tools.js";
 
 /** Native input receipts and session idle, together, establish Agents API completion. */
@@ -140,84 +141,6 @@ export function createAgentsApiSession(options: {
     cancelled = !terminatedByTool && latest?.status === "cancelled";
     return turns;
   };
-  const readItemsByTurn = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
-    const savedItems = await readClient.items(sessionId, undefined, readSignal);
-    readSignal.throwIfAborted();
-    const itemsByTurn = new Map<string, AgentsApiItem[]>();
-    for (const item of savedItems) {
-      if (!item.turn_id) {
-        continue;
-      }
-      const items = itemsByTurn.get(item.turn_id) ?? [];
-      items.push(item);
-      itemsByTurn.set(item.turn_id, items);
-    }
-    return itemsByTurn;
-  };
-  const readSavedState = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
-    const turns = await readAdmittedTurns(readClient, readSignal);
-    const entries: Array<{ turn: Turn; items: AgentsApiItem[] }> = [];
-    const inputItems = new Set<string>();
-    const itemsByTurn =
-      turns.length || baselineTurnId
-        ? await readItemsByTurn(readClient, readSignal)
-        : new Map<string, AgentsApiItem[]>();
-    for (const turn of turns) {
-      const items = itemsByTurn.get(turn.id) ?? [];
-      for (const item of items) {
-        rememberItemTurn(item.id, turn.id);
-        if (item.type === "message" && item.role === "user" && !priorInputItemIds.has(item.id)) {
-          inputItems.add(item.id);
-        }
-      }
-      entries.push({ turn, items });
-    }
-    observedInputItems = inputItems;
-    return { turns, entries, itemsByTurn };
-  };
-  const projectSavedState = async (
-    entries: Array<{ turn: Turn; items: AgentsApiItem[] }>,
-    readSignal: AbortSignal,
-  ) => {
-    let transcriptReady = true;
-    for (const { turn, items } of entries) {
-      readSignal.throwIfAborted();
-      const ready = await options.onReconcile?.(turn, items);
-      transcriptReady = ready !== false && transcriptReady;
-      readSignal.throwIfAborted();
-    }
-    return transcriptReady;
-  };
-  const reconcilePriorHistory = async (
-    readClient: AgentsApiClient,
-    readSignal: AbortSignal,
-    itemsByTurn: Map<string, AgentsApiItem[]>,
-  ) => {
-    if (!baselineTurnId || !options.onReconcileHistory) {
-      return;
-    }
-    const turns = await readClient.turns(sessionId, readSignal);
-    readSignal.throwIfAborted();
-    const baselineIndex = turns.findIndex((turn) => turn.id === baselineTurnId);
-    if (baselineIndex < 0) {
-      throw new Error("Agents API historical reconciliation lost its baseline turn");
-    }
-    const priorTurns = turns
-      .slice(0, baselineIndex + 1)
-      .filter((turn) => isAgentsApiTerminalTurn(turn.status));
-    if (!priorTurns.length) {
-      return;
-    }
-    // Historical facts repair the retained conversation without entering this
-    // attempt's admission, live presentation, tool lifecycle, or token accounting.
-    await options.onReconcileHistory(
-      priorTurns.map((turn) => ({
-        turn,
-        items: itemsByTurn.get(turn.id) ?? [],
-      })),
-    );
-    readSignal.throwIfAborted();
-  };
   const rememberItemTurn = (itemId: string, turnId: string) => {
     const previous = itemTurnIds.get(itemId);
     if (previous && previous !== turnId) {
@@ -226,6 +149,20 @@ export function createAgentsApiSession(options: {
     itemTurnIds.set(itemId, turnId);
     excludedItemIds.delete(itemId);
   };
+
+  const history = createAgentsApiSessionHistory({
+    sessionId,
+    cleanupClient,
+    getBaselineTurnId: () => baselineTurnId,
+    coordinatorTurnIds,
+    priorInputItemIds,
+    readAdmittedTurns,
+    rememberItemTurn,
+    observeInputItems: (items) => {
+      observedInputItems = items;
+    },
+    callbacks: options,
+  });
 
   return {
     isAvailable,
@@ -236,31 +173,7 @@ export function createAgentsApiSession(options: {
       if (!submitted || !settled) {
         return Promise.resolve([]);
       }
-      return (usageTurns ??= (async () => {
-        const usageSignal = AbortSignal.timeout(5_000);
-        let turns: Turn[] = [];
-        // Idle can precede the REST records and their usage. Give accounting
-        // a bounded settlement window, without treating unknown usage as zero.
-        try {
-          while (true) {
-            turns = await cleanupClient.turns(sessionId, usageSignal, baselineTurnId);
-            const recordedIds = new Set(turns.map((turn) => turn.id));
-            if (
-              turns.length > 0 &&
-              [...coordinatorTurnIds].every((id) => recordedIds.has(id)) &&
-              turns.every((turn) => turn.usage !== null)
-            ) {
-              return turns;
-            }
-            await delay(500, undefined, { signal: usageSignal });
-          }
-        } catch (error) {
-          if (!usageSignal.aborted) {
-            options.onUsageError?.(error);
-          }
-          return turns;
-        }
-      })());
+      return (usageTurns ??= history.readUsageTurns());
     },
     async run(prompt: string, persistInput: () => Promise<void>, onSubmitted: () => void) {
       signal.throwIfAborted();
@@ -333,7 +246,7 @@ export function createAgentsApiSession(options: {
         // a transient read failure or wait indefinitely before a Gateway action.
         const prefixSignal = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
         try {
-          itemsByTurn = await readItemsByTurn(client, prefixSignal);
+          itemsByTurn = await history.readItemsByTurn(client, prefixSignal);
           assertCurrent();
         } catch (error) {
           signal.throwIfAborted();
@@ -372,7 +285,7 @@ export function createAgentsApiSession(options: {
             // A pending function can precede its saved item. Preserve the available
             // prefix; its existing readiness barrier still fences unresolved slots.
             const prefix = callIndex >= 0 ? items.slice(0, callIndex) : items;
-            const transcriptReady = await projectSavedState(
+            const transcriptReady = await history.projectSavedState(
               turns.map((turn) => ({
                 turn,
                 items: turn.id === call.turn_id ? prefix : (itemsByTurn!.get(turn.id) ?? []),
@@ -542,7 +455,7 @@ export function createAgentsApiSession(options: {
         await awaitReceipt(submissionFence);
         assertCurrent();
         const admittedCount = admittedMessageCount;
-        const snapshot = await readSavedState(client, signal);
+        const snapshot = await history.readSavedState(client, signal);
         assertCurrent();
         const session = await client.session(sessionId, signal);
         assertCurrent();
@@ -569,10 +482,10 @@ export function createAgentsApiSession(options: {
         }
         if (settled || recover) {
           if (settled) {
-            await reconcilePriorHistory(client, signal, snapshot.itemsByTurn);
+            await history.reconcilePriorHistory(client, signal, snapshot.itemsByTurn);
             assertCurrent();
           }
-          await projectSavedState(snapshot.entries, signal);
+          await history.projectSavedState(snapshot.entries, signal);
           assertCurrent();
         }
       };
@@ -599,13 +512,13 @@ export function createAgentsApiSession(options: {
               return false;
             }
             // Command deltas can omit their turn; saved admitted items retain that correlation.
-            const snapshot = await readSavedState(client, signal);
+            const snapshot = await history.readSavedState(client, signal);
             assertCurrent();
             if (!itemTurnIds.has(itemId)) {
               excludedItemIds.add(itemId);
               return false;
             }
-            await projectSavedState(snapshot.entries, signal);
+            await history.projectSavedState(snapshot.entries, signal);
             assertCurrent();
             return true;
           }
@@ -803,9 +716,9 @@ export function createAgentsApiSession(options: {
       if (session.status !== "idle" && session.status !== "failed") {
         throw new Error("Agents API canonical cleanup requires native work to be retired");
       }
-      const snapshot = await readSavedState(cleanupClient, cleanupSignal);
-      await reconcilePriorHistory(cleanupClient, cleanupSignal, snapshot.itemsByTurn);
-      await projectSavedState(snapshot.entries, cleanupSignal);
+      const snapshot = await history.readSavedState(cleanupClient, cleanupSignal);
+      await history.reconcilePriorHistory(cleanupClient, cleanupSignal, snapshot.itemsByTurn);
+      await history.projectSavedState(snapshot.entries, cleanupSignal);
       return snapshot.turns.at(-1);
     },
     async close() {

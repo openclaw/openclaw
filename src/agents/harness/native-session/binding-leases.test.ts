@@ -124,9 +124,9 @@ describe("native session binding leases", () => {
   it("preserves renewal failure after retained cleanup authority expires", async () => {
     vi.useFakeTimers();
     const { state } = createBindingTestState();
-    const key = "binding-failed-renewal";
+    const bindingKey = "binding-failed-renewal";
     const renewalCause = new Error("renewal observation failed");
-    const renewalFailure = new Error(`Lost binding lease: ${key}`, { cause: renewalCause });
+    const renewalFailure = new Error(`Lost binding lease: ${bindingKey}`, { cause: renewalCause });
     const owner = createNativeSessionBindingLeases(state, {
       ...bindingTestOptions,
       errors: {
@@ -156,9 +156,9 @@ describe("native session binding leases", () => {
     const expiresAt = Date.now() + bindingTestOptions.lease.staleMs;
     const run = owner
       .withLease(
-        key,
+        bindingKey,
         async () => {
-          assertRetainedLease = owner.captureLeaseAssertion(key);
+          assertRetainedLease = owner.captureLeaseAssertion(bindingKey);
           failNextObservation = true;
           started();
           await finishRun;

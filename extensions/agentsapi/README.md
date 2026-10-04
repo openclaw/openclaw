@@ -201,31 +201,35 @@ bindings. Adding, changing, or removing a configured network policy requires an
 explicit session reset before further native session writes. These settings are
 unused for self-hosted sessions.
 
-Self-hosted session creation sends
-the absolute host-prepared OpenClaw workspace as `workspace_directory`. That
-directory must already exist at the same path inside the executor. See the
-[official self-hosted guide](https://developers.openai.com/api/docs/guides/agents-api/environments/self-hosted).
-Before enabling `self_hosted`, configure an operator-owned controller using the
-[official webhook-managed lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
-It receives `agent.session.action_required` with an `environment_connection`
-action, retrieves that session through the authenticated Agents API, and connects
-the executor using `session.environment.id` and the unchanged
-`session.environment.remote_url`. Route only this Gateway's sessions to the
-controller and match its workspace path. The controller owns startup,
-reconnection, and cleanup; this plugin does not launch, provision, or authenticate
-an executor. Input submission has a 60-second HTTP deadline, including any wait
-for the executor to connect. Configure the controller to connect promptly;
-the API's longer connection window does not extend this deadline. Session
-connection events remain visible while it connects.
-A deployment can enable a separate executor plugin and select it explicitly with
-`plugins.entries.agentsapi.config.executorController: "my-executor"`.
-The selected plugin registers one controller through
-`api.registerAgentExecutorController({ workspaceDirectory, ensure, retire })`.
-The stock Agents API plugin continues to own the harness; the executor plugin
-must not register a second harness. Its manifest declares
-`activation.onAgentHarnesses: ["agentsapi"]` so the controller is loaded into
-the same prepared invocation registry as the harness. Omit `executorController` for the external
-webhook-managed path above.
+For setup, deployment choices, and a shared-host example, see the
+[self-hosted execution guide](https://docs.openclaw.ai/plugins/agentsapi#self-hosted-execution).
+Each native session needs its own executor process. All executors can share one
+persistent VM, remote host, container, and workspace, or use separate environments.
+Shared files and credentials are subject to host permissions, not session isolation.
+
+Self-hosted execution has two lifecycle options:
+
+- Enable a separate executor controller plugin and select its ID with
+  `plugins.entries.agentsapi.config.executorController: "my-executor"`.
+  That plugin registers
+  `api.registerAgentExecutorController({ workspaceDirectory, ensure, retire })`
+  and declares `activation.onAgentHarnesses: ["agentsapi"]` in its manifest.
+  Its existing absolute `workspaceDirectory` is sent as `workspace_directory`;
+  Gateway tool paths stay unchanged. The stock Agents API plugin owns the harness,
+  so the executor plugin must not register another harness. OpenClaw provides the
+  contract; install or implement a controller appropriate for your infrastructure.
+- Omit `executorController` for an external controller, such as the
+  [official webhook-managed lifecycle](https://developers.openai.com/api/docs/guides/agents-api/environments/lifecycle#start-compute-from-webhooks).
+  It receives `agent.session.action_required` with an `environment_connection`
+  action, retrieves the session through the authenticated API, and uses
+  `session.environment.id` and the unchanged `session.environment.remote_url`.
+  The host-prepared OpenClaw workspace path must already exist at the same
+  absolute path on the executor. The external controller owns startup,
+  reconnection, and cleanup. Route only its intended sessions to it.
+
+Use one lifecycle owner per session. Both options require an operator-provisioned
+host and executor credentials. Input submission has a 60-second HTTP deadline,
+including connection wait; the API's longer connection window does not extend it.
 
 The controller uses the public `AgentExecutorController`, `AgentExecutorBinding`
 and `AgentExecutorContext` types from `openclaw/plugin-sdk/agent-harness-runtime`:

@@ -12,17 +12,11 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   agentHarnessAttemptTerminal,
-  awaitAgentEndSideEffects,
-  buildAgentHookContextChannelFields,
-  buildEmbeddedForegroundPromptContext,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   formatErrorMessage,
-  resolveAgentDir,
   resolveAgentHarnessBeforePromptBuildResult,
   resolveAgentExecutorController,
-  runAgentEndSideEffects,
-  runAgentHarnessLlmOutputHook,
   sanitizeToolArgs,
   setActiveEmbeddedRun,
   type AgentHarnessAttemptParamsV2,
@@ -30,6 +24,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createAgentsApiAttemptHooks } from "./agentsapi-attempt-hooks.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import { AgentsApiClient } from "./agentsapi-client.js";
 import { ensureAgentsApiEnvironment } from "./agentsapi-environment.js";
@@ -138,25 +133,7 @@ export async function runAgentsApiAttempt(
     state: { lifecycleStarted: false, lifecycleTerminalEmitted: false },
     emitEvent,
   });
-  const contextWindow = {
-    contextTokenBudget: params.contextWindowInfo?.tokens ?? params.contextTokenBudget,
-    contextWindowSource: params.contextWindowInfo?.source,
-    contextWindowReferenceTokens: params.contextWindowInfo?.referenceTokens,
-  };
-  const hookContext = {
-    runId: params.runId,
-    agentId: target.agentId,
-    sessionKey: params.sessionKey,
-    sessionId: params.sessionId,
-    workspaceDir: params.workspaceDir,
-    modelProviderId: params.provider,
-    modelId: params.model.id,
-    trigger: params.trigger,
-    inputProvenance: params.inputProvenance,
-    ...buildAgentHookContextChannelFields(params),
-    channelContext: params.channelContext,
-    ...contextWindow,
-  };
+  const hooks = createAgentsApiAttemptHooks(params, target.agentId, startedAtMs);
   let native: ReturnType<typeof createAgentsApiSession> | undefined;
   let remoteSessionId = binding?.sessionId;
   const logFailure = (message: string, error: unknown) =>
@@ -346,7 +323,7 @@ export async function runAgentsApiAttempt(
         preparedHistory = history.buildSessionContext().messages;
         return preparedHistory;
       },
-      ctx: hookContext,
+      ctx: hooks.hookContext,
       bootstrapContextRunKind: params.bootstrapContextRunKind,
       toolAuthority: {
         fingerprint: params.toolAuthorityFingerprint,
@@ -729,46 +706,7 @@ export async function runAgentsApiAttempt(
     },
   };
   assertHarnessCurrent();
-  runAgentHarnessLlmOutputHook({
-    event: {
-      runId: params.runId,
-      sessionId: params.sessionId,
-      provider: params.provider,
-      model: params.model.id,
-      resolvedRef: `${params.provider}/${params.model.id}`,
-      harnessId: "agentsapi",
-      prompt: params.prompt,
-      ...contextWindow,
-      assistantTexts: result.assistantTexts,
-      lastAssistant: result.lastAssistant,
-      usage: result.attemptUsage,
-    },
-    ctx: hookContext,
-  });
-  const agentEnd = {
-    event: {
-      runId: params.runId,
-      messages: result.messagesSnapshot,
-      success: terminal.kind === "ok",
-      error: terminal.kind === "failed" ? formatErrorMessage(terminal.error) : undefined,
-      durationMs: Date.now() - startedAtMs,
-    },
-    ctx: {
-      ...hookContext,
-      config: params.config,
-      foregroundPromptContext: buildEmbeddedForegroundPromptContext(
-        { ...params, agentId: target.agentId },
-        params.agentDir ?? resolveAgentDir(params.config ?? {}, target.agentId),
-      ),
-      skillWorkshopAvailable: false,
-      compacted: false,
-    },
-  };
-  if (!params.messageChannel && !params.messageProvider) {
-    await awaitAgentEndSideEffects(agentEnd);
-  } else {
-    runAgentEndSideEffects(agentEnd);
-  }
+  await hooks.complete(result);
   return result;
 }
 
