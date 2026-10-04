@@ -162,12 +162,15 @@ describe("meeting participation authority and durable attempts", () => {
     expect(effect).toHaveBeenCalledTimes(1);
   });
 
-  it("does not replay a consumed source after its text is revised", async () => {
+  it("does not replay a consumed source under a new request or after its text is revised", async () => {
     const { owner, effect } = harness();
     const sourceId = owner.observe(sessionId, source);
     await expect(owner.execute(sessionId, { ...request, sourceId })).resolves.toMatchObject({
       status: "succeeded",
     });
+    await expect(
+      owner.execute(sessionId, { ...request, sourceId, requestId: "another-request" }),
+    ).resolves.toMatchObject({ status: "rejected" });
     const revisedSourceId = owner.observe(sessionId, {
       ...source,
       revision: "2",
@@ -688,7 +691,7 @@ describe("meeting participation SQLite value contract", () => {
 });
 
 describe("meeting participation native correction feedback", () => {
-  it.each(["succeeded"] as const)(
+  it.each(["succeeded", "failed", "uncertain", "unsupported"] as const)(
     "does not authorize retry of a %s native outcome",
     async (status) => {
       const { owner, effect } = harness();

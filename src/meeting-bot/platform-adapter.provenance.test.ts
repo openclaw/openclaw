@@ -66,8 +66,16 @@ describe("meeting observation provenance parsing", () => {
 
   it.each([
     ["missing", undefined],
+    ["null", null],
+    ["array", []],
+    ["missing observer", { self: "other" }],
     ["blank observer", { ...testMeetingObservation(), observer: " " }],
     ["oversized observer", { ...testMeetingObservation(), observer: "x".repeat(129) }],
+    ["oversized observation id", { ...testMeetingObservation(), observationId: "x".repeat(1_025) }],
+    ["non-scalar session", { ...testMeetingObservation(), sessionId: { id: "session-1" } }],
+    ["oversized epoch", { ...testMeetingObservation(), epoch: "x".repeat(513) }],
+    ["invalid time", { ...testMeetingObservation(), observedAt: "not-a-date" }],
+    ["invalid speaker", { ...testMeetingObservation(), speaker: ["Alice"] }],
     ["invalid self", { ...testMeetingObservation(), self: false }],
   ])(
     "makes %s envelopes explicitly unknown without inferring self from a source",

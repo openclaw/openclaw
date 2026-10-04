@@ -279,6 +279,24 @@ describe("provider-catalog-shared live catalog cache", () => {
     },
   );
 
+  it("reloads rejected catalog values and retains the subsequent usable result", async () => {
+    const load = vi
+      .fn<() => Promise<string>>()
+      .mockResolvedValueOnce("empty")
+      .mockResolvedValueOnce("usable");
+    const read = () =>
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models"],
+        load,
+        shouldCache: (value) => value !== "empty",
+      });
+
+    await expect(read()).resolves.toBe("empty");
+    await expect(read()).resolves.toBe("usable");
+    await expect(read()).resolves.toBe("usable");
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
   it.each(["resolve", "reject", "predicate-false", "predicate-throw", "same-promise"] as const)(
     "preserves a replacement cache entry after expired work finishes with %s",
     async (outcome) => {

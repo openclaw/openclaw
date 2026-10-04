@@ -166,6 +166,7 @@ describe("node auto-update controller", () => {
   it.each([
     { label: "unmanaged process", launcher: false, kind: "package" },
     { label: "source checkout", launcher: true, kind: "git" },
+    { label: "unknown installation", launcher: true, kind: "unknown" },
     { label: "host-owned installation", launcher: true, kind: "host" },
     { label: "node setting", config: { nodeHost: { autoUpdate: { enabled: false } } } },
     { label: "startup check setting", config: { update: { checkOnStart: false } } },

@@ -195,6 +195,8 @@ describe("plugin discovery identity and local join", () => {
 
   it.each([
     ["bundled", "@openclaw/calendar-local"],
+    ["official", "@acme/calendar-local"],
+    ["global", "@openclaw/calendar-local"],
     ["workspace", "@openclaw/calendar-local"],
   ])(
     "derives %s attribution from Gateway provenance, never package name %s",

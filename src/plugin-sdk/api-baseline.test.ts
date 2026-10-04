@@ -871,5 +871,28 @@ describe("Plugin SDK API baseline", () => {
       expect(changed.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);
       expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(declaration?.closureHash);
     }
+
+    const combined = await renderPrivateDeclarationFixture({
+      optionalOption: true,
+      optionalResult: true,
+    });
+    const combinedDiff = diffPluginSdkApi(baseline, combined);
+    expect(combinedDiff.exports).toEqual([
+      expect.objectContaining({
+        change: "reachable",
+        entrypoint: "fixture",
+        exportName: "createFixture",
+      }),
+    ]);
+    expect(
+      combinedDiff.exports.flatMap((change) =>
+        change.declarationChanges.map((section) => section.name),
+      ),
+    ).toEqual(expect.arrayContaining(["FixtureOptionLeaf", "FixtureResultLeaf"]));
+    expect(hasPluginSdkApiChanges(combinedDiff)).toBe(true);
+    expect(pluginSdkApiAcknowledgement(combinedDiff)).toMatch(/^[a-f0-9]{8}$/u);
+    expect(
+      formatPluginSdkApiDiffReport({ baseLabel: "base", diff: combinedDiff, headLabel: "head" }),
+    ).toContain("Reachable declarations changed");
   });
 });
