@@ -22,6 +22,13 @@ working directory. Their process callbacks and idle queue tail must not retain
 the first read's async context. Each read keeps its own admission, cancellation,
 and deadline scope until settlement; completed operation promises are released.
 
+Snapshot staging owners and native-source completion promises use the same
+lifecycle context. Staging preparations keep their individual authority until
+cleanup completes. Shared-state opening releases its caller admission callback
+after native settlement; reusable writer slots retain prepared launch facts
+instead of the opening caller's options. These changes preserve FIFO admission,
+joins of pending opens, schemas, stored bytes, configuration, and update behavior.
+
 Inventory classifications describe counted operations, not whole-module runtime
 safety. Reviewed mixed modules use named operation paths, optionally narrowed to
 a variable initializer, rather than line numbers. Initializer exceptions exclude

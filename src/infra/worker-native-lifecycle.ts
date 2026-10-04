@@ -10,8 +10,8 @@ import {
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSpawnBrokerHost, type SpawnBrokerHost } from "../process/spawn-broker/host.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureSqliteWorkerEnvironmentData } from "./bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "./runtime-process-url.js";
@@ -445,8 +445,11 @@ export function captureRetainedNativeWorkerSource(options?: {
     },
   };
   const owners = new Map<object, { close: () => Promise<void>; settled: boolean }>();
-  const joined = createDeferredCore();
-  void joined.promise.catch(() => undefined);
+  const joined = runInDetachedAsyncContext(() => {
+    const completion = createDeferredCore();
+    void completion.promise.catch(() => undefined);
+    return completion;
+  });
   let joining = false;
   let closingOwners: Promise<void> | undefined;
   const joinSource = () => {

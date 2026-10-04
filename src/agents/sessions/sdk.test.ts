@@ -46,7 +46,7 @@ import type { ToolDefinition } from "./extensions/types.js";
 import * as publicSessionSdk from "./index.js";
 import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { ModelRegistry } from "./model-registry.js";
-import { createAgentSession, createAgentSessionForEmbeddedRunner } from "./sdk.js";
+import { createAgentSession } from "./sdk.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
@@ -65,7 +65,7 @@ const testModel: Model = {
 
 describe("createAgentSession runtime ownership", () => {
   it("keeps embedded recovery construction out of the public sessions barrel", () => {
-    expect(publicSessionSdk).not.toHaveProperty("createAgentSessionForEmbeddedRunner");
+    expect(publicSessionSdk).not.toHaveProperty("createAgentSession");
   });
 
   it("keeps durable provider resources when an embedded attempt session is disposed", async () => {
@@ -73,17 +73,15 @@ describe("createAgentSession runtime ownership", () => {
     const unregisterCleanup = registerSessionResourceCleanup(cleanup);
     try {
       const sessionManager = SessionManager.inMemory();
-      const { session } = await createAgentSessionForEmbeddedRunner(
-        {
-          model: testModel,
-          thinkingLevel: "medium",
-          resourceLoader: createResourceLoader(),
-          sessionManager,
-          settingsManager: SettingsManager.inMemory(),
-          modelRegistry: createTestModelRegistry(),
-        },
-        {},
-      );
+      const { session } = await createAgentSession({
+        model: testModel,
+        thinkingLevel: "medium",
+        resourceLoader: createResourceLoader(),
+        sessionManager,
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(),
+        cleanupProviderSessionResourcesOnDispose: false,
+      });
 
       session.dispose();
 
@@ -833,24 +831,22 @@ describe("createAgentSession thinking level clamping", () => {
     "openai-chatgpt-responses",
   ] as const)("records declared max thinking in a new embedded %s session", async (api) => {
     const sessionManager = SessionManager.inMemory();
-    const { session } = await createAgentSessionForEmbeddedRunner(
-      {
-        model: {
-          ...testModel,
-          id: "custom-reasoner",
-          api,
-          reasoning: true,
-          thinkingLevelMap: { off: null, minimal: null },
-          compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-        },
-        thinkingLevel: "max",
-        resourceLoader: createResourceLoader(),
-        sessionManager,
-        settingsManager: SettingsManager.inMemory(),
-        modelRegistry: createTestModelRegistry(),
+    const { session } = await createAgentSession({
+      model: {
+        ...testModel,
+        id: "custom-reasoner",
+        api,
+        reasoning: true,
+        thinkingLevelMap: { off: null, minimal: null },
+        compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
       },
-      {},
-    );
+      thinkingLevel: "max",
+      resourceLoader: createResourceLoader(),
+      sessionManager,
+      settingsManager: SettingsManager.inMemory(),
+      modelRegistry: createTestModelRegistry(),
+      cleanupProviderSessionResourcesOnDispose: false,
+    });
     try {
       expect({
         level: session.thinkingLevel,

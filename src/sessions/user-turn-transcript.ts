@@ -13,7 +13,7 @@ import {
   type SessionTranscriptTurnPersistOptions,
 } from "../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { registerUserTurnTranscriptAdmissionOwner } from "./user-turn-transcript-admission.js";
 import { createUserTurnProcessingCompletion } from "./user-turn-transcript-processing.js";
 import {

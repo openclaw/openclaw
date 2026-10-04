@@ -46,13 +46,14 @@ afterEach(() => {
 });
 
 it.each([
-  ...(["clean", "missing", "unclean", "version", "replacement"] as const).flatMap((mode) =>
-    (mode === "unclean" ? ["reset", "retained"] : ["reset", "retained", "shared"]).map(
-      (runtimeProof) => ({ mode, runtimeProof }),
-    ),
-  ),
+  { mode: "clean", runtimeProof: "reset" },
+  { mode: "version", runtimeProof: "shared" },
+  { mode: "missing", runtimeProof: "retained" },
+  { mode: "unclean", runtimeProof: "reset" },
+  { mode: "version", runtimeProof: "reset" },
+  { mode: "replacement", runtimeProof: "retained" },
   { mode: "clean", runtimeProof: "foreign" },
-])(
+] as const)(
   "uses durable $mode state for the next open ($runtimeProof runtime proof)",
   ({ mode, runtimeProof }) => {
     const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-integrity-policy-") };

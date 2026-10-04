@@ -1,3 +1,16 @@
+const unavailableSharedStateWorkerFixture = `
+vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, async (importOriginal) => {
+  const actual = await importOriginal<typeof import(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))})>();
+  return {
+    ...actual,
+    resolveRuntimeWorkerUrl: (params: Parameters<typeof actual.resolveRuntimeWorkerUrl>[0]) =>
+      params.distWorkerPath === "state/openclaw-state.worker.js"
+        ? new URL("file:///synthetic/shared-state.worker.js")
+        : actual.resolveRuntimeWorkerUrl(params),
+  };
+});
+`;
+
 // Literal resolver calls keep generated imports visible to CI's dependency graph.
 export function sqliteLifecycleFixtureFiles(): Record<string, string> {
   const readPoolFixture = `
@@ -50,10 +63,7 @@ async function useReadPool() {
 import { afterAll, expect, it, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
-vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
-  resolveRuntimeWorkerThreadExecArgv: () => [],
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
-}));
+${unavailableSharedStateWorkerFixture}
 import { isSqliteWorkerStoreAvailable } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))};
 import { readDatabasePathIdentitySync } from ${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-identity.ts"))};
 import { registerOpenClawStateDatabaseAsyncResource } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-state-db-cache.ts"))};
@@ -130,10 +140,7 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
   ...await importOriginal<typeof import("node:worker_threads")>(),
   Worker: edge.forbidden,
 }));
-vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
-  resolveRuntimeWorkerThreadExecArgv: () => [],
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
-}));
+${unavailableSharedStateWorkerFixture}
 vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/sqlite-worker-store.ts"))}, () => ({
   openSharedStateSqliteWorkerStore: async (
     options: { databasePath: string },
@@ -299,10 +306,7 @@ function failedDrainFixtureFiles(readPoolFixture: string): Record<string, string
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
-  resolveRuntimeWorkerThreadExecArgv: () => [],
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
-}));
+${unavailableSharedStateWorkerFixture}
 import { resolveGlobalSingleton } from ${JSON.stringify(import.meta.resolve("../src/shared/global-singleton.ts"))};
 import { openOpenClawAgentDatabase } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db.ts"))};
 import { agentDatabaseLifecycle, closeOpenClawAgentDatabasesAsync } from ${JSON.stringify(import.meta.resolve("../src/state/openclaw-agent-db-lifecycle.ts"))};
@@ -536,10 +540,7 @@ function subagentRetirementFixtureFiles(): Record<string, string> {
   return {
     "10-c-subagent-registry.test.ts": `
 import { expect, it, vi } from "vitest";
-vi.mock(${JSON.stringify(import.meta.resolve("../src/infra/runtime-worker-url.ts"))}, () => ({
-  resolveRuntimeWorkerThreadExecArgv: () => [],
-  resolveRuntimeWorkerUrl: () => new URL("file:///synthetic/shared-state.worker.js"),
-}));
+${unavailableSharedStateWorkerFixture}
 import ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry.ts"))};
 import { subagentRuns } from ${JSON.stringify(import.meta.resolve("../src/agents/subagents/registry/subagent-registry-memory.ts"))};
 import { createSubagentRunRecord } from ${JSON.stringify(import.meta.resolve("../src/agents/subagent-test-fixtures.test-helpers.ts"))};

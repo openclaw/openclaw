@@ -192,10 +192,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/sdk.js")>();
   return {
     ...actual,
-    createAgentSessionForEmbeddedRunner: async (
-      options: Parameters<typeof actual.createAgentSessionForEmbeddedRunner>[0],
-      internalOptions: Parameters<typeof actual.createAgentSessionForEmbeddedRunner>[1],
-    ) => {
+    createAgentSession: async (options: Parameters<typeof actual.createAgentSession>[0]) => {
       const current = fixture();
       const extensions = expectDefined(
         options.resourceLoader,
@@ -229,7 +226,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
           extensions.runtime,
         ),
       );
-      const created = await actual.createAgentSessionForEmbeddedRunner(options, internalOptions);
+      const created = await actual.createAgentSession(options);
       current.session = created.session;
       const dispose = created.session.dispose.bind(created.session);
       vi.spyOn(created.session, "dispose").mockImplementation(() => {
