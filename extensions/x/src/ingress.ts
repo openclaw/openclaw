@@ -15,11 +15,11 @@ export async function resolveXIngress(
 ) {
   const core = getXRuntime();
   const account = resolveXAccount(cfg, accountId);
-  const readStoreAllowFrom = async () => await openXAllowlist(core).readAllowFrom(accountId);
+  const snapshot = await openXAllowlist(core).readSnapshot(accountId);
   // 2026.9.8 only invokes readStoreAllowFrom for DMs. This admin-owned store
   // supplies raw group entries; the host still owns all matching and policy.
-  const groupAllowFrom = [...(account.config.allowFrom ?? []), ...(await readStoreAllowFrom())];
-  return await core.channel.inbound.ingress.resolveStable({
+  const groupAllowFrom = [...(account.config.allowFrom ?? []), ...snapshot.allowFrom];
+  const ingress = await core.channel.inbound.ingress.resolveStable({
     channelId: "x",
     accountId,
     cfg,
@@ -37,11 +37,18 @@ export async function resolveXIngress(
     groupPolicy: account.config.groupPolicy ?? "allowlist",
     allowFrom: account.config.allowFrom ?? [],
     groupAllowFrom,
-    readStoreAllowFrom,
     mentionFacts: xMentionFacts,
     policy: {
       groupAllowFromFallbackToAllowFrom: true,
       activation: { requireMention: true, allowTextCommands: false },
     },
   });
+  const assertCurrent = () => {
+    snapshot.assertCurrent();
+    if (getXRuntime() !== core) {
+      throw new Error("X runtime changed during authorization");
+    }
+  };
+  assertCurrent();
+  return { ingress, assertCurrent };
 }
