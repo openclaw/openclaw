@@ -1,15 +1,9 @@
 import type { messagingApi } from "@line/bot-sdk";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  collectErrorGraphCandidates,
-  extractErrorCode,
-  readErrorName,
-} from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { chunkMarkdownText, type ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { FlexContainer } from "./flex-templates/types.js";
 import { processLineMessage } from "./markdown-to-line.js";
@@ -23,6 +17,7 @@ import {
 } from "./quote-tokens.js";
 import { createLineQuickReply } from "./rich-messages.js";
 import {
+  canFallbackAfterLineReplyFailure,
   explainLineRefusal,
   findLineHttpError,
   resolveLineNonDispatchRetryable,
@@ -42,40 +37,6 @@ type LineAutoReplyDeliveryResult =
 
 function toLineDeliveryError(error: unknown): Error {
   return error instanceof Error ? error : new Error("LINE message send failed", { cause: error });
-}
-
-function canFallbackAfterLineReplyFailure(error: unknown): boolean {
-  const httpError = findLineHttpError(error);
-  if (httpError) {
-    return httpError.status >= 400 && httpError.status < 500 && httpError.status !== 408;
-  }
-
-  const candidates = collectErrorGraphCandidates(error, (candidate) => [
-    candidate.cause,
-    candidate.error,
-  ]);
-  if (
-    candidates.some(
-      (candidate) =>
-        readErrorName(candidate) === "AbortError" ||
-        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
-    )
-  ) {
-    return false;
-  }
-  if (
-    candidates.some(
-      (candidate) =>
-        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
-    )
-  ) {
-    return true;
-  }
-
-  // Undici rejects an unknown network outcome with this exact TypeError shape.
-  return !candidates.some(
-    (candidate) => candidate instanceof TypeError && candidate.message === "fetch failed",
-  );
 }
 
 function markLineVisibleDeliveryError(error: unknown): Error {

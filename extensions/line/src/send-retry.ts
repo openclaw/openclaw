@@ -1,7 +1,11 @@
 // Line plugin module implements push retry policy behavior.
 import { HTTPFetchError } from "@line/bot-sdk";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  readErrorName,
+} from "openclaw/plugin-sdk/error-runtime";
 import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
@@ -12,6 +16,48 @@ import { readLineAccountMessageQuota } from "./probe.js";
 export function findLineHttpError(error: unknown): HTTPFetchError | undefined {
   return collectErrorGraphCandidates(error, (candidate) => [candidate.cause, candidate.error]).find(
     (candidate): candidate is HTTPFetchError => candidate instanceof HTTPFetchError,
+  );
+}
+
+/**
+ * Whether a failed reply leaves it safe to fall back to a push of the same text.
+ *
+ * A push cannot deduplicate a reply that LINE may already have accepted, so only
+ * a definitive rejection (a 4xx other than 408) or a failure before the request
+ * reached LINE permits the fallback. Ambiguous outcomes (AbortError, transient
+ * network codes, undici's "fetch failed" TypeError) refuse it.
+ */
+export function canFallbackAfterLineReplyFailure(error: unknown): boolean {
+  const httpError = findLineHttpError(error);
+  if (httpError) {
+    return httpError.status >= 400 && httpError.status < 500 && httpError.status !== 408;
+  }
+
+  const candidates = collectErrorGraphCandidates(error, (candidate) => [
+    candidate.cause,
+    candidate.error,
+  ]);
+  if (
+    candidates.some(
+      (candidate) =>
+        readErrorName(candidate) === "AbortError" ||
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "ambiguous",
+    )
+  ) {
+    return false;
+  }
+  if (
+    candidates.some(
+      (candidate) =>
+        classifyTransientNetworkErrorCode(extractErrorCode(candidate)) === "pre-connect",
+    )
+  ) {
+    return true;
+  }
+
+  // Undici rejects an unknown network outcome with this exact TypeError shape.
+  return !candidates.some(
+    (candidate) => candidate instanceof TypeError && candidate.message === "fetch failed",
   );
 }
 
