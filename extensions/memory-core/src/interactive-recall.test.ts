@@ -61,7 +61,7 @@ describe("interactive memory recall admission", () => {
     const params = await fixture();
     const content = `${snippet}\n`;
     await fs.writeFile(path.join(params.workspaceDir, hit.path), content);
-    const chunk = chunkMarkdown(content, { tokens: 400, overlap: 80 })[0];
+    const chunk = chunkMarkdown(content, { tokens: 400, overlap: 80 })[0]!;
     expect(chunk.endLine).toBe(2);
     params.results = [
       { ...hit, startLine: chunk.startLine, endLine: chunk.endLine, snippet: chunk.text },
@@ -69,7 +69,7 @@ describe("interactive memory recall admission", () => {
     await recordMemoryRecall(params, claim);
     expect(record).toHaveBeenCalledOnce();
     record.mockClear();
-    await recordMemoryRecall({ ...params, results: [{ ...params.results[0], endLine: 3 }] }, claim);
+    await recordMemoryRecall({ ...params, results: [{ ...params.results[0]!, endLine: 3 }] }, claim);
     expect(record).not.toHaveBeenCalled();
   });
 
@@ -77,7 +77,7 @@ describe("interactive memory recall admission", () => {
     const params = await fixture();
     const content = `${snippet}${"x".repeat(1000 - snippet.length)}\n`;
     await fs.writeFile(path.join(params.workspaceDir, hit.path), content);
-    const chunk = chunkMarkdown(content, { tokens: 400, overlap: 80 })[0];
+    const chunk = chunkMarkdown(content, { tokens: 400, overlap: 80 })[0]!;
     const projected = projectMemorySearchRow(
       {
         id: "fixture-chunk",

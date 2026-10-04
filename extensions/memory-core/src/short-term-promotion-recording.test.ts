@@ -87,7 +87,7 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
         claim,
       );
       let store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      let entry = Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0];
+      let entry = Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0]!;
       expect(entry.recallCount).toBe(2);
       expect(entry.userQueryHashes).toHaveLength(2);
       expect(entry.provenance).toMatchObject({ originClass: "agent", sessionKind: "unknown" });
@@ -108,7 +108,7 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
         claim,
       );
       store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
-      entry = Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0];
+      entry = Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0]!;
       expect(entry.provenance?.originClass).toBe("untrusted");
       await expect(
         recordShortTermRecalls({
@@ -122,7 +122,7 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
       ).rejects.toThrow("closed");
       store = await testing.readRecallStore(workspaceDir, new Date().toISOString());
       expect(
-        Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0].recallCount,
+        Object.values(store.entries as Record<string, ShortTermRecallEntry>)[0]!.recallCount,
       ).toBe(3);
     },
   );
@@ -196,13 +196,13 @@ describe("short-term recall recording of Conversation Summary snippets", () => {
       expect(entries).toHaveLength(mode === "prior-full" ? 2 : 1);
       expect(entries.every((entry) => entry.provenance?.originClass === "untrusted")).toBe(true);
       expect(entries.every((entry) => entry.recallCount === 1)).toBe(true);
-      expect(entries[0].recallCount).toBe(1);
-      expect(entries[0].userQueryHashes).toHaveLength(1);
-      expect(entries[0].provenance?.originClass).toBe("untrusted");
+      expect(entries[0]!.recallCount).toBe(1);
+      expect(entries[0]!.userQueryHashes).toHaveLength(1);
+      expect(entries[0]!.provenance?.originClass).toBe("untrusted");
       if (mode !== "concurrent" && mode !== "prior-full") {
-        expect(entries[0].maxScore).toBe(0.9);
-        expect(entries[0].totalScore).toBe(0.9);
-        expect(entries[0].lastRecalledAt).toBe(entries[0].firstRecalledAt);
+        expect(entries[0]!.maxScore).toBe(0.9);
+        expect(entries[0]!.totalScore).toBe(0.9);
+        expect(entries[0]!.lastRecalledAt).toBe(entries[0]!.firstRecalledAt);
       }
       expect(
         vi
