@@ -713,6 +713,9 @@ describe("session progress card Gateway response boundary", () => {
   });
 
   it.each([
+    { method: "get", updatedAt: -MAX_DATE_TIMESTAMP_MS, valid: true },
+    { method: "get", updatedAt: -MAX_DATE_TIMESTAMP_MS - 1, valid: false },
+    { method: "put", updatedAt: -MAX_DATE_TIMESTAMP_MS - 1, valid: false },
     { method: "get", updatedAt: MAX_DATE_TIMESTAMP_MS, valid: true },
     { method: "get", updatedAt: MAX_DATE_TIMESTAMP_MS + 1, valid: false },
     { method: "put", updatedAt: MAX_DATE_TIMESTAMP_MS + 1, valid: false },

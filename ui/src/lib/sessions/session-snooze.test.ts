@@ -12,6 +12,8 @@ describe("session snooze", () => {
     { now: new Date(2026, 8, 29, 9), evening: true, nextMonday: new Date(2026, 9, 5, 9) },
     { now: new Date(2026, 8, 28, 17), evening: false, nextMonday: new Date(2026, 9, 5, 9) },
     { now: new Date(2026, 8, 27, 9), evening: true, nextMonday: null },
+    { now: new Date(2026, 2, 8, 0, 30), evening: true, nextMonday: null },
+    { now: new Date(2026, 10, 1, 0, 30), evening: true, nextMonday: null },
   ])("resolves calendar presets for $now", ({ now, evening, nextMonday }) => {
     const before = now.getTime();
     const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 9);

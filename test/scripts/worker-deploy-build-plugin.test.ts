@@ -10,7 +10,10 @@ import { build } from "tsdown";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
-import { createWorkerDeployBuildPlugin } from "../../scripts/lib/worker-deploy-build-plugin.mts";
+import {
+  createWorkerDeployBuildPlugin,
+  WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+} from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
 import {
   WORKER_BUNDLE_ARTIFACT_PATHS,
@@ -680,6 +683,14 @@ console.log("relocated worker WebSocket and transcription passed");
     });
   });
 
+  it("replaces optional host-native modules with a failing virtual module", () => {
+    const plugin = createWorkerDeployBuildPlugin();
+
+    expect(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID)).toContain(
+      "optional host-native dependency unavailable",
+    );
+  });
+
   it("initializes the composed Browser runtime only when its factory is called", async () => {
     const bridgePath = path.resolve("src/worker/worker-deploy-browser-runtime.ts");
     const source = fs.readFileSync(bridgePath, "utf8");
@@ -729,6 +740,16 @@ export async function createAttachedBrowserToolRuntime(params) {
     await first.dispose();
     await second.dispose();
     expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\ndisposed\ndisposed\n");
+  });
+
+  it("leaves fs-safe native package resolution to the dependency", () => {
+    const nativePath = path.resolve("node_modules/@openclaw/fs-safe/dist/native.js");
+    const source = fs.readFileSync(nativePath, "utf8");
+    const plugin = createWorkerDeployBuildPlugin();
+
+    const transformed = plugin.transform.call({ error: fail }, source, nativePath);
+
+    expect(transformed).toBeNull();
   });
 
   it.each<{

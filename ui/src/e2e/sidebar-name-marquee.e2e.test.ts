@@ -223,4 +223,20 @@ suite.define(() => {
       },
     );
   });
+
+  it("uses the existing account-menu tap to reveal an overflowing name on touch", async () => {
+    await suite.withPage(
+      { viewport: { width: 1440, height: 900 }, hasTouch: true, reducedMotion: "no-preference" },
+      async ({ page }) => {
+        const [label] = await openNames(page, longName);
+        const button = label!.locator("xpath=ancestor::button[1]");
+        expect((await readName(label!)).animating).toBe(false);
+        await button.tap();
+        await expect.poll(() => button.getAttribute("aria-expanded")).toBe("true");
+        await expect.poll(async () => (await readName(label!)).animating).toBe(true);
+        await page.keyboard.press("Escape");
+        await expect.poll(() => button.getAttribute("aria-expanded")).toBe("false");
+      },
+    );
+  });
 });

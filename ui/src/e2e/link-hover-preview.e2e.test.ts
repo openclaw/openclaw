@@ -313,6 +313,22 @@ suite.define(() => {
     });
   });
 
+  it("makes no metadata requests with the existing automatic-fetch setting off", async () => {
+    await suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        automaticallyFetchFavicons: false,
+        historyMessages,
+      });
+      await page.goto(suite.server.baseUrl + "chat");
+      const link = page.getByRole("link", { name: "Field guide", exact: true });
+      await link.hover();
+      await page.keyboard.press("Tab");
+      await link.focus();
+      expect(await page.locator(".link-hovercard").count()).toBe(0);
+      expect(await gateway.getRequests("controlUi.linkPreview")).toEqual([]);
+    });
+  });
+
   it("keeps touch taps as native link navigation without fetching previews", async () => {
     await suite.withPage(
       { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
