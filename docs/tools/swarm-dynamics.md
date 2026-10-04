@@ -6,7 +6,7 @@ status: experimental
 
 # Swarm bounded launches
 
-The optional `agents.run(..., { dynamics })` contract makes one Swarm launch
+The optional `agents.run(..., { boundedLaunch })` contract makes one Swarm launch
 **stricter** than an ordinary collector. It does not create a scheduler or grant
 new authority.
 
