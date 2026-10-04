@@ -53,6 +53,9 @@ const cancellableUpdateAction = z.strictObject({
 });
 const updateAction = cancellableUpdateAction.extend({
   mutationProtocol: cancellationProtocol.optional(),
+  // Read the unpublished 2026.9.9 candidate marker long enough to settle it;
+  // new writers use the released v2 shape and derive command state from its key.
+  custody: z.enum(["reserved", "bound"]).optional(),
 });
 const actionSchema = z.discriminatedUnion("kind", [
   updateAction,

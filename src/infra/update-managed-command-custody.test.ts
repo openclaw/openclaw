@@ -206,7 +206,7 @@ const command = createManagedCommandProcessCustody({ roots: ${JSON.stringify(nam
 } });
 command.custody.reserve([process.execPath, "-e", "process.stdin.resume()"]).spawned({pid: ${holder.pid}, startedAt: null});
 // Reopen an orphan produced before canonical anchors existed, without using the new producer.
-const orphan = store.acquire(${JSON.stringify(`${f.roots.at(-1)!}/.openclaw-update-child-historical-command`)}, "tracked-owner", {kind:"update", custody:"reserved"});
+const orphan = store.acquire(${JSON.stringify(`${f.roots.at(-1)!}/.openclaw-update-child-00000000-0000-4000-8000-000000000001-command`)}, "tracked-owner", {kind:"update"});
 if (orphan.kind !== "acquired" || !store.bindUpdateChildren([orphan.lease], ${holder.pid})) throw new Error("Historical orphan fixture failed");
 createManagedCommandProcessCustody({ roots: [${JSON.stringify(pendingRoot)}], runId: "pending-owner", databaseIdentity: command.databaseIdentity }).custody.reserve([process.execPath]);
 process.kill(process.pid, "SIGKILL");

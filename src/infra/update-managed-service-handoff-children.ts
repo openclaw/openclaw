@@ -35,7 +35,9 @@ export function managedCommandCustody(
   if (!commandKey || !/\/\.openclaw-update-child-[a-f0-9-]{36}-command$/.test(commandKey)) {
     return undefined;
   }
-  return isDeepStrictEqual(lease.helper, lease.executor) ? "reserved" : "bound";
+  return (
+    lease.action.custody ?? (isDeepStrictEqual(lease.helper, lease.executor) ? "reserved" : "bound")
+  );
 }
 
 /** Tracked command reservations outlive their helper; only group extinction closes a binding. */
