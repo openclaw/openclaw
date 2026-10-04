@@ -3,10 +3,25 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWorkboardChangeEventService } from "./change-events.js";
 
-afterEach(() => vi.useRealTimers());
+const ORIGINAL_EXTERNAL_CHANGE_CHECK_MS = process.env.WORKBOARD_EXTERNAL_CHANGE_CHECK_MS;
+
+afterEach(() => {
+  vi.useRealTimers();
+  if (ORIGINAL_EXTERNAL_CHANGE_CHECK_MS === undefined) {
+    delete process.env.WORKBOARD_EXTERNAL_CHANGE_CHECK_MS;
+  } else {
+    process.env.WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = ORIGINAL_EXTERNAL_CHANGE_CHECK_MS;
+  }
+});
+
+function pinLegacyPollIntervalForTests(): void {
+  // Keep fake-timer advances aligned with historical 1000ms expectations.
+  process.env.WORKBOARD_EXTERNAL_CHANGE_CHECK_MS = "1000";
+}
 
 describe("createWorkboardChangeEventService", () => {
   it("keeps repeated starts on one change subscription and reconciliation timer", async () => {
+    pinLegacyPollIntervalForTests();
     vi.useFakeTimers();
     const listeners = new Set<(change: WorkboardChange) => void>();
     const unsubscribe = vi.fn((listener: (change: WorkboardChange) => void) => {
@@ -58,6 +73,7 @@ describe("createWorkboardChangeEventService", () => {
   });
 
   it("announces its epoch, forwards changes, and reconciles external commits", async () => {
+    pinLegacyPollIntervalForTests();
     vi.useFakeTimers();
     let listener: ((change: WorkboardChange) => void) | undefined;
     const unsubscribe = vi.fn();
@@ -98,6 +114,7 @@ describe("createWorkboardChangeEventService", () => {
   });
 
   it("logs external reconciliation failures without stopping the service", async () => {
+    pinLegacyPollIntervalForTests();
     vi.useFakeTimers();
     const reconcileExternalChanges = vi.fn(async () => {
       throw new Error("database unavailable");
@@ -118,13 +135,15 @@ describe("createWorkboardChangeEventService", () => {
     } satisfies Parameters<typeof service.start>[0];
 
     await service.start(context);
-    await vi.advanceTimersByTimeAsync(2000);
+    // First failure at 1000ms; backoff schedules next at +2000ms (t=3000).
+    await vi.advanceTimersByTimeAsync(3000);
     expect(reconcileExternalChanges).toHaveBeenCalledTimes(2);
     expect(warn).toHaveBeenCalledTimes(2);
     await service.stop?.(context);
   });
 
   it("starts the new generation after stopping an unfinished initialization", async () => {
+    pinLegacyPollIntervalForTests();
     vi.useFakeTimers();
     const firstReady = createDeferred<void>();
     const ready = vi.fn(async () => {});
@@ -164,6 +183,7 @@ describe("createWorkboardChangeEventService", () => {
   });
 
   it("keeps slow polls nonoverlapping and drains a rejected poll on stop", async () => {
+    pinLegacyPollIntervalForTests();
     vi.useFakeTimers();
     const poll = createDeferred<boolean>();
     const unsubscribe = vi.fn();
