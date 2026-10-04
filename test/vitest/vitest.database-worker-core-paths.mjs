@@ -540,6 +540,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/plugins-cli.uninstall.test.ts",
   "src/cli/plugins-cli.update.test.ts",
   "src/cli/plugins-update-command.authority.integration.test.ts",
+  "src/cli/plugins-update-command.generation.integration.test.ts",
   "src/cli/plugins-update-command.migrations.integration.test.ts",
   "src/cli/devices-cli.gateway.test.ts",
   "src/cli/update-cli/update-command-post-update.test.ts",
