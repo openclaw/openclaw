@@ -516,6 +516,12 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               {
                 abortSignal: params.abortSignal,
                 onCancel: () => activeSession.abortCompaction(),
+                // Under a host ceiling, the summary stops one window early so its own
+                // timeout outcome (the deterministic reduction or a failure) can commit.
+                ...(params.compactionDeadlineAt !== undefined &&
+                summaryOutputPolicy !== "deterministic"
+                  ? { deadlineAt: params.compactionDeadlineAt - compactionTimeoutMs }
+                  : {}),
               },
             );
           try {

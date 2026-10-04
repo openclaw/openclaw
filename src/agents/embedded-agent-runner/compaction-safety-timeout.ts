@@ -1,6 +1,6 @@
 import { finiteSecondsToTimerSafeMilliseconds } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { compactionWatchdogResets } from "../../context-engine/compaction-watchdog.js";
+import { compactionWatchdogs } from "../../context-engine/compaction-watchdog.js";
 import type { CompactResult, ContextEngine } from "../../context-engine/types.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { runAbortableTimeout } from "../../node-host/with-timeout.js";
@@ -26,8 +26,11 @@ export async function compactWithSafetyTimeout<T>(
   opts?: {
     abortSignal?: AbortSignal;
     onCancel?: () => void;
+    /** Epoch ms ceiling; defaults to COMPACTION_CEILING_WINDOWS windows from now. */
+    deadlineAt?: number;
   },
 ): Promise<T> {
+  const deadlineAt = opts?.deadlineAt ?? Date.now() + timeoutMs * COMPACTION_CEILING_WINDOWS;
   let canceled = false;
   const cancel = () => {
     if (canceled) {
@@ -70,7 +73,7 @@ export async function compactWithSafetyTimeout<T>(
     },
     timeoutMs,
     "Compaction",
-    timeoutMs * COMPACTION_CEILING_WINDOWS,
+    deadlineAt - Date.now(),
   );
 }
 
@@ -80,7 +83,7 @@ type ContextEngineCompactParams = Parameters<ContextEngine["compact"]>[0];
  * Every engine is bounded by one host window and receives the composed
  * timeout/caller cancellation signal. Only the built-in runtime delegate, reached
  * with that signal, refreshes the window while its model requests make progress,
- * up to the operation ceiling.
+ * up to the operation ceiling it also receives.
  */
 export function compactContextEngineWithSafetyTimeout(
   contextEngine: Pick<ContextEngine, "compact" | "info">,
@@ -88,15 +91,16 @@ export function compactContextEngineWithSafetyTimeout(
   timeoutMs: number = EMBEDDED_COMPACTION_TIMEOUT_MS,
   abortSignal?: AbortSignal,
 ): Promise<CompactResult> {
+  const deadlineAt = Date.now() + timeoutMs * COMPACTION_CEILING_WINDOWS;
   return compactWithSafetyTimeout(
     (compactionAbortSignal, resetTimeout) => {
       if (!compactionAbortSignal) {
         return contextEngine.compact(params);
       }
-      compactionWatchdogResets.set(compactionAbortSignal, resetTimeout);
+      compactionWatchdogs.set(compactionAbortSignal, { reset: resetTimeout, deadlineAt });
       return contextEngine.compact({ ...params, abortSignal: compactionAbortSignal });
     },
     timeoutMs,
-    abortSignal ? { abortSignal } : undefined,
+    abortSignal ? { abortSignal, deadlineAt } : { deadlineAt },
   );
 }
