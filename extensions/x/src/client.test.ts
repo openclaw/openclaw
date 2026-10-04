@@ -20,7 +20,10 @@ const fixture = vi.hoisted(() => {
   };
 });
 
-vi.mock("./runtime.js", () => ({ getXRuntime: () => fixture.runtime }));
+vi.mock("./runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./runtime.js")>()),
+  getXRuntime: () => fixture.runtime,
+}));
 vi.mock("./api.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api.js")>();
   return {

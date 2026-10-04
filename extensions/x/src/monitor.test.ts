@@ -20,7 +20,11 @@ import { sendXDelivery } from "./send.js";
 import { createKeyedState, createQueue } from "./test-support/monitor.js";
 
 const client = vi.hoisted(() => ({ getXApi: vi.fn() }));
-vi.mock("./client.js", () => ({ getXApi: client.getXApi, getXTokenState: () => "ready" }));
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
+  getXApi: client.getXApi,
+  getXTokenState: () => "ready",
+}));
 
 type Payload = { version: number; rawEvent: string };
 type Plan = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];

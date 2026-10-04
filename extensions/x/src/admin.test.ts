@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerXAllowlistMethods } from "./admin.js";
 
 const getUserByUsername = vi.hoisted(() => vi.fn());
-vi.mock("./client.js", () => ({
+vi.mock("./client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./client.js")>()),
   getXApi: async () => ({ getUserByUsername }),
 }));
 
