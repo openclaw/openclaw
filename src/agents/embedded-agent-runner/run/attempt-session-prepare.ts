@@ -121,6 +121,8 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
       modelId: attempt.modelId,
       baseUrl: attempt.model.baseUrl ?? undefined,
     }),
+    // The finalizer's result gate rejects any compaction, so never start one.
+    compactionForbidden: attempt.operation === "settled-tool-finalization",
   });
 
   // These factories carry compaction/pruning runtime state into the resource loader.

@@ -133,13 +133,15 @@ export function applyAgentAutoCompactionGuard(params: {
   contextEngineInfo?: ContextEngineInfo;
   compactionMode?: AgentCompactionMode;
   silentOverflowProneProvider?: boolean;
+  compactionForbidden?: boolean;
 }): { supported: boolean; disabled: boolean } {
   // Leave compaction with its selected owner so prompt-time runtime compaction
   // cannot rewrite the transcript before OpenClaw's provider call.
   const disable =
     params.contextEngineInfo?.ownsCompaction === true ||
     params.compactionMode === "safeguard" ||
-    params.silentOverflowProneProvider === true;
+    params.silentOverflowProneProvider === true ||
+    params.compactionForbidden === true;
   const hasMethod = typeof params.settingsManager.setCompactionEnabled === "function";
   if (!disable || !hasMethod) {
     return { supported: hasMethod, disabled: false };
