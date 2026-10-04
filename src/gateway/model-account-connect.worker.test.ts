@@ -16,10 +16,10 @@ import type { ProviderAuthMethod } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import {
-  connectUserModelAccount,
-  listUserModelAccounts,
-  listUserProfileAuthLinks,
-  setUserProfileAuthLink,
+  connectUserModelAccountAsync,
+  listUserModelAccountsAsync,
+  listUserProfileAuthLinksAsync,
+  setUserProfileAuthLinkAsync,
 } from "../state/user-model-account-operations.js";
 import {
   readUserModelAuthProfile,
@@ -256,12 +256,12 @@ it.each([
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const owner = ensureProfileForEmail("grant-role@example.test").id;
       setUserProfileRole(owner, "member");
-      const first = await connectUserModelAccount({
+      const first = await connectUserModelAccountAsync({
         ownerProfileId: owner,
         credential,
         ...authority,
       });
-      const second = await connectUserModelAccount({
+      const second = await connectUserModelAccountAsync({
         ownerProfileId: owner,
         credential,
         ...authority,
@@ -366,7 +366,7 @@ it.each([
           stage === "transaction" && !allowed ? ["transaction"] : ["transaction", "commit"],
         );
         expect(grantSql).toEqual([]);
-        expect(await listUserProfileAuthLinks(owner)).toMatchObject([
+        expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
           { authProfileId: allowed ? first.authProfileId : second.authProfileId },
         ]);
       } finally {
@@ -393,7 +393,7 @@ it.each(["transaction", "commit"] as const)(
       });
       try {
         await expect(
-          connectUserModelAccount({
+          connectUserModelAccountAsync({
             ownerProfileId: owner,
             credential,
             assertCurrent() {
@@ -406,8 +406,8 @@ it.each(["transaction", "commit"] as const)(
         expect(observed).toEqual(
           refusalStage === "transaction" ? ["transaction"] : ["transaction", "commit"],
         );
-        expect(await listUserModelAccounts({ profileId: owner })).toEqual({ accounts: [] });
-        expect(await listUserProfileAuthLinks(owner)).toEqual([]);
+        expect(await listUserModelAccountsAsync({ profileId: owner })).toEqual({ accounts: [] });
+        expect(await listUserProfileAuthLinksAsync(owner)).toEqual([]);
       } finally {
         admission.mockRestore();
       }
@@ -420,7 +420,7 @@ it.each(["unchanged", "credential", "selection"] as const)(
   async (race) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const owner = ensureProfileForEmail("replacement-account@example.test").id;
-      const first = await connectUserModelAccount({
+      const first = await connectUserModelAccountAsync({
         ownerProfileId: owner,
         credential,
         ...authority,
@@ -428,7 +428,7 @@ it.each(["unchanged", "credential", "selection"] as const)(
       const order: string[] = [];
       const admission = observeAccountAdmission((stage) => order.push(stage));
       try {
-        const result = await connectUserModelAccount({
+        const result = await connectUserModelAccountAsync({
           ownerProfileId: owner,
           credential: { ...credential, token: "synthetic-reconnected-token" },
           ...authority,
@@ -461,10 +461,10 @@ it.each(["unchanged", "credential", "selection"] as const)(
             token: race === "credential" ? "synthetic-concurrent-refresh" : credential.token,
           });
         }
-        expect((await listUserModelAccounts({ profileId: owner })).accounts).toHaveLength(
+        expect((await listUserModelAccountsAsync({ profileId: owner })).accounts).toHaveLength(
           race === "unchanged" ? 1 : 2,
         );
-        expect(await listUserProfileAuthLinks(owner)).toMatchObject([
+        expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
           { authProfileId: result.authProfileId },
         ]);
       } finally {
@@ -518,7 +518,7 @@ it("does not replay a committed account mutation whose worker reply is lost", as
       return originalEmit.call(this, event, ...args);
     });
     try {
-      const failure = await setUserProfileAuthLink({
+      const failure = await setUserProfileAuthLinkAsync({
         profileId: owner,
         provider: "synthetic",
         authProfileId: "synthetic:lost-reply",
@@ -528,7 +528,7 @@ it("does not replay a committed account mutation whose worker reply is lost", as
       expect(terminated).toBeDefined();
       await terminated;
       expect(attempts).toBe(1);
-      expect(await listUserProfileAuthLinks(owner)).toMatchObject([
+      expect(await listUserProfileAuthLinksAsync(owner)).toMatchObject([
         { provider: "synthetic", authProfileId: "synthetic:lost-reply" },
       ]);
       expect(attempts).toBe(1);

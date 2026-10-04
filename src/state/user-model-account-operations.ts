@@ -80,7 +80,7 @@ function mutate<Key extends Mutation>(
 }
 
 /** The provider compares identities before BEGIN; the worker compares the exact current rows. */
-export function connectUserModelAccount(
+export function connectUserModelAccountAsync(
   params: {
     ownerProfileId: string;
     credential: AuthProfileCredential;
@@ -120,7 +120,7 @@ export function connectUserModelAccount(
   );
 }
 
-export function setUserProfileAuthLink(
+export function setUserProfileAuthLinkAsync(
   params: {
     profileId: string;
     provider: string;
@@ -134,7 +134,7 @@ export function setUserProfileAuthLink(
   return mutate("userProfiles.modelAccount.link", input, assertCurrent, options);
 }
 
-export function clearUserProfileAuthLink(
+export function clearUserProfileAuthLinkAsync(
   params: {
     profileId: string;
     provider: string;
@@ -164,14 +164,14 @@ async function read<
   return result;
 }
 
-export async function listUserModelAccounts(
+export async function listUserModelAccountsAsync(
   params: { profileId: string; cursor?: string },
   options: AccountOptions = {},
 ) {
   return (await read("userProfiles.modelAccount.list", params, options)) ?? { accounts: [] };
 }
 
-export function readUserModelAccountSummary(
+export function readUserModelAccountSummaryAsync(
   params: { profileId: string; authProfileId: string },
   options: AccountOptions = {},
 ) {
@@ -179,7 +179,7 @@ export function readUserModelAccountSummary(
 }
 
 /** Only provider preparation consumes the private selected credential, never an RPC reply. */
-export async function readSelectedUserModelAccount(
+export async function readSelectedUserModelAccountAsync(
   profileId: string,
   provider: string,
   options: AccountOptions = {},
@@ -191,4 +191,4 @@ export async function readSelectedUserModelAccount(
   return result;
 }
 
-export { listUserProfileAuthLinksAsync as listUserProfileAuthLinks } from "./user-model-accounts.js";
+export { listUserProfileAuthLinksAsync } from "./user-model-accounts.js";

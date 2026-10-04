@@ -9,7 +9,7 @@ import {
   isUserModelAuthProfileId,
   parseUserModelAuthProfileId,
 } from "../../state/user-model-account-id.js";
-import { readUserModelAccountSummary } from "../../state/user-model-account-operations.js";
+import { readUserModelAccountSummaryAsync } from "../../state/user-model-account-operations.js";
 import type { UserModelAccount } from "../../state/user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "../../state/user-profile-events.js";
 import { getUserProfileDisplay, resolveUserProfileId } from "../../state/user-profiles.js";
@@ -30,7 +30,7 @@ export async function prepareChatAccountSelection(params: {
   if (requesterProfileId && authProfileId && isUserModelAuthProfileId(authProfileId)) {
     const { admission } = captureOpenClawStateReadContext();
     isCurrent = captureUserProfileModelAccountLinksAuthority(admission, requesterProfileId);
-    personal = await readUserModelAccountSummary(
+    personal = await readUserModelAccountSummaryAsync(
       { profileId: requesterProfileId, authProfileId },
       { path: admission.databasePath },
     );

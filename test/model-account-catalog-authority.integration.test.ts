@@ -125,8 +125,13 @@ beforeEach(() => {
   });
   vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "0");
   vi.stubEnv("OPENAI_API_KEY", "");
+  // Hold catalog deadlines while deferred auth/DNS and worker admission settle.
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllEnvs();
+});
 
 describe("selected account catalog physical dispatch", () => {
   it("sends one authorized credentialed request through the production HTTP owner", async () => {

@@ -25,13 +25,13 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
-  clearUserProfileAuthLink,
-  connectUserModelAccount,
-  listUserModelAccounts,
-  listUserProfileAuthLinks,
-  readUserModelAccountSummary,
-  readSelectedUserModelAccount,
-  setUserProfileAuthLink,
+  clearUserProfileAuthLinkAsync,
+  connectUserModelAccountAsync,
+  listUserModelAccountsAsync,
+  listUserProfileAuthLinksAsync,
+  readUserModelAccountSummaryAsync,
+  readSelectedUserModelAccountAsync,
+  setUserProfileAuthLinkAsync,
 } from "../state/user-model-account-operations.js";
 import * as nativeAccounts from "../state/user-model-accounts.js";
 import { captureUserProfileModelAccountLinksAuthority } from "../state/user-profile-events.js";
@@ -86,7 +86,7 @@ async function resolveOwnedAccountProvider(
   context: OpenClawStateWorkerContext,
 ): Promise<string> {
   return requireOwnedAccountProvider(
-    await readUserModelAccountSummary({ profileId: owner, authProfileId }, { context }),
+    await readUserModelAccountSummaryAsync({ profileId: owner, authProfileId }, { context }),
   );
 }
 
@@ -219,7 +219,7 @@ export function createModelAccountConnectService(options: {
     }
     // Replays retain the committed account, but never replay an obsolete default link.
     assertRunning(action);
-    const links = await listUserProfileAuthLinks(operation.owner);
+    const links = await listUserProfileAuthLinksAsync(operation.owner);
     assertRunning(action);
     return { ...result, links };
   };
@@ -247,7 +247,7 @@ export function createModelAccountConnectService(options: {
     previous: readonly ConnectOperation[],
   ) => {
     action.assertCurrent();
-    const links = await setUserProfileAuthLink(
+    const links = await setUserProfileAuthLinkAsync(
       {
         profileId: action.owner,
         provider,
@@ -366,7 +366,7 @@ export function createModelAccountConnectService(options: {
     },
     async listLinksAsync(action: ModelAccountConnectAction): Promise<UsersListAuthLinksResult> {
       assertRunning(action);
-      const links = await listUserProfileAuthLinks(action.owner);
+      const links = await listUserProfileAuthLinksAsync(action.owner);
       assertRunning(action);
       return { links };
     },
@@ -401,7 +401,7 @@ export function createModelAccountConnectService(options: {
       const context = captureOpenClawStateWorkerContext();
       const previous = [...operations.values()];
       return retainWrite(async () => {
-        const links = await clearUserProfileAuthLink(
+        const links = await clearUserProfileAuthLinkAsync(
           {
             profileId: action.owner,
             provider,
@@ -426,11 +426,11 @@ export function createModelAccountConnectService(options: {
         context.admission,
         action.owner,
       );
-      const accounts = await listUserModelAccounts(
+      const accounts = await listUserModelAccountsAsync(
         { profileId: action.owner, cursor },
         { context },
       );
-      const links = await listUserProfileAuthLinks(action.owner, { context });
+      const links = await listUserProfileAuthLinksAsync(action.owner, { context });
       assertRunning(action);
       if (!linksCurrent()) {
         throw new Error(
@@ -539,7 +539,7 @@ export function createModelAccountConnectService(options: {
           assertLive(operation);
           // Reconnect may reuse only this person's selected private registration.
           // Shared gateway profiles never enter a personal provider login context.
-          const selected = await readSelectedUserModelAccount(operation.owner, provider, {
+          const selected = await readSelectedUserModelAccountAsync(operation.owner, provider, {
             context,
           });
           assertLive(operation);
@@ -579,7 +579,7 @@ export function createModelAccountConnectService(options: {
           // Config patches, shared profile IDs, and global defaults are not applied.
           failure = "unavailable";
           operation.settlement = retainWrite(async () => {
-            const connected = await connectUserModelAccount(
+            const connected = await connectUserModelAccountAsync(
               {
                 ownerProfileId: operation.owner,
                 credential: profile.credential,

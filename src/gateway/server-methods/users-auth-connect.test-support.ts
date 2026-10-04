@@ -57,14 +57,14 @@ vi.mock("../../state/openclaw-state-worker-context.js", () => ({
 }));
 vi.mock("../../state/user-model-accounts.js", () => ({ isUserModelAuthProfileOwner }));
 vi.mock("../../state/user-model-account-operations.js", () => ({
-  connectUserModelAccount,
-  listUserProfileAuthLinks,
-  listUserModelAccounts,
-  readUserModelAccountSummary,
+  connectUserModelAccountAsync: connectUserModelAccount,
+  listUserProfileAuthLinksAsync: listUserProfileAuthLinks,
+  listUserModelAccountsAsync: listUserModelAccounts,
+  readUserModelAccountSummaryAsync: readUserModelAccountSummary,
   isUserModelAuthProfileOwner,
-  readSelectedUserModelAccount,
-  setUserProfileAuthLink,
-  clearUserProfileAuthLink,
+  readSelectedUserModelAccountAsync: readSelectedUserModelAccount,
+  setUserProfileAuthLinkAsync: setUserProfileAuthLink,
+  clearUserProfileAuthLinkAsync: clearUserProfileAuthLink,
 }));
 vi.mock("../../agents/auth-profiles/shared-main-dir.js", () => ({
   resolveSharedMainAuthAgentDir: () => "/tmp/shared-main-agent",

@@ -23,9 +23,9 @@ describe("gateway chat metadata personal accounts", () => {
       const viewer = ensureProfileForEmail("viewer@example.test");
       const authProfileId = connectChatMetadataAccount(owner.id);
       let requesterProfileId = owner.id;
-      const readSummary = accountOperations.readUserModelAccountSummary;
+      const readSummary = accountOperations.readUserModelAccountSummaryAsync;
       const summaryRead = vi
-        .spyOn(accountOperations, "readUserModelAccountSummary")
+        .spyOn(accountOperations, "readUserModelAccountSummaryAsync")
         .mockImplementationOnce(async (...args) => {
           const summary = await readSummary(...args);
           requesterProfileId = viewer.id;
