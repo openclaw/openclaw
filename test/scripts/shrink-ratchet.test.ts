@@ -57,21 +57,22 @@ describe("shrink-ratchet", () => {
     expect(loadRatchetSnapshot<unknown>(root, file, false, parse)).toEqual(expected);
   });
 
-  it("loads worktree, index, and reference snapshots", () => {
+  it("loads large worktree, index, and reference snapshots", () => {
     const root = tempDirs.make("openclaw-shrink-ratchet-git-");
     const baselinePath = "baseline.txt";
     const absolutePath = path.join(root, baselinePath);
+    const padding = `# ${"x".repeat(1024 * 1024)}\n`;
     execFileSync("git", ["init"], { cwd: root, stdio: "ignore" });
-    fs.writeFileSync(absolutePath, "1\n");
+    fs.writeFileSync(absolutePath, `${padding}1\n`);
     execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
     execFileSync(
       "git",
       ["-c", "user.name=OpenClaw", "-c", "user.email=test@openclaw.local", "commit", "-m", "base"],
       { cwd: root, stdio: "ignore" },
     );
-    fs.writeFileSync(absolutePath, "2\n");
+    fs.writeFileSync(absolutePath, `${padding}2\n`);
     execFileSync("git", ["add", baselinePath], { cwd: root, stdio: "ignore" });
-    fs.writeFileSync(absolutePath, "3\n");
+    fs.writeFileSync(absolutePath, `${padding}3\n`);
     const parse = (source: string) => parseRatchetScalar(source, baselinePath);
 
     expect(loadRatchetSnapshot(root, baselinePath, false, parse)).toBe(3);
