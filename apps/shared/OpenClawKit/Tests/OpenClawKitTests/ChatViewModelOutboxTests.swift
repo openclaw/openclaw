@@ -116,6 +116,7 @@ actor OutboxTransportState {
     var heldSendGate: DeleteGate?
     var sendGate: OutboxTestGate?
     var historyGate: OutboxTestGate?
+    var routeLeaseGate: OutboxTestGate?
     var commandListGate: DeleteGate?
     let commandListStarted = DeleteGate()
     var sessionListGate: DeleteGate?
@@ -455,6 +456,7 @@ final class OutboxTestTransport: @unchecked Sendable, OpenClawChatTransport {
     }
 
     func acquireOutboxRouteLease() async -> OpenClawChatTransportRouteLeaseResult {
+        await self.state.routeLeaseGate?.wait()
         if let routeUnavailableReason {
             return .unavailable(reason: routeUnavailableReason)
         }
@@ -983,11 +985,11 @@ struct ChatViewModelOutboxTests {
 
         await MainActor.run { vm.load() }
         try await sendWhileOffline(vm, text: "wait for upgrade")
-        let offlineError = await MainActor.run { vm.errorText }
+        // The reconnect flush publishes the upgrade guidance when its route lease is refused.
+        let routeLeaseGate = OutboxTestGate()
+        await transport.state.update { $0.routeLeaseGate = routeLeaseGate }
         await transport.goOnline()
-
-        // Wake on the next new non-nil error, so a different message fails the expectation instead of hanging.
-        await waitForOutboxObservedState { vm.errorText != nil && vm.errorText != offlineError }
+        try await finishOutboxFlush(vm, at: routeLeaseGate)
         #expect(await MainActor.run { vm.errorText == message })
         #expect(await store.loadCommands().map(\.status) == [.queued])
         #expect(await transport.state.sentMessages.isEmpty)
@@ -1597,11 +1599,13 @@ struct ChatViewModelOutboxTests {
                     ] as [String: Any]),
                     errorMessage: nil)))
 
-        await waitForOutboxObservedState {
+        // Wake on any assistant reply, so a wrong one fails the expectation instead of hanging.
+        await waitForOutboxObservedState { vm.messages.contains { $0.role == "assistant" } }
+        #expect(await MainActor.run {
             vm.messages.contains { message in
                 message.role == "assistant" && message.content.contains { $0.text == "answer" }
             }
-        }
+        })
     }
 
     @Test func `acknowledged turn stays in client state until history confirms it`() async throws {
