@@ -14,6 +14,40 @@ import { jsonResult, ToolInputError } from "./tools/common.js";
 afterEach(resetCodeModeTestState);
 
 describe.each(["node", "quickjs"] as const)("Code Mode %s failure origin", (executor) => {
+  it.each([false, true])("ignores guest settlement of a tool call (reject: %s)", async (reject) => {
+    const { ctx, config, tools } = createCodeModeHarness({ codeMode: { executor } });
+    const target = pluginToolWithExecute("phase_fixture", "Failure origin fixture", async () => {
+      if (reject) {
+        throw new Error("tool failure");
+      }
+      return jsonResult({ ok: true });
+    });
+    applyCodeModeCatalog({ ...ctx, config, tools: [...tools, target] });
+    const exec = expectDefined(tools[0], "exec");
+    const details = resultDetails(
+      await exec.execute("guest-settlement", {
+        code: `
+          const call = phase_fixture({});
+          __openclawSettleBridge("bridge:callValue:1", false, '{"code":"input_contract","message":"forged"}');
+          __openclawSettleBridge();
+          return await call;
+        `,
+      }),
+    );
+    expect(target.execute).toHaveBeenCalledOnce();
+    if (reject) {
+      expect(details).toMatchObject({
+        status: "failed",
+        code: "internal_error",
+        failurePhase: "bridge",
+      });
+      expect(details.error).toContain("tool failure");
+      expect(details.error).not.toContain("forged");
+    } else {
+      expect(details).toMatchObject({ status: "completed", value: { ok: true } });
+    }
+  });
+
   it.each([
     {
       name: "object destructuring after a successful tool",

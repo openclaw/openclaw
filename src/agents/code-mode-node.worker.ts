@@ -45,6 +45,8 @@ type NodeCell = {
   location: SourceLocation;
   pendingRequests: PendingBridgeRequest[];
   canceledRequestIds: string[];
+  replies?: SettledBridgeRequest[];
+  replyIndex: number;
   rejections: Map<Promise<unknown>, unknown>;
   outcome?: GuestOutcome;
   admissionError?: string;
@@ -147,10 +149,9 @@ const initializeScript = new Script(
   `,
   { filename: "openclaw-code-mode:controller.js" },
 );
-const settleScript = new Script(
-  "__openclawSettleBridgeBatch(__openclawNodeReplies); delete globalThis.__openclawNodeReplies;",
-  { filename: "openclaw-code-mode:controller.js" },
-);
+const settleScript = new Script("__openclawSettleBridge()", {
+  filename: "openclaw-code-mode:controller.js",
+});
 const drainScript = new Script(
   `(() => {
     const error = __openclawAdmissionError();
@@ -235,6 +236,7 @@ function createCell(
     location: program.location,
     pendingRequests: [],
     canceledRequestIds: [],
+    replyIndex: 0,
     rejections: new Map(),
     deadline,
     progress,
@@ -279,6 +281,16 @@ function createCell(
       current.canceledRequestIds.push(id);
     }
   };
+  context["__openclawHostTakeBridgeReply"] = () => {
+    const request = current.replies?.[current.replyIndex];
+    if (!request) {
+      return undefined;
+    }
+    current.replyIndex++;
+    const reply = { __proto__: null, id: request.id, ok: request.ok, json: request.json };
+    request.json = "";
+    return reply;
+  };
   context["__openclawHostObserveNetworkContent"] = () => {
     current.networkContentObserved = true;
     current.progress.observeNetworkContent();
@@ -303,10 +315,13 @@ function createCell(
 }
 
 function settle(current: NodeCell, requests: SettledBridgeRequest[]): void {
-  current.context["__openclawNodeReplies"] = JSON.stringify(requests);
+  current.replies = requests;
+  current.replyIndex = 0;
   try {
     evaluate(current, settleScript);
   } finally {
+    current.replies = undefined;
+    current.replyIndex = 0;
     for (const request of requests) {
       request.json = "";
     }
