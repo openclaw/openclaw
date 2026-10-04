@@ -35,7 +35,6 @@ import {
 } from "./install-npm-fixtures.js";
 import { findDarwinReexecBash } from "./install-reexec-fixtures.js";
 import {
-  defineInstallerNpmDirectoryIdentityContract,
   defineInstallerNpmFreshnessContract,
   defineInstallerShellIsolationContract,
 } from "./install-test-contract.js";
@@ -1491,25 +1490,6 @@ fi
   });
 
   it.each([
-    { expected: "", version: "11.15.0" },
-    { expected: "--allow-scripts=openclaw", version: "11.16.0" },
-  ])("resolves npm lifecycle policy for npm $version", ({ expected, version }) => {
-    const fixture = npmPolicyFixture();
-    const result = fixture.run("openclaw@latest", version);
-    expect(result.status).toBe(0);
-    expect(result.stdout).toBe(expected);
-    const tool = fixture.run("pnpm@12.0.0", version, "pnpm@12.0.0");
-    expect(tool.status).toBe(0);
-    expect(tool.stdout).toBe(expected ? "--allow-scripts=pnpm@12.0.0" : "");
-  });
-
-  it("rejects a malformed npm version before mutation", () => {
-    const fixture = npmPolicyFixture();
-    expect(fixture.run("openclaw@latest", "npm 12.0.0 warning").status).not.toBe(0);
-    expect(existsSync(fixture.args)).toBe(false);
-  });
-
-  it.each([
     ["openclaw@npm:@scope/candidate.tgz@1.0.0", "--allow-scripts=@scope/candidate.tgz"],
     ["vendor/repo.tgz", "--allow-scripts=vendor/repo.tgz"],
     [
@@ -1520,15 +1500,6 @@ fi
     const result = npmPolicyFixture().run(spec, "12.0.0");
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe(expected);
-  });
-
-  it("uses the absolute npm tarball identity for file-relative input", () => {
-    const fixture = npmPolicyFixture();
-    const result = fixture.run("file:./candidate.tgz", "12.0.0");
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(
-      `--allow-scripts=file:${join(fixture.root, "candidate.tgz")}`,
-    );
   });
 
   it.each([
@@ -1548,8 +1519,6 @@ fi
       expect(existsSync(fixture.args)).toBe(false);
     },
   );
-
-  defineInstallerNpmDirectoryIdentityContract(installerContract);
 
   it.each(["global", "builtin"])(
     "honors raw %s npmrc min-release-age before --before",

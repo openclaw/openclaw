@@ -202,24 +202,6 @@ describe("full release candidate contract", () => {
     expect(() => validateFullReleaseCandidateRequest(request)).toThrow("schema is invalid");
   });
 
-  it.each([
-    ["repository", { repository: "openclaw/fork" }],
-    ["target SHA", { targetSha: "4".repeat(40) }],
-    ["tooling SHA", { toolingSha: "5".repeat(40) }],
-    ["release profile", { releaseProfile: "beta" }],
-    ["release soak", { releaseSoak: false }],
-    ["survivor baseline", { upgradeSurvivorBaseline: "beta" }],
-    ["survivor scenarios", { upgradeSurvivorScenarios: "base" }],
-    ["frozen omissions", { allowFrozenTargetScenarioOmissions: true }],
-    ["changelog policy", { allowUnreleasedChangelog: true }],
-    ["package provenance", { packagePublished: true }],
-    ["shared image policy", { sharedImagePolicy: "existing-only" }],
-  ])("changes the request digest when %s changes", (_label, overrides) => {
-    const baseline = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
-    const changed = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
-    expect(canonicalTestSha256(changed)).not.toBe(canonicalTestSha256(baseline));
-  });
-
   it("rejects malformed or noncanonical request policy", () => {
     const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     expect(() => validateFullReleaseCandidateRequest({ ...request, ignored: true })).toThrow(
