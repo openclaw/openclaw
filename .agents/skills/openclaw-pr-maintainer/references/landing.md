@@ -201,15 +201,50 @@ verifier rechecks live authority, enforced reviews, security, and exact CI evide
 after the final REST reread. Missing or changed evidence still refuses before
 intent. This adds no implicit admin route or mutation retry.
 
-#### Explicitly approved pre-existing failures
+#### Authorized pre-existing failures
 
-When the operator specifically authorizes ignoring independently attributed
-pre-existing CI failures, use the same flags and `github_pending` preparation.
+A scoped instruction to land a PR authorizes the inherited-failure exception
+when every remaining failure is independently attributed to the baseline. Do
+not ask for another confirmation just because CI is inherited red. Use the same
+`--admin-evidence` and `--confirmed-operator-admin` flags and `github_pending`
+preparation; the confirmation records the operator-authorized exception, not
+a claim that the executing bot is an administrator. A readiness question,
+uncertain attribution, or a PR-caused failure does not select this route.
 Keep `tests.result: "fail"` in the exact-head review and add `tests.preExistingCi`
 with `head`, numeric `runId` and `runAttempt`, and a nonempty `reason`. A READY
 review can retain that exception; ordinary merge admission still rejects it.
 The confirmed admin route must verify the same head and failed attempt. Product
 findings, enforced reviews, and security requirements are never waived.
+
+An executing account that is not an organization/repository admin may use this
+exception when it has repository write permission, active organization
+membership, and live GitHub bypass authority for every effective CI gate
+ruleset. The native verifier reads `current_user_can_bypass` with the actual
+writer: `always` and `pull_requests_only` qualify. Each qualifying ruleset must
+be an active, repository-owned branch ruleset containing only the
+`openclaw/ci-gate` required check from GitHub Actions (integration `15368`).
+Mixed review/security rulesets, missing or changed policy, and unavailable or
+revoked grants refuse admission. The verifier rereads policy and delegated
+authority after CI/security inspection and retains the writer, repository ID,
+ruleset IDs and bypass modes in the existing outcome. It does not accept a
+caller-supplied grant, change GitHub permissions, or grant the prior-success
+conflict-resolution exception to a delegated writer.
+
+GitHub administrators provision any missing grant through the repository
+ruleset owner, preferably with a dedicated CI-bypass team and pull-request-only
+mode. Inspect existing grants before changing them; never add the bot to an
+organization-admin role or broaden review/security bypass to enable this path.
+Task authorization remains the existing operator-invocation contract; a
+GitHub bypass grant is execution capability, not an authenticated human approval.
+
+Delegation does not remove the policy-reader requirement. The writer must still
+obtain authoritative classic-protection absence through the existing supported
+API. GitHub can return a generic `404 Not Found` to a non-admin even when the
+repository is readable. GraphQL `branchProtectionRule: null` and an empty
+`branchProtectionRules` connection can also hide real protection; they are not
+absence proofs. If policy is unavailable, stop before intent and report the
+missing policy-read capability. Do not upgrade the writer, substitute credentials,
+or introduce a caller-attested policy snapshot to get through this guard.
 
 Use the existing version-1 admin evidence with
 `changeKind: "pre-existing-failure"`. Here `priorHead` is the recorded main

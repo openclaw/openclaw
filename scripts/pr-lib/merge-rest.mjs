@@ -118,6 +118,10 @@ export function readMergePolicy(repo) {
     // stderr, inaccessible repositories, and generic 404s do not prove absence.
     response = String(error.stdout ?? "");
     const parsed = parseGithubResponse(response);
+    requireEvidence(
+      !(parsed.status === "404" && parsed.body?.message === "Not Found"),
+      "classic branch-protection policy is unavailable to this writer; a generic 404 or hidden GraphQL rule cannot prove absence",
+    );
     if (parsed.status !== "404" || parsed.body?.message !== "Branch not protected") {
       throw error;
     }
@@ -217,7 +221,7 @@ function pullRequest(record) {
   };
 }
 
-function beginRead(repo, pr, observe) {
+function beginRead(repo, pr, observe, priorCiObservation) {
   const startedAtMs = Date.now();
   // Included headers select the protected writer route, so pooled-reader
   // permissions cannot establish the actor's access to branch policy.
@@ -240,7 +244,9 @@ function beginRead(repo, pr, observe) {
   // reduced privileges cannot invalidate the retained head and tree proof.
   const receipt = observe && record.merged;
   requireRestSupport(
-    receipt || authority.permissions?.admin === true,
+    receipt ||
+      authority.permissions?.admin === true ||
+      (priorCiObservation && authority.permissions?.push === true),
     "policy-reader admin access changed",
   );
   const policy = receipt ? null : readMergePolicy(repo);
@@ -602,7 +608,7 @@ function main([mode, repository, prValue, head, bodySnapshot, expectedObservatio
   const repo = parseRepository(repository);
   const pr = Number(prValue);
   const body = mode === "merge" ? mergeBody(bodySnapshot) : undefined;
-  const snapshot = beginRead(repo, pr, observing);
+  const snapshot = beginRead(repo, pr, observing, priorCiObservation);
   const checks =
     mode === "checks" || ((observing || mode === "merge") && snapshot.record.state === "open")
       ? readRequiredMergeChecks(repo, snapshot.record.head.sha, snapshot.policy)

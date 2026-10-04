@@ -425,6 +425,13 @@ else if(args[0]==="api"&&args.some(arg=>new RegExp("^repos/[^/]+/[^/]+$").test(a
   }
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(s.repoAuthority):s.repoAuthority);
 }
+else if(args[0]==="api"&&args.includes("repos/fixture/repo/rulesets/41")) {
+  if(!args.includes("--include")||!args.includes("Cache-Control: max-age=0")) fail("ruleset authority must use the live writer");
+  s.priorCi.rulesetReads++;save();
+  out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({id:41,source:"fixture/repo",source_type:"Repository",target:"branch",enforcement:"active",
+    current_user_can_bypass:s.priorCi.revokeRulesetAfterRead&&s.priorCi.rulesetReads>1?"never":s.priorCi.rulesetBypass,
+    rules:[{type:"required_status_checks",parameters:{required_status_checks:[{context:"openclaw/ci-gate",integration_id:s.restRequiredApp}]}}]}));
+}
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("orgs/fixture/memberships/"))) {
   out("HTTP/2.0 200 OK\\n\\n"+JSON.stringify({state:"active",role:s.priorCi.membership,user:{login:s.operator}}));
 }
@@ -493,11 +500,13 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main"))
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/branches/main/protection")) {
   if(s.restPolicy==="classic") out('HTTP/2.0 200 OK\\n\\n{}');
+  else if(s.restPolicy==="not-found") {out('HTTP/2.0 404 Not Found\\n\\n{"message":"Not Found"}');fail("gh: Not Found (HTTP 404)");}
   else {out('HTTP/2.0 404 Not Found\\n\\n{"message":"Branch not protected"}');fail("gh: Branch not protected (HTTP 404)");}
 }
 else if(args[0]==="api"&&args.some(arg=>arg.startsWith("repos/fixture/repo/rules/branches/main?"))) {
   out(s.restPolicy==="missing"?[null]:[[
-    {type:"required_status_checks",parameters:{required_status_checks:s.restContexts.map(context=>({context,integration_id:s.restRequiredApp}))}},
+    {type:"required_status_checks",...(s.priorCi.rulesetBypass?{ruleset_id:41,ruleset_source:"fixture/repo",ruleset_source_type:"Repository"}:{}),parameters:{required_status_checks:s.restContexts.filter(context=>!s.priorCi.rulesetBypass||context==="openclaw/ci-gate").map(context=>({context,integration_id:s.restRequiredApp}))}},
+    ...(s.priorCi.rulesetBypass?[{type:"required_status_checks",parameters:{required_status_checks:s.restContexts.filter(context=>context!=="openclaw/ci-gate").map(context=>({context,integration_id:s.restRequiredApp}))}}]:[]),
     ...(s.priorCi.enabled?[{type:"pull_request",parameters:{required_approving_review_count:s.priorCi.reviewCount,require_code_owner_review:s.priorCi.requireCodeOwners,require_last_push_approval:s.priorCi.requireLastPush,required_review_thread_resolution:s.priorCi.requireThreads}}]:[]),
     ...(s.restPolicy==="queue"?[{type:"merge_queue"}]:s.restPolicy==="unsupported"?[{type:"workflows"}]:[])
   ]]);
