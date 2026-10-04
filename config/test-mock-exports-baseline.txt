@@ -1227,8 +1227,6 @@
 ["extensions/msteams/src/graph.read-authority.test.ts","./sdk.js","1983d81936602aa00e9acafc650b22d1eaa4fe7f70fb783aa16e2ace7da4ed23",1]
 ["extensions/msteams/src/graph.test.ts","./sdk.js","3ce9d869cbed99c910463f5ff6d40044b8555521714816e9ba18e3e2db9c0bf1",1]
 ["extensions/msteams/src/graph.test.ts","./token.js","9aa8cd9f423827c6151f85dcf8b4301ed55c91796f1491ec3204ae1feb7dba00",1]
-["extensions/msteams/src/graph.timeout.test.ts","./sdk.js","05bde7044da381e8f5d67cf65e392f6cc09eff544b5d83be780439cdc863858c",1]
-["extensions/msteams/src/graph.timeout.test.ts","./token.js","5a2538435c97056da26e765cd255468119e4bc7ae26e857552d1ef7953e29e3a",1]
 ["extensions/msteams/src/monitor-handler.adaptive-card.test.ts","./reply-dispatcher.js","7290bbf2276ad8a8164f19cd8ee94114465b77a488d504bc47dbbdf242d36f2c",1]
 ["extensions/msteams/src/monitor-handler.feedback-authz.test.ts","./monitor-handler/message-handler.js","211029b43ac7a335e3225504c934e8bf138a7c5b0c1560e47545c64317515483",1]
 ["extensions/msteams/src/monitor-handler.feedback-authz.test.ts","./monitor-handler/reaction-handler.js","90dbfd6c8761b72f2b42bd2570fd4221482955b31b2800b59da15c1aba0c43e3",1]
