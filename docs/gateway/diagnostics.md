@@ -515,9 +515,19 @@ diagnostic event collection:
 Disabling diagnostics reduces bug-report detail; it does not affect normal
 Gateway logging.
 
-Memory pressure events record RSS, heap, threshold, and growth facts
-(`rss_threshold`, `heap_threshold`, `rss_growth`) without performing a
-file-system scan or writing a pre-OOM snapshot.
+Memory pressure warnings start at 80% of a measured limit; critical pressure starts
+at 90%. The main thread's V8 `heap_size_limit` is the primary signal
+(`heap_threshold`). Each fresh worker sample is compared with that worker's own V8
+limit (`worker_heap_threshold`), including process-wide heap flag overrides. RSS
+includes every worker and native allocation, so `rss_threshold` uses the smaller of
+physical RAM and the process/cgroup memory constraint, independently of V8 heap
+limits. Unknown limits are omitted; Bun's compatibility heap metadata is not treated
+as a V8 limit. RSS growth alone does not indicate pressure.
+
+Warning and critical journal lines and diagnostic events retain the measured
+`usedBytes`, `limitBytes`, and `thresholdBytes`; worker pressure also identifies
+`workerThreadId`. The detector performs no file-system scan, forced main-thread GC,
+or pre-OOM snapshot. `openclaw_memory_bytes` remains unchanged.
 
 Persistent database workers collect garbage after a completed operation when their
 used heap has grown by 32 MiB since the last idle collection. This uses the runtime's
@@ -527,7 +537,7 @@ history, transcript, and reclamation workers request a 512 MiB V8 old-generation
 limit; an explicit process-wide `--max-old-space-size` overrides Node's worker
 resource limit. These limits do not cover native allocations or transferred buffers.
 Memory diagnostics report each sampled direct worker by script and thread ID,
-including its heap and external memory. Task workers also publish ArrayBuffer
+including its heap, measured heap limit, and external memory. Task workers also publish ArrayBuffer
 bytes from inside their isolate; ArrayBuffers are already included in external
 memory, so do not add those values together. Other direct workers use native heap
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
@@ -545,8 +555,10 @@ until the worker responds. Memory pressure warnings include these counters and t
 limit caveat; Node does not provide a worker limit for external/native allocations.
 
 Critical memory pressure retires idle workers through their existing cleanup owners,
-including when diagnostic event collection is disabled. Active operations keep
-their custody and the usual 30-minute database retention window resumes after use.
+including when diagnostic event collection is disabled. Warnings do not retire
+workers. Retirement requests are asynchronous, skip active work, and keep native
+close/checkpoint operations off the main thread. Active operations keep their
+custody and the usual 30-minute database retention window resumes after use.
 No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps

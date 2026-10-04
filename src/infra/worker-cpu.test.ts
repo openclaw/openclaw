@@ -126,6 +126,7 @@ describe("worker CPU lifecycle", () => {
         script: "other",
         heapUsed: native.used_heap_size,
         heapTotal: native.total_heap_size,
+        heapSizeLimitBytes: process.versions.bun ? undefined : native.heap_size_limit,
       }),
     ]);
     const now = performance.now();
@@ -153,7 +154,9 @@ describe("worker CPU lifecycle", () => {
     const published = createDeferredCore<{
       port: MessagePort;
       worker: Worker;
-      sample: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external" | "arrayBuffers">;
+      sample: Pick<NodeJS.MemoryUsage, "heapUsed" | "heapTotal" | "external" | "arrayBuffers"> & {
+        heapSizeLimitBytes?: number;
+      };
     }>();
     let attached = false;
     const onWorker = (worker: Worker) => {
@@ -216,6 +219,9 @@ describe("worker CPU lifecycle", () => {
       });
       expect(read).toHaveBeenCalledTimes(1);
       const native = await read.mock.results[0]!.value;
+      expect(sample.heapSizeLimitBytes).toBe(
+        process.versions.bun ? undefined : native.heap_size_limit,
+      );
       const late = createDeferredCore<Awaited<ReturnType<Worker["getHeapStatistics"]>>>();
       completeNative = () => late.resolve(native);
       read.mockReturnValueOnce(late.promise);

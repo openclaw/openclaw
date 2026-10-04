@@ -25,6 +25,7 @@ import { consumeHostPluginUsageDiagnosticEvent } from "./diagnostic-plugin-usage
 import type {
   DiagnosticMemoryUsage,
   DiagnosticChildProcessSpawnFields,
+  DiagnosticMemoryPressureFields,
 } from "./diagnostic-process-types.js";
 import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
 import type {
@@ -715,15 +716,7 @@ type DiagnosticMemorySampleEvent = DiagnosticBaseEvent & {
   uptimeMs?: number;
 };
 
-export type DiagnosticMemoryPressureEvent = DiagnosticBaseEvent & {
-  type: "diagnostic.memory.pressure";
-  level: "warning" | "critical";
-  reason: "rss_threshold" | "heap_threshold" | "rss_growth";
-  memory: DiagnosticMemoryUsage;
-  thresholdBytes?: number;
-  rssGrowthBytes?: number;
-  windowMs?: number;
-};
+export type DiagnosticMemoryPressureEvent = DiagnosticBaseEvent & DiagnosticMemoryPressureFields;
 
 type DiagnosticPayloadLargeEvent = DiagnosticBaseEvent & {
   type: "payload.large";
