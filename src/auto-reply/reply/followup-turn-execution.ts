@@ -217,8 +217,8 @@ export async function executeFollowupTurn(params: {
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
     isHeartbeat,
-    // Queue callbacks are refreshed per session, but authority and run observers
-    // belong to the queued turn. Never borrow either from another turn's runner.
+    // Queue callbacks are refreshed per session, but authority, cancellation, and
+    // run observers belong to the queued turn. Never borrow them from another runner.
     operatorAuthority: turn.queued.operatorAuthority,
     abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
