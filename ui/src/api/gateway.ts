@@ -590,12 +590,7 @@ export class GatewayBrowserClient {
       return;
     }
     const decision = payload.decision;
-    if (
-      decision !== "approved" &&
-      decision !== "rejected" &&
-      decision !== "expired" &&
-      decision !== "superseded"
-    ) {
+    if (decision !== "approved" && decision !== "rejected" && decision !== "expired") {
       return;
     }
     if (decision === "rejected" || decision === "expired") {

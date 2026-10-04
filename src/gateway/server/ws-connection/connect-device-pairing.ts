@@ -2,7 +2,6 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
-import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import {
   buildPairingConnectCloseReason,
   buildPairingConnectErrorDetails,
@@ -220,10 +219,7 @@ export async function authorizeGatewayConnectDevice(
           existingPairedDevice ? resolvePairedAccessScopes(existingPairedDevice) : undefined,
         );
       }
-      const waitForResolution =
-        state.isControlUi &&
-        role === "operator" &&
-        connectParams.caps?.includes(GATEWAY_CLIENT_CAPS.DEVICE_PAIRING_WAIT);
+      const waitForResolution = state.isControlUi && role === "operator";
       const pairingAbort = new AbortController();
       const cancelPairingWait = () => pairingAbort.abort();
       let resolution: ReturnType<typeof waitForDevicePairingResolution> | undefined;
@@ -480,16 +476,18 @@ export async function authorizeGatewayConnectDevice(
             if (!decision || context.handler.isClosed()) {
               return;
             }
-            context.handler.send({
-              type: "event",
-              event: "device.pair.resolved",
-              payload: {
-                requestId: pairing.request.requestId,
-                deviceId: device.id,
-                decision,
-                ts: Date.now(),
-              },
-            });
+            if (decision !== "superseded") {
+              context.handler.send({
+                type: "event",
+                event: "device.pair.resolved",
+                payload: {
+                  requestId: pairing.request.requestId,
+                  deviceId: device.id,
+                  decision,
+                  ts: Date.now(),
+                },
+              });
+            }
             close(1008, `pairing ${decision}`);
           });
           return false;

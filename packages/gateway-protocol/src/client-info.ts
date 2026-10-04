@@ -80,7 +80,6 @@ export const GATEWAY_CLIENT_CAPS = {
   AGENT_KIND: "agent-kind",
   APPROVALS: "approvals",
   CHAT_ONLY_ASSISTANT_TEXT: "chat-only-assistant-text",
-  DEVICE_PAIRING_WAIT: "device-pairing-wait",
   EXEC_APPROVALS: "exec-approvals",
   INLINE_WIDGETS: "inline-widgets",
   MODEL_CATALOG_SNAPSHOT: "model-catalog-snapshot",

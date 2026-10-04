@@ -3,7 +3,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type PairingRequest = { requestId: string; deviceId: string };
-export type DevicePairingResolution = "approved" | "rejected" | "superseded" | "expired";
+type DevicePairingResolution = "approved" | "rejected" | "superseded" | "expired";
 type Waiter = PairingRequest & {
   resolve: (decision: DevicePairingResolution) => void;
   refresh: (expiresAtMs: number) => void;

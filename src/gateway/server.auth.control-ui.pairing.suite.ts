@@ -49,21 +49,20 @@ export function registerControlUiPairingSuite(): void {
       const sockets: WebSocket[] = [];
       const first = await createOperatorIdentityFixture("declined-browser-");
       const second = await createOperatorIdentityFixture("unrelated-browser-");
-      const connectBrowser = async (identityPath: string) => {
+      const connectBrowser = async (identityPath: string, scopes = ["operator.admin"]) => {
         const socket = await openWs(port, { origin, "x-forwarded-for": "203.0.113.50" });
         sockets.push(socket);
         const response = await connectReq(socket, {
           token,
           client: CONTROL_UI_CLIENT,
-          caps: ["device-pairing-wait"],
-          scopes: ["operator.admin"],
+          scopes,
           device: (
             await createSignedDevice({
               identityPath,
               clientId: CONTROL_UI_CLIENT.id,
               clientMode: CONTROL_UI_CLIENT.mode,
               token,
-              scopes: ["operator.admin"],
+              scopes,
               nonce: await readConnectChallengeNonce(socket),
             })
           ).device,
@@ -76,7 +75,7 @@ export function registerControlUiPairingSuite(): void {
         expect((await connectReq(admin, { token, client: BACKEND_GATEWAY_CLIENT })).ok).toBe(true);
         const requester = await connectBrowser(first.identityPath);
         const sibling = await connectBrowser(first.identityPath);
-        const unrelated = await connectBrowser(second.identityPath);
+        const unrelated = await connectBrowser(second.identityPath, ["operator.read"]);
         const pending = (await listDevicePairing()).pending;
         const request = pending.find((entry) => entry.deviceId === first.identity.deviceId)!;
         const other = pending.find((entry) => entry.deviceId === second.identity.deviceId)!;
@@ -123,8 +122,18 @@ export function registerControlUiPairingSuite(): void {
         });
         expect((await connectBrowser(first.identityPath)).response.ok).toBe(true);
 
-        const closed = new Promise<number>((resolve) => unrelated.socket.once("close", resolve));
-        unrelated.socket.send(
+        const supersededMessages: string[] = [];
+        unrelated.socket.on("message", (message) => supersededMessages.push(String(message)));
+        const supersededClosed = new Promise<number>((resolve) =>
+          unrelated.socket.once("close", resolve),
+        );
+        const upgraded = await connectBrowser(second.identityPath);
+        expect(await supersededClosed).toBe(1008);
+        expect(supersededMessages).toEqual([]);
+        expect(upgraded.response.error?.details).toMatchObject({ waitForResolution: true });
+
+        const closed = new Promise<number>((resolve) => upgraded.socket.once("close", resolve));
+        upgraded.socket.send(
           JSON.stringify({
             type: "req",
             id: "pending-rpc",
