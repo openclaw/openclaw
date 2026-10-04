@@ -109,15 +109,6 @@ export type AgentDatabaseIncognitoOperations = IncognitoSessionOperations & {
 
 export type AgentDatabaseIncognitoAuthority = { assertCurrent(): void };
 
-export class IncognitoSessionEndedError extends Error {
-  readonly code = "INCOGNITO_SESSION_ENDED";
-
-  constructor(options?: ErrorOptions) {
-    super("Incognito session ended. Create a new incognito session to continue.", options);
-    this.name = "IncognitoSessionEndedError";
-  }
-}
-
 export type AgentDatabaseOperations = AgentDatabaseDomainOperations &
   RegisteredAgentWorkerOperations & {
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };

@@ -194,7 +194,7 @@ describe("Gateway Claw package cleanup owner", () => {
       throw new Error("Fixture deletion journal is missing");
     }
     await withAgentDeletion("worker", async (begin) => {
-      const deletion = begin(previous);
+      const deletion = await begin(previous);
       const oldOperationId = deletion.entry.operationId;
       f.input.operationId = oldOperationId;
       const entered = createDeferred();

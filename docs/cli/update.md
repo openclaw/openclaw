@@ -114,6 +114,10 @@ command cleanup before handing off ownership or reporting completion. If cleanup
 cannot confirm that work stopped, the updater retains any acquired ownership and
 recovery artifacts and skips automatic service compensation and repair. Inspect
 `openclaw update status` and resolve the pending execution before retrying.
+Repair settles only native commands belonging to its Doctor. Another Doctor's
+retained command is recorded as foreign custody with its Doctor PID, without
+making the completed Doctor unsettled. Installation replacement remains blocked
+while any live command claim exists.
 A verified rollback does not automatically start triage: the previous generation
 is running again, and the report keeps the failing check as the reason.
 An interactive update offers the diagnose/report menu with **Exit** selected by

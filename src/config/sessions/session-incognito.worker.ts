@@ -13,6 +13,10 @@ import {
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import type { AgentDatabaseIncognitoIdentity } from "../../state/openclaw-agent-execution-contract.js";
+import {
+  requestRestrictedAgentDatabaseAdmission,
+  type AgentDatabaseAdmissionRestriction,
+} from "../../state/openclaw-agent-execution-domain.js";
 import { assertSessionCreationLabelAvailable } from "./session-accessor.sqlite-creation-read.js";
 import { projectSessionSharingEntry } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
@@ -36,6 +40,11 @@ import {
   isIncognitoLifecycleWrite,
 } from "./session-incognito-lifecycle-contract.js";
 import { createIncognitoLifecycleWorker } from "./session-incognito-lifecycle.worker.js";
+import {
+  isIncognitoManagerCommand,
+  isIncognitoManagerWrite,
+} from "./session-incognito-manager-contract.js";
+import { createIncognitoManagerWorker } from "./session-incognito-manager.worker.js";
 import { isIncognitoOutboxCommand } from "./session-incognito-outbox-contract.js";
 import { createIncognitoOutboxWorker } from "./session-incognito-outbox.worker.js";
 import {
@@ -96,6 +105,7 @@ export function createIncognitoSessionWorker(
     stage: "transaction" | "commit",
     keys: readonly string[],
     pendingHistory?: { custody: PendingInputHistoryGrant; receipt?: PendingInputHistoryReceipt },
+    restriction?: AgentDatabaseAdmissionRestriction,
   ) => {
     keys.forEach(assertKey);
     const facts = keys.flatMap((key) => read(key).facts);
@@ -116,13 +126,16 @@ export function createIncognitoSessionWorker(
         pendingHistory?.receipt ? { value: pendingHistory.receipt, facts } : facts,
       );
     }
-    requestSqliteWorkerOperationAdmission({
-      stage,
-      facts: { identity, sessions: facts, pendingHistory: pendingHistory?.custody },
-    });
+    requestRestrictedAgentDatabaseAdmission(
+      { stage, facts: { identity, sessions: facts, pendingHistory: pendingHistory?.custody } },
+      restriction,
+    );
   };
   const sideData = createIncognitoSideDataWorker(database, env, admit);
   const transcript = createIncognitoTranscriptWorker(database, env, admit);
+  const manager = createIncognitoManagerWorker(database, env, (stage, keys, restriction) =>
+    admit(stage, keys, undefined, restriction),
+  );
   const outbox = createIncognitoOutboxWorker(database, admit);
   const lifecycle = createIncognitoLifecycleWorker(database, identity, env, admit);
   const history = createIncognitoHistoryWorker(database, env);
@@ -139,7 +152,9 @@ export function createIncognitoSessionWorker(
   };
   return {
     async prepare(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
-      if (isIncognitoComputeCommand(command)) {
+      if (isIncognitoManagerCommand(command)) {
+        await manager.prepare();
+      } else if (isIncognitoComputeCommand(command)) {
         await compute.prepare(command);
       } else if (isIncognitoHistoryCommand(command)) {
         await history.prepare(command);
@@ -157,6 +172,22 @@ export function createIncognitoSessionWorker(
       }
     },
     execute(command: SqliteWorkerCommand<IncognitoSessionOperations>) {
+      if (isIncognitoManagerCommand(command)) {
+        assertKey(command.input.sessionKey);
+        const execute = () => {
+          const { value, keys } = manager.execute(command);
+          return { value, facts: keys.flatMap((key) => read(key).facts) };
+        };
+        return isIncognitoManagerWrite(command.type)
+          ? execute()
+          : readOnly(() => {
+              requestSqliteWorkerOperationAdmission({
+                stage: "prepare",
+                facts: { identity, sessions: read(command.input.sessionKey).facts },
+              });
+              return execute();
+            });
+      }
       if (command.type === "session.pendingInputs.interruptHistory") {
         const { sessionKey, sessionId, lifecycleRevision, ids } = command.input;
         assertKey(sessionKey);
@@ -296,6 +327,7 @@ export function createIncognitoSessionWorker(
       return result;
     },
     assertSettled() {
+      manager.assertSettled();
       compute.assertSettled();
       history.assertSettled();
       sideData.assertSettled();
@@ -303,6 +335,7 @@ export function createIncognitoSessionWorker(
       outbox.assertSettled();
     },
     close() {
+      manager.close();
       compute.close();
       sideData.close();
       transcript.close();

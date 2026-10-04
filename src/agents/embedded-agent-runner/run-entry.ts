@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import {
+  assertAgentRunLifecycleGenerationCurrent,
   captureAgentRunLifecycleGeneration,
   emitAgentEvent,
   emitAgentEventForRunContext,
@@ -179,7 +180,10 @@ async function runEmbeddedAgentEntryInternal<T extends EmbeddedAgentRunResult>(
   const operatorAuthority = readPreparedRunOperatorAuthority(params.preparedRunAdmission);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(params.identity.runId);
   const runContext = getAgentRunContext(params.identity.runId);
-  const placementRuntime = resolveSessionPlacementRuntimeOverride(params.identity);
+  const placementRuntime = await resolveSessionPlacementRuntimeOverride(params.identity);
+  params.abortSignal?.throwIfAborted();
+  params.preparedRunAdmission?.assertSourceCurrent();
+  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const resolveRuntimeOverride = (provider: string, model: string) => {
     const requestedRuntime = params.harness.resolveRuntimeOverride(provider, model);
     if (requestedRuntime || !placementRuntime) {

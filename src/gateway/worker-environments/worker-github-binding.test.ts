@@ -32,6 +32,11 @@ vi.mock("../../agents/worktrees/service.js", () => ({
     resolveRepositoryIdentity: mocks.repository,
   },
 }));
+vi.mock("../../agents/worktrees/registry-read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/worktrees/registry-read.js")>()),
+  readLiveRegistryWorktreeByOwner: async (_context: unknown, kind: string, id: string) =>
+    mocks.worktree(kind, id),
+}));
 vi.mock("../session-utils.js", () => ({ loadGatewaySessionEntryReadOnly: mocks.session }));
 vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),

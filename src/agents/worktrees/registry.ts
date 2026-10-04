@@ -17,6 +17,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import {
+  findLiveRegistryWorktreeByOwnerInDatabase,
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedStateInDatabase,
   listRegistryWorktreesInDatabase,
@@ -215,17 +216,7 @@ export function findLiveRegistryWorktreeByOwner(
   ownerKind: ManagedWorktreeOwnerKind,
   ownerId: string,
 ): ManagedWorktreeRecord | undefined {
-  const db = dbFor(env);
-  const query = kyselyFor(db)
-    .selectFrom("worktrees")
-    .select(WORKTREE_RECORD_COLUMNS)
-    .where("owner_kind", "=", ownerKind)
-    .where("owner_id", "=", ownerId)
-    .where("removed_at", "is", null)
-    .orderBy("created_at", "desc")
-    .limit(1);
-  const row = executeSqliteQuerySync(db, query).rows[0];
-  return row ? rowToRecord(row) : undefined;
+  return findLiveRegistryWorktreeByOwnerInDatabase(dbFor(env), ownerKind, ownerId);
 }
 
 export function insertRegistryWorktree(

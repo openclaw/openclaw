@@ -18,6 +18,7 @@ import {
   patchSessionEntryCore,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { applySessionEntryLifecycleMutation } from "../config/sessions/session-accessor.sqlite-projection.js";
 import { runSqliteSessionReclamation } from "../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { createSessionMaintenanceStatisticsOperation } from "../config/sessions/session-accessor.sqlite-reclamation.js";
 import { settlePendingFinalDelivery } from "../infra/outbound/delivery-completion.js";
@@ -167,6 +168,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   let closing: Promise<void> | undefined;
   let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
   let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
+  let acceptedLifecycle: ReturnType<typeof applySessionEntryLifecycleMutation> | undefined;
   try {
     const pluginId = fixture.pluginId;
     const registry = createEmptyPluginRegistry();
@@ -211,6 +213,21 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
         },
       );
     }
+    const lifecycleKey = "agent:main:lifecycle-close";
+    await replaceSessionEntry(
+      { agentId: "main", storePath: activeStore, sessionKey: lifecycleKey },
+      {
+        sessionId: "lifecycle-close-session",
+        updatedAt: 1,
+        sessionDiffBaseline: {
+          version: 1,
+          sessionId: "lifecycle-close-session",
+          root: "/synthetic",
+          files: [],
+        },
+        skillsSnapshot: { prompt: "before close", skills: [] },
+      },
+    );
     const retainedDatabase = path.join(fixture.state.agentDir("retired"), "openclaw-agent.sqlite");
     const operationId = randomUUID();
     beginAgentDeletionJournal(
@@ -289,8 +306,23 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
           },
           "delivered",
         );
+        acceptedLifecycle = applySessionEntryLifecycleMutation({
+          agentId: "main",
+          storePath: activeStore,
+          activeSessionKey: lifecycleKey,
+          upserts: [
+            {
+              sessionKey: lifecycleKey,
+              entry: {
+                sessionId: "lifecycle-close-session",
+                updatedAt: 2,
+                skillsSnapshot: { prompt: "accepted before close", skills: [] },
+              },
+            },
+          ],
+        });
         rootWorkEntered.resolve();
-        await acceptedFinal;
+        await Promise.all([acceptedFinal, acceptedLifecycle]);
       },
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -314,10 +346,21 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     releaseRootWork.resolve();
     await heldWriter;
     await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
+    await expect(acceptedLifecycle).resolves.toMatchObject({ removedEntries: 0 });
     await expect(closing).resolves.toBeUndefined();
     expect(disposed).toBe(true);
     expect(shared.isOpen).toBe(false);
     expect((await fs.stat(retainedDatabase)).isFile()).toBe(true);
+    const lifecycleEntry = loadSessionEntry({
+      agentId: "main",
+      storePath: activeStore,
+      sessionKey: lifecycleKey,
+    });
+    expect(lifecycleEntry?.skillsSnapshot).toEqual({
+      prompt: "accepted before close",
+      skills: [],
+    });
+    expect(lifecycleEntry?.sessionDiffBaseline).toBeUndefined();
     expect(
       loadSessionEntry({ agentId: "main", storePath: activeStore, sessionKey: "agent:main:main" })
         ?.pluginExtensions,
@@ -333,7 +376,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   } finally {
     stopEntered.resolve();
     releaseRootWork.resolve();
-    await Promise.allSettled([heldWriter, acceptedFinal, closing]);
+    await Promise.allSettled([heldWriter, acceptedFinal, acceptedLifecycle, closing]);
     vi.useRealTimers();
     vi.restoreAllMocks();
     await fixture.cleanup();

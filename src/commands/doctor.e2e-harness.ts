@@ -553,7 +553,8 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   autoMigrateLegacyPluginDoctorState,
 }));
 
-vi.mock("../infra/state-migrations.state-dir.js", () => ({
+vi.mock("../infra/state-migrations.state-dir.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/state-migrations.state-dir.js")>()),
   autoMigrateLegacyStateDir,
   resolvePendingLegacyStateDirMigrationPaths: vi.fn().mockReturnValue(null),
   prepareLegacyStateDirMigration: vi.fn(),
