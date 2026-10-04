@@ -241,6 +241,13 @@ marker within that budget. A failed package baseline scan records
 `baseline-scan-failed` with the scan's original cause, including when its identity
 fallback also fails. A timeout with a successful fallback remains a warning.
 
+Recovery permission refusals identify the object role and basename, observed mode,
+link count and owner UID, and the required private mode and file link count.
+Installation paths and file contents are omitted. Preserve the recovery evidence;
+do not remove links or change permissions without identifying their owner. These
+diagnostics require the updated installed updater; a candidate cannot add them to
+an older updater already running.
+
 When a managed-service handoff cannot start or transfer ownership, the Gateway
 records the refusal on the failed `requested` step. Status includes the recorded
 diagnostic after the reason code; chat and failure reports use the same facts.
