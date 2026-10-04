@@ -187,6 +187,32 @@ describe("replaceDirectoryContents", () => {
     }
   });
 
+  it("excludes nested repository metadata while syncing nested hooks source", async () => {
+    const source = await makeTmpDir();
+    const target = await makeTmpDir();
+
+    await fs.mkdir(path.join(source, "sub", ".GIT", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(source, "sub", ".GIT", "hooks", "pre-commit"), "malicious");
+    await fs.mkdir(path.join(source, "sub", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(source, "sub", "hooks", "index.ts"), "ok");
+    await fs.mkdir(path.join(target, "kept", ".git"), { recursive: true });
+    await fs.writeFile(path.join(target, "kept", ".git", "HEAD"), "ref: refs/heads/main\n");
+    await fs.writeFile(path.join(target, "kept", "stale.txt"), "stale");
+
+    await replaceDirectoryContents({
+      sourceDir: source,
+      targetDir: target,
+      excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+    });
+
+    expect(await fs.readFile(path.join(target, "sub", "hooks", "index.ts"), "utf8")).toBe("ok");
+    await expectPathMissing(path.join(target, "sub", ".GIT"));
+    expect(await fs.readdir(path.join(target, "kept"))).toEqual([".git"]);
+    expect(await fs.readFile(path.join(target, "kept", ".git", "HEAD"), "utf8")).toBe(
+      "ref: refs/heads/main\n",
+    );
+  });
+
   it("skips symbolic links when copying into the host workspace", async () => {
     const source = await makeTmpDir();
     const target = await makeTmpDir();
@@ -289,6 +315,26 @@ describe("replaceDirectoryContents", () => {
 });
 
 describe("stageDirectoryContents", () => {
+  it("excludes nested repository metadata from staged uploads", async () => {
+    const source = await makeTmpDir();
+    const staged = await makeTmpDir();
+
+    await fs.mkdir(path.join(source, "sub", ".git", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(source, "sub", ".git", "config"), "[credential]");
+    await fs.writeFile(path.join(source, "sub", ".git", "hooks", "pre-commit"), "trusted");
+    await fs.mkdir(path.join(source, "sub", "hooks"), { recursive: true });
+    await fs.writeFile(path.join(source, "sub", "hooks", "index.ts"), "ok");
+
+    await stageDirectoryContents({
+      sourceDir: source,
+      targetDir: staged,
+      excludeDirs: DEFAULT_OPEN_SHELL_MIRROR_EXCLUDE_DIRS,
+    });
+
+    expect(await fs.readFile(path.join(staged, "sub", "hooks", "index.ts"), "utf8")).toBe("ok");
+    await expectPathMissing(path.join(staged, "sub", ".git"));
+  });
+
   it("stages upload content without symbolic links", async () => {
     const source = await makeTmpDir();
     const staged = await makeTmpDir();
