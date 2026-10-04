@@ -6,9 +6,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as commandRunner from "../../process/exec-runner.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import * as provisionedFiles from "./provisioned-files.js";
 import * as registry from "./registry.js";
 import { getRegistryWorktree, updateRegistryWorktree } from "./registry.js";
 import * as leases from "./run-lease.js";
@@ -936,20 +936,27 @@ describe("exact-state retirement admission and recovery", () => {
     await fs.writeFile(filename, "original secret\n");
     await fs.utimes(filename, 1_600_000_000, 1_600_000_000);
     const original = await fs.stat(filename);
-    const snapshot = provisionedFiles.snapshotProvisionedFiles;
+    const runCommand = gitExec.executeGitCommandBuffered;
     let captured = false;
-    vi.spyOn(provisionedFiles, "snapshotProvisionedFiles").mockImplementation(async (...args) => {
-      captured = true;
-      await fs.writeFile(filename, "different bytes\n");
-      try {
-        return await snapshot(...args);
-      } finally {
-        await fs.writeFile(filename, "original secret\n");
-        await fs.utimes(filename, original.atime, original.mtime);
+    vi.spyOn(gitExec, "executeGitCommandBuffered").mockImplementation(async (...args) => {
+      if (
+        !captured &&
+        args[0] === f.record.path &&
+        args[1].includes("--literal-pathspecs") &&
+        args[1].includes("ls-files") &&
+        args[1].includes("--ignored")
+      ) {
+        captured = true;
+        await fs.writeFile(filename, "different bytes\n");
       }
+      return await runCommand(...args);
     });
-    await expect(service.remove(f.request)).rejects.toThrow(/provisioned exact-state/);
+    await expect(service.remove(f.request)).rejects.toThrow(
+      /provisioned exact-state bytes changed after capture/,
+    );
     expect(captured).toBe(true);
+    await fs.writeFile(filename, "original secret\n");
+    await fs.utimes(filename, original.atime, original.mtime);
     expect(await fs.readFile(filename, "utf8")).toBe("original secret\n");
     expect(await fs.readFile(f.indexPath)).toEqual(f.index);
     expect(getRegistryWorktree(env, f.record.id)?.removedAt).toBeUndefined();

@@ -49,7 +49,6 @@ vi.mock("../agents/worktrees/owner-protection.js", () => ({
 vi.mock("../agents/worktrees/service.js", () => ({
   WORKTREE_GC_INTERVAL_MS: 60 * 60_000,
   managedWorktrees: { gc: () => forbiddenDefaultAdapter("worktree GC") },
-  resolveWorktreeCleanupLimits: () => forbiddenDefaultAdapter("worktree cleanup limits"),
 }));
 
 vi.mock("../infra/delivery-queue-sqlite.js", () => ({
@@ -190,7 +189,7 @@ describe("gateway telemetry maintenance", () => {
       });
       try {
         await vi.advanceTimersByTimeAsync(
-          owner === "worktree" ? blockedCall * 60 * 60_000 : 60_000,
+          owner === "worktree" ? blockedCall * 60 * 60_000 + 1 : 60_000,
         );
         expect(calls).toBe(blockedCall);
         if (owner === "plugin-state") {

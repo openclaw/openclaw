@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import * as backoff from "../../infra/backoff.js";
@@ -18,7 +19,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
-import * as capacity from "./capacity.js";
 import { addManagedWorktree } from "./checkout.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import { createCopyWorktreeBackend } from "./filesystem-backend.test-support.js";
@@ -440,16 +440,6 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
     acceleration = false;
     const existing = await service.create({ repoRoot: repo, name: "existing", baseRef: "HEAD" });
     acceleration = true;
-    const inventoryStarted = createDeferredCore();
-    const finishInventory = createDeferredCore();
-    const readSize = capacity.directorySizeBytes;
-    vi.spyOn(capacity, "directorySizeBytes").mockImplementation(async (...args) => {
-      if (args[0] === existing.path) {
-        inventoryStarted.resolve();
-        await finishInventory.promise;
-      }
-      return await readSize(...args);
-    });
     const cloneStarted = createDeferredCore<string>();
     const finishClone = createDeferredCore();
     vi.mocked(backend.cloneTemplate).mockImplementationOnce(
@@ -463,41 +453,34 @@ describe("ManagedWorktreeService filesystem acceleration", () => {
         await fs.cp(source, destination, { recursive: true, verbatimSymlinks: true });
       },
     );
-    const collection = service.gc({
-      limits: { maxTotalSizeBytes: Number.MAX_SAFE_INTEGER },
-    });
-    let creation: ReturnType<typeof service.create> | undefined;
+    const creation = service.create({ repoRoot: repo, name: "allocating", baseRef: "HEAD" });
+    let collection: ReturnType<typeof service.gc> | undefined;
     try {
-      await Promise.race([
-        inventoryStarted.promise,
-        collection.then(() => {
-          throw new Error("Collection completed without inventorying the existing checkout");
-        }),
-      ]);
-      creation = service.create({ repoRoot: repo, name: "allocating", baseRef: "HEAD" });
-      const destination = await Promise.race([
+      const destination = await awaitGateBeforeSettlement(
         cloneStarted.promise,
-        creation.then(() => {
-          throw new Error("Creation completed without starting a clone");
-        }),
-      ]);
+        creation,
+        "Creation completed without starting a clone",
+      );
       const contended = createDeferredCore();
       const sleep = backoff.sleepWithAbort;
       vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (...args) => {
         contended.resolve();
         return await sleep(...args);
       });
-      finishInventory.resolve();
-      await Promise.race([contended.promise, collection]);
+      collection = service.gc();
+      await awaitGateBeforeSettlement(
+        contended.promise,
+        collection,
+        "Collection bypassed the active allocation",
+      );
       expect(await fs.readFile(path.join(destination, "partial.txt"), "utf8")).toBe(
         "in-progress clone\n",
       );
     } finally {
-      finishInventory.resolve();
       finishClone.resolve();
       await Promise.all([creation, collection]);
     }
-    assert(creation);
+    assert(collection);
     const created = await creation;
     expect((await collection).orphansDeleted).toBe(0);
     expect((await service.listRegistryRecords()).map((record) => record.id).toSorted()).toEqual(

@@ -29,6 +29,7 @@ export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 type WorktreeListEntry = {
   path: string;
+  head?: string;
   lockedReason?: string;
   branch?: string | null;
 };
@@ -284,6 +285,8 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current = {
         path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
       };
+    } else if (current && field.startsWith("HEAD ")) {
+      current.head = field.slice("HEAD ".length);
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {

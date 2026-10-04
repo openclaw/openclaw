@@ -9,14 +9,17 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { readLiveRegistryWorktreeIds, readRegistryWorktrees } from "./registry-read.js";
+import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
+import {
+  getRegistryWorktreeProvisionedChunk,
+  readLiveRegistryWorktreeIds,
+  readRegistryWorktrees,
+} from "./registry-read.js";
 import {
   getRegistryWorktree,
-  getRegistryWorktreeProvisionedChunk,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
-  insertRegistryWorktreeProvisionedChunk,
   updateRegistryWorktree,
 } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
@@ -115,7 +118,7 @@ describe("managed worktree registry worker reads", () => {
     updateRegistryWorktree(env, older.id, { provisionedState });
     const chunks = [Uint8Array.from([0, 255, 10]), Uint8Array.from([127, 0, 1])];
     for (const [chunkIndex, data] of chunks.entries()) {
-      insertRegistryWorktreeProvisionedChunk(env, {
+      await insertRegistryWorktreeProvisionedChunk(env, {
         worktreeId: older.id,
         path: "synthetic.bin",
         chunkIndex,

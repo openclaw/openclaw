@@ -205,7 +205,7 @@ describe("Git operation host lifecycle", () => {
         },
       },
       {
-        onEffect: (effect) => (effect.type === "worktree.snapshot-provisioned" ? [] : undefined),
+        onEffect: () => undefined,
       },
     );
     expect(await git(repo, "show", `${snapshot.snapshotRef}:${input}`)).toBe("retain task input");
@@ -249,8 +249,7 @@ describe("Git operation host lifecycle", () => {
             },
           },
           {
-            onEffect: (effect) =>
-              effect.type === "worktree.snapshot-provisioned" ? [] : undefined,
+            onEffect: () => undefined,
           },
         ),
       ).rejects.toThrow("nested git repositories cannot be snapshotted losslessly");
@@ -431,8 +430,7 @@ describe("Git operation host lifecycle", () => {
                 input: { kind: "nested-repository", checkoutPath: repo },
               },
           {
-            onEffect: (effect) =>
-              effect.type === "worktree.snapshot-provisioned" ? [] : undefined,
+            onEffect: () => undefined,
           },
         );
       const first = settle(startMaintenance());
@@ -723,9 +721,6 @@ describe("Git operation host lifecycle", () => {
             await release.promise;
           }
         }
-        if (effect.type === "worktree.snapshot-provisioned") {
-          return [];
-        }
         return undefined;
       };
       let completed = 0;
@@ -765,11 +760,9 @@ describe("Git operation host lifecycle", () => {
         const result = await within(pending);
         expect(result.rejected).toBe(true);
         if (ending === "worker-error") {
-          expect(
-            result.rejected &&
-              result.error instanceof Error &&
-              result.error.message.includes("provisioned path entered Git snapshot"),
-          ).toBe(true);
+          expect(result.rejected && result.error).toMatchObject({
+            message: "provisioned path is now tracked: README.md",
+          });
         }
         expect(await exists(temporaryDirectory)).toBe(false);
         expect((await fs.readFile(neighbor)).length).toBe(4);
@@ -841,9 +834,6 @@ describe("Git operation host lifecycle", () => {
                 effect.input.purpose === "worktree safety snapshot index"
               ) {
                 temporaryDirectory = effect.input.demands[0]?.path ?? "";
-              }
-              if (effect.type === "worktree.snapshot-provisioned") {
-                return [];
               }
               return undefined;
             },

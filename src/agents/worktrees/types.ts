@@ -134,6 +134,15 @@ export type ManagedWorktreeGcResult = {
   protectionReasons: Record<string, number>;
   /** Null when incomplete inventory or size measurements prevent a conclusion. */
   limitsSatisfied: boolean | null;
+  evictions?: Partial<Record<"merged" | "squashed" | "idle-age" | "dirty-purged", number>>;
+};
+
+export type ManagedWorktreeGcReceipt = ManagedWorktreeGcResult & {
+  jobId: string;
+  state: "queued" | "running" | "completed" | "failed";
+  startedAt: number | null;
+  completedAt: number | null;
+  error: string | null;
 };
 
 /** Explicit early retirement only for a snapshot whose source remains retained. */
