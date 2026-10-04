@@ -4,7 +4,12 @@ import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { adoptPluginRegistryRecords } from "./registry-lifecycle.js";
+import {
+  adoptPluginRegistryRecords,
+  capturePluginLifecycleAuthority,
+  markPluginRecordBorrowed,
+  markPluginRegistryActive,
+} from "./registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -56,6 +61,22 @@ it("releases the adopted registry only after consumer and module cleanup settle"
     finish.resolve();
     await disposal;
   }
+});
+
+it("does not reacquire borrowed authority after its lender releases registry custody", async () => {
+  const { registry, record, instance } = createOwnedInstance();
+  markPluginRegistryActive(registry);
+  const borrower = createEmptyPluginRegistry();
+  borrower.plugins.push(record);
+  markPluginRecordBorrowed(borrower, record);
+  markPluginRegistryActive(borrower);
+  const authority = capturePluginLifecycleAuthority(borrower, record);
+  expect(authority?.()).toBe(true);
+  expect(instance.owner?.registry).toBe(registry);
+  await instance.dispose();
+  expect(instance.owner?.registry).toBeUndefined();
+  expect(authority?.()).toBe(false);
+  expect(capturePluginLifecycleAuthority(borrower, record)).toBeUndefined();
 });
 
 it.each(["host", "module"] as const)(

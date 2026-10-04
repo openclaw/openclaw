@@ -466,11 +466,11 @@ export function capturePluginLifecycleAuthority(
   const registry = getPluginRegistryResourceOwner(registryView);
   if (record && borrowedRecords.get(registry)?.has(record)) {
     // A borrower mints from the lender's current custody and loses it when it retires.
-    const lent = capturePluginLifecycleAuthority(
-      getPluginRecordRegistry(registry, record),
-      record,
-      options,
-    );
+    const owner = pluginInstanceState.records.get(record);
+    if (!owner || owner.revoked) {
+      return undefined;
+    }
+    const lent = capturePluginLifecycleAuthority(owner.registry, record, options);
     return lent && (() => !retiredRegistries.has(registry) && lent());
   }
   if (record) {
