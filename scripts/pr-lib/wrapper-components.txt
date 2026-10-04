@@ -1439,6 +1439,7 @@ src/secrets/unsupported-surface-policy.ts
 src/security/config-regex.ts
 src/security/safe-regex.ts
 src/security/scan-paths.ts
+src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
