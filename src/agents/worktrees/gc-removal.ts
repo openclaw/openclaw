@@ -39,6 +39,11 @@ export type WorktreeCleanupOwnerPolicy = {
   retryDeferred?: boolean;
   shouldProtectOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
   shouldRemoveOwner?: (ownerKind: ManagedWorktreeOwnerKind, ownerId: string) => boolean;
+  withOwnerCleanup?: <T>(
+    record: ManagedWorktreeRecord,
+    run: () => Promise<T>,
+    signal?: AbortSignal,
+  ) => Promise<T>;
 };
 
 export async function removeWorktreeIfLossless(
@@ -187,7 +192,7 @@ export async function deferWorktreeGcRecord(
   }
 }
 
-export function assertOwnerAllowsCleanup(
+function assertOwnerAllowsCleanup(
   env: NodeJS.ProcessEnv,
   record: ManagedWorktreeRecord,
   params: WorktreeCleanupOwnerPolicy,
@@ -199,7 +204,7 @@ export function assertOwnerAllowsCleanup(
   assertOwnerPolicyAllowsCleanup(record, params, retiredOwner);
 }
 
-export function assertOwnerPolicyAllowsCleanup(
+function assertOwnerPolicyAllowsCleanup(
   record: ManagedWorktreeRecord,
   params: WorktreeCleanupOwnerPolicy,
   retiredOwner = false,
@@ -213,16 +218,29 @@ export function assertOwnerPolicyAllowsCleanup(
   }
 }
 
-export function createWorktreeGcErrorHandler(context: {
+export function createWorktreeGcRemoval(context: {
   env: NodeJS.ProcessEnv;
   now: number;
   progress: WorktreeGcProgress;
   policy: WorktreeCleanupOwnerPolicy;
   signal?: AbortSignal;
   assertCurrent?: () => void;
+  remove: (
+    params: Pick<CreateManagedWorktreeParams, "signal" | "commitGuard"> & {
+      id: string;
+      reason: string;
+      workerAuthority?: WorktreeWorkerAuthority;
+    },
+  ) => Promise<RemoveManagedWorktreeResult>;
 }) {
   const { env, now, progress, policy, assertCurrent, signal } = context;
-  return async (
+  const withOwnerCleanup = <T>(record: ManagedWorktreeRecord, run: () => Promise<T>) =>
+    policy.withOwnerCleanup ? policy.withOwnerCleanup(record, run, signal) : run();
+  const assertOwnerCurrent = (record: ManagedWorktreeRecord, retiredOwner = false) => {
+    assertCurrent?.();
+    assertOwnerAllowsCleanup(env, record, policy, retiredOwner);
+  };
+  const handleError = async (
     stage: "idle" | "limits",
     record: ManagedWorktreeRecord,
     initialError: unknown,
@@ -248,6 +266,7 @@ export function createWorktreeGcErrorHandler(context: {
           await withWorktreeAllocationLease(
             {
               env,
+              id: record.id,
               signal,
               workerAuthority: {
                 assertCurrent: () => {
@@ -258,10 +277,7 @@ export function createWorktreeGcErrorHandler(context: {
                   { kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt },
                 ],
               },
-              commitGuard: () => {
-                assertCurrent?.();
-                assertOwnerAllowsCleanup(env, record, policy, retiredOwner);
-              },
+              commitGuard: () => assertOwnerCurrent(record, retiredOwner),
             },
             async (guard) => {
               const token = randomUUID();
@@ -332,5 +348,29 @@ export function createWorktreeGcErrorHandler(context: {
       }
     }
     progress.error(stage, error, record.id);
+  };
+  return {
+    remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) =>
+      withOwnerCleanup(record, () =>
+        context.remove({
+          id: record.id,
+          reason,
+          signal,
+          workerAuthority: {
+            assertCurrent: () => {
+              assertCurrent?.();
+              assertOwnerPolicyAllowsCleanup(record, policy, retiredOwner);
+            },
+            predicates: [{ kind: "activity", id: record.id, lastActiveAt: record.lastActiveAt }],
+          },
+          commitGuard: () => assertOwnerCurrent(record, retiredOwner),
+        }),
+      ),
+    retireMissing: (record: ManagedWorktreeRecord) =>
+      withOwnerCleanup(record, () =>
+        retireMissingRegistryWorktree(env, record, now, () => assertOwnerCurrent(record)),
+      ),
+    onError: (...args: Parameters<typeof handleError>) =>
+      withOwnerCleanup(args[1], () => handleError(...args)),
   };
 }

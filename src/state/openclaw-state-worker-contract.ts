@@ -14,6 +14,7 @@ import type {
   WorkspaceStateGuard,
   WorkspaceStateWorkerOperations,
 } from "../agents/workspace-state-store.worker-contract.js";
+import type { reserveWorktreeCapacityInWorker } from "../agents/worktrees/capacity.worker.js";
 import type { WorktreeTemplateWorkerOperations } from "../agents/worktrees/template-registry.worker.js";
 import type { ClawInstallSchemaVersionRow } from "../claws/provenance-runtime-read.kernel.js";
 import type { ConfigHealthPatch } from "../config/io.health-state.kernel.js";
@@ -87,6 +88,10 @@ export type OpenClawStateWorkerOperations = RegisteredStateWorkerOperations &
   CronStateWorkerOperations &
   TranscriptReadOperations &
   OpenClawStateLeaseLifecycleOperations & {
+    "worktrees.reserveCapacity": {
+      input: Parameters<typeof reserveWorktreeCapacityInWorker>[0];
+      output: ReturnType<typeof reserveWorktreeCapacityInWorker>;
+    };
     "database.walMaintenance": { input: SqliteWalPeriodicRequest; output: SqliteWalPeriodicResult };
     "deviceIdentity.read": { input: { identityKey: string }; output: DeviceIdentity | null };
     "deviceIdentity.load": { input: { identityKey: string }; output: DeviceIdentity };
@@ -240,6 +245,7 @@ export type OpenClawStateWorkerRuntimeCommand = Exclude<
       | "database.inspectIdle"
       | "database.walMaintenance"
       | "agentDatabases.releaseExitedLease"
+      | "worktrees.reserveCapacity"
       | keyof CaptureWorkerOperations
       | keyof PluginStateWorkerOperations
       | keyof WorktreeTemplateWorkerOperations
