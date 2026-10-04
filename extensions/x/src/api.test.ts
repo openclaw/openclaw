@@ -89,47 +89,66 @@ describe("X API authentication", () => {
     expect(states).toEqual(["refreshing", "error"]);
   });
 
-  it.each(["refresh", "refresh-after-401", "post-network", "post-json"] as const)(
-    "classifies %s failure at the actual reply POST boundary",
-    async (failure) => {
-      let posts = 0;
-      let refreshes = 0;
-      const api = createXApiClient({
-        clientId: "client",
-        clientSecret: "secret",
-        refreshToken: "seed",
-        saveRefreshToken: async () => {},
-        fetch: async (url) => {
-          if (url.endsWith("/oauth2/token")) {
-            refreshes++;
-            return failure === "refresh" || (failure === "refresh-after-401" && refreshes === 2)
-              ? new Response(null, { status: 503 })
-              : Response.json({ access_token: "access" });
-          }
-          posts++;
-          if (failure === "post-network") {
-            throw new Error("Synthetic connection reset after request handoff");
-          }
-          if (failure === "refresh-after-401") {
-            return new Response(null, { status: 401 });
-          }
-          return new Response("not-json", { status: 200 });
-        },
-      });
-      const error: unknown = await api
-        .reply({ text: "Reply", inReplyToId: "20" })
-        .catch((cause: unknown) => cause);
-      if (failure === "refresh" || failure === "refresh-after-401") {
-        expect(posts).toBe(failure === "refresh" ? 0 : 1);
-        expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
-        expect(error).toMatchObject({ retryable: true });
-      } else {
-        expect(posts).toBe(1);
-        expect(error).toBeInstanceOf(Error);
-        expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+  it.each([
+    "refresh",
+    "refresh-after-401",
+    "post-network",
+    "post-json",
+    "post-429",
+    "post-403",
+    "post-503",
+  ] as const)("classifies %s failure at the actual reply POST boundary", async (failure) => {
+    let posts = 0;
+    let refreshes = 0;
+    const api = createXApiClient({
+      clientId: "client",
+      clientSecret: "secret",
+      refreshToken: "seed",
+      saveRefreshToken: async () => {},
+      fetch: async (url) => {
+        if (url.endsWith("/oauth2/token")) {
+          refreshes++;
+          return failure === "refresh" || (failure === "refresh-after-401" && refreshes === 2)
+            ? new Response(null, { status: 503 })
+            : Response.json({ access_token: "access" });
+        }
+        posts++;
+        if (failure === "post-network") {
+          throw new Error("Synthetic connection reset after request handoff");
+        }
+        if (failure === "refresh-after-401") {
+          return new Response(null, { status: 401 });
+        }
+        if (failure === "post-429" || failure === "post-403" || failure === "post-503") {
+          return new Response(null, {
+            status: failure === "post-429" ? 429 : failure === "post-403" ? 403 : 503,
+          });
+        }
+        return new Response("not-json", { status: 200 });
+      },
+    });
+    const error: unknown = await api
+      .reply({ text: "Reply", inReplyToId: "20" })
+      .catch((cause: unknown) => cause);
+    if (failure === "refresh" || failure === "refresh-after-401") {
+      expect(posts).toBe(failure === "refresh" ? 0 : 1);
+      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(error).toMatchObject({ retryable: true });
+    } else if (failure === "post-429" || failure === "post-403") {
+      // A 4xx rejection proves no post was created; only the rate limit is retryable.
+      expect(posts).toBe(1);
+      expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
+      expect(error).toMatchObject({ retryable: failure === "post-429" });
+    } else {
+      // Network failures, unreadable bodies, and 5xx after dispatch stay ambiguous.
+      expect(posts).toBe(1);
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+      if (failure === "post-503") {
+        expect(error).toMatchObject({ status: 503 });
       }
-    },
-  );
+    }
+  });
 
   it("preserves an existing permanent no-dispatch marker from authority checks", async () => {
     const rejected = new PlatformMessageNotDispatchedError("X account authority was revoked", {

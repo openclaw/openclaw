@@ -443,7 +443,18 @@ export function createXApiClient(options: {
         }
         return id;
       } catch (cause) {
-        if (dispatched || cause instanceof PlatformMessageNotDispatchedError) {
+        if (cause instanceof PlatformMessageNotDispatchedError) {
+          throw cause;
+        }
+        if (cause instanceof XApiError && cause.status < 500) {
+          // A 4xx rejection proves X created no post: rate limits are safe to retry,
+          // other client rejections are permanent. 5xx stays ambiguous (the post may exist).
+          throw new PlatformMessageNotDispatchedError(cause.message, {
+            cause,
+            retryable: cause.status === 429,
+          });
+        }
+        if (dispatched) {
           throw cause;
         }
         throw new PlatformMessageNotDispatchedError(
