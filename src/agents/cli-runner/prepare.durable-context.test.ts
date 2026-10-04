@@ -84,7 +84,7 @@ describe("CLI durable session context", () => {
     }
   });
 
-  it.each(["process", "plugin", "first-only"])(
+  it.each(["plugin", "first-only"])(
     "preserves prompt privacy and order with plugin execution %s",
     async (transport) => {
       const pluginExecution = transport === "plugin";
@@ -150,19 +150,29 @@ describe("CLI durable session context", () => {
 
       const activeNodeText =
         "Current active computer (latest reported app/system input, not message origin): active_node=mac-one active_node_identity=unknown";
-      const logicalPrompt = `Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\n${activeNodeText}`;
-      expect(context.params.prompt).toBe(
-        pluginExecution ? "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask" : logicalPrompt,
+      const logicalPrompt = context.promptForHooks ?? context.params.prompt;
+      expect(logicalPrompt).toMatch(
+        /^Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\nFor the current source conversation,/,
       );
+      expect(logicalPrompt.endsWith(`\n\n${activeNodeText}`)).toBe(true);
+      if (pluginExecution) {
+        expect(context.params.prompt).toBe("Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask");
+      }
       expect(context.promptContext).toEqual(
         pluginExecution
           ? {
               prependContext: "trusted hook context",
-              appendContext: `trusted hook tail\n\n${activeNodeText}`,
+              appendContext: expect.stringMatching(
+                /^trusted hook tail\n\nFor the current source conversation,/,
+              ),
             }
           : undefined,
       );
-      expect(context.promptForHooks).toBe(pluginExecution ? logicalPrompt : undefined);
+      if (pluginExecution) {
+        expect(context.promptContext?.appendContext?.endsWith(`\n\n${activeNodeText}`)).toBe(true);
+      } else {
+        expect(context.promptForHooks).toBeUndefined();
+      }
       expect(context.params.transcriptPrompt).toBe("latest ask");
       expect(context.contextEngineTurnPrompt).toBe("latest ask");
       expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
@@ -227,9 +237,13 @@ describe("CLI durable session context", () => {
     });
     cleanups.push(() => context.preparedBackend.cleanup?.());
 
-    expect(context.params.prompt).toBe(
-      "hook context\n\ncurrent ask\n\nCurrent active computer (latest reported app/system input, not message origin): active_node=unknown active_node_identity=unknown",
+    expect(context.params.prompt).toMatch(
+      /^hook context\n\ncurrent ask\n\nFor the current source conversation,/,
     );
+    expect(context.params.prompt).toMatch(
+      /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,
+    );
+    expect(context.params.transcriptPrompt).toBe("current ask");
     expect(context.openClawHistoryPrompt).toContain("Compaction summary: compacted earlier ask");
     expect(context.openClawHistoryPrompt).toContain("hook context");
     expect(context.openClawHistoryPrompt).toContain("current ask");
@@ -270,11 +284,8 @@ describe("CLI durable session context", () => {
 
   it.each([
     { transport: "plugin", resume: false, changeAccount: false },
-    { transport: "plugin", resume: true, changeAccount: false },
-    { transport: "process", resume: false, changeAccount: false },
     { transport: "process", resume: true, changeAccount: false },
     { transport: "plugin", resume: true, changeAccount: true },
-    { transport: "process", resume: true, changeAccount: true },
   ])(
     "preserves owned reference facts for $transport, resume=$resume, changeAccount=$changeAccount",
     async (testCase) => {

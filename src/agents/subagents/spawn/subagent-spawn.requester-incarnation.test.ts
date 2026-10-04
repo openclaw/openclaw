@@ -4,7 +4,6 @@ import "./subagent-spawn-model.mocks.shared.js";
 import { installSpawnAuthorityFixture } from "./subagent-spawn.authority.test-support.js";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { isMainThread } from "node:worker_threads";
 import type { AcpRuntime } from "@openclaw/acp-core/runtime/types";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -35,76 +34,13 @@ import {
   settleSubagentRegistryPersistenceWork,
   writeSubagentSessionEntry,
 } from "../registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRunsByRunIdsFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import { spawnAcpDirect } from "./acp-spawn.js";
 import { spawnSubagentDirect } from "./subagent-spawn.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
 
 const fixture = installSpawnAuthorityFixture();
 const backendId = "requester-incarnation-fixture";
-
-it("captures the requester through spawn without host session-store reads", async () => {
-  const benchmark = process.env.OPENCLAW_DB_WORKER_BENCH === "1";
-  const rows = benchmark ? 4_096 : 4;
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      writeSessionEntry(database, fixture.parentSessionKey, {
-        sessionId: "spawn-requester",
-        updatedAt: 1,
-      });
-      for (let index = 0; index < rows; index++) {
-        writeSessionEntry(database, `agent:main:synthetic-spawn-roster-${index}`, {
-          sessionId: `synthetic-spawn-roster-${index}`,
-          updatedAt: index + 1,
-          label: `Unrelated synthetic session ${index}`,
-        });
-      }
-    },
-    { agentId: "main" },
-  );
-  getRuntimeConfig();
-  const sql = observeHostDataSql();
-  const parse = benchmark ? vi.spyOn(JSON, "parse") : undefined;
-  try {
-    for (const phase of benchmark ? ["cold", "warm"] : ["cold"]) {
-      sql.queries.length = 0;
-      parse?.mockClear();
-      const started = performance.now();
-      const cpu = benchmark ? process.threadCpuUsage() : undefined;
-      // This validation runs after requester capture and before child admission.
-      const result = await spawnSubagentDirect(
-        { task: "capture requester", context: "isolated", groupId: "requires-collect" },
-        { agentSessionKey: fixture.parentSessionKey },
-      );
-      if (cpu) {
-        const elapsed = process.threadCpuUsage(cpu);
-        console.log(
-          JSON.stringify({
-            entryPoint: "spawnSubagentDirect",
-            phase,
-            rows,
-            isMainThread,
-            mainThreadCpuMs: (elapsed.user + elapsed.system) / 1_000,
-            wallMs: performance.now() - started,
-            rssBytes: process.memoryUsage.rss(),
-            hostDataSqlCalls: sql.queries.length,
-            hostSiblingParses: parse?.mock.calls.filter(([value]) =>
-              value.includes('"sessionId":"synthetic-spawn-roster-'),
-            ).length,
-          }),
-        );
-      }
-      expect(result).toEqual({
-        status: "error",
-        error: "sessions_spawn groupId requires collect=true.",
-      });
-      expect(sql.queries).toEqual([]);
-    }
-  } finally {
-    parse?.mockRestore();
-    sql.restore();
-  }
-});
 
 it("rejects a spawn cancelled during requester acquisition before starting effects", async () => {
   await writeSubagentSessionEntry({
@@ -131,7 +67,7 @@ it("rejects a spawn cancelled during requester acquisition before starting effec
   expect(effectsStarted).not.toHaveBeenCalled();
 });
 
-it("retains dirty-sibling validation when a spawn reads its selected requester", async () => {
+it("reads the requester off-thread while retaining dirty-sibling validation", async () => {
   const sibling = "agent:main:matrix:channel:!mixed:example.org";
   const database = runOpenClawAgentWriteTransaction(
     (writer) => {
@@ -147,10 +83,17 @@ it("retains dirty-sibling validation when a spawn reads its selected requester",
       { task: "capture requester", context: "isolated", groupId: "requires-collect" },
       { agentSessionKey: fixture.parentSessionKey },
     );
-  expect(await readRequester()).toEqual({
-    status: "error",
-    error: "sessions_spawn groupId requires collect=true.",
-  });
+  getRuntimeConfig();
+  const sql = observeHostDataSql();
+  try {
+    expect(await readRequester()).toEqual({
+      status: "error",
+      error: "sessions_spawn groupId requires collect=true.",
+    });
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
   database.db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?").run(
     JSON.stringify({
       sessionId: sibling,
@@ -172,7 +115,6 @@ it("retains dirty-sibling validation when a spawn reads its selected requester",
 
 it.each([
   { backend: "native", originalSessionId: "original-requester", globalRequester: false },
-  { backend: "visible", originalSessionId: "original-requester", globalRequester: false },
   { backend: "acp", originalSessionId: "original-requester", globalRequester: false },
   { backend: "native", originalSessionId: undefined, globalRequester: false },
   { backend: "visible", originalSessionId: "original-requester", globalRequester: true },
@@ -180,6 +122,10 @@ it.each([
   "keeps the birth requester window through async $backend launch (original=$originalSessionId, global=$globalRequester)",
   async ({ backend, originalSessionId, globalRequester }) => {
     const requesterSessionKey = globalRequester ? "global" : "agent:main:completion-owner";
+    const originalLifecycleRevision = originalSessionId
+      ? "original-requester-lifecycle"
+      : undefined;
+    const replacementLifecycleRevision = "replacement-requester-lifecycle";
     if (globalRequester) {
       const cfg = getRuntimeConfig();
       await writeFile(
@@ -215,6 +161,7 @@ it.each([
         agentId: "main",
         sessionKey: requesterSessionKey,
         defaultSessionId: originalSessionId,
+        lifecycleRevision: originalLifecycleRevision,
       });
     }
     if (backend === "acp") {
@@ -270,7 +217,11 @@ it.each([
       // must retain that captured window even when later launch steps await.
       replaceSessionEntrySync(
         { sessionKey: requesterSessionKey, agentId: "main" },
-        { sessionId: "replacement-requester", updatedAt: Date.now() },
+        {
+          sessionId: "replacement-requester",
+          lifecycleRevision: replacementLifecycleRevision,
+          updatedAt: Date.now(),
+        },
       );
     });
     const ctx = {
@@ -325,7 +276,7 @@ it.each([
         throw new Error("Expected an accepted child run");
       }
       await settleSubagentRegistryPersistenceWork();
-      const [restored] = loadSubagentRunsByRunIdsFromSqlite([runId]);
+      const restored = loadSubagentRegistryFromSqlite().get(runId);
       expect(restored).toMatchObject({
         runId,
         requesterSessionKey,
@@ -333,9 +284,13 @@ it.each([
         expectsCompletionMessage: true,
       });
       expect(restored?.completionRequesterSessionId).toBe(originalSessionId);
+      expect(restored?.completionRequesterLifecycleRevision).toBe(originalLifecycleRevision);
       expect(
-        loadSessionEntryReadOnly({ sessionKey: requesterSessionKey, agentId: "main" })?.sessionId,
-      ).toBe("replacement-requester");
+        loadSessionEntryReadOnly({ sessionKey: requesterSessionKey, agentId: "main" }),
+      ).toMatchObject({
+        sessionId: "replacement-requester",
+        lifecycleRevision: replacementLifecycleRevision,
+      });
     } finally {
       if (backend === "acp") {
         await disposeAcpSessionManagerInstance(getAcpSessionManager(), "test-cleanup");

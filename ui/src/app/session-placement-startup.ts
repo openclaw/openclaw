@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { t } from "../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -85,7 +86,7 @@ export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
   gateway: ApplicationGateway,
-  { gatewayUrl, recoveryScope }: Pick<SessionPlacementRecovery, "gatewayUrl" | "recoveryScope">,
+  { gatewayUrl, recoveryScope }: { gatewayUrl: string; recoveryScope?: string },
 ): () => boolean {
   const revision = gateway.connectionRevision;
   const presentationScope = gatewayPresentationScope(gateway);
@@ -98,7 +99,7 @@ export function capturePlacementStartupConnection(
       gateway.connectionRevision === revision &&
       gatewayPresentationScope(gateway) === presentationScope &&
       gateway.connection.gatewayUrl === gatewayUrl &&
-      (!currentScope || currentScope === recoveryScope)
+      (recoveryScope === undefined || !currentScope || currentScope === recoveryScope)
     );
   };
 }
@@ -402,10 +403,7 @@ export function createApplicationPlacementStartup(
       runtime?.retry(sessionKey);
     },
     resumeRecovery,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: (listener) => registerListener(listeners, listener),
     dispose() {
       stopGateway?.();
       stopReloadGuard();

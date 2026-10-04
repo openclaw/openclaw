@@ -146,12 +146,6 @@ actor RemoteTunnelManager {
         }
     }
 
-    /// Ensure an SSH tunnel is running for the gateway control port.
-    /// Returns the local forwarded port configured by gateway.remote.url.
-    func ensureControlTunnel() async throws -> UInt16 {
-        try await self.ensureControlTunnelRoute().localPort
-    }
-
     func ensureControlTunnelRoute() async throws -> Route {
         guard !self.isShutDown else { throw CancellationError() }
         return try await self.ensureControlTunnelRoute(
@@ -199,13 +193,9 @@ actor RemoteTunnelManager {
                   self.createInFlight == nil, currentConfiguration == configuration
             else { continue }
 
-            let desiredPort = configuration.preferredLocalPort ?? 18789
             let token = UUID()
             let task = Task {
-                try await RemotePortTunnel.create(
-                    configuration: configuration,
-                    preferredLocalPort: desiredPort,
-                    allowRandomLocalPort: true)
+                try await RemotePortTunnel.create(configuration: configuration)
             }
             self.createInFlight = (
                 token: token,

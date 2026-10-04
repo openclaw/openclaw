@@ -39,6 +39,7 @@ export function proposalBundleRelativePath(
 }
 
 export async function stageSkillProposalGeneration(params: {
+  assertCommitAllowed?: () => void;
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
@@ -49,7 +50,8 @@ export async function stageSkillProposalGeneration(params: {
     throw new Error("Revised Skill Workshop proposals require a generation draft path.");
   }
   const stateDir = resolveSkillWorkshopStateDir(params.store);
-  const stateRoot = await root(stateDir);
+  // fs-safe rechecks after path preparation, immediately before each filesystem mutation.
+  const stateRoot = await root(stateDir, { assertBeforeMutation: params.assertCommitAllowed });
   const proposalDir = proposalRelativeDir(params.record.id);
   const stagingDir = path.join(
     proposalDir,
@@ -119,21 +121,6 @@ export async function cleanupSkillProposalGenerations(
   if (!activeGenerationId) {
     return;
   }
-  await retireLegacyProposalBundle(record, store);
-}
-
-function proposalGenerationId(draftFile: SkillProposalDraftFile): string | null {
-  return GENERATION_DRAFT_PATTERN.exec(draftFile)?.[1] ?? null;
-}
-
-async function retireLegacyProposalBundle(
-  record: SkillProposalRecord,
-  store?: SkillWorkshopStoreOptions,
-): Promise<void> {
-  const stateDir = resolveSkillWorkshopStateDir(store);
-  const stateRoot = await root(stateDir);
-  const proposalDir = proposalRelativeDir(record.id);
-  let entries: string[];
   try {
     entries = await stateRoot.list(proposalDir);
   } catch (error) {
@@ -147,6 +134,10 @@ async function retireLegacyProposalBundle(
       await removeGenerationPath(stateDir, path.join(proposalDir, entry));
     }
   }
+}
+
+function proposalGenerationId(draftFile: SkillProposalDraftFile): string | null {
+  return GENERATION_DRAFT_PATTERN.exec(draftFile)?.[1] ?? null;
 }
 
 async function removeGenerationPath(stateDir: string, relativePath: string): Promise<void> {

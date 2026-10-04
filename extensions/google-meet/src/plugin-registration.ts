@@ -23,6 +23,7 @@ export const loadGoogleMeetPluginHelpers = createLazyRuntimeModule(
   () => import("./plugin-helpers.js"),
 );
 export const loadGoogleMeetCliModule = createLazyRuntimeModule(() => import("./cli.js"));
+export const loadGoogleMeetCreateModule = createLazyRuntimeModule(() => import("./create.js"));
 export const loadGoogleMeetNodeHostModule = createLazyRuntimeModule(() => import("./node-host.js"));
 
 const loadGoogleMeetRuntimeModule = createLazyRuntimeModule(() => import("./runtime.js"));
@@ -33,12 +34,10 @@ const loadGoogleMeetGatewayRuntimeModule = createLazyRuntimeModule(
   () => import("openclaw/plugin-sdk/gateway-runtime"),
 );
 
-type GoogleMeetGatewayRuntimeModule = Awaited<
-  ReturnType<typeof loadGoogleMeetGatewayRuntimeModule>
->;
-type CallGatewayFromCli = GoogleMeetGatewayRuntimeModule["callGatewayFromCli"];
-type GoogleMeetGatewayError = NonNullable<Parameters<GatewayRequestHandlerOptions["respond"]>[2]>;
-type GoogleMeetGatewayErrorCode = GoogleMeetGatewayError["code"];
+type CallGatewayFromCli = typeof import("openclaw/plugin-sdk/gateway-runtime").callGatewayFromCli;
+type GoogleMeetGatewayErrorCode = NonNullable<
+  Parameters<GatewayRequestHandlerOptions["respond"]>[2]
+>["code"];
 
 type LoadGoogleMeetNodeInvokePolicy = (
   config: GoogleMeetConfig,
@@ -92,24 +91,14 @@ type GoogleMeetGatewayToolAction =
   | "test_speech"
   | "test_listen";
 
-function googleMeetGatewayMethodForToolAction(action: GoogleMeetGatewayToolAction): string {
-  switch (action) {
-    case "participation_context":
-      return "googlemeet.participationContext";
-    case "recover_current_tab":
-      return "googlemeet.recoverCurrentTab";
-    case "setup_status":
-      return "googlemeet.setup";
-    case "test_speech":
-      return "googlemeet.testSpeech";
-    case "test_listen":
-      return "googlemeet.testListen";
-    case "end_active_conference":
-      return "googlemeet.endActiveConference";
-    default:
-      return `googlemeet.${action}`;
-  }
-}
+const googleMeetGatewayMethods: Partial<Record<GoogleMeetGatewayToolAction, string>> = {
+  participation_context: "googlemeet.participationContext",
+  recover_current_tab: "googlemeet.recoverCurrentTab",
+  setup_status: "googlemeet.setup",
+  test_speech: "googlemeet.testSpeech",
+  test_listen: "googlemeet.testListen",
+  end_active_conference: "googlemeet.endActiveConference",
+};
 
 export function readGoogleMeetParticipationParams(raw: Record<string, unknown>): {
   sessionId: string;
@@ -151,13 +140,13 @@ export function readGoogleMeetParticipationParams(raw: Record<string, unknown>):
   };
 }
 
-function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
+export function assertGoogleMeetAgentToolActionSupported(params: {
   config: GoogleMeetConfig;
   raw: Record<string, unknown>;
-}): boolean {
+}): void {
   const platform = googleMeetToolDeps.platform();
   if (platform === "darwin" || platform === "linux") {
-    return false;
+    return;
   }
   const action = params.raw.action;
   if (
@@ -165,33 +154,19 @@ function isGoogleMeetAgentToolActionUnsupportedOnHost(params: {
     action !== "test_speech" &&
     !(action === "create" && shouldJoinCreatedMeet(params.raw))
   ) {
-    return false;
+    return;
   }
   const transport = normalizeTransport(params.raw.transport) ?? params.config.defaultTransport;
   const mode =
     action === "test_speech"
       ? "agent"
       : (normalizeMode(params.raw.mode) ?? params.config.defaultMode);
-  return transport === "chrome" && (mode === "agent" || mode === "bidi");
-}
-
-export function assertGoogleMeetAgentToolActionSupported(params: {
-  config: GoogleMeetConfig;
-  raw: Record<string, unknown>;
-}): void {
-  if (!isGoogleMeetAgentToolActionUnsupportedOnHost(params)) {
+  if (transport !== "chrome" || (mode !== "agent" && mode !== "bidi")) {
     return;
   }
   throw new Error(
     "Google Meet local Chrome talk-back audio requires macOS with BlackHole 2ch or Linux with PipeWire-Pulse. On this host, use mode: transcribe, transport: twilio, or a supported chrome-node.",
   );
-}
-
-function readGatewayErrorDetails(err: unknown): unknown {
-  if (!err || typeof err !== "object" || !("details" in err)) {
-    return undefined;
-  }
-  return (err as { details?: unknown }).details;
 }
 
 export async function callGoogleMeetGatewayFromTool(params: {
@@ -200,16 +175,13 @@ export async function callGoogleMeetGatewayFromTool(params: {
   raw: Record<string, unknown>;
   runtime?: OpenClawPluginApi["runtime"];
 }): Promise<unknown> {
+  const method = googleMeetGatewayMethods[params.action] ?? `googlemeet.${params.action}`;
   try {
     if (params.runtime) {
-      return await params.runtime.gateway.request(
-        googleMeetGatewayMethodForToolAction(params.action),
-        params.raw,
-        {
-          timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
-          scopes: ["operator.admin"],
-        },
-      );
+      return await params.runtime.gateway.request(method, params.raw, {
+        timeoutMs: resolveGoogleMeetGatewayOperationTimeoutMs(params.config),
+        scopes: ["operator.admin"],
+      });
     }
     // Standalone agent workers connect as this bundled plugin, not as the
     // model session; its Gateway methods remain the only exposed actions.
@@ -217,7 +189,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       googleMeetToolDeps.callGatewayFromCli ??
       (await loadGoogleMeetGatewayRuntimeModule()).callGatewayFromCli;
     return await callGatewayFromCli(
-      googleMeetGatewayMethodForToolAction(params.action),
+      method,
       {
         json: true,
         timeout: String(resolveGoogleMeetGatewayOperationTimeoutMs(params.config)),
@@ -226,7 +198,7 @@ export async function callGoogleMeetGatewayFromTool(params: {
       { progress: false, scopes: ["operator.admin"] },
     );
   } catch (err) {
-    const details = readGatewayErrorDetails(err);
+    const details = err && typeof err === "object" && "details" in err ? err.details : undefined;
     if (details && typeof details === "object") {
       return details;
     }

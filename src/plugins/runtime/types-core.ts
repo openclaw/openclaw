@@ -1,4 +1,4 @@
-// Core runtime types define system, config, and task helper contracts for plugins.
+import type { StopReason } from "../../../packages/llm-core/src/types.js";
 import type { CreateChannelIngressDrainOptions } from "../../channels/message/ingress-drain.js";
 import type { CreateChannelIngressQueueOptions } from "../../channels/message/ingress-queue.types.js";
 import type { ConfigMutationBase } from "../../config/mutation-types.js";
@@ -7,7 +7,6 @@ import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import type { LogLevel } from "../../logging/levels.js";
 import type { MediaUnderstandingRuntime } from "../../media-understanding/runtime-types.js";
 import type { OpenAsyncKeyedStoreOptions } from "../../plugin-state/plugin-state-store.types.js";
-import type { PluginRuntimeTasks } from "./runtime-tasks.types.js";
 
 type TtsRuntimeApi = typeof import("../../tts/runtime-api.js");
 type ListSpeechVoices = TtsRuntimeApi["listSpeechVoices"];
@@ -310,7 +309,7 @@ export type LlmCompleteResult = {
   /** Concrete model identity returned by the provider, when available. */
   responseModel?: string;
   /** Provider terminal reason for direct completions, when available. */
-  stopReason?: "stop" | "length" | "toolUse" | "error" | "aborted";
+  stopReason?: StopReason;
   agentId: string;
   usage: LlmCompleteUsage;
   execution: LlmCompleteExecution;
@@ -390,7 +389,7 @@ export type PluginRuntimeCore = {
      * budget timeouts for the run that will actually execute.
      */
     resolveCliBackendDispatchEligibility: typeof import("../../agents/embedded-agent-runner/cli-backend-dispatch-eligibility.js").resolveEmbeddedCliBackendDispatchEligibility;
-    ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
+    ensureAgentWorkspace: typeof import("./runtime-agent-workspace.js").ensurePluginAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveSessionStorePathCore;
       createSessionEntry: (
@@ -549,7 +548,6 @@ export type PluginRuntimeCore = {
       },
     ) => import("../../channels/message/ingress-drain.js").ChannelIngressDrain;
   };
-  tasks: PluginRuntimeTasks;
   llm: {
     complete: (params: LlmCompleteParams) => Promise<LlmCompleteResult>;
     acquireLocalService: (

@@ -91,26 +91,33 @@ function setup(mint: Promise<unknown> = Promise.resolve(minted)) {
 }
 
 describe("Browser panel stream startup lifetime", () => {
-  it.each(["mint", "connecting", "open", "ready"] as const)(
+  it.each(["mint", "connecting", "progressing"] as const)(
     "waits through slow %s, then retires it before one bounded fallback",
     async (phase) => {
       const mint = createDeferred<unknown>();
-      const { controller, calls } = setup(phase === "mint" ? mint.promise : undefined);
+      const { controller, calls } = setup(phase === "connecting" ? undefined : mint.promise);
       const pending = controller.refreshAll();
       await flush();
       const socket = sockets[0];
-      if (phase === "open" || phase === "ready") {
-        socket?.open();
-      }
-      if (phase === "ready") {
-        socket?.receive(ready);
-      }
       await vi.advanceTimersByTimeAsync(1501);
       expect(calls("/screenshot")).toHaveLength(0);
       expect(controller.loading).toBe(true);
       const signal = calls("/screencast")[0]?.[2]?.signal;
       expect(signal?.aborted).toBe(false);
-      await vi.advanceTimersByTimeAsync(28_499);
+      if (phase === "progressing") {
+        await vi.advanceTimersByTimeAsync(8499);
+        expect(calls("/screenshot")).toHaveLength(0);
+        mint.resolve(minted);
+        await flush();
+        await vi.advanceTimersByTimeAsync(10_000);
+        sockets[0]!.open();
+        await vi.advanceTimersByTimeAsync(9000);
+        sockets[0]!.receive(ready);
+        expect(calls("/screenshot")).toHaveLength(0);
+        await vi.advanceTimersByTimeAsync(1000);
+      } else {
+        await vi.advanceTimersByTimeAsync(28_499);
+      }
       await pending;
       expect(signal?.aborted).toBe(true);
       expect(calls("/screenshot")).toHaveLength(1);
@@ -121,8 +128,9 @@ describe("Browser panel stream startup lifetime", () => {
         await flush();
         expect(sockets).toHaveLength(0);
       } else {
-        expect(socket?.close).toHaveBeenCalledOnce();
-        socket?.receive(screencastFrame());
+        const retired = socket ?? sockets[0]!;
+        expect(retired.close).toHaveBeenCalledOnce();
+        retired.receive(screencastFrame());
         await flush();
         expect(controller.view).toBe(fallback);
       }
@@ -132,26 +140,6 @@ describe("Browser panel stream startup lifetime", () => {
       expect(calls("/screencast")).toHaveLength(2);
     },
   );
-
-  it("does not restart the total deadline when minting, socket opening, or ready advances", async () => {
-    const mint = createDeferred<unknown>();
-    const { controller, calls } = setup(mint.promise);
-    const pending = controller.refreshAll();
-    await flush();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(calls("/screenshot")).toHaveLength(0);
-    mint.resolve(minted);
-    await flush();
-    await vi.advanceTimersByTimeAsync(10_000);
-    sockets[0]!.open();
-    await vi.advanceTimersByTimeAsync(9000);
-    sockets[0]!.receive(ready);
-    expect(calls("/screenshot")).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(1000);
-    await pending;
-    expect(sockets[0]!.close).toHaveBeenCalledOnce();
-    expect(calls("/screenshot")).toHaveLength(1);
-  });
 
   it("retires a mint immediately when its panel disconnects and ignores its late response", async () => {
     const mint = createDeferred<unknown>();

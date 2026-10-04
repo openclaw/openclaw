@@ -1,41 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { PluginCandidate } from "./discovery.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { mkdirSafeDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
-
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function makeTempDir() {
-  const dir = tempDirs.make("openclaw-manifest-provider-metadata-");
-  mkdirSafeDir(dir);
-  return dir;
-}
-
-function writeManifest(dir: string, manifest: Record<string, unknown>) {
-  fs.writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
-}
-
-function loadSingleCandidateRegistry(
-  params: Pick<PluginCandidate, "idHint" | "rootDir" | "origin">,
-) {
-  return loadPluginManifestRegistryCore({
-    candidates: [{ ...params, source: path.join(params.rootDir, "index.ts") }],
-  });
-}
-
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("loadPluginManifestRegistry provider metadata", () => {
-  it("preserves provider and executor contracts from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
+it.each([
+  {
+    name: "preserves provider and executor contracts from plugin manifests",
+    manifest: {
       id: "acme-ai",
       providers: ["acme-ai"],
       contracts: {
@@ -43,27 +22,23 @@ describe("loadPluginManifestRegistry provider metadata", () => {
         externalAuthProviders: ["acme-ai"],
         usageProviders: ["acme-ai"],
         workerProviders: [" static-ssh ", ""],
+        storageProviders: [" archive-objects ", ""],
       },
       configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "acme-ai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.contracts).toEqual({
-      codeModeExecutors: ["quickjs"],
-      externalAuthProviders: ["acme-ai"],
-      usageProviders: ["acme-ai"],
-      workerProviders: ["static-ssh"],
-    });
-  });
-
-  it("normalizes provider metadata from plugin manifests", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
+    },
+    expected: {
+      contracts: {
+        codeModeExecutors: ["quickjs"],
+        externalAuthProviders: ["acme-ai"],
+        usageProviders: ["acme-ai"],
+        workerProviders: ["static-ssh"],
+        storageProviders: ["archive-objects"],
+      },
+    },
+  },
+  {
+    name: "normalizes provider metadata from plugin manifests",
+    manifest: {
       id: "openai",
       enabledByDefault: true,
       enabledByDefaultOnPlatforms: ["darwin", "not-a-platform"],
@@ -144,109 +119,77 @@ describe("loadPluginManifestRegistry provider metadata", () => {
         },
       ],
       configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "openai",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.providerEndpoints).toEqual([
-      {
-        endpointClass: "openai-public",
-        hosts: ["api.openai.com"],
-        hostSuffixes: [".openai.azure.com"],
-        baseUrls: ["https://api.openai.com/v1"],
-        googleVertexRegion: "global",
-        googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
-      },
-    ]);
-    expect(registry.plugins[0]?.modelIdNormalization).toEqual({
-      providers: {
-        openai: {
-          aliases: {
-            "gpt-latest": "gpt-5.4",
-          },
-          stripPrefixes: ["openai/"],
-          prefixWhenBare: "openai",
-          prefixWhenBareAfterAliasStartsWith: [
-            {
-              modelPrefix: "gpt-",
-              prefix: "openai",
-            },
-          ],
-        },
-      },
-    });
-    expect(registry.plugins[0]?.providerRequest).toEqual({
-      providers: {
-        openai: {
-          family: "openai-family",
-          compatibilityFamily: "moonshot",
-          openAICompletions: {
-            supportsStreamingUsage: true,
-          },
-        },
-      },
-    });
-    expect(registry.plugins[0]?.syntheticAuthRefs).toEqual(["openai-cli"]);
-    expect(registry.plugins[0]?.nonSecretAuthMarkers).toEqual(["openai-cli"]);
-    expect(registry.plugins[0]?.providerAuthAliases).toEqual({
-      openai: "openai",
-    });
-    expect(registry.plugins[0]?.enabledByDefault).toBe(true);
-    expect(registry.plugins[0]?.enabledByDefaultOnPlatforms).toEqual(["darwin"]);
-    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
-      {
-        provider: "openai",
-        method: "api-key",
-        choiceId: "openai-api-key",
-        choiceLabel: "OpenAI API key",
-        icon: "https://cdn.simpleicons.org/openai",
-        modelTarget: "utility",
-        platforms: ["darwin"],
-        website: "https://platform.openai.com/api-keys",
-        docsUrl: "https://docs.example.com/authentication",
-        assistantPriority: 10,
-        assistantVisibility: "detected-only",
-        appGuidedSecret: true,
-        personalAccount: true,
-        appGuidedActionLabel: "Connect account",
-        appGuidedDiscovery: true,
-      },
-    ]);
-  });
-
-  it.each([
-    { platforms: [] },
-    { platforms: ["not-a-platform"] },
-    { platforms: "darwin" },
-    { platforms: null },
-  ])(
-    "preserves an unavailable auth choice when its platform restriction is $platforms",
-    ({ platforms }) => {
-      const dir = makeTempDir();
-      writeManifest(dir, {
-        id: "native-provider",
-        providerAuthChoices: [
-          { provider: "native", method: "local", choiceId: "native-local", platforms },
-        ],
-        configSchema: { type: "object" },
-      });
-
-      const registry = loadSingleCandidateRegistry({
-        idHint: "native-provider",
-        rootDir: dir,
-        origin: "bundled",
-      });
-      expect(registry.plugins[0]?.providerAuthChoices?.[0]?.platforms).toEqual([]);
     },
-  );
-
-  it("drops non-HTTPS provider auth presentation URLs", () => {
-    const dir = makeTempDir();
-    writeManifest(dir, {
+    expected: {
+      providerEndpoints: [
+        {
+          endpointClass: "openai-public",
+          hosts: ["api.openai.com"],
+          hostSuffixes: [".openai.azure.com"],
+          baseUrls: ["https://api.openai.com/v1"],
+          googleVertexRegion: "global",
+          googleVertexRegionHostSuffix: "-aiplatform.googleapis.com",
+        },
+      ],
+      modelIdNormalization: {
+        providers: {
+          openai: {
+            aliases: {
+              "gpt-latest": "gpt-5.4",
+            },
+            stripPrefixes: ["openai/"],
+            prefixWhenBare: "openai",
+            prefixWhenBareAfterAliasStartsWith: [
+              {
+                modelPrefix: "gpt-",
+                prefix: "openai",
+              },
+            ],
+          },
+        },
+      },
+      providerRequest: {
+        providers: {
+          openai: {
+            family: "openai-family",
+            compatibilityFamily: "moonshot",
+            openAICompletions: {
+              supportsStreamingUsage: true,
+            },
+          },
+        },
+      },
+      syntheticAuthRefs: ["openai-cli"],
+      nonSecretAuthMarkers: ["openai-cli"],
+      providerAuthAliases: {
+        openai: "openai",
+      },
+      enabledByDefault: true,
+      enabledByDefaultOnPlatforms: ["darwin"],
+      providerAuthChoices: [
+        {
+          provider: "openai",
+          method: "api-key",
+          choiceId: "openai-api-key",
+          choiceLabel: "OpenAI API key",
+          icon: "https://cdn.simpleicons.org/openai",
+          modelTarget: "utility",
+          platforms: ["darwin"],
+          website: "https://platform.openai.com/api-keys",
+          docsUrl: "https://docs.example.com/authentication",
+          assistantPriority: 10,
+          assistantVisibility: "detected-only",
+          appGuidedSecret: true,
+          personalAccount: true,
+          appGuidedActionLabel: "Connect account",
+          appGuidedDiscovery: true,
+        },
+      ],
+    },
+  },
+  {
+    name: "drops non-HTTPS provider auth presentation URLs",
+    manifest: {
       id: "unsafe-auth-artwork",
       providerAuthChoices: [
         {
@@ -266,25 +209,49 @@ describe("loadPluginManifestRegistry provider metadata", () => {
         },
       ],
       configSchema: { type: "object" },
-    });
-
-    const registry = loadSingleCandidateRegistry({
-      idHint: "unsafe-auth-artwork",
-      rootDir: dir,
-      origin: "bundled",
-    });
-
-    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
-      {
-        provider: "unsafe",
-        method: "api-key",
-        choiceId: "unsafe-api-key",
-      },
-      {
-        provider: "oversized",
-        method: "api-key",
-        choiceId: "oversized-api-key",
-      },
-    ]);
+    },
+    expected: {
+      providerAuthChoices: [
+        {
+          provider: "unsafe",
+          method: "api-key",
+          choiceId: "unsafe-api-key",
+        },
+        {
+          provider: "oversized",
+          method: "api-key",
+          choiceId: "oversized-api-key",
+        },
+      ],
+    },
+  },
+  ...[[], ["not-a-platform"], "darwin", null].map((platforms) => ({
+    name: `preserves unavailable platform restriction ${JSON.stringify(platforms)}`,
+    manifest: {
+      id: "native-provider",
+      configSchema: { type: "object" },
+      providerAuthChoices: [
+        { provider: "native", method: "local", choiceId: "native-local", platforms },
+      ],
+    },
+    expected: {
+      providerAuthChoices: [
+        { provider: "native", method: "local", choiceId: "native-local", platforms: [] },
+      ],
+    },
+  })),
+])("$name", ({ manifest, expected }) => {
+  const rootDir = tempDirs.make("openclaw-manifest-provider-metadata-");
+  mkdirSafeDir(rootDir);
+  fs.writeFileSync(path.join(rootDir, "openclaw.plugin.json"), JSON.stringify(manifest), "utf-8");
+  const registry = loadPluginManifestRegistryCore({
+    candidates: [
+      { idHint: manifest.id, rootDir, origin: "bundled", source: path.join(rootDir, "index.ts") },
+    ],
   });
+  const plugin = registry.plugins[0];
+  expect(plugin).toBeDefined();
+  for (const [key, value] of Object.entries(expected)) {
+    expect(plugin && Reflect.get(plugin, key), key).toEqual(value);
+  }
 });

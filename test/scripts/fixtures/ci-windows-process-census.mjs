@@ -5,10 +5,19 @@ import net from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const QUERY_TIMEOUT_MS = 1_000;
 const MAX_FRAME_BYTES = 1024 * 1024;
 const MAX_STDERR_CHARS = 16 * 1024;
 const metadataPath = (root) => path.join(root, "census.json");
+
+// This witness borrows the operation's deadline, including IPC scheduling time.
+function remainingTime(deadline, stage) {
+  if (!Number.isSafeInteger(deadline)) {
+    throw new Error("Fixture census requires an absolute operation deadline");
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error(`Census ${stage} ETIMEDOUT (operation deadline expired)`);
+  return remaining;
+}
 
 function assertLease(root, token) {
   if (fs.readFileSync(path.join(root, "lease"), "utf8") !== token) {
@@ -145,9 +154,10 @@ export function createWindowsProcessCensus({ root, token, onFailure }) {
         return;
       }
       const request = pending.get(message?.id);
-      if (!request || Object.keys(message).length !== 2 || Date.now() >= request.deadline) {
-        throw new Error("Late or mismatched census helper reply");
+      if (!request || Object.keys(message).length !== 2) {
+        throw new Error("Mismatched census helper reply");
       }
+      remainingTime(request.deadline, "helper reply");
       const observations = observationsFor(request.pids, message.observations);
       clearTimeout(request.timer);
       pending.delete(message.id);
@@ -155,26 +165,31 @@ export function createWindowsProcessCensus({ root, token, onFailure }) {
     },
     fail,
   );
-  const read = (pids) => {
+  const read = (pids, deadline) => {
     validatePids(pids);
     if (closing || failure || !initialized) {
       return Promise.reject(failure ?? new Error("Census helper is not ready"));
     }
     const id = ++sequence;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => fail(new Error("Census query ETIMEDOUT")), QUERY_TIMEOUT_MS);
+      const remaining = remainingTime(deadline, "helper query admission");
+      const timer = setTimeout(
+        () => fail(new Error("Census helper query ETIMEDOUT (operation deadline expired)")),
+        remaining,
+      );
       pending.set(id, {
         pids: [...pids],
         resolve,
         reject,
         timer,
-        deadline: Date.now() + QUERY_TIMEOUT_MS,
+        deadline,
       });
       child.stdin.write(JSON.stringify({ id, pids }) + "\n", (error) => {
         if (error) fail(error);
       });
     }).then((observations) => {
       if (closing || failure) throw failure ?? new Error("Census owner retired");
+      remainingTime(deadline, "helper query completion");
       return observations;
     });
   };
@@ -201,10 +216,11 @@ export function createWindowsProcessCensus({ root, token, onFailure }) {
         }
         received = true;
         assertLease(root, token);
-        void read(request.pids)
+        void read(request.pids, request.deadline)
           .then((observations) => {
             assertLease(root, token);
             if (socket.destroyed || closing || failure) return;
+            remainingTime(request.deadline, "broker reply publication");
             socket.end(
               JSON.stringify({ id: request.id, observations: [...observations.values()] }) + "\n",
             );
@@ -255,7 +271,7 @@ export function createWindowsProcessCensus({ root, token, onFailure }) {
 }
 
 /** Actors use the supervisor's sampler, never a fresh interpreter or cached PID identity. */
-export async function requestWindowsProcessCensus(root, token, pids) {
+export async function requestWindowsProcessCensus(root, token, pids, deadline) {
   validatePids(pids);
   assertLease(root, token);
   const endpoint = JSON.parse(fs.readFileSync(metadataPath(root), "utf8"));
@@ -267,11 +283,11 @@ export async function requestWindowsProcessCensus(root, token, pids) {
   ) {
     throw new Error("Invalid fixture census endpoint");
   }
+  const remaining = remainingTime(deadline, "broker query admission");
   const id = randomUUID();
   const socket = net.createConnection({ host: "127.0.0.1", port: endpoint.port });
   let observations;
   let failure;
-  const deadline = Date.now() + QUERY_TIMEOUT_MS;
   const fail = (error) => {
     failure ??= error;
     socket.destroy();
@@ -284,21 +300,16 @@ export async function requestWindowsProcessCensus(root, token, pids) {
     });
   });
   const timer = setTimeout(
-    () => fail(new Error("Census broker query ETIMEDOUT")),
-    QUERY_TIMEOUT_MS,
+    () => fail(new Error("Census broker query ETIMEDOUT (operation deadline expired)")),
+    remaining,
   );
   readFrames(
     socket,
     (message) => {
-      if (
-        observations ||
-        failure ||
-        message?.id !== id ||
-        Object.keys(message).length !== 2 ||
-        Date.now() >= deadline
-      ) {
-        throw new Error("Late or mismatched census broker reply");
+      if (observations || failure || message?.id !== id || Object.keys(message).length !== 2) {
+        throw new Error("Mismatched census broker reply");
       }
+      remainingTime(deadline, "broker reply");
       observations = observationsFor(pids, message.observations);
     },
     fail,
@@ -306,14 +317,15 @@ export async function requestWindowsProcessCensus(root, token, pids) {
   socket.once("connect", () => {
     try {
       assertLease(root, token);
-      socket.write(JSON.stringify({ id, token, pids }) + "\n");
+      remainingTime(deadline, "broker connection");
+      socket.write(JSON.stringify({ id, token, pids, deadline }) + "\n");
     } catch (error) {
       fail(error);
     }
   });
   try {
     const result = await closed;
-    if (Date.now() >= deadline) throw new Error("Census broker query ETIMEDOUT");
+    remainingTime(deadline, "broker socket close");
     assertLease(root, token);
     return result;
   } finally {

@@ -6,7 +6,8 @@ import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { encodePngRgba } from "../../../src/media/png-encode.js";
-import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
+import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -84,20 +85,16 @@ suite.define(() => {
     await createCanvasDocument(
       {
         id: docId,
-        kind: "html_bundle",
         title: "Live widget proof",
         cspSandbox: "scripts",
         surface: "assistant_message",
-        entrypoint: {
-          type: "html",
-          value: buildWidgetDocument(
-            "Live widget proof",
-            `<style>body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
+        html: buildWidgetDocument(
+          "Live widget proof",
+          `<style>body{padding:24px;font:16px system-ui;background:var(--surface);color:var(--text)}
               input{padding:12px;background:var(--surface-raised);color:var(--text);border:1px solid var(--border)}</style>
               <h1>Live widget proof</h1><p>Loaded from this isolated Gateway's persisted Canvas document.</p>
               <label>Local note <input aria-label="Local note"></label>`,
-          ),
-        },
+        ),
       },
       { stateDir: owner.stateDir },
     );
@@ -128,18 +125,14 @@ suite.define(() => {
     await createCanvasDocument(
       {
         id: a2uiDocId,
-        kind: "html_bundle",
         title: "A2UI live proof",
         cspSandbox: "scripts",
         surface: "assistant_message",
-        entrypoint: {
-          type: "html",
-          value: buildWidgetDocument(
-            "A2UI live proof",
-            `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
-            { scriptOrigins: ["'self'"] },
-          ),
-        },
+        html: buildWidgetDocument(
+          "A2UI live proof",
+          `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
+          { scriptOrigins: ["'self'"] },
+        ),
       },
       { stateDir: owner.stateDir },
     );

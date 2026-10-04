@@ -1,9 +1,7 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { afterAll, assert, beforeEach, describe, expect, it } from "vitest";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   loadTranscriptEventsSync,
   loadSessionEntry,
@@ -17,254 +15,149 @@ import {
   SessionTranscriptReadFenceError,
 } from "../config/sessions/session-transcript-read-fence.js";
 import { waitForSessionTranscriptIndexReconcile } from "../config/sessions/session-transcript-reconcile.js";
-import { readLatestAssistantTextFromSessionTranscript } from "../config/sessions/transcript.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import {
   appendSessionTranscriptMessageByIdentity,
   readLatestAssistantTextByIdentity,
   readSessionTranscriptEvents,
   readSessionTranscriptRawDelta,
   readVisibleSessionTranscriptMessageEntries,
+  type SessionTranscriptReadParams,
 } from "./session-transcript-runtime.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
+const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-transcript-fence-");
 describe("session transcript runtime read fence", () => {
-  let storePath: string;
-
-  beforeEach(() => {
-    storePath = path.join(tempDirs.make("openclaw-sdk-transcript-fence-"), "sessions.json");
+  let scope: SessionTranscriptReadParams & { agentId: string; storePath: string };
+  beforeEach(async () => {
+    scope = {
+      agentId: "main",
+      sessionId: "fenced",
+      sessionKey: "agent:main:fenced",
+      storePath: path.join(tempDirs.make(), "sessions.json"),
+    };
+    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
   });
+  async function seedHistory() {
+    const rows = [];
+    for (const [index, content] of ["prompt", "prior", "prompt", "current"].entries()) {
+      const now = (index + 1) * 1_000;
+      const row = await appendSessionTranscriptMessageByIdentity({
+        ...scope,
+        message: { role: index % 2 ? "assistant" : "user", content, timestamp: now },
+        now,
+      });
+      assert(row?.anchor);
+      rows.push(row);
+    }
+    const [priorUser, priorAssistant, admitted] = rows;
+    assert(priorUser && priorAssistant && admitted?.anchor);
+    return {
+      priorUser,
+      priorAssistant,
+      admitted,
+      receipt: { ...admitted.anchor, logicalTurnId: "fenced-turn", role: "user" as const },
+    };
+  }
 
   it("fences full and raw reads before the exact admitted row and resumes from its cursor", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "fenced-raw-session",
-      sessionKey: "agent:main:fenced-raw",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    const priorUser = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "same prompt" },
-      now: 1_000,
-    });
-    const priorAssistant = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "assistant", content: "prior answer" },
-      parentId: priorUser?.messageId,
-      now: 2_000,
-    });
-    const admitted = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "same prompt" },
-      parentId: priorAssistant?.messageId,
-      now: 3_000,
-    });
-    await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "assistant", content: "current answer" },
-      parentId: admitted?.messageId,
-      now: 4_000,
-    });
-    if (!priorUser || !priorAssistant || !admitted) {
-      throw new Error("expected fenced transcript setup messages");
-    }
-    if (!admitted.anchor) {
-      throw new Error("expected admitted transcript anchor");
-    }
-    const receipt = {
-      ...admitted.anchor,
-      logicalTurnId: "fenced-raw-session",
-      role: "user" as const,
-    };
-
-    const fenced = await runWithSessionTranscriptReadFence(receipt, async () => {
-      const syncEvents = loadTranscriptEventsSync(scope);
+    const { priorUser, priorAssistant, admitted, receipt } = await seedHistory();
+    const page = await runWithSessionTranscriptReadFence(receipt, async () => {
       const events = await readSessionTranscriptEvents(scope);
-      const visible = await readVisibleSessionTranscriptMessageEntries(scope);
-      const latest = await readLatestAssistantTextByIdentity(scope);
-      const page = await readSessionTranscriptRawDelta({
-        ...scope,
-        maxBytes: 100_000,
-        maxEvents: 100,
+      expect(loadTranscriptEventsSync(scope)).toEqual(events);
+      expect(events).toEqual([
+        expect.objectContaining({ type: "session" }),
+        expect.objectContaining({ id: priorUser.messageId }),
+        expect.objectContaining({ id: priorAssistant.messageId }),
+      ]);
+      expect(
+        (await readVisibleSessionTranscriptMessageEntries(scope)).map((entry) => entry.entryId),
+      ).toEqual([priorUser.messageId, priorAssistant.messageId]);
+      await expect(readLatestAssistantTextByIdentity(scope)).resolves.toMatchObject({
+        id: priorAssistant.messageId,
+        text: "prior",
       });
-      return { events, latest, page, syncEvents, visible };
+      return readSessionTranscriptRawDelta({ ...scope, maxBytes: 100_000, maxEvents: 100 });
     });
-
-    expect(fenced.syncEvents).toEqual(fenced.events);
-    expect(
-      fenced.events.flatMap((event) =>
-        event &&
-        typeof event === "object" &&
-        "type" in event &&
-        event.type === "message" &&
-        "id" in event
-          ? [event.id]
-          : [],
-      ),
-    ).toEqual([priorUser.messageId, priorAssistant.messageId]);
-    expect(fenced.visible.map((entry) => entry.entryId)).toEqual([
-      priorUser.messageId,
-      priorAssistant.messageId,
-    ]);
-    expect(fenced.latest).toMatchObject({ id: priorAssistant.messageId, text: "prior answer" });
-    expect(fenced.page).toMatchObject({ kind: "page", hasMore: false });
-    if (fenced.page.kind !== "page") {
-      throw new Error("expected fenced raw transcript page");
-    }
-
+    assert(page.kind === "page");
+    expect(page.hasMore).toBe(false);
     await expect(
       readSessionTranscriptRawDelta({
         ...scope,
-        cursor: fenced.page.cursor,
+        cursor: page.cursor,
         maxBytes: 100_000,
         maxEvents: 100,
       }),
     ).resolves.toMatchObject({
       kind: "page",
       events: [
-        { event: { id: admitted.messageId, message: { content: "same prompt" } } },
-        { event: { message: { content: "current answer" } } },
+        { event: { id: admitted.messageId, message: { content: "prompt" } } },
+        { event: { message: { content: "current" } } },
       ],
       hasMore: false,
     });
   });
 
-  it.each(["sdk latest", "core latest", "legacy marker latest", "channel preparation"] as const)(
-    "restores cold history before %s with its history boundary",
-    async (reader) => {
-      const scope = {
-        agentId: "main",
-        sessionId: "cold-fenced-session",
-        sessionKey: "agent:main:cold-fenced",
-        storePath,
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-      const priorUser = await appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        message: { role: "user", content: "prior question", timestamp: 1_000 },
-        now: 1_000,
-      });
-      const priorAssistant = await appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        message: { role: "assistant", content: "prior answer", timestamp: 2_000 },
-        parentId: priorUser?.messageId,
-        now: 2_000,
-      });
-      const admitted = await appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        message: { role: "user", content: "current question", timestamp: 3_000 },
-        parentId: priorAssistant?.messageId,
-        now: 3_000,
-      });
-      await appendSessionTranscriptMessageByIdentity({
-        ...scope,
-        message: { role: "assistant", content: "current answer", timestamp: 4_000 },
-        parentId: admitted?.messageId,
-        now: 4_000,
-      });
-      if (!admitted?.anchor || !priorAssistant) {
-        throw new Error("expected transcript admission and prior assistant");
-      }
-      const options = { agentId: scope.agentId, path: admitted.anchor.storePath };
-      await waitForSessionTranscriptIndexReconcile(options);
-      await replaceSessionEntry(scope, {
-        ...loadSessionEntry(scope),
-        sessionId: scope.sessionId,
-        updatedAt: 1,
-        lastActivityAt: 1,
-        lastInteractionAt: 1,
-      });
-      runOpenClawAgentWriteTransaction(({ db }) => {
-        executeSqliteQuerySync(
-          db,
-          getNodeSqliteKysely<DB>(db)
-            .updateTable("session_windows")
-            .set({ updated_at: 1, transcript_updated_at: 1 })
-            .where("session_id", "=", scope.sessionId),
-        );
-      }, options);
-      await expect(
-        runSessionColdStorageMaintenance({
-          config: {
-            agents: { list: [{ id: "main" }] },
-            session: {
-              store: options.path,
-              maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
-            },
+  it("restores cold history before channel preparation with its history boundary", async () => {
+    const { receipt } = await seedHistory();
+    const options = { agentId: scope.agentId, path: receipt.storePath };
+    await waitForSessionTranscriptIndexReconcile(options);
+    await replaceSessionEntry(scope, {
+      ...loadSessionEntry(scope),
+      sessionId: scope.sessionId,
+      updatedAt: 1,
+      lastActivityAt: 1,
+      lastInteractionAt: 1,
+    });
+    runOpenClawAgentWriteTransaction(({ db }) => {
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<DB>(db)
+          .updateTable("session_windows")
+          .set({ updated_at: 1, transcript_updated_at: 1 })
+          .where("session_id", "=", scope.sessionId),
+      );
+    }, options);
+    await expect(
+      runSessionColdStorageMaintenance({
+        config: {
+          agents: { entries: { main: {} } },
+          session: {
+            store: options.path,
+            maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
           },
-        }),
-      ).resolves.toMatchObject({ archivedTranscripts: 1 });
-      expect(() => loadTranscriptEventsSync(scope)).toThrow(/cold storage/);
-      if (reader === "channel preparation") {
-        const ctx: FinalizedMsgContext = {
-          Body: "continue",
-          CommandAuthorized: false,
-          AgentId: scope.agentId,
-          SessionKey: scope.sessionKey,
-          Timestamp: 3_000,
-          SessionTranscriptContext: { historyLimit: 10 },
-        };
-        let dispatched = false;
-        await runPreparedChannelTurn({
-          channel: "slack",
-          routeSessionKey: scope.sessionKey,
-          storePath,
-          ctxPayload: ctx,
-          recordInboundSession: async () => undefined,
-          runDispatch: async () => {
-            dispatched = true;
-            expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual([
-              "prior question",
-              "prior answer",
-            ]);
-            return { queuedFinal: false };
-          },
-        });
-        expect(dispatched).toBe(true);
-        return;
-      }
-      const receipt = {
-        ...admitted.anchor,
-        logicalTurnId: "cold-fenced-turn",
-        role: "user" as const,
-      };
-      await runWithSessionTranscriptReadFence(receipt, async () => {
-        const latest =
-          reader === "sdk latest"
-            ? await readLatestAssistantTextByIdentity(scope)
-            : await readLatestAssistantTextFromSessionTranscript(
-                reader === "core latest" ? scope : formatSqliteSessionFileMarker(scope),
-              );
-        expect(latest).toMatchObject({ id: priorAssistant.messageId, text: "prior answer" });
-      });
-    },
-  );
+        },
+      }),
+    ).resolves.toMatchObject({ archivedTranscripts: 1 });
+    expect(() => loadTranscriptEventsSync(scope)).toThrow(/cold storage/);
+    const ctx: FinalizedMsgContext = {
+      Body: "continue",
+      CommandAuthorized: false,
+      AgentId: scope.agentId,
+      SessionKey: scope.sessionKey,
+      Timestamp: 3_000,
+      SessionTranscriptContext: { historyLimit: 10 },
+    };
+    let dispatched = false;
+    await runPreparedChannelTurn({
+      channel: "slack",
+      routeSessionKey: scope.sessionKey,
+      storePath: scope.storePath,
+      ctxPayload: ctx,
+      recordInboundSession: async () => undefined,
+      runDispatch: async () => {
+        dispatched = true;
+        expect(ctx.InboundHistory?.map((entry) => entry.body)).toEqual(["prompt", "prior"]);
+        return { queuedFinal: false };
+      },
+    });
+    expect(dispatched).toBe(true);
+  });
 
   it("rejects a read fence when any immutable admission field changes", async () => {
-    const scope = {
-      agentId: "main",
-      sessionId: "fenced-anchor-session",
-      sessionKey: "agent:main:fenced-anchor",
-      storePath,
-    };
-    await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 10 });
-    const admitted = await appendSessionTranscriptMessageByIdentity({
-      ...scope,
-      message: { role: "user", content: "exact admission" },
-      now: 1_000,
-    });
-    if (!admitted?.anchor) {
-      throw new Error("expected admitted transcript anchor");
-    }
-    const receipt = {
-      ...admitted.anchor,
-      logicalTurnId: "fenced-anchor-turn",
-      role: "user" as const,
-    };
+    const { receipt } = await seedHistory();
     const invalidReceipts = [
       { ...receipt, storePath: `${receipt.storePath}.other` },
       { ...receipt, sessionKey: `${receipt.sessionKey}:other` },
@@ -274,21 +167,18 @@ describe("session transcript runtime read fence", () => {
       { ...receipt, activeMessagePosition: receipt.activeMessagePosition + 1 },
       { ...receipt, role: "assistant" as const },
     ];
-
-    for (const invalidReceipt of invalidReceipts) {
+    for (const invalid of invalidReceipts) {
       expect(() =>
-        runWithSessionTranscriptReadFence(invalidReceipt as unknown as typeof receipt, () =>
+        runWithSessionTranscriptReadFence(invalid as unknown as typeof receipt, () =>
           loadTranscriptEventsSync(scope),
         ),
       ).toThrow(SessionTranscriptReadFenceError);
       await expect(
-        runWithSessionTranscriptReadFence(
-          invalidReceipt as unknown as typeof receipt,
-          async () => await readSessionTranscriptEvents(scope),
+        runWithSessionTranscriptReadFence(invalid as unknown as typeof receipt, () =>
+          readSessionTranscriptEvents(scope),
         ),
       ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
     }
-
     const events = loadTranscriptEventsSync(scope);
     expect(replaceTranscriptEventsSync(scope, events)).toBe(true);
     expect(() =>

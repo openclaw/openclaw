@@ -9,7 +9,6 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { resolveSlackAccount } from "../accounts.js";
-import type { SlackSendIdentity } from "../send.js";
 import type { SlackMessageEvent } from "../types.js";
 import { hasSlackMessageTableBlock } from "./block-text.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
@@ -28,7 +27,7 @@ import {
   buildSlackDebounceKey,
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
-import type { PreparedSlackMessage } from "./message-handler/types.js";
+import type { PreparedSlackMessage, SlackMessageSourceOptions } from "./message-handler/types.js";
 import { createSlackThreadTsResolver } from "./thread-resolution.js";
 
 const loadSlackMessagePipeline = createLazyRuntimeModule(
@@ -37,12 +36,7 @@ const loadSlackMessagePipeline = createLazyRuntimeModule(
 
 export type SlackMessageHandler = (
   message: SlackMessageEvent,
-  opts: {
-    source: "message" | "app_mention";
-    wasMentioned?: boolean;
-    relayIdentity?: SlackSendIdentity;
-    /** Non-serializable listener scope for a validated enterprise event. */
-    eventScope?: SlackEventScope;
+  opts: SlackMessageSourceOptions & {
     /** Wait until any inbound debounce flush and dispatch has completed. */
     awaitDispatch?: boolean;
     /** Durable ingress ownership carried into reply-lane adoption. */
@@ -242,6 +236,9 @@ export function createSlackMessageHandler(params: {
                   ...last.message,
                   text: combinedText,
                 };
+                const sourceMessageIds = surviving.flatMap((entry) =>
+                  entry.message.ts ? [entry.message.ts] : [],
+                );
                 const {
                   dispatchCompletion: _completion,
                   awaitDispatch: _awaitDispatch,
@@ -264,10 +261,13 @@ export function createSlackMessageHandler(params: {
                     message: syntheticMessage,
                     opts: {
                       ...lastOpts,
+                      senderAuthentication: surviving.every(
+                        (entry) => entry.opts.senderAuthentication === "verified",
+                      )
+                        ? "verified"
+                        : "asserted",
                       wasMentioned: combinedMentioned || last.opts.wasMentioned,
-                      sourceMessageIds: surviving.flatMap((entry) =>
-                        entry.message.ts ? [entry.message.ts] : [],
-                      ),
+                      sourceMessageIds,
                       abortSignal: admissionLifecycle.abortSignal,
                       isRuntimePolicyCurrent: runtimeContext.isRuntimePolicyCurrent,
                       onVisibleDrop: () => {
@@ -333,15 +333,10 @@ export function createSlackMessageHandler(params: {
                     },
                   };
                   onPrepared?.(prepared);
-                  if (surviving.length > 1) {
-                    const ids = surviving
-                      .map((entry) => entry.message.ts)
-                      .filter(Boolean) as string[];
-                    if (ids.length > 0) {
-                      prepared.ctxPayload.MessageSids = ids;
-                      prepared.ctxPayload.MessageSidFirst = ids[0];
-                      prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
-                    }
+                  if (surviving.length > 1 && sourceMessageIds.length > 0) {
+                    prepared.ctxPayload.MessageSids = sourceMessageIds;
+                    prepared.ctxPayload.MessageSidFirst = sourceMessageIds[0];
+                    prepared.ctxPayload.MessageSidLast = sourceMessageIds.at(-1);
                   }
                   await dispatchPreparedSlackMessage(prepared);
                   if (!turnAdoptionLifecycle && !settlementHandedOff) {

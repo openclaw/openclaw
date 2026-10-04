@@ -132,43 +132,27 @@ function pushToolExecPosture(
             ask: "off",
           }),
         };
-  const securityUsesMode =
-    modePosture?.inherited === false ||
-    (localSecurity === undefined && modePosture?.inherited === true);
-  const security =
-    modePosture?.inherited === false
-      ? modePosture.security
-      : (localSecurity ?? modePosture?.security ?? inheritedSecurity ?? defaultSecurity);
-  pushToolPostureValue(entries, params, {
-    suffix: "exec/security",
-    sourceSuffix: securityUsesMode ? "exec/mode" : undefined,
-    kind: "execSecurity",
-    value: security,
-    explicit:
-      modePosture !== undefined || localSecurity !== undefined || inheritedSecurity !== undefined,
-    inherited:
-      modePosture?.inherited === true
-        ? localSecurity === undefined
-        : localSecurity === undefined && inheritedSecurity !== undefined,
-  });
-
-  const askUsesMode =
-    modePosture?.inherited === false || (localAsk === undefined && modePosture?.inherited === true);
-  const ask =
-    modePosture?.inherited === false
-      ? modePosture.ask
-      : (localAsk ?? modePosture?.ask ?? inheritedAsk ?? "off");
-  pushToolPostureValue(entries, params, {
-    suffix: "exec/ask",
-    sourceSuffix: askUsesMode ? "exec/mode" : undefined,
-    kind: "execAsk",
-    value: ask,
-    explicit: modePosture !== undefined || localAsk !== undefined || inheritedAsk !== undefined,
-    inherited:
-      modePosture?.inherited === true
-        ? localAsk === undefined
-        : localAsk === undefined && inheritedAsk !== undefined,
-  });
+  for (const [field, kind, local, inherited, fallback] of [
+    ["security", "execSecurity", localSecurity, inheritedSecurity, defaultSecurity],
+    ["ask", "execAsk", localAsk, inheritedAsk, "off"],
+  ] as const) {
+    const usesMode =
+      modePosture?.inherited === false || (local === undefined && modePosture?.inherited === true);
+    pushToolPostureValue(entries, params, {
+      suffix: `exec/${field}`,
+      sourceSuffix: usesMode ? "exec/mode" : undefined,
+      kind,
+      value:
+        modePosture?.inherited === false
+          ? modePosture[field]
+          : (local ?? modePosture?.[field] ?? inherited ?? fallback),
+      explicit: modePosture !== undefined || local !== undefined || inherited !== undefined,
+      inherited:
+        modePosture?.inherited === true
+          ? local === undefined
+          : local === undefined && inherited !== undefined,
+    });
+  }
 }
 
 function pushToolElevatedPosture(
@@ -176,9 +160,7 @@ function pushToolElevatedPosture(
   params: ToolPostureParams,
 ): void {
   const localElevated = asNonArrayRecord(params.tools.elevated);
-  const inheritedElevated = isRecord(params.inheritedTools.elevated)
-    ? params.inheritedTools.elevated
-    : {};
+  const inheritedElevated = asNonArrayRecord(params.inheritedTools.elevated);
   const localEnabled = readBoolean(localElevated.enabled);
   const inheritedEnabled = readBoolean(inheritedElevated.enabled);
   const effectiveEnabled =
@@ -194,9 +176,7 @@ function pushToolElevatedPosture(
   });
 
   const localAllowFrom = asNonArrayRecord(localElevated.allowFrom);
-  const inheritedAllowFrom = isRecord(inheritedElevated.allowFrom)
-    ? inheritedElevated.allowFrom
-    : {};
+  const inheritedAllowFrom = asNonArrayRecord(inheritedElevated.allowFrom);
   const providers = [
     ...new Set([...Object.keys(inheritedAllowFrom), ...Object.keys(localAllowFrom)]),
   ].toSorted((a, b) => a.localeCompare(b));
@@ -292,8 +272,8 @@ function pushToolAlsoAllowPostureList(
   const inheritedValue = params.inheritedTools.alsoAllow;
   const localConfigured = Array.isArray(localValue);
   const inheritedConfigured = Array.isArray(inheritedValue);
-  const localEntries = localConfigured ? readStringArray(localValue) : [];
-  const inheritedEntries = inheritedConfigured ? readStringArray(inheritedValue) : [];
+  const localEntries = readStringArray(localValue);
+  const inheritedEntries = readStringArray(inheritedValue);
   const inherited = !localConfigured && inheritedConfigured;
   entries.push({
     id: `${params.id}-alsoAllow`,

@@ -23,85 +23,67 @@ import { jsonBrowserError, jsonError, runProfileRouteOperation, toStringOrEmpty 
 const DEFAULT_TAB_REACHABILITY_TIMEOUT_MS = 300;
 const TAB_REACHABILITY_RETRY_DELAY_MS = 250;
 
-function handleTabsRouteError(
-  ctx: BrowserRouteContext,
-  res: BrowserResponse,
-  err: unknown,
-  opts?: { mapTabError?: boolean },
-) {
-  if (isProfileRestartRequiredError(err)) {
-    throw err;
-  }
-  if (opts?.mapTabError) {
-    const mapped = ctx.mapTabError(err);
-    if (mapped) {
-      return jsonBrowserError(res, mapped);
-    }
-  }
-  return jsonError(res, 500, String(err));
-}
-
-async function runTabsProfileRoute<T>(params: {
+async function runTabsProfileRoute(params: {
   req: BrowserRequest;
   res: BrowserResponse;
   ctx: BrowserRouteContext;
   mapTabError?: boolean;
-  run: (profileCtx: ProfileContext, signal: AbortSignal) => Promise<T>;
-}): Promise<T | undefined> {
+  run: (profileCtx: ProfileContext, signal: AbortSignal) => Promise<unknown>;
+}): Promise<void> {
   const profileCtx = resolveProfileContext(params.req, params.res, params.ctx);
   if (!profileCtx) {
-    return undefined;
+    return;
   }
+  let result: unknown;
   try {
-    return await runProfileRouteOperation({
+    result = await runProfileRouteOperation({
       profileCtx,
       signal: params.req.signal,
       assertCurrent: params.req.assertCurrent,
       run: async (signal) => await params.run(profileCtx, signal),
     });
   } catch (err) {
-    handleTabsRouteError(params.ctx, params.res, err, { mapTabError: params.mapTabError });
-    return undefined;
+    if (isProfileRestartRequiredError(err)) {
+      throw err;
+    }
+    const mapped = params.mapTabError ? toBrowserErrorResponse(err) : undefined;
+    if (mapped) {
+      jsonBrowserError(params.res, mapped);
+    } else {
+      jsonError(params.res, 500, String(err));
+    }
+    return;
   }
-}
-
-function resolveTabReachabilityTimeoutMs(
-  ctx: BrowserRouteContext,
-  profileCtx: ProfileContext,
-): number {
-  if (!getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
-    return DEFAULT_TAB_REACHABILITY_TIMEOUT_MS;
+  if (result) {
+    params.res.json(result);
   }
-  return (
-    clampPositiveTimerTimeoutMs(ctx.state().resolved.actionTimeoutMs) ??
-    DEFAULT_TAB_REACHABILITY_TIMEOUT_MS
-  );
 }
 
 async function checkTabReachability(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ) {
-  const timeoutMs = resolveTabReachabilityTimeoutMs(ctx, profileCtx);
-  return signal
-    ? await profileCtx.isReachable(timeoutMs, { signal })
-    : await profileCtx.isReachable(timeoutMs);
+  const timeoutMs = getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp
+    ? (clampPositiveTimerTimeoutMs(ctx.state().resolved.actionTimeoutMs) ??
+      DEFAULT_TAB_REACHABILITY_TIMEOUT_MS)
+    : DEFAULT_TAB_REACHABILITY_TIMEOUT_MS;
+  return await profileCtx.isReachable(timeoutMs, { signal });
 }
 
 async function ensureBrowserRunning(
   ctx: BrowserRouteContext,
   profileCtx: ProfileContext,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ) {
   let isReachable = await checkTabReachability(ctx, profileCtx, signal);
   // A running browser can outlive one short CDP probe; retry once before
   // rejecting a tab mutation and leaving session-owned tabs behind.
-  if (!isReachable && !signal?.aborted) {
+  if (!isReachable && !signal.aborted) {
     await new Promise<void>((resolve) => {
       setTimeout(resolve, TAB_REACHABILITY_RETRY_DELAY_MS);
     });
-    signal?.throwIfAborted();
+    signal.throwIfAborted();
     isReachable = await checkTabReachability(ctx, profileCtx, signal);
   }
   if (!isReachable) {
@@ -193,7 +175,7 @@ async function runTabTargetMutation(params: {
     signal: AbortSignal,
   ) => Promise<string | void>;
 }) {
-  const result = await runTabsProfileRoute({
+  await runTabsProfileRoute({
     req: params.req,
     res: params.res,
     ctx: params.ctx,
@@ -207,9 +189,6 @@ async function runTabTargetMutation(params: {
       } as const;
     },
   });
-  if (result) {
-    params.res.json(result);
-  }
 }
 
 export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: BrowserRouteContext) {
@@ -249,15 +228,12 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
   };
 
   app.get("/tabs", async (req, res) => {
-    const result = await runTabsProfileRoute({
+    await runTabsProfileRoute({
       req,
       res,
       ctx,
       run: listTabs,
     });
-    if (result) {
-      res.json(result);
-    }
   });
 
   app.post("/tabs/open", async (req, res) => {
@@ -267,7 +243,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       return jsonError(res, 400, "url is required");
     }
 
-    const result = await runTabsProfileRoute({
+    await runTabsProfileRoute({
       req,
       res,
       ctx,
@@ -287,9 +263,6 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         return { ...opened, resolvedProfile: profileCtx.profile.name };
       },
     });
-    if (result) {
-      res.json(result);
-    }
   });
 
   app.post("/tabs/focus", async (req, res) => {
@@ -379,7 +352,7 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
       return;
     }
 
-    const result = await runTabsProfileRoute({
+    await runTabsProfileRoute({
       req,
       res,
       ctx,
@@ -418,8 +391,5 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         return { ok: true, targetId: target.targetId };
       },
     });
-    if (result) {
-      res.json(result);
-    }
   });
 }

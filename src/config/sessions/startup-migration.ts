@@ -13,7 +13,10 @@ import {
   readAgentDatabaseDeletionSnapshot,
   readAgentDeletionJournalStatusInWorker,
 } from "../../state/agent-deletion-journal.read.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
+import {
+  AGENT_DATABASE_PREFLIGHT_CONCURRENCY,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+} from "../../state/openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "../../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -22,10 +25,8 @@ import {
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
-import { AGENT_DATABASE_PREFLIGHT_CONCURRENCY } from "../../state/openclaw-database-preflight-agent-scheduler.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
-import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
 import {
@@ -45,7 +46,6 @@ import {
 import {
   resolveAllAgentSessionStoreTargetsSync,
   resolveConfiguredAgentDatabaseTargets,
-  resolveSessionStoreTargets,
 } from "./targets.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
@@ -64,23 +64,8 @@ export function assertSessionStoreMigrationComplete(params: {
   ).filter(
     (target) => !target.agentId || !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
   );
-  const legacyRootStore = path.join(resolveStateDir(env), "sessions", "sessions.json");
-  const legacyTargets = fs.existsSync(legacyRootStore)
-    ? resolveSessionStoreTargets(params.cfg, { allAgents: true }, readOptions).map((target) => ({
-        agentId: target.agentId,
-        sqlitePath: resolveSqliteTargetFromSessionStorePath(target.storePath, {
-          agentId: target.agentId,
-          ...readOptions,
-        }).path,
-        storePath: legacyRootStore,
-      }))
-    : [];
-  const sources: readonly { agentId?: string; storePath: string; sqlitePath?: string }[] = [
-    ...(legacyTargets.length > 0 ? legacyTargets : [{ storePath: legacyRootStore }]),
-    ...targets,
-  ];
-  const sourcesByPath = new Map<string, Array<(typeof sources)[number]>>();
-  for (const target of sources) {
+  const sourcesByPath = new Map<string, typeof targets>();
+  for (const target of targets) {
     const sourcePath = path.resolve(target.storePath);
     sourcesByPath.set(sourcePath, [...(sourcesByPath.get(sourcePath) ?? []), target]);
   }
@@ -107,7 +92,7 @@ export function assertSessionStoreMigrationComplete(params: {
     });
   const legacyStore = legacySources.find(([storePath, candidates]) => {
     type SourceOwner = {
-      target: { agentId: string; storePath: string; sqlitePath?: string };
+      target: { agentId: string; storePath: string };
       destination: string;
       retained: boolean;
       imported: boolean;
@@ -117,12 +102,10 @@ export function assertSessionStoreMigrationComplete(params: {
       if (!target.agentId) {
         return true;
       }
-      const destination =
-        target.sqlitePath ??
-        resolveSqliteTargetFromSessionStorePath(target.storePath, {
-          agentId: target.agentId,
-          ...readOptions,
-        }).path;
+      const destination = resolveSqliteTargetFromSessionStorePath(target.storePath, {
+        agentId: target.agentId,
+        ...readOptions,
+      }).path;
       const deletion =
         classifyDeletion?.(storePath, target.agentId) ??
         classifyDeletion?.(destination, target.agentId);
@@ -228,7 +211,7 @@ export async function runSessionStartupMigration(params: {
   const resolveTargets =
     params.deps?.resolveAllAgentSessionStoreTargetsSync ?? resolveAllAgentSessionStoreTargetsSync;
   const admittedTargets = () =>
-    resolveTargets(params.cfg, { env }).filter(
+    resolveTargets(params.cfg, { env, agentIds: params.agentIds }).filter(
       (target) =>
         (!params.agentIds || params.agentIds.has(target.agentId)) &&
         !readAgentDatabaseAdmissionRefusal(target.agentId, { env }),
@@ -237,6 +220,17 @@ export async function runSessionStartupMigration(params: {
   // Stable installations may still have file-backed history. Only Doctor imports it;
   // do not serve an empty SQLite history or rewrite those files during startup.
   assertSessionStoreMigrationComplete({ cfg: params.cfg, env, targets });
+  const { assertAcpSessionKeysMigratedForStartup, assertEmbeddedAcpMetadataMigratedForStartup } =
+    await import("../../acp/runtime/session-meta-startup.js");
+  if (!params.agentIds) {
+    await assertAcpSessionKeysMigratedForStartup(
+      params.cfg,
+      env,
+      targets.map((target) => target.agentId),
+      undefined,
+      params.assertCurrent,
+    );
+  }
   const migrateLegacyMain =
     params.deps?.migrateLegacyMainSessionKeys ?? migrateLegacyMainSessionKeys;
   const result = await migrateLegacyMain({ cfg: params.cfg, env, mode: "detect" });
@@ -338,6 +332,19 @@ export async function runSessionStartupMigration(params: {
         return;
       }
       params.assertCurrent?.();
+      await runUnlessDeleted(async () => {
+        params.assertCurrent?.();
+        if (params.agentIds) {
+          await assertAcpSessionKeysMigratedForStartup(
+            params.cfg,
+            env,
+            targets.map((admittedTarget) => admittedTarget.agentId),
+            options,
+            params.assertCurrent,
+          );
+        }
+        assertEmbeddedAcpMetadataMigratedForStartup(options);
+      });
       const handoffDatabase = params.handoffDatabase;
       if (handoffDatabase) {
         // Runtime readiness failures must propagate; only successful handoff

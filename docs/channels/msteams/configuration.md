@@ -41,7 +41,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.cloud`: Teams SDK cloud environment (`Public`, `USGov`, `USGovDoD`, or `China`; default `Public`). Set with `serviceUrl` for USGov/DoD SDK clouds; China uses the SDK preset and stored Azure China Bot Framework conversation references, with Graph-backed helpers disabled until Azure China Graph routing ships.
 - `channels.msteams.serviceUrl`: Bot Connector service URL boundary for SDK proactive operations. Public cloud uses the SDK default; set for GCC (`https://smba.infra.gcc.teams.microsoft.com/teams`), GCC High, or DoD. China accepts Azure China Bot Framework channel hosts when the stored conversation reference comes from Teams operated by 21Vianet.
 - `channels.msteams.webhook.path`: Gateway HTTP route (omitted or empty uses `/api/messages`), served on `gateway.port` (default `18789`).
-- `channels.msteams.legacyWebhook`: compatibility listener. Omitted retains port `3978` with the previous wildcard bind; `{ port, host? }` selects an endpoint; `false` closes the old listener.
+- `channels.msteams.legacyWebhook`: explicit compatibility listener. `{ port, host? }` selects an endpoint, preserving the previous wildcard bind when `host` is omitted. Omitted or `false` opens no separate listener.
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`).
 - `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). Stable AAD object IDs also authorize approval actions. The wizard resolves names to IDs during setup when Graph access is available.
 - `channels.msteams.defaultTo`: default outbound target; a stable AAD object ID can also authorize approval actions.
@@ -65,7 +65,7 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.requireMentionInBotThreads`: per-channel bot-thread override.
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.tools`: per-channel tool policy overrides (`allow`/`deny`/`alsoAllow`).
 - `channels.msteams.teams.<teamId>.channels.<conversationId>.toolsBySender`: per-channel per-sender tool policy overrides (`"*"` wildcard supported).
-- `toolsBySender` keys should use explicit prefixes: `channel:`, `id:`, `e164:`, `username:`, `name:` (legacy unprefixed keys still map to `id:` only).
+- `toolsBySender` keys use explicit prefixes: `channel:`, `id:`, `e164:`, `username:`, `name:`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries.
 - `channels.msteams.authType`: authentication type - `"secret"` (default) or `"federated"`.
 - `channels.msteams.certificatePath`: path to PEM certificate file (federated + certificate auth).
 - `channels.msteams.certificateThumbprint`: certificate thumbprint; accepted, not required for auth.
@@ -86,22 +86,34 @@ Gateway port `18789` (or your `gateway.port`), preserving `/api/messages` or you
 configured `webhook.path`. If you expose a port directly, update Azure Bot's
 messaging endpoint to the public HTTPS URL that reaches this Gateway route.
 
-Existing installs keep receiving callbacks on port `3978` when no listener setting
-was written. An explicitly configured `webhook.port` moves to `legacyWebhook.port`
-through Doctor's normal config backup and write flow. Both implicit and explicit
-compatibility listeners forward into the same Gateway route and JWT validation;
-OpenClaw does not silently remove either listener.
+Doctor pins `legacyWebhook: { port: 3978 }` once for an enabled Teams channel on
+an existing installation that relied on the implicit port. Evidence of prior
+operation is required; fresh installations open no separate listener. An
+explicitly configured `webhook.port` moves to `legacyWebhook.port` through
+Doctor's normal config backup and write flow. Pinned compatibility listeners
+forward into the same Gateway route and JWT validation.
 
 The deprecated TypeScript `webhook.port` input remains source-compatible until
 the next Plugin SDK major. Runtime config uses `legacyWebhook`; run
 `openclaw doctor --fix` to migrate the old key.
 
-After confirming a delivery through the Gateway port, set
-`channels.msteams.legacyWebhook: false` and remove any old firewall or Compose
-port mapping. Removing the setting restores the default compatibility listener,
-so use `false` to close it. There is no scheduled cutoff; retiring this
-compatibility behavior requires a separate change. Doctor and startup print the
-Gateway route and the exact setting to disable the old listener.
+After confirming a delivery through the Gateway port, remove the
+`channels.msteams.legacyWebhook` pin and any old firewall or Compose port mapping.
+Keep `meta.migrations.webhookListeners`, which Doctor saves with the pin, so later
+runs do not recreate it. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for included and read-only config sources.
+Explicit `false` also disables the listener. Doctor and startup print the
+Gateway route and the setting to remove.
+
+For an existing installation that supplies Teams credentials only through
+environment variables, Doctor preserves the endpoint without enabling Teams in
+the source config. If those credentials are visible only to the Gateway service,
+Doctor leaves the decision pending until Gateway startup. Continue using
+`gateway run --ambient-channels` to activate it. A listener setting alone no
+longer enables Teams; use `enabled: true` for a permanent opt-in. Doctor adds that
+flag to authored listener settings that previously implied activation, including
+an explicit `legacyWebhook: false`. It does not add the flag to a generated pin
+whose migration completion is already recorded.
 
 A custom path also accepts the older `/api/messages` alias with its existing
 deprecation warning when that route is available. If another plugin owns the
@@ -113,8 +125,8 @@ The Gateway reserves `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
 callback uses one of these paths, set `webhook.path` to `/api/messages` and update
 Azure Bot or the proxy upstream to match. Doctor reports this conflict. The
 compatibility listener keeps the old endpoint working; startup refuses the
-unusable Gateway route only when `legacyWebhook` is `false`. Verify the replacement
-before disabling that listener.
+unusable Gateway route when no explicit legacy listener is configured. Verify
+the replacement before removing that listener's pin.
 
 Paths under `/api/channels` require Gateway authentication on the main listener,
 including encoded spellings. Teams callbacks authenticate with Azure JWTs, so
@@ -125,6 +137,6 @@ cutover is complete.
 Express parameter, wildcard, and brace patterns continue working on the legacy
 port. Gateway route registration uses literal paths. Before disabling the legacy
 listener for a pattern, change the existing `webhook.path` to `/api/messages` and
-update Azure Bot or your proxy. Doctor and startup identify these patterns; with
-`legacyWebhook: false`, startup reports the required change instead of silently
+update Azure Bot or your proxy. Doctor and startup identify these patterns; without
+an explicit legacy listener, startup reports the required change instead of silently
 dropping callbacks.

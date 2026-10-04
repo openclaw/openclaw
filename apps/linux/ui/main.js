@@ -94,7 +94,7 @@ function render({
   elements.installHint.textContent =
     firstRunBuild?.platform === "freebsd"
       ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-      : "Installs the CLI and managed Node runtime in ~/.openclaw.";
+      : "Installs OpenClaw and its managed runtime in ~/.openclaw.";
   show(elements.installControls, showInstall);
   show(elements.actionControls, false);
   show(elements.editConnection, false);
@@ -587,7 +587,7 @@ async function install() {
     description:
       firstRunBuild?.platform === "freebsd"
         ? "Installing the CLI requires a compatible system Node.js and npm. Start the Gateway with the package service or in a terminal after installation."
-        : "A managed CLI and Node runtime are being installed in your home directory.",
+        : "OpenClaw and its managed runtime are being installed in your home directory.",
     eyebrow: "INSTALLING",
     title: "Preparing your companion",
   });

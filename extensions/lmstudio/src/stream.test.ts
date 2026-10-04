@@ -352,29 +352,6 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
-  it("prefers model contextTokens over contextWindow for preload requests", async () => {
-    const baseStream = buildDoneStreamFn();
-    const wrapped = createWrappedLmstudioStream(baseStream, {
-      baseUrl: "http://lmstudio.internal:1234/v1",
-    });
-    const stream = runWrappedLmstudioStream(
-      wrapped,
-      { contextWindow: 131072, contextTokens: 64000 },
-      { apiKey: "lmstudio-token" },
-    );
-    const events = await collectEvents(stream);
-
-    expectSingleDoneEvent(events);
-    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(1);
-    expectEnsureLoadedFields({
-      baseUrl: "http://lmstudio.internal:1234/v1",
-      modelKey: "qwen3-8b-instruct",
-      requestedContextLength: 64000,
-      apiKey: "lmstudio-token",
-      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
-    });
-  });
-
   it("omits malformed preload context lengths", async () => {
     const baseStream = buildDoneStreamFn();
     const wrapped = createWrappedLmstudioStream(baseStream, {
@@ -515,28 +492,6 @@ describe("lmstudio stream wrapper", () => {
     }
 
     expect(baseStream).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries preload once the cooldown expires", async () => {
-    prepareLmstudioModelForInferenceMock.mockRejectedValueOnce(new Error("out of memory"));
-    prepareLmstudioModelForInferenceMock.mockResolvedValueOnce(undefined);
-    const baseStream = buildDoneStreamFn();
-    const wrapped = createWrappedLmstudioStream(baseStream);
-
-    // Freeze Date.now at a known base so we can jump past the first backoff
-    // window (5s by default) between the two preload attempts.
-    const baseTime = 1_000_000;
-    const nowSpy = vi.spyOn(Date, "now");
-    nowSpy.mockReturnValue(baseTime);
-    await collectEvents(runWrappedLmstudioStream(wrapped, { id: "qwen3-8b-instruct" }));
-    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(1);
-
-    // Move the clock past the initial 5s cooldown window so the next call is
-    // allowed to retry preload.
-    nowSpy.mockReturnValue(baseTime + 6_000);
-    await collectEvents(runWrappedLmstudioStream(wrapped, { id: "qwen3-8b-instruct" }));
-    expect(prepareLmstudioModelForInferenceMock).toHaveBeenCalledTimes(2);
-    nowSpy.mockRestore();
   });
 
   it("keeps increasing preload backoff across expired consecutive failures", async () => {

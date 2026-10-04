@@ -9,37 +9,40 @@ import {
   type AttachmentItem,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
-import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
+
+export function needsAttachmentSourceAdmission(attachment: AttachmentItem["attachment"]): boolean {
+  return (
+    isLocalAssistantAttachmentSource(attachment.url) || isManagedOutgoingMediaSource(attachment.url)
+  );
+}
 
 export function shouldDeferAttachmentCard(
   item: AttachmentItem,
   presentation: "inline" | "card" | "preview",
 ): boolean {
   const { attachment } = item;
-  // Players, SVG previews, and text chips retain their own control lifetimes.
+  // Players and SVG previews retain their own control lifetimes.
   return (
-    (isLocalAssistantAttachmentSource(attachment.url) ||
-      isManagedOutgoingMediaSource(attachment.url)) &&
+    needsAttachmentSourceAdmission(attachment) &&
     resolveAttachmentImageKind(attachment) !== "svg" &&
     !(presentation === "inline" && (attachment.kind === "audio" || attachment.kind === "video")) &&
-    !(presentation === "preview" && attachment.kind === "video") &&
-    !(presentation === "card" && isSentPastedTextAttachment(item))
+    !(presentation === "preview" && attachment.kind === "video")
   );
 }
 
-export type AttachmentCardAdmission = {
-  observeCard?: (element: Element | undefined) => void;
-  onFocus: () => void;
+export type AttachmentAdmission = {
+  observeElement?: (element: Element | undefined) => void;
+  onAdmit: () => void;
 };
 
-type AttachmentAdmission = {
-  attachment: AttachmentItem["attachment"];
+type AttachmentAdmissionInput = {
+  attachments: readonly AttachmentItem["attachment"][];
   options: ImageRenderOptions;
-  render: (admission?: AttachmentCardAdmission) => unknown;
+  render: (admission?: AttachmentAdmission) => unknown;
 };
 
 class ChatAttachmentAdmissionDirective extends AsyncDirective {
-  private input: AttachmentAdmission | undefined;
+  private input: AttachmentAdmissionInput | undefined;
   private key = "";
   private generation = 0;
   private admitted = false;
@@ -52,7 +55,7 @@ class ChatAttachmentAdmissionDirective extends AsyncDirective {
       this.refresh();
     }
   };
-  private readonly observeCard = (element: Element | undefined) => {
+  private readonly observeElement = (element: Element | undefined) => {
     this.stopObserving?.();
     this.stopObserving = undefined;
     if (!element || !this.isConnected || this.admitted) {
@@ -71,11 +74,10 @@ class ChatAttachmentAdmissionDirective extends AsyncDirective {
     }
   };
 
-  override render(input: AttachmentAdmission) {
-    const { attachment, options } = input;
+  override render(input: AttachmentAdmissionInput) {
+    const { attachments, options } = input;
     const key = JSON.stringify([
-      attachment.url,
-      attachment.artifactId,
+      attachments.map((attachment) => [attachment.url, attachment.artifactId]),
       options.sessionKey,
       options.agentId,
       options.connectionEpoch,
@@ -97,7 +99,7 @@ class ChatAttachmentAdmissionDirective extends AsyncDirective {
     if (typeof IntersectionObserver !== "function") {
       this.admitted = true;
     }
-    return html`${keyed(key, input.render({ observeCard: this.admitted ? undefined : this.observeCard, onFocus: this.admit }))}`;
+    return html`${keyed(key, input.render({ observeElement: this.admitted ? undefined : this.observeElement, onAdmit: this.admit }))}`;
   }
 
   protected override disconnected() {

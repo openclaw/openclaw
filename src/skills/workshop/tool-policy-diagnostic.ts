@@ -1,4 +1,3 @@
-// Skill Workshop diagnostics explain which effective policy layer hides its agent tool.
 import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   resolveConversationCapabilityProfile,
@@ -24,11 +23,6 @@ type SkillWorkshopToolPolicyDiagnostic = {
   detail: string;
   fix: string;
   message: string;
-};
-
-type AgentToolsLocation = {
-  path: string;
-  tools: AgentToolsConfig;
 };
 
 function findAgent(config: OpenClawConfig, agentId: string) {
@@ -69,40 +63,6 @@ function providerPolicyPath(params: {
     : undefined;
 }
 
-function profileAlsoAllowPath(params: {
-  config: OpenClawConfig;
-  agent: AgentToolsLocation | undefined;
-  profileOwnerPath: string;
-}): string {
-  if (Array.isArray(params.agent?.tools.alsoAllow)) {
-    return `${params.agent.path}.alsoAllow`;
-  }
-  if (Array.isArray(params.config.tools?.alsoAllow)) {
-    return "tools.alsoAllow";
-  }
-  return `${params.profileOwnerPath}.alsoAllow`;
-}
-
-function providerProfileAlsoAllowPath(params: {
-  globalProvider: ReturnType<typeof providerPolicyPath>;
-  agentProvider: ReturnType<typeof providerPolicyPath>;
-  profileOwnerPath: string;
-}): string {
-  if (params.agentProvider?.ownsAlsoAllow) {
-    return `${params.agentProvider.path}.alsoAllow`;
-  }
-  if (params.globalProvider?.ownsAlsoAllow) {
-    return `${params.globalProvider.path}.alsoAllow`;
-  }
-  return `${params.profileOwnerPath}.alsoAllow`;
-}
-
-function policyDeniesWorkshop(event: ToolPolicyFilterEvent): boolean {
-  return !isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, {
-    deny: event.policy.deny,
-  });
-}
-
 function describeExclusion(params: {
   config: OpenClawConfig;
   agentId: string;
@@ -128,27 +88,28 @@ function describeExclusion(params: {
   if (label.startsWith("tools.profile")) {
     const policyPath = agent?.tools.profile ? agent.path : "tools";
     const source = `${policyPath}.profile`;
-    const grant = profileAlsoAllowPath({
-      config: params.config,
-      agent,
-      profileOwnerPath: policyPath,
-    });
+    const grantOwner = Array.isArray(agent?.tools.alsoAllow)
+      ? agent.path
+      : Array.isArray(params.config.tools?.alsoAllow)
+        ? "tools"
+        : policyPath;
     return {
       source,
       detail: `${source}: ${JSON.stringify(params.capabilityProfile.policy.profile ?? "unknown")} does not include ${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}.`,
-      fix: `Add ${grant}: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`,
+      fix: `Add ${grantOwner}.alsoAllow: [${JSON.stringify(SKILL_WORKSHOP_TOOL_NAME)}].`,
     };
   }
 
   if (label.startsWith("tools.byProvider.profile")) {
     const policyPath = agentProvider?.profile ? agentProvider.path : globalProvider?.path;
     const source = policyPath ? `${policyPath}.profile` : "tools.byProvider.profile";
+    const grantOwner = agentProvider?.ownsAlsoAllow
+      ? agentProvider.path
+      : globalProvider?.ownsAlsoAllow
+        ? globalProvider.path
+        : policyPath;
     const grant = policyPath
-      ? providerProfileAlsoAllowPath({
-          globalProvider,
-          agentProvider,
-          profileOwnerPath: policyPath,
-        })
+      ? `${grantOwner}.alsoAllow`
       : "the matching tools.byProvider alsoAllow";
     return {
       source,
@@ -169,7 +130,7 @@ function describeExclusion(params: {
       : label
           .replace(`agents.${params.agentId}.tools`, agent?.path ?? "agents.entries.*.tools")
           .replace("agent tools", agent?.path ?? "agents.entries.*.tools");
-  if (policyDeniesWorkshop(params.event)) {
+  if (!isToolAllowedByPolicyName(SKILL_WORKSHOP_TOOL_NAME, { deny: params.event.policy.deny })) {
     const source = normalizedLabel.replace(/\.allow$/, ".deny");
     return {
       source,
@@ -226,7 +187,6 @@ export function resolveSkillWorkshopToolPolicyAvailability(params: {
   };
 }
 
-/** Returns an actionable diagnostic when an active Workshop tool is policy-hidden. */
 export function detectSkillWorkshopToolPolicyDiagnostic(params: {
   config: OpenClawConfig;
   workshopEnabled: boolean;

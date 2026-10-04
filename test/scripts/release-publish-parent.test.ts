@@ -17,8 +17,8 @@ const workflow = parse(readFileSync(".github/workflows/openclaw-release-publish.
 const step = (name: string) => workflow.jobs.publish.steps.find((entry) => entry.name === name)!;
 const source =
   'source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"\n';
-const dispatch = (name = "plugin-clawhub-release.yml", fields = "") =>
-  `${source}dispatch_workflow_at_ref main "$PARENT_WORKFLOW_SHA" ${name} ${fields}`;
+const dispatch = (name = "plugin-clawhub-release.yml") =>
+  `${source}${name.startsWith("plugin-clawhub-") ? `require_clawhub_dispatch_available main ${name}` : `sweep_superseded_children ${name}`}\ndispatch_workflow_at_ref main "$PARENT_WORKFLOW_SHA" ${name}`;
 
 function child(overrides: Record<string, unknown> = {}) {
   return {
@@ -47,6 +47,7 @@ type Fixture = {
   registry?: (Record<string, unknown> | null)[];
   ledger?: { status: string; conclusion?: string }[];
   dispatchFails?: boolean;
+  sleepSeconds?: number;
   harness?: string;
 };
 
@@ -65,61 +66,73 @@ function fixture(config: Fixture = {}) {
   );
   writeFileSync(
     join(harness, "release-publish-children.sh"),
-    `source "$HELPER_SCRIPT"\nsleep() { SECONDS=$((SECONDS + $1)); }\n${config.harness ?? ""}\n`,
+    `source "$HELPER_SCRIPT"\nunset SECONDS; SECONDS=0\nsleep() { SECONDS=$((SECONDS + ${config.sleepSeconds ?? "$1"})); }\n${config.harness ?? ""}\n`,
   );
-  const fake = `#!${process.execPath}
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
-const root = process.env.FIXTURE_ROOT;
-const config = ${JSON.stringify(config)};
-const args = process.argv.slice(2);
-const binary = process.argv[1].split('/').pop();
-const state = JSON.parse(readFileSync(root + '/state.json', 'utf8'));
-const save = () => writeFileSync(root + '/state.json', JSON.stringify(state));
-const value = (key) => args[args.indexOf(key) + 1];
-const endpoint = args.find((arg) => arg.startsWith('repos/')) ?? '';
-const post = args.includes('POST');
-const body = args.includes('--input') ? readFileSync(0, 'utf8') : undefined;
-appendFileSync(root + '/calls', JSON.stringify({ binary, args, body, ledgerToken: process.env.GH_TOKEN === 'fixture-ledger' }) + '\\n');
-const emit = (value) => console.log(JSON.stringify(value));
-const children = config.children ?? [];
-const parent = (id) => ({ id: Number(id), repository: {full_name: '${repo}'}, head_repository: {full_name: '${repo}'}, event: 'workflow_dispatch', path: '.github/workflows/openclaw-release-publish.yml', run_attempt: id === '100' ? 2 : 1, status: id === '100' ? 'in_progress' : 'completed', conclusion: id === '100' ? null : 'failure', run_started_at: '2026-09-24T01:00:00Z', ...config.parent });
-if (binary === 'curl') {
-  const docs = config.registry ?? [];
-  const doc = docs[Math.min(state.registry++, docs.length - 1)]; save();
-  if (!doc) { console.error('registry unavailable'); process.exit(22); }
-  emit(doc);
-} else if (args[0] === 'run' && args[1] === 'list') {
-  const matches = children.filter((run) => run.path.endsWith('/' + value('--workflow')) && run.status === value('--status') && !state.cancelled[run.id]);
-  emit(config.capped ? Array(1000).fill({}) : matches.map((run) => ({ databaseId: run.id, displayTitle: run.display_title, headBranch: run.head_branch, url: '${url(0)}'.replace(/0$/, run.id), createdAt: run.created_at })));
-} else if (args[0] === 'run' && args[1] === 'view') {
-  const id = args[args.indexOf('--repo') + 2];
-  if (value('--json') === 'headSha,url') emit({headSha: '${sha}', url: '${url(92)}'});
-  else emit({ jobs: children.find((run) => String(run.id) === id)?.jobs ?? [] });
-} else if (args[0] === 'run' && args[1] === 'cancel') {
-  state.cancelled[args[args.indexOf('--repo') + 2]] = true; save();
-} else if (endpoint.endsWith('/pending_deployments')) {
-  if (post && config.rejectFails) { console.error('HTTP 403'); process.exit(1); }
-  emit(post ? {} : [{environment: {id: 7}}]);
-} else if (endpoint.endsWith('/dispatches')) {
-  if (config.dispatchFails) { console.error('HTTP 502'); process.exit(1); }
-  emit({ workflow_run_id: 92, html_url: '${url(92)}' });
-} else if (endpoint.includes('/commits/')) console.log('${sha}');
-else if (endpoint.includes('/actions/runs/')) {
-  const id = endpoint.split('/').pop();
-  if (endpoint.startsWith('repos/openclaw/releases/')) {
-    const states = config.ledger ?? [{status: 'completed', conclusion: 'success'}];
-    emit(states[Math.min(state.ledger++, states.length - 1)]); save();
-  } else {
-    const run = children.find((run) => String(run.id) === id);
-    if (!run) emit(parent(id));
-    else {
-      const states = config.cancelStates ?? ['waiting', 'completed'];
-      const index = state.polls[id] ?? 0;
-      emit({...run, status: state.cancelled[id] ? states[Math.min(index, states.length - 1)] : config.completedBeforeSweep ? "completed" : run.status});
-      if (state.cancelled[id]) { state.polls[id] = index + 1; save(); }
-    }
-  }
-} else throw new Error('Unexpected call: ' + JSON.stringify(args));
+  // Inventory polling must not pay a Node startup for every fake gh read.
+  const fake = `#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+root = Path(os.environ['FIXTURE_ROOT'])
+config = json.loads(${JSON.stringify(JSON.stringify(config))})
+args = sys.argv[1:]
+binary = Path(sys.argv[0]).name
+state = json.loads((root / 'state.json').read_text())
+def save(): (root / 'state.json').write_text(json.dumps(state))
+def value(key): return args[args.index(key) + 1]
+def emit(data): print(json.dumps(data))
+def fail(message, code=1):
+    print(message, file=sys.stderr)
+    sys.exit(code)
+endpoint = next((arg for arg in args if arg.startswith('repos/')), '')
+post = 'POST' in args
+body = sys.stdin.read() if '--input' in args else None
+with (root / 'calls').open('a') as calls:
+    calls.write(json.dumps(dict(binary=binary, args=args, body=body, ledgerToken=os.environ.get('GH_TOKEN') == 'fixture-ledger')) + '\\n')
+children = config.get('children', [])
+def parent(run_id):
+    return dict(id=int(run_id), repository=dict(full_name='${repo}'), head_repository=dict(full_name='${repo}'), event='workflow_dispatch', path='.github/workflows/openclaw-release-publish.yml', run_attempt=2 if run_id == '100' else 1, status='in_progress' if run_id == '100' else 'completed', conclusion=None if run_id == '100' else 'failure', run_started_at='2026-09-24T01:00:00Z') | config.get('parent', {})
+if binary == 'curl':
+    docs = config.get('registry', [])
+    doc = docs[min(state['registry'], len(docs) - 1)] if docs else None
+    state['registry'] += 1
+    save()
+    if doc is None: fail('registry unavailable', 22)
+    emit(doc)
+elif args[:2] == ['run', 'list']:
+    matches = [run for run in children if run['path'].endswith('/' + value('--workflow')) and run['status'] == value('--status') and not state['cancelled'].get(str(run['id']))]
+    emit([{}] * 1000 if config.get('capped') else [dict(databaseId=run['id'], displayTitle=run['display_title'], headBranch=run['head_branch'], url='https://github.com/${repo}/actions/runs/' + str(run['id']), createdAt=run['created_at']) for run in matches])
+elif args[:2] == ['run', 'view']:
+    run_id = args[args.index('--repo') + 2]
+    if value('--json') == 'headSha,url': emit(dict(headSha='${sha}', url='${url(92)}'))
+    else: emit(dict(jobs=next((run['jobs'] for run in children if str(run['id']) == run_id), [])))
+elif args[:2] == ['run', 'cancel']:
+    state['cancelled'][args[args.index('--repo') + 2]] = True
+    save()
+elif endpoint.endswith('/pending_deployments'):
+    if post and config.get('rejectFails'): fail('HTTP 403')
+    emit({} if post else [dict(environment=dict(id=7))])
+elif endpoint.endswith('/dispatches'):
+    if config.get('dispatchFails'): fail('HTTP 502')
+    emit(dict(workflow_run_id=92, html_url='${url(92)}'))
+elif '/commits/' in endpoint: print('${sha}')
+elif '/actions/runs/' in endpoint:
+    run_id = endpoint.split('/')[-1]
+    if endpoint.startswith('repos/openclaw/releases/'):
+        states = config.get('ledger', [dict(status='completed', conclusion='success')])
+        emit(states[min(state['ledger'], len(states) - 1)])
+        state['ledger'] += 1
+        save()
+    else:
+        run = next((run for run in children if str(run['id']) == run_id), None)
+        if run is None: emit(parent(run_id))
+        else:
+            states = config.get('cancelStates', ['waiting', 'completed'])
+            index = state['polls'].get(run_id, 0)
+            emit(run | dict(status=states[min(index, len(states) - 1)] if state['cancelled'].get(run_id) else 'completed' if config.get('completedBeforeSweep') else run['status']))
+            if state['cancelled'].get(run_id):
+                state['polls'][run_id] = index + 1
+                save()
+else: fail('Unexpected call: ' + json.dumps(args))
 `;
   for (const bin of ["gh", "curl"]) {
     writeFileSync(join(root, "bin", bin), fake, { mode: 0o755 });
@@ -137,6 +150,12 @@ else if (endpoint.includes('/actions/runs/')) {
           RUNNER_TEMP: root,
           GITHUB_STEP_SUMMARY: join(root, "summary"),
           GITHUB_OUTPUT: join(root, "output"),
+          CHILD_WORKFLOW_REF: "release-publish/aaaaaaaaaaaa-100",
+          PARENT_WORKFLOW_BRANCH: "release-publish/aaaaaaaaaaaa-100",
+          PARENT_WORKFLOW_FULL_REF: "refs/tags/release-publish/aaaaaaaaaaaa-100",
+          PLUGIN_PUBLISH_SCOPE: "all-publishable",
+          PLUGINS: "",
+          PREPARED_PLUGINS: "",
           GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-100",
           GITHUB_REPOSITORY: repo,
           GITHUB_RUN_ID: "100",
@@ -171,170 +190,210 @@ const isDispatch = (call: { args: string[] }) =>
 const isCancel = (call: { args: string[] }) => call.args[1] === "cancel";
 
 describe("superseded release children", () => {
-  it("rejects the gate, cancels, and observes completion before dispatching", () => {
-    const result = fixture({ children: [child()] }).run(dispatch());
-    expect(result.status, result.stderr).toBe(0);
-    const mutations = result.calls.filter((call) => call.args.includes("POST") || isCancel(call));
-    expect(mutations.map((call) => call.args)).toEqual([
-      expect.arrayContaining([
-        "POST",
-        `repos/${repo}/actions/runs/91/pending_deployments`,
-        "state=rejected",
-        "environment_ids[]=7",
-        "comment=Superseded release child; rejected by publish parent 100/2",
-      ]),
-      expect.arrayContaining(["run", "cancel", "91"]),
-      expect.arrayContaining([
-        "POST",
-        `repos/${repo}/actions/workflows/plugin-clawhub-release.yml/dispatches`,
-      ]),
-    ]);
-    const afterCancel = result.calls.slice(
-      result.calls.findIndex(isCancel) + 1,
-      result.calls.findIndex(isDispatch),
-    );
-    expect(
-      afterCancel.filter((call) => call.args.includes(`repos/${repo}/actions/runs/91`)),
-    ).toHaveLength(2);
-    expect(result.summary).toContain(
-      `Reclaimed superseded plugin-clawhub-release.yml child: ${url(91)}`,
-    );
-  });
-
   it.each([
-    { label: "a live publisher", overrides: { jobs: [{ status: "in_progress" }] } },
-    {
-      label: "this parent attempt",
-      overrides: { display_title: `plugin-clawhub-release.yml [${tag}] publish parent=100/2` },
-    },
-    { label: "another actor", overrides: { actor: { login: "someone" } } },
-  ])("preserves and blocks on $label", ({ overrides }) => {
-    const result = fixture({ children: [child(overrides)] }).run(dispatch());
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("ClawHub dispatch blocked by waiting run");
-    expect(result.calls.some(isCancel)).toBe(false);
-    expect(result.calls.some(isDispatch)).toBe(false);
-  });
-
-  it.each(["success", "in_progress"])("preserves a child with a %s parent", (parentState) => {
-    const parent =
-      parentState === "success"
-        ? { conclusion: "success" }
-        : { status: "in_progress", conclusion: null };
-    const result = fixture({ children: [child()], parent }).run(dispatch());
-    expect(result.status).toBe(1);
-    expect(result.calls.some(isCancel)).toBe(false);
-  });
-
-  it("reclaims an older attempt and tolerates a rejected reviewer request", () => {
+    { name: "openclaw-npm-release.yml", blocked: false },
+    { name: "plugin-clawhub-new.yml", blocked: true },
+  ])("preflights a gate-blocked stale $name before any dispatch", ({ name, blocked }) => {
     const result = fixture({
       children: [
-        child({ display_title: `plugin-clawhub-release.yml [${tag}] publish parent=100/1` }),
+        child({
+          path: `.github/workflows/${name}`,
+          display_title: `${name} [${tag}] publish parent=80/1`,
+        }),
       ],
       rejectFails: true,
-    }).run(dispatch());
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("::notice::");
-    expect(result.calls.filter(isCancel)).toHaveLength(1);
+      cancelStates: ["waiting"],
+      harness: `
+verify_release_tag_target() { :; }
+render_github_release_notes() { :; }
+guard_existing_public_release() { :; }
+resolve_openclaw_npm_publish_state() { openclaw_npm_already_published=false; }
+resolve_clawhub_release_plan() {
+  clawhub_plan_path="$RUNNER_TEMP/plan.json"
+  printf '%s' '{"normal":{"shouldDispatch":true,"ref":"main","workflow":"plugin-clawhub-release.yml"},"bootstrap":{"shouldDispatch":true,"ref":"main","workflow":"plugin-clawhub-new.yml"}}' > "$clawhub_plan_path"
+}
+verify_bootstrap_workflow_sha() { echo "$PARENT_WORKFLOW_SHA"; }
+append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
+`,
+    }).run(step("Dispatch publish workflows").run!, {
+      PUBLISH_OPENCLAW_NPM: "true",
+      WAIT_FOR_CLAWHUB: "false",
+      RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "0",
+    });
+    expect(result.status, result.stderr).toBe(blocked ? 1 : 0);
+    expect(result.stderr).toContain("needs a reviewer:");
+    expect(result.stderr.match(/HTTP 403/g)).toHaveLength(1);
+    expect(result.summary).toContain(url(91));
+    expect(result.summary).toContain("cancellation unconfirmed");
+    expect(result.calls.filter(isCancel).map((call) => call.args.at(-1))).toEqual(["91"]);
+    const firstDispatch = result.calls.findIndex(isDispatch);
+    if (blocked) {
+      expect(firstDispatch).toBe(-1);
+      expect(result.stderr).toContain("Publisher slot for plugin-clawhub-new.yml remains occupied");
+    } else {
+      expect(firstDispatch).toBeGreaterThan(result.calls.findIndex(isCancel));
+      const sweeps = result.calls.filter((call) => call.args[1] === "list");
+      expect(new Set(sweeps.map((call) => call.args[call.args.indexOf("--workflow") + 1]))).toEqual(
+        new Set([
+          "openclaw-release-publish.yml",
+          "plugin-npm-release.yml",
+          "plugin-clawhub-release.yml",
+          "plugin-clawhub-new.yml",
+          "openclaw-npm-release.yml",
+        ]),
+      );
+      expect(
+        result.calls.slice(firstDispatch).some((call) => call.args[1] === "list" || isCancel(call)),
+      ).toBe(false);
+    }
   });
 
-  it.each(["openclaw-npm-release.yml", "plugin-clawhub-new.yml"])(
-    "sweeps correlated %s children",
-    (name) => {
+  it("reclaims only terminal correlated children before dispatch", () => {
+    const cases = [
+      { name: "plugin-clawhub-release.yml", parent: "80/1", rejectFails: false },
+      { name: "plugin-clawhub-release.yml", parent: "100/1", rejectFails: true },
+      { name: "openclaw-npm-release.yml", parent: "80/1", rejectFails: false },
+      { name: "plugin-clawhub-new.yml", parent: "80/1", rejectFails: false },
+    ];
+    for (const { name, parent, rejectFails } of cases) {
       const result = fixture({
         children: [
           child({
             path: `.github/workflows/${name}`,
-            display_title: `${name} [${tag}] publish parent=80/1`,
+            display_title: `${name} [${tag}] publish parent=${parent}`,
           }),
         ],
+        rejectFails,
       }).run(dispatch(name));
       expect(result.status, result.stderr).toBe(0);
       expect(result.calls.filter(isCancel)).toHaveLength(1);
-    },
-  );
-
-  it("ignores a child completed since the active inventory was read", () => {
-    const result = fixture({ children: [child()], completedBeforeSweep: true }).run(dispatch());
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.some(isCancel)).toBe(false);
-    expect(result.calls.some(isDispatch)).toBe(true);
+      if (rejectFails) {
+        expect(result.stderr).toContain("::warning::");
+      }
+      const mutations = result.calls.filter((call) => call.args.includes("POST") || isCancel(call));
+      expect(mutations.map((call) => call.args)).toEqual([
+        expect.arrayContaining([
+          "POST",
+          `repos/${repo}/actions/runs/91/pending_deployments`,
+          "state=rejected",
+          "environment_ids[]=7",
+          "comment=Superseded release child; rejected by publish parent 100/2",
+        ]),
+        expect.arrayContaining(["run", "cancel", "91"]),
+        expect.arrayContaining(["POST", `repos/${repo}/actions/workflows/${name}/dispatches`]),
+      ]);
+      const afterCancel = result.calls.slice(
+        result.calls.findIndex(isCancel) + 1,
+        result.calls.findIndex(isDispatch),
+      );
+      expect(
+        afterCancel.filter((call) => call.args.includes(`repos/${repo}/actions/runs/91`)),
+      ).toHaveLength(2);
+      expect(result.summary).toContain(`Reclaimed superseded ${name} child: ${url(91)}`);
+    }
   });
 
-  it("skips legacy core titles", () => {
-    const result = fixture({
-      children: [
-        child({
+  it("preserves children without authority to cancel them", () => {
+    const cases: {
+      label: string;
+      overrides?: Record<string, unknown>;
+      parent?: Record<string, unknown>;
+    }[] = [
+      { label: "live publisher", overrides: { jobs: [{ status: "in_progress" }] } },
+      {
+        label: "this parent attempt",
+        overrides: { display_title: `plugin-clawhub-release.yml [${tag}] publish parent=100/2` },
+      },
+      { label: "another actor", overrides: { actor: { login: "someone" } } },
+      { label: "successful parent", parent: { conclusion: "success" } },
+      { label: "live parent", parent: { status: "in_progress", conclusion: null } },
+    ];
+    for (const { label, overrides, parent } of cases) {
+      const result = fixture({ children: [child(overrides)], parent }).run(dispatch());
+      expect(result.status, label).toBe(1);
+      expect(result.stderr).toContain("ClawHub dispatch blocked by waiting run");
+      expect(result.calls.some(isCancel)).toBe(false);
+      expect(result.calls.some(isDispatch)).toBe(false);
+    }
+  });
+
+  it("ignores completed or uncorrelated legacy children", () => {
+    const cases = [
+      { name: "plugin-clawhub-release.yml", completedBeforeSweep: true, overrides: {} },
+      {
+        name: "openclaw-npm-release.yml",
+        completedBeforeSweep: false,
+        overrides: {
           path: ".github/workflows/openclaw-npm-release.yml",
           display_title: "OpenClaw NPM Release",
-        }),
-      ],
-    }).run(dispatch("openclaw-npm-release.yml"));
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.some(isCancel)).toBe(false);
+        },
+      },
+    ];
+    for (const { name, completedBeforeSweep, overrides } of cases) {
+      const result = fixture({ children: [child(overrides)], completedBeforeSweep }).run(
+        dispatch(name),
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls.some(isCancel)).toBe(false);
+      expect(result.calls.some(isDispatch)).toBe(true);
+    }
   });
 
-  it("only reclaims plugin npm runs older than the parent and excludes its known child", () => {
-    const npm = {
-      path: ".github/workflows/plugin-npm-release.yml",
-      display_title: `Plugin NPM Release [all-publishable] ${target}`,
-    };
-    const result = fixture({
-      children: [
-        child(npm),
-        child({ ...npm, id: 93, created_at: "2026-09-24T02:00:00Z" }),
-        child({ ...npm, id: 94 }),
-      ],
-    }).run(dispatch("plugin-npm-release.yml"), { CHILD_PLUGIN_NPM_RUN_ID: "94" });
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.calls.filter(isCancel).map((call) => call.args.at(-1))).toEqual(["91"]);
-    expect(
-      result.calls.filter((call) => call.args.includes(`repos/${repo}/actions/runs/100`)),
-    ).toHaveLength(1);
+  it("reclaims only older unowned plugin npm children when no other parent is live", () => {
+    for (const otherParent of [false, true]) {
+      const npm = {
+        path: ".github/workflows/plugin-npm-release.yml",
+        display_title: `Plugin NPM Release [all-publishable] ${target}`,
+      };
+      const result = fixture({
+        children: [
+          child(npm),
+          child({ ...npm, id: 93, created_at: "2026-09-24T02:00:00Z" }),
+          child({ ...npm, id: 94 }),
+          ...(otherParent
+            ? [
+                child({
+                  id: 80,
+                  path: ".github/workflows/openclaw-release-publish.yml",
+                  display_title: "OpenClaw Release Publish",
+                  status: "in_progress",
+                }),
+              ]
+            : []),
+        ],
+      }).run(dispatch("plugin-npm-release.yml"), { CHILD_PLUGIN_NPM_RUN_ID: "94" });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.calls.filter(isCancel).map((call) => call.args.at(-1))).toEqual(
+        otherParent ? [] : ["91"],
+      );
+      if (otherParent) {
+        expect(result.stderr).toContain("Another publish parent is live");
+        expect(result.calls.some(isDispatch)).toBe(true);
+      } else {
+        expect(
+          result.calls.filter((call) => call.args.includes(`repos/${repo}/actions/runs/100`)),
+        ).toHaveLength(1);
+      }
+    }
   });
 
-  it("leaves plugin npm children alone while another publish parent is live", () => {
-    const result = fixture({
-      children: [
-        child({
-          path: ".github/workflows/plugin-npm-release.yml",
-          display_title: `Plugin NPM Release [all-publishable] ${target}`,
-        }),
-        child({
-          id: 80,
-          path: ".github/workflows/openclaw-release-publish.yml",
-          display_title: "OpenClaw Release Publish",
-          status: "in_progress",
-        }),
-      ],
-    }).run(dispatch("plugin-npm-release.yml"));
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stderr).toContain("Another publish parent is live");
-    expect(result.calls.some(isCancel)).toBe(false);
-    expect(result.calls.some(isDispatch)).toBe(true);
-  });
-
-  it("refuses capped inventories and skips sweeping dry runs", () => {
-    const blocked = fixture({ capped: true }).run(dispatch());
-    expect(blocked.status).toBe(1);
-    expect(blocked.calls.some(isDispatch)).toBe(false);
-    const dry = fixture({ children: [child()] }).run(
-      dispatch("plugin-clawhub-release.yml", "-f dry_run=true"),
-    );
-    expect(dry.status, dry.stderr).toBe(0);
-    expect(dry.calls.some((call) => call.args[1] === "list" || isCancel(call))).toBe(false);
-  });
-
-  it("shares the sweep deadline and prints manual reject/cancel commands", () => {
-    const result = fixture({
-      children: [child(), child({ id: 93 })],
-      cancelStates: ["waiting", "completed"],
-    }).run(dispatch(), { RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "5" });
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain(url(93));
-    expect(result.stderr).toContain("environment_ids[]=<id>");
-    expect(result.stderr).toContain(`gh run cancel --repo ${repo} 93`);
-    expect(result.calls.some(isDispatch)).toBe(false);
+  it("refuses dispatch when inventory or cancellation cannot establish a free slot", () => {
+    const cases: { config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }[] = [
+      { config: { capped: true }, env: {}, messages: [] },
+      {
+        config: { children: [child(), child({ id: 93 })], cancelStates: ["waiting", "completed"] },
+        env: { RELEASE_CHILD_SWEEP_TIMEOUT_SECONDS: "5" },
+        messages: [url(93), "environment_ids[]=<id>", `gh run cancel --repo ${repo} 93`],
+      },
+    ];
+    for (const { config, env, messages } of cases) {
+      const result = fixture(config).run(dispatch(), env);
+      expect(result.status).toBe(1);
+      expect(result.calls.some(isDispatch)).toBe(false);
+      for (const message of messages) {
+        expect(result.stderr).toContain(message);
+      }
+    }
   });
 
   it("failure cleanup cancels a waiting npm child and preserves an active one", () => {
@@ -399,6 +458,8 @@ describe("npm completion barriers", () => {
     expect(result.calls[0]?.args).toContain("X-GitHub-Api-Version: 2026-03-10");
     expect(result.calls.every((call) => call.ledgerToken)).toBe(true);
     expect(result.calls).toHaveLength(3);
+    expect(result.stderr).toContain(`${url(92)} status=queued elapsed=0s`);
+    expect(result.stderr).toContain(`${url(92)} status=completed elapsed=15s`);
     expect(result.summary).toContain(`npm beta floor: synced (${url(92)})`);
   });
 
@@ -414,15 +475,6 @@ describe("npm completion barriers", () => {
       label: "failed sync",
       env: { RELEASE_LEDGER_TOKEN: "fixture-ledger" },
       config: { ledger: [{ status: "completed", conclusion: "failure" }] },
-      calls: 2,
-    },
-    {
-      label: "timeout",
-      env: {
-        RELEASE_LEDGER_TOKEN: "fixture-ledger",
-        RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS: "0",
-      },
-      config: { ledger: [{ status: "waiting" }] },
       calls: 2,
     },
   ])("leaves verification authoritative after $label", ({ env, config, calls }) => {
@@ -448,13 +500,15 @@ describe("npm completion barriers", () => {
 
 describe("complete publish workflow", () => {
   it.each([
-    { resume: false, visible: true },
-    { resume: true, visible: true },
-    { resume: false, visible: false },
-    { resume: true, visible: false },
+    { resume: false, visible: true, sync: "absent" },
+    { resume: true, visible: true, sync: "absent" },
+    { resume: false, visible: false, sync: "absent" },
+    { resume: true, visible: false, sync: "absent" },
+    { resume: false, visible: true, sync: "late" },
+    { resume: true, visible: true, sync: "timeout" },
   ])(
-    "gates verification on registry visibility (resume=$resume, visible=$visible)",
-    ({ resume, visible: isVisible }) => {
+    "gates verification on registry visibility and own sync (resume=$resume, visible=$visible, sync=$sync)",
+    ({ resume, visible: isVisible, sync }) => {
       const harness = `
 resolve_clawhub_release_plan() { :; }
 verify_release_tag_target() { :; }
@@ -465,29 +519,51 @@ upload_dependency_evidence_release_asset() { :; }
 upload_release_evidence_assets() { :; }
 append_release_proof_to_github_release() { :; }
 `;
-      const result = fixture({ registry: [isVisible ? visible : {}], harness }).run(
-        step("Complete publish workflows").run!,
-        {
-          CHILD_PLUGIN_NPM_RUN_ID: "90",
-          CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
-          CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",
-          CHILD_BOOTSTRAP_WORKFLOW_SHA: "",
-          CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: String(resume),
-          CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "main",
-          CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA: sha,
-          CHILD_OPENCLAW_NPM_RUN_ATTEMPT: "1",
-          CHILD_OPENCLAW_NPM_RUN_ID: resume ? "" : "92",
-          CORE_START_OUTCOME: "success",
-          CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
-          CLAWHUB_RECEIPT_OUTCOME: "skipped",
-          WAIT_FOR_CLAWHUB: "false",
-          RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: "0",
-        },
-      );
-      expect(result.status, result.stderr).toBe(isVisible ? 0 : 1);
+      const result = fixture({
+        registry: [isVisible ? visible : {}],
+        harness,
+        sleepSeconds: 300,
+        ledger:
+          sync === "timeout"
+            ? [{ status: "in_progress" }]
+            : [
+                { status: "queued" },
+                { status: "in_progress" },
+                { status: "in_progress" },
+                { status: "in_progress" },
+                { status: "completed", conclusion: "success" },
+              ],
+      }).run(step("Complete publish workflows").run!, {
+        CHILD_PLUGIN_NPM_RUN_ID: "90",
+        CHILD_PLUGIN_CLAWHUB_RUN_ID: "",
+        CHILD_PLUGIN_CLAWHUB_BOOTSTRAP_RUN_ID: "",
+        CHILD_BOOTSTRAP_WORKFLOW_SHA: "",
+        CHILD_OPENCLAW_NPM_ALREADY_PUBLISHED: String(resume),
+        CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_REF: "main",
+        CHILD_OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA: sha,
+        CHILD_OPENCLAW_NPM_RUN_ATTEMPT: "1",
+        CHILD_OPENCLAW_NPM_RUN_ID: resume ? "" : "92",
+        CORE_START_OUTCOME: "success",
+        CLAWHUB_AUTHORIZATION_OUTCOME: "skipped",
+        CLAWHUB_RECEIPT_OUTCOME: "skipped",
+        WAIT_FOR_CLAWHUB: "false",
+        RELEASE_NPM_VISIBILITY_TIMEOUT_SECONDS: "0",
+        ...(sync !== "absent" ? { RELEASE_LEDGER_TOKEN: "fixture-ledger" } : {}),
+        ...(sync === "timeout" ? { RELEASE_NPM_DIST_TAG_SYNC_TIMEOUT_SECONDS: "900" } : {}),
+      });
+      expect(result.status, result.stderr).toBe(isVisible && sync !== "timeout" ? 0 : 1);
       expect(result.calls.filter((call) => call.binary === "curl")).toHaveLength(1);
-      if (isVisible) {
+      if (sync === "timeout") {
+        expect(result.stderr).toContain(`parent's own sync run is still in progress (${url(92)})`);
+        expect(result.summary).toContain("verification was not judged against it");
+        expect(result.summary).not.toContain("VERIFIED");
+      } else if (isVisible) {
         expect(result.summary).toMatch(/npm registry:[\s\S]*npm beta floor:[\s\S]*VERIFIED/);
+        if (sync === "late") {
+          expect(result.stderr).toContain("status=in_progress elapsed=900s");
+          expect(result.stderr).toContain("status=completed elapsed=1200s");
+          expect(result.summary).toContain("npm beta floor: synced");
+        }
       } else {
         expect(result.summary).not.toMatch(/VERIFIED|npm beta floor/);
       }

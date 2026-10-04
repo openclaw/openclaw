@@ -76,7 +76,6 @@ export function evaluateMissingDeviceIdentity(params: {
   sharedAuthOk: boolean;
   authOk: boolean;
   hasSharedAuth: boolean;
-  isLocalClient: boolean;
 }): MissingDeviceIdentityDecision {
   if (params.hasDeviceIdentity) {
     return { kind: "allow" };

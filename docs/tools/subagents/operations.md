@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "The subagent queue lane, restart recovery, stop scope, and the standing limitations"
 title: "Sub-agent concurrency, recovery, and stopping"
 read_when:
@@ -37,8 +38,7 @@ and limits independently of these OpenClaw queues.
 
 Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
-authorization checks independently of the delivery backlog. Operators can
-inspect, retry, or dismiss retained deliveries with `openclaw tasks`.
+authorization checks independently of the delivery backlog.
 
 OpenClaw warns when the delivery backlog reaches 25. Within a Gateway process,
 unchanged backlog counts do not repeat the warning every sweep. A count change
@@ -58,9 +58,11 @@ whichever is longer). These retained counts govern `/subagents list`,
 status summaries, descendant completion gating, and per-session concurrency
 checks; they are not proof that an executor is live.
 
-During a graceful restart, an already-admitted replacement run can finish
-refreshing a deferred child result before shutdown. The refresh remains tracked
-until capture and persistence finish; it does not admit a new run.
+During a graceful restart or Gateway suspension, lifecycle events from
+already-admitted runs remain tracked through restart preservation and completion
+processing. An already-admitted replacement run can finish refreshing a deferred
+child result before shutdown. The refresh remains tracked until capture and
+persistence finish; it does not admit a new run.
 
 After a Gateway restart, the parent owns continuation of the user's task.
 Interrupted sub-agents are finalized through their normal completion path instead
@@ -79,9 +81,9 @@ Recovery handles both sessions marked `abortedLastRun: true` and hard kills that
 prevented the shutdown marker from being written. For a hard kill, the child
 session must still identify the exact run from the retired Gateway, with no newer
 run or admitted work owning that session. Live executions and queued collectors
-keep their existing owners. Orphaned runs settle their background task before
-cleanup, so retained child sessions do not leave phantom running activity. If the
-task update fails, completion remains available for retry.
+keep their existing owners. Orphaned runs settle their native execution state
+before cleanup, so retained child sessions do not leave phantom running activity.
+If settlement fails, completion remains available for retry.
 
 Recovery remembers live session ownership without retaining saved prompt snapshots.
 Unchanged owned rows skip session reads; ownership release or a published session
@@ -108,6 +110,18 @@ sub-agent completions do not restart failed cleanup or reset its retry budget.
 Descendant completion still wakes the current requester ancestors waiting on that
 work. These cleanup retries are separate from [completion delivery](/tools/subagents/announce).
 
+When required registration has an unknown outcome or retained registry state
+forbids deleting the child session, a Gateway-hosted ordinary spawn's error keeps
+the child's session and run identifiers. If the first cancellation attempt also
+fails, the error reports unconfirmed termination and whether Gateway cleanup was
+scheduled. The Gateway retains the child's admission slot while retrying and
+rechecks the exact run owner before each attempt. If database admission retires
+while that child still runs, cancellation stops but its slot stays reserved until
+the child controller retires or Gateway shutdown takes over. The child session
+stays intact. Provisional session rollback, collector FIFO cleanup, and local
+embedded cleanup remain joined. Inspect the retained child before retrying the
+spawn.
+
 <Note>
 If a sub-agent spawn fails with Gateway `PAIRING_REQUIRED` /
 `scope-upgrade`, check the RPC caller before editing pairing state.
@@ -128,6 +142,21 @@ run and their descendants, including ordinary sub-agents and [Swarm](/tools/swar
 collectors. Successful cancellation keeps selected queued collectors from
 starting while running children stop. Exact-run cancellation does not cancel
 unrelated turns or clear unrelated session-wide queues.
+
+For raw child session keys such as `global`, registration records the known
+owning agent as `childAgentId`. Child cancellation derives that agent's session
+store from current configuration, just as it does for agent-qualified keys,
+which need no recorded binding. Clearing the child's queued follow-ups and
+commands stays within that agent, even when another agent uses the same raw
+session key. Legacy runs without a recorded owner use current configuration to
+resolve one agent and clear only that agent's queues. The optional binding stays
+in `payload_json` when an older build rewrites the run.
+
+Owner-aware child lookups keep watched follow-ups, steering, run generations,
+completion transcripts, and timeout reconciliation separate when agents share a
+raw key. Terminal events and session timing updates use that same child owner.
+Rows without a recorded owner and callers without an explicit owner retain their
+existing key-only lookup behavior.
 
 Stop also retires pending completion continuations for the selected work, even
 when a child has already finished. Cancelling a completion turn retires its
@@ -151,18 +180,23 @@ A typed `/stop` sent through `chat.send` honors `expectedLeafEntryId` and, when
 that branch check is present, `sessionId`. If the check fails during descendant
 cancellation, the Gateway refuses further cancellation and reports
 `active-leaf-changed`. Cancellation already accepted by a child still settles.
+The cancellation result waits for pending child-session metadata writes before
+checking that the original session still owns the outcome.
 
 Incomplete cancellation is reported as an error, not a clean success. `/stop`
-reports actual stopped and failed child counts. Inspect the remaining
-[background tasks](/automation/tasks#control-ui) and retry their cancellation;
-request acknowledgment does not mean all runtime cleanup is instantaneous.
+reports actual stopped and failed child counts. A committed child cancellation
+remains in the stopped count if later cleanup fails or the parent is replaced.
+The cleanup error remains visible; a replacement run requires its own Stop
+request. Inspect the remaining native subagent runs with `subagents` and retry
+their cancellation; request acknowledgment does not mean all runtime cleanup is
+instantaneous.
 
 Accepted children remain independent after ordinary parent completion, yield, or
 timeout. Those events do not automatically cancel them.
 
 ## Limitations
 
-- Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their owner/task projections survive gateway restarts in the shared SQLite state database.
+- Direct announce attempts are best-effort, but admitted session-queued completion handoffs and their native subagent records survive gateway restarts in the shared SQLite state database.
 - Sub-agents still share the same Gateway process resources; concurrency caps apply per spawning session or Swarm group, not to total Gateway concurrency.
 - `sessions_spawn` returns `{ status: "accepted", runId, childSessionKey }` when startup is accepted, without waiting for the child task to finish. Cloud-worker spawns can wait for provisioning before returning this receipt.
 - Sub-agent context only injects `AGENTS.md` (no `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, or `BOOTSTRAP.md`). Its `## Tools` section carries environment-specific notes. Codex-native subagents follow the same boundary through native `AGENTS.md` discovery, while parent-only persona, identity, and user files are injected as turn-scoped collaboration instructions so children do not clone them.

@@ -545,14 +545,19 @@ describe("scenario-flow-runner", () => {
         env: {
           providerMode: "mock-openai",
           cfg: {
-            agents: { list: [{ id: "main", default: true }] },
+            agents: { entries: { main: {} } },
           },
           gateway: {
             baseUrl: "http://127.0.0.1:43124",
             token: gatewayToken,
           },
         },
-        buildAgentSessionKey: () => sessionKey,
+        transport: {
+          id: "qa-channel",
+          accountId: "default",
+          buildAgentDelivery: ({ target }: { target: string }) => ({ replyTo: target }),
+        },
+        resolveAgentRoute: () => ({ sessionKey }),
         webOpenPage: async ({ url }: { url: string }) => {
           openedUrls.push(url);
           return { pageId: "control-ui-session-page" };

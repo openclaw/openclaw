@@ -9,8 +9,10 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
-import { buildCurrentInboundSteeringPrompt } from "../embedded-agent-runner/run/runtime-context-prompt.js";
+import { attachSteeringRuntimeContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import {
+  isOpenClawSystemUpdateMessage,
+  orderSystemUpdateMessages,
   resolvePendingRuntimeContextReplay,
   type CurrentInboundPromptContext,
 } from "../internal-runtime-context.js";
@@ -46,9 +48,29 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
   private promptPreparation?: () => Promise<void | (() => void)>;
 
-  [agentSessionQueuePromptContext](message: CustomMessage): () => void {
-    // The carrier belongs immediately after its user, ahead of queued extension context.
-    this.pendingNextTurnMessages.unshift(message);
+  [agentSessionQueuePromptContext](message: CustomMessage): () => void;
+  [agentSessionQueuePromptContext](
+    message: CustomMessage,
+    options: { delivery: "current-request" },
+  ): Promise<void>;
+  [agentSessionQueuePromptContext](
+    message: CustomMessage,
+    options?: { delivery: "current-request" },
+  ): (() => void) | Promise<void> {
+    if (options?.delivery === "current-request") {
+      return this.persistCustomMessage(message);
+    }
+    if (this.logicalPromptActive && isOpenClawSystemUpdateMessage(message)) {
+      this.agent.steer(message);
+      return () => {
+        this.agent.cancelSteeringMessage((pending) => pending === message);
+      };
+    }
+    if (isOpenClawSystemUpdateMessage(message)) {
+      this.pendingNextTurnMessages.push(message);
+    } else {
+      this.pendingNextTurnMessages.unshift(message);
+    }
     return () => {
       this.pendingNextTurnMessages = this.pendingNextTurnMessages.filter(
         (pending) => pending !== message,
@@ -148,7 +170,9 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     }
 
     // Messages queued by agent_end handlers arrive after the loop's final queue drain.
-    return this.agent.hasQueuedMessages() ? "continue" : "settled";
+    // A failed request stays unanswered for the run owner to retry, so queued input
+    // must not continue past it; a steer's caller re-queues it when this run settles.
+    return msg.stopReason !== "error" && this.agent.hasQueuedMessages() ? "continue" : "settled";
   }
 
   private createUserMessage(
@@ -185,7 +209,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     const preparedCompactionBudget = takePromptCompactionRequestBudget(options);
     const expandPromptTemplates = options?.expandPromptTemplates ?? true;
     const preflightResult = options?.preflightResult;
-    let messages: AgentMessage[] | undefined;
+    let messages: AgentMessage[];
 
     try {
       // Handle extension commands first (execute immediately, even during streaming)
@@ -337,12 +361,8 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw error;
     }
 
-    if (!messages) {
-      return;
-    }
-
     preflightResult?.(true);
-    await this.runAgentPrompt(messages);
+    await this.runAgentPrompt(orderSystemUpdateMessages(messages));
   }
 
   /**
@@ -362,15 +382,14 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
 
     try {
       await command.handler(args, ctx);
-      return true;
     } catch (err) {
       this.currentExtensionRunner.emitError({
         extensionPath: `command:${commandName}`,
         event: "command",
         error: err instanceof Error ? err.message : String(err),
       });
-      return true;
     }
+    return true;
   }
 
   /**
@@ -431,15 +450,11 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     canInject?: () => boolean,
     currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void> {
-    // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
 
     const expandedText = this.expandPrompt(text);
-    // Expand commands before adding this turn's model-only context.
-    const steeringPrompt = buildCurrentInboundSteeringPrompt(expandedText, currentInboundContext);
-
     const preparedMessage = await userTurnTranscriptRecorder?.resolveMessage();
     // Transcript preparation may outlive the captured attempt. Recheck its owner
     // fence immediately before enqueue so a successor cannot inherit this steer.
@@ -447,7 +462,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       throw new Error("active session is finalizing");
     }
     await this.queueSteer(
-      steeringPrompt,
+      expandedText,
       images,
       preparedMessage && userTurnTranscriptRecorder
         ? { message: preparedMessage, recorder: userTurnTranscriptRecorder }
@@ -455,6 +470,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       media,
       imageOrder,
       queueIdentity,
+      currentInboundContext,
     );
   }
 
@@ -466,7 +482,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
    * @throws Error if text is an extension command
    */
   async followUp(text: string, images?: ImageContent[]): Promise<void> {
-    // Check for extension commands (cannot be queued)
     if (text.startsWith("/")) {
       this.throwIfExtensionCommand(text);
     }
@@ -474,9 +489,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     await this.queueFollowUp(this.expandPrompt(text), images);
   }
 
-  /**
-   * Internal: Queue a steering message (already expanded, no extension command check).
-   */
+  /** Queue pre-expanded steering input without an extension-command check. */
   private async queueSteer(
     text: string,
     images?: ImageContent[],
@@ -487,11 +500,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     media?: MediaFact[],
     imageOrder?: PromptImageOrderEntry[],
     queueIdentity?: string,
+    currentInboundContext?: CurrentInboundPromptContext,
   ): Promise<void> {
     const runtimeMessage = this.createUserMessage(text, images, transcriptContext?.message);
     const promptMessage = media?.length
       ? attachRuntimePromptMediaFacts(runtimeMessage, media, imageOrder)
       : runtimeMessage;
+    attachSteeringRuntimeContext(promptMessage, currentInboundContext);
     setSteeringMessageIdentity(promptMessage, queueIdentity);
     this.trackQueuedUserMessage(promptMessage, "steering", text);
     this.agent.steer(
@@ -501,18 +516,13 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     );
   }
 
-  /**
-   * Internal: Queue a follow-up message (already expanded, no extension command check).
-   */
+  /** Queue pre-expanded follow-up input without an extension-command check. */
   private async queueFollowUp(text: string, images?: ImageContent[]): Promise<void> {
     const message = this.createUserMessage(text, images);
     this.trackQueuedUserMessage(message, "followUp", text);
     this.agent.followUp(message);
   }
 
-  /**
-   * Throw an error if the text is an extension command.
-   */
   private throwIfExtensionCommand(text: string): void {
     const spaceIndex = text.indexOf(" ");
     const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
@@ -560,18 +570,22 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
     } else if (options?.triggerTurn) {
       await this.runAgentPrompt(appMessage);
     } else {
-      await withSessionManagerWrite(this.sessionManager, () => {
-        this.sessionManager.appendCustomMessageEntry(
-          appMessage.customType,
-          appMessage.content,
-          appMessage.display,
-          appMessage.details,
-        );
-        this.agent.state.messages.push(appMessage);
-      });
-      this.emit({ type: "message_start", message: appMessage });
-      this.emit({ type: "message_end", message: appMessage });
+      await this.persistCustomMessage(appMessage);
     }
+  }
+
+  private async persistCustomMessage(message: CustomMessage): Promise<void> {
+    await withSessionManagerWrite(this.sessionManager, async () => {
+      await this.sessionManager.appendCustomMessageEntryAsync(
+        message.customType,
+        message.content,
+        message.display,
+        message.details,
+      );
+      this.agent.state.messages.push(message);
+    });
+    this.emit({ type: "message_start", message });
+    this.emit({ type: "message_end", message });
   }
 
   /**
@@ -606,7 +620,6 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
     }
 
-    // Use prompt() with expandPromptTemplates: false to skip command handling and template expansion
     await this.prompt(text, {
       expandPromptTemplates: false,
       streamingBehavior: options?.deliverAs,

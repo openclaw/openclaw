@@ -15,9 +15,8 @@ export abstract class AgentRosterElement extends OpenClawLightDomElement {
   protected readonly avatars = new IdentityAvatarController(this);
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => (this.active && this.context ? rosterActivityStore(this.context) : undefined),
-      (store, notify) => store.subscribe(notify),
+    new SubscriptionsController(this).watchStore(() =>
+      this.active && this.context ? rosterActivityStore(this.context) : undefined,
     );
   }
 

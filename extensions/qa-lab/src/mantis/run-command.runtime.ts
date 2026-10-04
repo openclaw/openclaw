@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements Mantis command-stage behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   addTimerTimeoutGraceMs,

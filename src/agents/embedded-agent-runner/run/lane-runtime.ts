@@ -31,16 +31,6 @@ export function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number {
   );
 }
 
-export function withEmbeddedRunLaneTimeout(
-  opts: CommandQueueEnqueueOptions | undefined,
-  laneTaskTimeoutMs: number,
-): CommandQueueEnqueueOptions | undefined {
-  if (opts?.taskTimeoutMs !== undefined) {
-    return opts;
-  }
-  return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
-}
-
 export function resolveEmbeddedRunSessionLanePolicy(
   trigger: RunEmbeddedAgentParams["trigger"],
   inputProvenance?: RunEmbeddedAgentParams["inputProvenance"],

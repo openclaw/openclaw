@@ -339,6 +339,7 @@ jobs:
             extensions/telegram/src/bot-message-dispatch.ts
             extensions/telegram/src/draft-stream.ts
             qa/scenarios/channels/telegram-empty-response-after-write-recovery.yaml
+            qa/scenarios/channels/telegram-prepared-delivery-recovery.yaml
             qa/scenarios/channels/telegram-progress-tool-visibility.yaml
             qa/scenarios/channels/telegram-queue-invalid-mode.yaml
             qa/scenarios/channels/telegram-rich-inline-composition.yaml
@@ -413,8 +414,12 @@ jobs:
               echo "Prerelease plugin registry inputs require an artifact-backed OpenClaw package." >&2
               exit 1
             fi
-            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
-              echo "package_spec must be openclaw@alpha, openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
+            if [[ "${PACKAGE_SPEC}" == "openclaw@alpha" ]]; then
+              echo "Alpha releases are retired; use openclaw@beta or an exact historical version." >&2
+              exit 1
+            fi
+            if [[ ! "${PACKAGE_SPEC}" =~ ^openclaw@(beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
+              echo "package_spec must be openclaw@beta, openclaw@latest, or an exact OpenClaw release version; got: ${PACKAGE_SPEC}" >&2
               exit 1
             fi
           elif [[ ! "$PACKAGE_ARTIFACT_DIGEST" =~ ^[0-9a-f]{64}$ ||
@@ -514,14 +519,52 @@ jobs:
           }
           attempt_started_at="$(jq -er '.run_started_at | fromdateiso8601' <<< "$attempt_json")"
           if [[ "$ARTIFACT_RUN_ID" == "$GITHUB_RUN_ID" ]]; then
-            jq -e '(.status == "pending" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "in_progress") and .conclusion == null' \
-              <<< "$attempt_json" >/dev/null || {
-              echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
+            [[ "$GITHUB_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
+              echo "Current Package Telegram workflow attempt is invalid." >&2
               exit 1
             }
-            if (( artifact_created_at <= attempt_started_at )); then
-              echo "Package Telegram artifact predates the active producer run attempt." >&2
+            if (( ARTIFACT_RUN_ATTEMPT > GITHUB_RUN_ATTEMPT )); then
+              echo "Package Telegram artifact declares a future producer run attempt." >&2
               exit 1
+            fi
+            if (( ARTIFACT_RUN_ATTEMPT == GITHUB_RUN_ATTEMPT )); then
+              jq -e '(.status == "pending" or .status == "queued" or .status == "requested" or .status == "waiting" or .status == "in_progress") and .conclusion == null' \
+                <<< "$attempt_json" >/dev/null || {
+                echo "Current-run Package Telegram artifact is not from the active workflow attempt." >&2
+                exit 1
+              }
+              if (( artifact_created_at <= attempt_started_at )); then
+                echo "Package Telegram artifact predates the active producer run attempt." >&2
+                exit 1
+              fi
+            else
+              producer_jobs_json="$(
+                gh api --paginate \
+                  "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}/jobs?per_page=100" |
+                  jq -s '[.[].jobs[]]'
+              )"
+              producer_matches="$(
+                jq -c \
+                  --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
+                  --arg run_id "$ARTIFACT_RUN_ID" \
+                  '[.[] | select(
+                    ((.name == "Resolve package candidate") or (.name | endswith(" / Resolve package candidate"))) and
+                    (.run_id | tostring) == $run_id and
+                    (.run_attempt | tostring) == $attempt and
+                    .status == "completed" and
+                    .conclusion == "success"
+                  )]' <<< "$producer_jobs_json"
+              )"
+              [[ "$(jq 'length' <<< "$producer_matches")" == "1" ]] || {
+                echo "Prior-attempt Package Telegram artifact lacks one exact successful producer job." >&2
+                exit 1
+              }
+              producer_started_at="$(jq -er '.[0].started_at | fromdateiso8601' <<< "$producer_matches")"
+              producer_completed_at="$(jq -er '.[0].completed_at | fromdateiso8601' <<< "$producer_matches")"
+              if (( artifact_created_at <= producer_started_at || artifact_created_at > producer_completed_at )); then
+                echo "Package Telegram artifact creation time is outside the successful producer job." >&2
+                exit 1
+              fi
             fi
           else
             jq -e '.status == "completed" and .conclusion == "success"' \

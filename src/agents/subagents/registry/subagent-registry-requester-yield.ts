@@ -1,23 +1,113 @@
 import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
-import { captureTaskProgressContinuationForRequesterTurn } from "../../../tasks/task-progress-requester.js";
-import { scheduleYieldedSubagentRunProgress } from "../../../tasks/task-registry-progress.js";
-/** Settles durable child ownership when the spawning requester turn ends. */
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { promoteFollowupYield } from "../completion/session-followup-completion.js";
 import {
-  captureRequesterCronAuthority,
   promoteRequesterCronAuthority,
+  type PreparedRequesterCronAuthority,
 } from "../requester-cron-authority.js";
 import { promoteRequesterFinalAttachment } from "../requester-final-attachment.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
+import {
+  mutateSubagentRuns,
+  SubagentRegistryMutationRejectedError,
+  SubagentRegistryWriteError,
+} from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
+  isRequesterYieldCohortMember,
+  isRequesterSettleWakeForRun,
+} from "./subagent-requester-settle-identity.js";
+import {
   compareSubagentRunGeneration,
+  isSameSubagentRunOwner,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
 import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
 import { getSubagentSessionStartedAt } from "./subagent-session-metrics.js";
+
+/** Accepted steering keeps the child's execution and transfers only its requester-turn claim. */
+export async function adoptSubagentRunForRequesterTurnInRuns(params: {
+  expected: SubagentRunRecord;
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  requesterTurnRunId: string;
+  assertCurrent: () => void;
+  runs: Map<string, SubagentRunRecord>;
+}): Promise<AcceptedSessionSpawn | undefined> {
+  const requesterTurnRunId = params.requesterTurnRunId.trim();
+  return mutateSubagentRuns(
+    [params.expected.runId],
+    (rows) => {
+      const entry = rows.get(params.expected.runId);
+      if (
+        !entry ||
+        !(
+          requesterTurnRunId.length > 0 &&
+          isSameSubagentRunOwner(entry, params.expected) &&
+          entry.requesterSessionKey === params.requesterSessionKey &&
+          entry.requesterAgentId === params.requesterAgentId &&
+          (!entry.requesterTurnRunId || entry.requesterTurnRunId === requesterTurnRunId) &&
+          entry.expectsCompletionMessage === true &&
+          entry.collect !== true &&
+          !entry.killIntent &&
+          !entry.killReconciliation &&
+          entry.suppressCompletionDelivery !== true &&
+          entry.cleanupCompletedAt === undefined &&
+          entry.requesterSettleWake?.status !== "dispatching" &&
+          (entry.requesterSettleWake?.batchRunIds === undefined
+            ? entry.requesterSettleWake?.requesterYieldBatch !== true
+            : entry.requesterSettleWake.batchRunIds.length === 1 &&
+              entry.requesterSettleWake.batchRunIds[0] === entry.runId) &&
+          (entry.requesterSettleWake?.requesterYieldBatch !== true ||
+            (entry.requesterSettleWake.status === "pending" &&
+              entry.requesterSettleWake.attemptCount === 0 &&
+              entry.requesterSettleWake.rearmGeneration !== undefined)) &&
+          (entry.delivery?.status === "pending" || entry.delivery?.status === "failed") &&
+          entry.delivery.disposition !== "permanent_failure" &&
+          (entry.delivery.disposition !== "intentional_non_delivery" ||
+            entry.requesterSettleWake !== undefined)
+        )
+      ) {
+        return { value: undefined };
+      }
+      const accepted: AcceptedSessionSpawn = {
+        runId: entry.taskRunId ?? entry.runId,
+        childSessionKey: entry.childSessionKey,
+        expectsCompletionMessage: true,
+      };
+      if (entry.requesterTurnRunId === requesterTurnRunId) {
+        return { value: accepted };
+      }
+      const next = structuredClone(entry);
+      next.requesterTurnRunId = requesterTurnRunId;
+      next.requesterTurnYielded = undefined;
+      if (next.requesterSettleWake?.requesterYieldBatch === true) {
+        delete next.requesterSettleWake.requesterYieldBatch;
+        delete next.requesterSettleWake.batchRunIds;
+      }
+      return { value: accepted, postimages: new Map([[entry.runId, next]]) };
+    },
+    {
+      runs: params.runs,
+      context: captureOpenClawStateWorkerContext(),
+      assertCurrent: params.assertCurrent,
+    },
+  );
+}
+
+export type RequesterInitialTransfer = (params: {
+  kind: "intent" | "yielded-cohort" | "completed-cohort";
+  entries: readonly SubagentRunRecord[];
+  prepare?: () => Promise<void>;
+  assertHandoffCurrent: (entries: readonly SubagentRunRecord[]) => void;
+  mutate: (entries: SubagentRunRecord[]) => ReadonlySet<string> | void;
+  validateSelection?: () => void;
+  finish: (entries: readonly SubagentRunRecord[]) => void;
+  release?: (entries: SubagentRunRecord[]) => void;
+  afterRelease?: (entries: readonly SubagentRunRecord[]) => void;
+}) => Promise<void>;
 
 /** A requester child whose completion is still owed to the requester session. */
 export type UnsettledRequesterChild = {
@@ -39,7 +129,7 @@ export type UnsettledRequesterChild = {
  * Lists this requester session's announcing children whose completion has not
  * reached the requester yet, regardless of which requester turn spawned them.
  * Children still bound to `excludeRequesterTurnRunId` belong to that turn's own
- * claim and are omitted.
+ * claim and are omitted, as is the settle-wake cohort already reaching that turn.
  */
 export function listUnsettledRequesterChildrenInRuns(params: {
   requesterSessionKey: string;
@@ -70,7 +160,15 @@ export function listUnsettledRequesterChildrenInRuns(params: {
     if (
       entry.collect === true ||
       entry.expectsCompletionMessage !== true ||
-      (excludedTurnRunId !== undefined && entry.requesterTurnRunId === excludedTurnRunId) ||
+      (excludedTurnRunId !== undefined &&
+        (entry.requesterTurnRunId === excludedTurnRunId ||
+          isRequesterSettleWakeForRun({
+            entry,
+            runId: excludedTurnRunId,
+            requesterSessionKey,
+            requesterAgentId: params.requesterAgentId,
+            runsById: params.runs,
+          }))) ||
       entry.killIntent ||
       entry.killReconciliation ||
       entry.suppressCompletionDelivery === true
@@ -111,54 +209,105 @@ export function listUnsettledRequesterChildrenInRuns(params: {
   return children.toSorted((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0));
 }
 
+/** Completion children that a requester turn still claims. */
+function selectRequesterTurnChildren(
+  runs: Map<string, SubagentRunRecord>,
+  requesterSessionKey: string,
+  requesterAgentId: string | undefined,
+  requesterTurnRunId: string,
+): SubagentRunRecord[] {
+  return [...runs.values()].filter(
+    (entry) =>
+      entry.requesterSessionKey === requesterSessionKey &&
+      (!requesterAgentId || entry.requesterAgentId === requesterAgentId) &&
+      entry.requesterTurnRunId === requesterTurnRunId &&
+      entry.expectsCompletionMessage === true,
+  );
+}
+
+const nextRearmGeneration = (entries: readonly SubagentRunRecord[]) =>
+  Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
+
 /** Persists explicit yield intent before the requester run is aborted. */
-export function markRequesterTurnYieldedInRuns(params: {
+export async function markRequesterTurnYieldedInRuns(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterTurnRunId: string;
   runs: Map<string, SubagentRunRecord>;
-  persistOrThrow(...runIds: string[]): void;
-}): number {
+  transfer: RequesterInitialTransfer;
+  preparedAuthority: PreparedRequesterCronAuthority | null;
+}): Promise<number> {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
   if (!requesterSessionKey || !requesterTurnRunId) {
     return 0;
   }
-  const entries = [...params.runs.values()].filter(
-    (entry) =>
-      entry.requesterSessionKey === requesterSessionKey &&
-      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId) &&
-      entry.requesterTurnRunId === requesterTurnRunId &&
-      entry.expectsCompletionMessage === true,
-  );
-  if (entries.every((entry) => entry.requesterTurnYielded === true)) {
-    return entries.length;
-  }
-  const cronAuthority = captureRequesterCronAuthority({
-    requesterSessionKey,
-    requesterAgentId: params.requesterAgentId,
-    requesterTurnRunId,
-    batch: entries,
-    runs: params.runs,
-  });
-  const previous = entries.map((entry) => entry.requesterTurnYielded);
-  for (const entry of entries) {
-    entry.requesterTurnYielded = true;
-  }
+  const { preparedAuthority } = params;
+  let cronAuthority: Awaited<ReturnType<PreparedRequesterCronAuthority["bind"]>>;
   try {
-    params.persistOrThrow(...entries.map((entry) => entry.runId));
+    const selectedEntries = selectRequesterTurnChildren(
+      params.runs,
+      requesterSessionKey,
+      params.requesterAgentId,
+      requesterTurnRunId,
+    );
+    if (selectedEntries.length === 0) {
+      return 0;
+    }
+    await params.transfer({
+      kind: "intent",
+      entries: selectedEntries,
+      validateSelection: () => {
+        const selected = selectRequesterTurnChildren(
+          params.runs,
+          requesterSessionKey,
+          params.requesterAgentId,
+          requesterTurnRunId,
+        );
+        if (
+          selected.length !== selectedEntries.length ||
+          selected.some(
+            (entry) => !selectedEntries.some((old) => isSameSubagentRunOwner(old, entry)),
+          )
+        ) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Requester yield membership changed before admission",
+          );
+        }
+      },
+      assertHandoffCurrent: (entries) => {
+        if (entries.some((entry) => entry.requesterTurnYielded !== true)) {
+          throw new Error("Requester yield intent no longer owns its handoff");
+        }
+      },
+      prepare: async () => {
+        cronAuthority = await preparedAuthority?.bind({
+          batch: selectedEntries,
+          runs: params.runs,
+        });
+      },
+      mutate: (entries) => {
+        for (const entry of entries) {
+          entry.requesterTurnYielded = true;
+        }
+      },
+      finish: () => cronAuthority?.commit(),
+    });
+    if (preparedAuthority) {
+      try {
+        await preparedAuthority.validate();
+      } catch (error) {
+        throw new SubagentRegistryWriteError("committed", error, "published");
+      }
+    }
+    return selectedEntries.length;
   } catch (error) {
     cronAuthority?.revoke();
-    entries.forEach((entry, index) => {
-      entry.requesterTurnYielded = previous[index];
-    });
     throw error;
   }
-  cronAuthority?.commit();
-  return entries.length;
 }
 
-export function settleRequesterTurnAfterSessionSpawns(params: {
+export async function settleRequesterTurnAfterSessionSpawns(params: {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterTurnRunId: string;
@@ -166,9 +315,9 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
   progressPresentation?: ProgressContinuationState;
   runs: Map<string, SubagentRunRecord>;
-  persistOrThrow(...runIds: string[]): void;
+  transfer: RequesterInitialTransfer;
   schedule(runId: string, entry: SubagentRunRecord, kind: "completion" | "settle"): void;
-}): boolean {
+}): Promise<boolean> {
   const requesterSessionKey = params.requesterSessionKey.trim();
   const requesterTurnRunId = params.requesterTurnRunId.trim();
   const spawnsByRunId = new Map(
@@ -180,19 +329,18 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
 
   // Completion rows keep their original task owner across steer; inline or
   // non-completion spawns are intentionally outside this batch.
-  const entries = [...params.runs.values()].filter(
-    (entry) =>
-      entry.requesterSessionKey === requesterSessionKey &&
-      (!params.requesterAgentId || entry.requesterAgentId === params.requesterAgentId) &&
-      entry.requesterTurnRunId === requesterTurnRunId &&
-      entry.expectsCompletionMessage === true,
+  const selectedEntries = selectRequesterTurnChildren(
+    params.runs,
+    requesterSessionKey,
+    params.requesterAgentId,
+    requesterTurnRunId,
   );
   const requiredRunIds = new Set(
     params.acceptedSessionSpawns
       .filter((spawn) => spawn.expectsCompletionMessage === true)
       .map((spawn) => spawn.runId),
   );
-  for (const entry of entries) {
+  for (const entry of selectedEntries) {
     const taskRunId = entry.taskRunId ?? entry.runId;
     const spawn = spawnsByRunId.get(taskRunId);
     if (
@@ -206,196 +354,305 @@ export function settleRequesterTurnAfterSessionSpawns(params: {
   }
   // Accepted completion receipts outlive registry rows. A surviving subset
   // cannot attest that the whole requester obligation transferred to a wake.
-  if (requiredRunIds.size > 0) {
+  if (requiredRunIds.size > 0 || selectedEntries.length === 0) {
     return false;
   }
 
-  const firstEntry = entries[0];
-  if (!firstEntry) {
-    return false;
-  }
-  const requester = params.runs.get(requesterTurnRunId);
-  const requesterSnapshot =
+  const childRunIds = new Set(selectedEntries.map((entry) => entry.runId));
+  const batchRunIds = [...childRunIds].toSorted();
+  let rearmGeneration: number | undefined;
+  let needsCohortRelease = false;
+  let yieldedFinalDeliverable = false;
+  const ownsRequester = (
+    requester: SubagentRunRecord | undefined,
+  ): requester is SubagentRunRecord =>
     params.requesterYielded &&
     requester?.childSessionKey === requesterSessionKey &&
-    requester.execution.status === "running" &&
     !requester.killIntent &&
     !requester.killReconciliation &&
     ![...params.runs.values()].some(
       (entry) =>
         entry.childSessionKey === requesterSessionKey &&
         compareSubagentRunGeneration(entry, requester) > 0,
-    )
-      ? structuredClone(requester)
-      : undefined;
-  const batchRunIds = entries.map((entry) => entry.runId).toSorted();
-  const previousStates = entries.map((entry) => ({
-    delivery: structuredClone(entry.delivery),
-    requesterSettleWake: structuredClone(entry.requesterSettleWake),
-    requesterTurnRunId: entry.requesterTurnRunId,
-    requesterTurnYielded: entry.requesterTurnYielded,
-    retireAfterRequesterTurn: entry.retireAfterRequesterTurn,
-  }));
-  const requesterAlreadyDeliveredFinal =
-    params.requesterYielded &&
-    entries.every(
-      (entry) =>
-        entry.execution.status === "terminal" &&
-        typeof entry.execution.endedAt === "number" &&
-        entry.delivery?.status === "delivered" &&
-        typeof entry.cleanupCompletedAt === "number",
-    ) &&
-    entries.some((entry) => {
-      const receipt = entry.delivery?.requesterVisibleFinal;
-      return (
-        receipt?.requesterTurnRunId === requesterTurnRunId &&
-        receipt.batchRunIds.length === batchRunIds.length &&
-        receipt.batchRunIds.every((runId, index) => runId === batchRunIds[index])
+    );
+  const selectedRequester = params.runs.get(requesterTurnRunId);
+  const selectedMembers =
+    ownsRequester(selectedRequester) && !childRunIds.has(selectedRequester.runId)
+      ? [...selectedEntries, selectedRequester]
+      : selectedEntries;
+  const children = (candidates: readonly SubagentRunRecord[]) =>
+    candidates.filter((entry) => childRunIds.has(entry.runId));
+  const validateSelection = () => {
+    const currentRequester = params.runs.get(requesterTurnRunId);
+    if (
+      ownsRequester(currentRequester) &&
+      !selectedMembers.some((entry) => isSameSubagentRunOwner(entry, currentRequester))
+    ) {
+      throw new SubagentRegistryMutationRejectedError(
+        "Requester pause owner appeared outside the admitted cohort",
       );
-    });
-  let rearmGeneration: number | undefined;
-  if (params.requesterYielded && !requesterAlreadyDeliveredFinal) {
-    rearmGeneration =
-      Math.max(0, ...entries.map((entry) => entry.requesterSettleWake?.rearmGeneration ?? 0)) + 1;
-    const progressOperationId = (
-      params.progressPresentation ??
-      captureTaskProgressContinuationForRequesterTurn({
-        requesterSessionKey,
-        requesterAgentId: params.requesterAgentId,
-        requesterTurnRunId,
-      })
-    )?.operationId;
-    for (const entry of entries) {
-      const existing = entry.requesterSettleWake;
-      const completionEnded = typeof entry.execution.endedAt === "number";
-      // An in-progress delivery may already target the requester run being aborted.
-      // Re-arm it like a delivered result so that completion cannot die with that turn.
-      if (completionEnded && entry.delivery?.status !== "delivered") {
-        // The persisted yielded batch now owns terminal delivery. Mark the old
-        // per-child attempt terminal so it cannot keep the batch unsettled.
-        entry.delivery = {
-          ...(entry.delivery ?? { status: "pending" }),
-          disposition: "intentional_non_delivery",
-        };
-      }
-      entry.requesterSettleWake = {
-        status: "pending",
-        attemptCount: 0,
-        batchRunIds,
-        requesterYieldBatch: true,
-        ...(completionEnded ? { afterRequesterYield: true } : {}),
-        rearmGeneration,
-        progressOperationId,
-        ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
-          ? { retireAfterSettle: true }
-          : {}),
-      };
-      entry.requesterTurnRunId = undefined;
-      entry.requesterTurnYielded = undefined;
-      entry.retireAfterRequesterTurn = undefined;
     }
-  } else {
-    for (const entry of entries) {
-      if (entry.delivery) {
-        delete entry.delivery.requesterVisibleFinal;
+    const current = selectRequesterTurnChildren(
+      params.runs,
+      requesterSessionKey,
+      params.requesterAgentId,
+      requesterTurnRunId,
+    );
+    if (
+      current.length !== childRunIds.size ||
+      current.some((entry) => !childRunIds.has(entry.runId))
+    ) {
+      throw new SubagentRegistryMutationRejectedError(
+        "Requester cohort membership changed before admission",
+      );
+    }
+  };
+  await params.transfer({
+    kind: params.requesterYielded ? "yielded-cohort" : "completed-cohort",
+    entries: selectedMembers,
+    validateSelection,
+    assertHandoffCurrent: (members) => {
+      if (!needsCohortRelease) {
+        return;
       }
-      if (requesterAlreadyDeliveredFinal) {
-        // The receipt proves this yielded batch already reached requester-visible delivery.
-        // Clear its provisional wake so settling the parent cannot replay the batch.
-        entry.requesterSettleWake = undefined;
-      }
-      entry.requesterTurnRunId = undefined;
-      entry.requesterTurnYielded = undefined;
       if (
-        entry.completionTarget === "parent" &&
-        typeof entry.execution.endedAt === "number" &&
-        entry.delivery?.status === "pending"
+        children(members).some((entry) => {
+          const wake = entry.requesterSettleWake;
+          return (
+            entry.requesterTurnRunId !== requesterTurnRunId ||
+            entry.requesterTurnYielded !== true ||
+            wake?.status !== "pending" ||
+            wake.attemptCount !== 0 ||
+            (wake.yieldedFinalDeliverable === true) !== yieldedFinalDeliverable ||
+            !isRequesterYieldCohortMember(entry, batchRunIds, rearmGeneration)
+          );
+        })
       ) {
-        // Private delivery becomes eligible only when its spawning turn releases it.
-        entry.delivery.windowStartedAt ??= Date.now();
-        entry.delivery.deadlineAt ??=
-          entry.delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+        throw new SubagentRegistryMutationRejectedError(
+          "Requester initial cohort no longer owns its handoff",
+        );
       }
-      if (entry.retireAfterRequesterTurn === true) {
-        if (entry.requesterSettleWake) {
-          entry.requesterSettleWake.retireAfterSettle = true;
-          entry.retireAfterRequesterTurn = undefined;
-        } else {
-          params.runs.delete(entry.runId);
+    },
+    mutate: (members) => {
+      const entries = children(members);
+      for (const entry of entries) {
+        const spawn = spawnsByRunId.get(entry.taskRunId ?? entry.runId);
+        if (
+          !spawn ||
+          entry.childSessionKey !== spawn.childSessionKey ||
+          (params.requesterYielded && entry.requesterTurnYielded !== true)
+        ) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Requester spawn receipt lost its child owner",
+          );
         }
       }
-    }
-  }
-  // A finished child can dispatch its wake before the requester's lifecycle-end
-  // event. Publish the paused task owner in the same commit as that wake batch.
-  const requesterPaused =
-    requester && requesterSnapshot && markSubagentRunPausedAfterYield({ entry: requester });
-  try {
-    params.persistOrThrow(
-      ...entries.map((entry) => entry.runId),
-      ...(requesterPaused ? [requester.runId] : []),
-    );
-  } catch (error) {
-    if (requesterPaused && requesterSnapshot) {
-      for (const key of Object.keys(requester)) {
-        Reflect.deleteProperty(requester, key);
+      const firstEntry = entries[0]!;
+      const requester = members.find((entry) => entry.runId === requesterTurnRunId);
+      const requesterOwnsSession = ownsRequester(requester);
+      const pauseRequester =
+        requesterOwnsSession && requester.execution.status === "running" ? requester : undefined;
+      const requesterAlreadyDeliveredFinal =
+        params.requesterYielded &&
+        entries.every(
+          (entry) =>
+            entry.execution.status === "terminal" &&
+            typeof entry.execution.endedAt === "number" &&
+            entry.delivery?.status === "delivered" &&
+            typeof entry.cleanupCompletedAt === "number",
+        ) &&
+        entries.some((entry) => {
+          const receipt = entry.delivery?.requesterVisibleFinal;
+          return (
+            receipt?.requesterTurnRunId === requesterTurnRunId &&
+            receipt.batchRunIds.length === batchRunIds.length &&
+            receipt.batchRunIds.every((runId, index) => runId === batchRunIds[index])
+          );
+        });
+      const preparedWake = firstEntry.requesterSettleWake;
+      const preparedCohort =
+        params.requesterYielded &&
+        !requesterAlreadyDeliveredFinal &&
+        preparedWake?.requesterYieldBatch === true &&
+        preparedWake.rearmGeneration !== undefined &&
+        entries.every((entry) => {
+          const wake = entry.requesterSettleWake;
+          return (
+            wake?.status === "pending" &&
+            wake.attemptCount === 0 &&
+            isRequesterYieldCohortMember(entry, batchRunIds, preparedWake.rearmGeneration)
+          );
+        });
+      rearmGeneration = preparedCohort ? preparedWake.rearmGeneration : undefined;
+      needsCohortRelease = params.requesterYielded && !requesterAlreadyDeliveredFinal;
+      yieldedFinalDeliverable = preparedCohort
+        ? preparedWake.yieldedFinalDeliverable === true
+        : needsCohortRelease;
+      if (
+        needsCohortRelease &&
+        ((entries.some((entry) => entry.requesterSettleWake?.requesterYieldBatch === true) &&
+          !preparedCohort) ||
+          (preparedCohort && pauseRequester))
+      ) {
+        throw new SubagentRegistryWriteError(
+          "committed",
+          new Error("Prepared requester cohort no longer has its complete paused owner"),
+          "superseded",
+        );
       }
-      Object.assign(requester, requesterSnapshot);
-    }
-    entries.forEach((entry, index) => {
-      const previous = previousStates[index];
-      params.runs.set(entry.runId, entry);
-      entry.delivery = previous?.delivery;
-      entry.requesterSettleWake = previous?.requesterSettleWake;
-      entry.requesterTurnRunId = previous?.requesterTurnRunId;
-      entry.requesterTurnYielded = previous?.requesterTurnYielded;
-      entry.retireAfterRequesterTurn = previous?.retireAfterRequesterTurn;
-    });
-    throw error;
-  }
-
-  promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
-  promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
-  if (rearmGeneration !== undefined && params.requesterAgentId) {
-    promoteRequesterFinalAttachment({
-      requesterAgentId: params.requesterAgentId,
-      requesterSessionKey,
-      requesterTurnRunId,
-      batchRunIds,
-      rearmGeneration,
-    });
-  }
-  if (rearmGeneration !== undefined) {
-    for (const entry of entries) {
-      scheduleYieldedSubagentRunProgress(entry);
-    }
-  }
-  for (const entry of entries) {
-    if (
-      entry.completionTarget === "parent" &&
-      typeof entry.execution.endedAt === "number" &&
-      params.runs.has(entry.runId)
-    ) {
-      params.schedule(entry.runId, entry, "completion");
-    }
-  }
-  if (
-    rearmGeneration !== undefined &&
-    entries.every((entry) => typeof entry.execution.endedAt === "number")
-  ) {
-    // Active children keep the frozen batch; their normal completion owner schedules it.
-    params.schedule(firstEntry.runId, firstEntry, "settle");
-  } else if (
-    !params.requesterYielded &&
-    entries.every((entry) => typeof entry.execution.endedAt === "number")
-  ) {
-    // A terminal child cannot wake while its requester still owns the turn.
-    // Once a normal parent response settles, resume its original per-child delivery.
-    for (const entry of entries) {
-      if (params.runs.has(entry.runId)) {
-        params.schedule(entry.runId, entry, "settle");
+      const retired = new Set<string>();
+      if (params.requesterYielded && !requesterAlreadyDeliveredFinal && !preparedCohort) {
+        rearmGeneration = nextRearmGeneration(entries);
+        const progressOperationId = params.progressPresentation?.operationId;
+        for (const entry of entries) {
+          const existing = entry.requesterSettleWake;
+          const completionEnded = typeof entry.execution.endedAt === "number";
+          // An in-progress delivery may already target the requester run being aborted.
+          // Re-arm it like a delivered result so that completion cannot die with that turn.
+          if (completionEnded && entry.delivery?.status !== "delivered") {
+            // The persisted yielded batch now owns terminal delivery. Mark the old
+            // per-child attempt terminal so it cannot keep the batch unsettled.
+            entry.delivery = {
+              ...(entry.delivery ?? { status: "pending" }),
+              disposition: "intentional_non_delivery",
+            };
+          }
+          entry.requesterSettleWake = {
+            ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
+            status: "pending",
+            attemptCount: 0,
+            batchRunIds,
+            requesterYieldBatch: true,
+            // Written only by builds that let a yielded requester answer; released
+            // markerless private batches keep their admitted private policy.
+            yieldedFinalDeliverable: true,
+            ...(completionEnded ? { afterRequesterYield: true } : {}),
+            rearmGeneration,
+            progressOperationId,
+            ...(existing?.retireAfterSettle === true || entry.retireAfterRequesterTurn === true
+              ? { retireAfterSettle: true }
+              : {}),
+          };
+          entry.retireAfterRequesterTurn = undefined;
+        }
+      } else if (!preparedCohort) {
+        // Distinct tasks sharing a child retain one completion owner after the turn retires.
+        const completionGeneration =
+          !requesterAlreadyDeliveredFinal &&
+          new Set(entries.map((entry) => entry.childSessionKey)).size < entries.length
+            ? nextRearmGeneration(entries)
+            : undefined;
+        for (const entry of entries) {
+          if (completionGeneration !== undefined) {
+            const existing = entry.requesterSettleWake;
+            entry.requesterSettleWake = {
+              ...(existing?.pauseNotice ? { pauseNotice: existing.pauseNotice } : {}),
+              ...(existing?.retireAfterSettle ? { retireAfterSettle: true } : {}),
+              status: "pending",
+              attemptCount: 0,
+              batchRunIds,
+              rearmGeneration: completionGeneration,
+            };
+          }
+          if (entry.delivery) {
+            entry.delivery = { ...entry.delivery };
+            delete entry.delivery.requesterVisibleFinal;
+          }
+          if (requesterAlreadyDeliveredFinal) {
+            // The receipt proves this yielded batch already reached requester-visible delivery.
+            // Clear its provisional wake so settling the parent cannot replay the batch.
+            entry.requesterSettleWake = undefined;
+          }
+          entry.requesterTurnRunId = undefined;
+          entry.requesterTurnYielded = undefined;
+          if (
+            entry.completionTarget === "parent" &&
+            typeof entry.execution.endedAt === "number" &&
+            entry.delivery?.status === "pending"
+          ) {
+            // Private delivery becomes eligible only when its spawning turn releases it.
+            entry.delivery.windowStartedAt ??= Date.now();
+            entry.delivery.deadlineAt ??=
+              entry.delivery.windowStartedAt + ANNOUNCE_COMPLETION_HARD_EXPIRY_MS;
+          }
+          if (entry.retireAfterRequesterTurn === true) {
+            if (entry.requesterSettleWake) {
+              entry.requesterSettleWake = { ...entry.requesterSettleWake, retireAfterSettle: true };
+              entry.retireAfterRequesterTurn = undefined;
+            } else {
+              retired.add(entry.runId);
+            }
+          }
+        }
       }
-    }
-  }
+      // A finished child can dispatch its wake before the requester's lifecycle-end
+      // event. Publish the paused task owner in the same commit as that wake batch.
+      if (pauseRequester) {
+        pauseRequester.completion = pauseRequester.completion
+          ? { ...pauseRequester.completion }
+          : undefined;
+        markSubagentRunPausedAfterYield({ entry: pauseRequester });
+      }
+      return retired;
+    },
+    finish: (members) => {
+      const entries = children(members);
+      promoteFollowupYield({ requesterTurnRunId, entries, rearmGeneration });
+      promoteRequesterCronAuthority({ requesterTurnRunId, batch: entries, rearmGeneration });
+      if (rearmGeneration !== undefined && params.requesterAgentId) {
+        promoteRequesterFinalAttachment({
+          requesterAgentId: params.requesterAgentId,
+          requesterSessionKey,
+          requesterTurnRunId,
+          batchRunIds,
+          rearmGeneration,
+        });
+      }
+    },
+    ...(params.requesterYielded
+      ? {
+          release: (members: SubagentRunRecord[]) => {
+            if (!needsCohortRelease) {
+              return;
+            }
+            for (const entry of children(members)) {
+              entry.requesterTurnRunId = undefined;
+              entry.requesterTurnYielded = undefined;
+            }
+          },
+        }
+      : {}),
+    afterRelease: (members) => {
+      const entries = children(members);
+      for (const entry of entries) {
+        if (entry.pauseReason === "sessions_yield" && entry.requesterSettleWake?.pauseNotice) {
+          params.schedule(entry.runId, entry, "settle");
+          continue;
+        }
+        if (
+          entry.completionTarget === "parent" &&
+          typeof entry.execution.endedAt === "number" &&
+          params.runs.has(entry.runId)
+        ) {
+          params.schedule(entry.runId, entry, "completion");
+        }
+      }
+      // Active children keep the frozen batch; their normal completion owner schedules it.
+      if (!entries.every((entry) => typeof entry.execution.endedAt === "number")) {
+        return;
+      }
+      if (rearmGeneration !== undefined) {
+        params.schedule(entries[0]!.runId, entries[0]!, "settle");
+      } else if (!params.requesterYielded) {
+        // A terminal child cannot wake while its requester still owns the turn.
+        // Once a normal parent response settles, resume its original per-child delivery.
+        for (const entry of entries) {
+          if (params.runs.has(entry.runId)) {
+            params.schedule(entry.runId, entry, "settle");
+          }
+        }
+      }
+    },
+  });
   return true;
 }

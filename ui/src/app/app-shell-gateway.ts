@@ -6,6 +6,7 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   DESKTOP_PANEL_TOGGLE_EVENT,
   PORTAL_PANEL_TOGGLE_EVENT,
+  PLUGIN_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   UI_COMMAND_EVENT,
 } from "../components/panel-toggle-contract.ts";
@@ -36,6 +37,8 @@ import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 const AGENT_ROSTER_REFRESH_DEBOUNCE_MS = 100;
 
 export type StoredOutboxScopeHost = {
+  client: GatewayBrowserClient | null;
+  connected: boolean;
   settings: { gatewayUrl?: string | null };
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
@@ -61,7 +64,7 @@ export interface ShellGatewayHost {
   agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   observeDeletedSessions(sessionState: ApplicationContext["sessions"]["state"]): void;
-  recoverDeletedActiveSession(sessionState: ApplicationContext["sessions"]["state"]): void;
+  recoverDeletedActiveSession(): void;
   selectChatSession(sessionKey: string, agentId?: string | null): void;
   requestUpdate(): void;
 }
@@ -104,7 +107,7 @@ export class ShellGatewayOwner {
         return;
       }
       this.host.observeDeletedSessions(sessions.state);
-      this.host.recoverDeletedActiveSession(sessions.state);
+      this.host.recoverDeletedActiveSession();
       synchronizeTitle();
     };
     synchronize();
@@ -183,13 +186,12 @@ export class ShellGatewayOwner {
       invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
     }
     if (event.event === "sessions.changed") {
-      const context = this.host.context;
-      if (context) {
-        this.host.recoverDeletedActiveSession(context.sessions.state);
-      }
+      this.host.recoverDeletedActiveSession();
       return;
     }
     if (event.event === "config.changed") {
+      // Bootstrap owns upload policy independently of an open configuration editor.
+      void this.host.context?.config.refresh();
       // A local settings draft owns config conflicts; external snapshots must not overwrite it.
       const runtimeConfig = this.host.context?.runtimeConfig;
       if (runtimeConfig && !runtimeConfig.state.configFormDirty) {
@@ -232,11 +234,16 @@ export class ShellGatewayOwner {
     if (command.kind === "panel") {
       const sessionKey =
         commandParams.sessionKey ??
-        (command.panel === "portal" ? this.host.activeSessionKey : undefined);
+        (command.panel === "portal" || command.panel === "plugin"
+          ? this.host.activeSessionKey
+          : undefined);
       if (
         sessionKey &&
         (!areUiSessionKeysEquivalent(sessionKey, this.host.activeSessionKey) ||
-          !isSessionRouteId(this.host.routeState.routeId))
+          !isSessionRouteId(this.host.routeState.routeId) ||
+          (command.panel === "plugin" &&
+            commandParams.agentId !== undefined &&
+            commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
         this.host.selectChatSession(sessionKey, commandParams.agentId);
       }
@@ -246,10 +253,18 @@ export class ShellGatewayOwner {
           browser: BROWSER_PANEL_TOGGLE_EVENT,
           desktop: DESKTOP_PANEL_TOGGLE_EVENT,
           portal: PORTAL_PANEL_TOGGLE_EVENT,
+          plugin: PLUGIN_PANEL_TOGGLE_EVENT,
         }[command.panel],
         {
           detail: {
             open: command.open,
+            ...(command.panel === "plugin"
+              ? {
+                  pluginId: command.pluginId,
+                  panelId: command.panelId,
+                  agentId: commandParams.agentId,
+                }
+              : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
@@ -263,7 +278,12 @@ export class ShellGatewayOwner {
         },
       );
       if (sessionKey) {
-        rememberSessionPanelToggle(command.panel, panelEvent);
+        rememberSessionPanelToggle(
+          command.panel === "plugin"
+            ? `plugin:${command.pluginId}/${command.panelId}`
+            : command.panel,
+          panelEvent,
+        );
       }
       window.dispatchEvent(panelEvent);
       return;
@@ -323,19 +343,14 @@ export class ShellGatewayOwner {
     this.host.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
-    if (context) {
-      this.host.recoverDeletedActiveSession(context.sessions.state);
-    }
+    this.host.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", async () => {
         await this.ensureRuntimeConfig(snapshot, context.runtimeConfig);
         return this.refreshProfileAppearancePrefs(context);
       });
-      if (
-        this.host.routeState.routeId &&
-        (!context.agents.state.agentsList || context.agents.state.agentsListCached)
-      ) {
+      if (this.host.routeState.routeId && !context.agents.state.agentsList) {
         void connectionBootstrap.run("agents", () =>
           this.ensureAgentsList(snapshot, context.agents),
         );
@@ -387,7 +402,7 @@ export class ShellGatewayOwner {
       return Promise.resolve();
     }
     const routeId = this.host.routeState.routeId;
-    if (!agents || !routeId || (agents.state.agentsList && !agents.state.agentsListCached)) {
+    if (!agents || !routeId || agents.state.agentsList) {
       return Promise.resolve();
     }
     if (this.host.agentsListClient === snapshot.client && this.host.agentsListSource === agents) {

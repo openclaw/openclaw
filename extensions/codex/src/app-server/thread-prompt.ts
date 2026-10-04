@@ -96,6 +96,7 @@ export function buildDeveloperInstructions(
   }).join("\n");
   const delegationGuidanceAvailable =
     params.disableTools !== true &&
+    params.toolsAllow?.length !== 0 &&
     params.delegationCapability !== "report_only" &&
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =

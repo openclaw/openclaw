@@ -1,15 +1,13 @@
 import fs from "node:fs";
-import { DatabaseSync } from "node:sqlite";
 import { expect, test, vi } from "vitest";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import * as sqliteIntegrity from "../infra/sqlite-integrity.js";
 import * as sqliteWal from "../infra/sqlite-wal.js";
 import * as agentDatabaseLeases from "../state/openclaw-agent-db-lease.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { setStateDirEnv, withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { readSessionGroupMembershipInWorker } from "./session-group-catalog.js";
@@ -26,7 +24,7 @@ test.each([false, true])(
         { agentId: "research", sessionKey: "agent:research:matrix:group:!Room:example.org" },
       ] as const;
       const config = {
-        agents: { list: [{ id: "main", default: true }, { id: "research" }] },
+        agents: { entries: { main: {}, research: {} } },
       } satisfies OpenClawConfig;
       const entry = {
         sessionId: "group-member",
@@ -70,17 +68,25 @@ test.each([false, true])(
             ["Shared work", [scopes[1]]],
           ]),
         );
-        const database = openOpenClawAgentDatabase(scopes[0]);
-        const external = new DatabaseSync(database.path);
-        try {
-          external
-            .prepare(
-              "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.category', ?) WHERE session_key = ?",
-            )
-            .run("External", scopes[0].sessionKey);
-        } finally {
-          external.close();
-        }
+        const entryUrl = new URL("../config/sessions/session-accessor.ts", import.meta.url);
+        const cleanupUrl = new URL("../test-utils/session-state-cleanup.ts", import.meta.url);
+        // A foreign canonical writer refreshes metadata without this process's publications.
+        const external = await runCliProcessChild({
+          nodeArgs: [
+            ...resolveRuntimeWorkerArgv(entryUrl).slice(0, -1),
+            "--input-type=module",
+            "--eval",
+            `import { upsertSessionEntryCore } from ${JSON.stringify(entryUrl.href)};
+             import { cleanupSessionStateForTest } from ${JSON.stringify(cleanupUrl.href)};
+             try {
+               await upsertSessionEntryCore(${JSON.stringify(scopes[0])}, { category: "External" });
+             } finally {
+               await cleanupSessionStateForTest({ stateDir: process.env.OPENCLAW_STATE_DIR });
+             }`,
+          ],
+          env: { ...process.env },
+        });
+        expect(external.code, external.stderr).toBe(0);
         expect(await readTargets()).toEqual(
           new Map([
             ["External", [scopes[0]]],
@@ -109,7 +115,7 @@ test("discovers groups across more than the handle cap without writable database
     );
     const config = {
       agents: {
-        list: agentIds.map((id, index) => ({ id, ...(index === 0 ? { default: true } : {}) })),
+        entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
       },
     } satisfies OpenClawConfig;
 

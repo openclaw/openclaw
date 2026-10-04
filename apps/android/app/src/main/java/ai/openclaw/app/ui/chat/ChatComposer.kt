@@ -187,8 +187,6 @@ internal class ChatComposerTextDraftStore(
     records += retainedNewestFirst.asReversed()
     return ArrayList(records.flatten())
   }
-
-  internal fun size(): Int = drafts.size
 }
 
 private fun pendingSendCheckpointEntry(
@@ -262,10 +260,8 @@ internal class ChatComposerMediaCheckpoint(
   }
 
   fun consume(requestId: String? = null): ChatComposerMediaLease? {
-    if (this.requestId != requestId) return null
-    val capturedOwner = owner ?: return null
-    val capturedAuthorizationId = mediaAuthorizationId ?: return null
-    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
+    if (this.requestId != requestId || owner == null || mediaAuthorizationId == null) return null
+    return clear()
   }
 
   fun clear(): ChatComposerMediaLease? {
@@ -500,15 +496,6 @@ internal suspend fun stageChatShareDraft(
     droppedAttachmentCount = droppedAttachmentCount,
   )
 }
-
-internal fun canCommitStagedChatShare(
-  stagedId: Long,
-  currentHead: ChatShareDraft?,
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean =
-  currentHead?.id == stagedId &&
-    ownerSnapshot == currentOwner
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

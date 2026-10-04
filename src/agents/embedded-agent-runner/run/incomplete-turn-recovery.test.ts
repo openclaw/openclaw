@@ -33,6 +33,25 @@ function emptyAttempt(assistant = emptyAssistant()) {
 }
 
 describe("incomplete-turn recovery policy", () => {
+  it("does not request a visible continuation for an authored speech-only answer", () => {
+    const assistant = emptyAssistant({
+      content: [
+        { type: "thinking", thinking: "Prepare a spoken greeting.", thinkingSignature: "" },
+        { type: "text", text: "" },
+      ],
+      openclawDelivery: { tts: { tagged: true, text: "Have a lovely day." } },
+    });
+
+    expect(
+      resolveReasoningOnlyRetryInstruction({
+        modelApi: "openai-completions",
+        aborted: false,
+        timedOut: false,
+        attempt: emptyAttempt(assistant),
+      }),
+    ).toBeNull();
+  });
+
   it.each(
     (["required", "optional"] as const).flatMap((terminalReplyExpectation) =>
       ["async tool", "active lifecycle item", "unfinished lifecycle item"].map((owner) => ({

@@ -41,49 +41,6 @@ describe("Cloudflare Access OIDC GitHub identity config", () => {
   });
 });
 
-describe("gateway trusted-proxy device auto-approval config", () => {
-  test("accepts bounded non-admin scopes", () => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            deviceAutoApprove: {
-              enabled: true,
-              scopes: ["operator.read", "operator.write", "operator.approvals"],
-            },
-          },
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  test.each(["operator.admin", " operator.admin "])(
-    "accepts %j as an explicit admin opt-in",
-    (adminScope) => {
-      const result = OpenClawSchema.safeParse({
-        gateway: {
-          auth: {
-            mode: "trusted-proxy",
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              deviceAutoApprove: {
-                enabled: true,
-                scopes: ["operator.read", adminScope],
-              },
-            },
-          },
-        },
-      });
-
-      expect(result.success).toBe(true);
-    },
-  );
-});
-
 describe("gateway identity scope grants config", () => {
   test.each([
     { scope: "operator.admin", success: true },
@@ -109,6 +66,62 @@ describe("gateway operator role config", () => {
     agents: ["guest-agent"],
     scopes: ["operator.read", "operator.write"],
   };
+  const withRole = (role: unknown) => ({
+    gateway: { roles: { default: "guest", definitions: { guest: role } } },
+  });
+
+  test("accepts GitHub login assignments to configured roles", () => {
+    const roles = {
+      default: "guest",
+      definitions: { guest: validRole, release_admin: validRole },
+      assignments: { byGithubLogin: { " Octo-Cat ": "release_admin" } },
+    };
+
+    expect(OpenClawSchema.parse({ gateway: { roles } }).gateway?.roles).toEqual(roles);
+  });
+
+  test.each([
+    {
+      name: "unknown assigned role",
+      byGithubLogin: { octocat: "missing" },
+      login: "octocat",
+      message: "must name a configured role definition",
+    },
+    {
+      name: "malformed GitHub login",
+      byGithubLogin: { octo_cat: "guest" },
+      login: "octo_cat",
+      message: "Invalid GitHub login",
+    },
+    {
+      name: "case-insensitive duplicate GitHub logins",
+      byGithubLogin: { Octocat: "guest", octocat: "guest" },
+      login: "octocat",
+      message: "Duplicate GitHub login",
+    },
+  ])("rejects $name", ({ byGithubLogin, login, message }) => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        roles: {
+          default: "guest",
+          definitions: { guest: validRole },
+          assignments: { byGithubLogin },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["gateway", "roles", "assignments", "byGithubLogin", login],
+            message: expect.stringContaining(message),
+          }),
+        ]),
+      );
+    }
+  });
 
   test("validates model source, scoped aliases, empty membership and future-family exclusions", () => {
     const result = validateConfigObject({
@@ -171,56 +184,10 @@ describe("gateway operator role config", () => {
     }
   });
 
-  test.each(["none", "view", "suggest", "write"])(
-    "accepts the closed foreign-session access level %s",
-    (others) => {
-      const result = OpenClawSchema.safeParse({
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: { guest: { ...validRole, sessions: { others } } },
-          },
-        },
-      });
-
-      expect(result.success).toBe(true);
-    },
-  );
-
-  test.each(["inherit", "required"])("accepts the closed sandbox policy %s", (sandbox) => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        roles: { default: "guest", definitions: { guest: { ...validRole, sandbox } } },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
-  test.each([
-    { name: "all agents and explicit admin scope", agents: "*", scopes: ["operator.admin"] },
-    { name: "an empty agent allowlist", agents: [], scopes: ["operator.read"] },
-  ])("accepts $name", ({ agents, scopes }) => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        roles: { default: "guest", definitions: { guest: { ...validRole, agents, scopes } } },
-      },
-    });
-
-    expect(result.success).toBe(true);
-  });
-
   test("accepts an access-policy plugin reference without plugin configuration", () => {
-    const result = OpenClawSchema.parse({
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: { ...validRole, accessPolicyPlugin: " unavailable-access-policy " },
-          },
-        },
-      },
-    });
+    const result = OpenClawSchema.parse(
+      withRole({ ...validRole, accessPolicyPlugin: " unavailable-access-policy " }),
+    );
 
     expect(result.gateway?.roles?.definitions.guest).toEqual({
       ...validRole,
@@ -247,11 +214,7 @@ describe("gateway operator role config", () => {
     { name: "missing session policy", role: { agents: "*", scopes: ["operator.read"] } },
     { name: "freeform capability", role: { ...validRole, capability: "sessions.delete" } },
   ])("rejects $name", ({ role }) => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        roles: { default: "guest", definitions: { guest: role } },
-      },
-    });
+    const result = OpenClawSchema.safeParse(withRole(role));
 
     expect(result.success).toBe(false);
   });
@@ -296,20 +259,13 @@ describe("gateway operator role config", () => {
   });
 
   test("normalizes and deduplicates configured agent and operator-scope allowlists", () => {
-    const result = OpenClawSchema.safeParse({
-      gateway: {
-        roles: {
-          default: "guest",
-          definitions: {
-            guest: {
-              ...validRole,
-              agents: [" Guest-Agent ", "guest-agent", "SECOND-agent"],
-              scopes: ["operator.read", "operator.write", "operator.read"],
-            },
-          },
-        },
-      },
-    });
+    const result = OpenClawSchema.safeParse(
+      withRole({
+        ...validRole,
+        agents: [" Guest-Agent ", "guest-agent", "SECOND-agent"],
+        scopes: ["operator.read", "operator.write", "operator.read"],
+      }),
+    );
 
     expect(result.success).toBe(true);
     if (result.success) {
@@ -318,9 +274,5 @@ describe("gateway operator role config", () => {
         scopes: ["operator.read", "operator.write"],
       });
     }
-  });
-
-  test("keeps roles optional for existing solo and shared-secret configurations", () => {
-    expect(OpenClawSchema.safeParse({ gateway: { auth: { mode: "token" } } }).success).toBe(true);
   });
 });

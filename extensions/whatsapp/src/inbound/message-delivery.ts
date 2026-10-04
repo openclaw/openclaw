@@ -2,9 +2,11 @@ import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage, WASock
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { parseStrictFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { defaultRuntime, createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { maybeResolveWhatsAppApprovalReaction } from "../approval-reactions.js";
 import { resolveComparableIdentity } from "../identity.js";
 import { addWhatsAppImagePreviewFields } from "../image-preview.js";
@@ -68,7 +70,7 @@ function recordAcceptedInboundActivity(accountId: string): void {
   });
 }
 
-export type WhatsAppAppendReplyWindow = {
+type WhatsAppAppendReplyWindow = {
   afterMs: number;
   untilMs: number;
   maxAgeMs: number;
@@ -514,12 +516,9 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
             preparedInboundByDurableId.delete(oldest);
           }
         }
-        preparedInboundByDurableId.set(
-          durableId,
-          new Promise((resolve) => {
-            resolvePrepared = resolve;
-          }),
-        );
+        const prepared = createDeferred<PreparedInbound | null | undefined>();
+        resolvePrepared = prepared.resolve;
+        preparedInboundByDurableId.set(durableId, prepared.promise);
       }
       const finishPreparation = (
         inbound: PreparedInbound | null | undefined,
@@ -625,25 +624,18 @@ export function createWhatsAppMessageDeliveryCoordinator(options: WhatsAppMessag
     await durableInboundMonitor.stop();
   };
   const drainInboundBeforeSocketCloseWithTimeout = async () => {
-    let timeout: ReturnType<typeof setTimeout> | null = null;
     try {
-      await Promise.race([
+      await raceWithTimeout(
         drainInboundBeforeSocketClose(),
-        new Promise<void>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(
-              new Error(
-                `Timed out draining WhatsApp inbound debounce after ${INBOUND_CLOSE_DRAIN_TIMEOUT_MS}ms`,
-              ),
-            );
-          }, INBOUND_CLOSE_DRAIN_TIMEOUT_MS);
-          timeout.unref?.();
-        }),
-      ]);
+        INBOUND_CLOSE_DRAIN_TIMEOUT_MS,
+        () => {
+          throw new Error(
+            `Timed out draining WhatsApp inbound debounce after ${INBOUND_CLOSE_DRAIN_TIMEOUT_MS}ms`,
+          );
+        },
+        { ref: false },
+      );
     } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
       // Start abort/dispose even when channel work ignored the graceful bound;
       // a successor must not share this account queue with a live owner.
       void durableInboundMonitor.stop();

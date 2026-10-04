@@ -223,6 +223,19 @@ function systemAgentRouteIdentity(
   return identity;
 }
 
+function loadRouteAuthProfileStore(
+  route: SystemAgentVerifiedExecutionRoute,
+  deps: SystemAgentVerifiedInferenceDeps,
+): AuthProfileStore {
+  return (deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime)(route.agentDir, {
+    readOnly: true,
+    migrationProvider: route.provider,
+    allowKeychainPrompt: false,
+    config: route.runConfig,
+    externalCliProviderIds: [route.provider],
+  });
+}
+
 async function resolveCurrentRuntimeOwnerFingerprint(params: {
   route: SystemAgentVerifiedExecutionRoute;
   kind: OpaqueRuntimeOwnerKind;
@@ -253,14 +266,7 @@ async function resolveCurrentRuntimeOwnerFingerprint(params: {
   }
   let authProfileOwnerFingerprint: string | undefined;
   if (params.authProfileId) {
-    const loadStore = params.deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-    const store = loadStore(params.route.agentDir, {
-      readOnly: true,
-      migrationProvider: params.route.provider,
-      allowKeychainPrompt: false,
-      config: params.route.runConfig,
-      externalCliProviderIds: [params.route.provider],
-    });
+    const store = loadRouteAuthProfileStore(params.route, params.deps);
     authProfileOwnerFingerprint = fingerprintAuthProfileOwnerShape({
       profileId: params.authProfileId,
       credential: store.profiles[params.authProfileId],
@@ -518,15 +524,7 @@ async function resolveCurrentAuthFingerprint(params: {
       params.deps.resolveCliAuthBindingFingerprint ?? resolveCliAuthBindingFingerprint;
     let resolvedAuth: ResolvedProviderAuth | undefined;
     if (params.authProfileId) {
-      const loadStore =
-        params.deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-      const store = loadStore(params.route.agentDir, {
-        readOnly: true,
-        migrationProvider: params.route.provider,
-        allowKeychainPrompt: false,
-        config: params.route.runConfig,
-        externalCliProviderIds: [params.route.provider],
-      });
+      const store = loadRouteAuthProfileStore(params.route, params.deps);
       const authCredential = store.profiles[params.authProfileId];
       const needsMaterializedSecret =
         (authCredential?.type === "api_key" && !authCredential.key) ||
@@ -568,30 +566,22 @@ async function resolveCurrentAuthFingerprint(params: {
     });
   }
   let store: AuthProfileStore | undefined;
+  let materializedProfile:
+    | { profileId: string; credential: AuthProfileStore["profiles"][string] }
+    | undefined;
   if (params.authProfileId) {
-    const loadStore = params.deps.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
-    store = loadStore(params.route.agentDir, {
-      readOnly: true,
-      migrationProvider: params.route.provider,
-      allowKeychainPrompt: false,
-      config: params.route.runConfig,
-      externalCliProviderIds: [params.route.provider],
-    });
+    store = loadRouteAuthProfileStore(params.route, params.deps);
     const credential = store.profiles[params.authProfileId];
     if (!credential) {
       return undefined;
     }
-    if (
-      credential.type === "oauth" ||
-      (params.route.runner === "embedded" &&
-        params.route.agentHarnessRuntimeOverride !== "openclaw")
-    ) {
-      if (credential.type === "oauth") {
-        return fingerprintAuthProfileCredential({
-          profileId: params.authProfileId,
-          credential,
-        });
-      }
+    if (credential.type === "oauth") {
+      return fingerprintAuthProfileCredential({
+        profileId: params.authProfileId,
+        credential,
+      });
+    }
+    if (params.route.agentHarnessRuntimeOverride !== "openclaw") {
       const harnessId = params.route.agentHarnessRuntimeOverride;
       const harness = getRegisteredAgentHarness(harnessId)?.harness;
       if (harness?.authBootstrap === "harness") {
@@ -604,34 +594,10 @@ async function resolveCurrentAuthFingerprint(params: {
           deps: params.deps,
         });
       }
-      if (!params.modelId || !params.modelApi) {
-        return undefined;
-      }
-      const resolveAuth = params.deps.resolveApiKeyForProvider ?? resolveApiKeyForProviderCore;
-      const auth = await resolveAuth({
-        store,
-        provider: params.route.provider,
-        cfg: params.route.runConfig,
-        agentDir: params.route.agentDir,
-        workspaceDir: resolveAgentWorkspaceDir(
-          params.route.runConfig,
-          params.route.agentId,
-          process.env,
-        ),
-        profileId: params.authProfileId,
-        lockedProfile: true,
-        modelId: params.modelId,
-        modelApi: params.modelApi,
-        secretSentinels: false,
-      });
-      if (auth.profileId !== params.authProfileId || !auth.apiKey) {
-        return undefined;
-      }
-      return fingerprintResolvedAuthProfileCredential({
+      materializedProfile = {
         profileId: params.authProfileId,
         credential,
-        resolvedAuth: auth,
-      });
+      };
     }
   }
   // Credential selection is transport-sensitive. Reuse the facts from the
@@ -655,10 +621,15 @@ async function resolveCurrentAuthFingerprint(params: {
       : { allowAuthProfileFallback: false }),
     modelId: params.modelId,
     modelApi: params.modelApi,
-    secretSentinels: true,
+    secretSentinels: materializedProfile === undefined,
   });
   if (params.authProfileId && auth.profileId !== params.authProfileId) {
     return undefined;
+  }
+  if (materializedProfile) {
+    return auth.apiKey
+      ? fingerprintResolvedAuthProfileCredential({ ...materializedProfile, resolvedAuth: auth })
+      : undefined;
   }
   return fingerprintResolvedProviderAuth(auth);
 }
@@ -789,10 +760,6 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   if (!currentAuthFingerprint || reportedAuthFingerprint !== currentAuthFingerprint) {
     throw new Error("The successful inference credential is no longer the active route owner.");
   }
-  const authFingerprint = reportedAuthFingerprint;
-  if (!authFingerprint) {
-    throw new Error("The successful inference run did not report an execution owner.");
-  }
   if (
     pluginHarnessId &&
     resolveRouteHarnessOwnerPluginIds(params.configuredRoute.sourceConfig, execution).length === 0
@@ -821,7 +788,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
       ...(successfulHarnessId ? { agentHarnessId: successfulHarnessId } : {}),
       ...(modelId ? { modelId } : {}),
       ...(modelApi ? { modelApi } : {}),
-      authFingerprint,
+      authFingerprint: currentAuthFingerprint,
       ...(proofKind === "runtime-owner" ? { proofKind } : {}),
       ...(params.auth.runtimeOwnerKind ? { runtimeOwnerKind: params.auth.runtimeOwnerKind } : {}),
       ...(runtimeOwnerId ? { runtimeOwnerId } : {}),

@@ -49,6 +49,7 @@ export type HumanMentionWebPush = {
   agentId: string;
   senderLabel?: string;
   sessionTitle?: string;
+  prepare: () => Promise<void>;
   isCurrent: () => boolean;
 };
 
@@ -83,21 +84,6 @@ function resolveEventWebPushNotification(
       title: "OpenClaw agent finished",
       body: "An agent completed its response.",
       tag: `openclaw-agent-finished-${runId}`,
-    };
-  }
-  if (event === "task" && value.action === "upserted") {
-    const task = isRecord(value.task) ? value.task : null;
-    if ((task?.status !== "failed" && task?.status !== "timed_out") || task.runtime === "cron") {
-      return null;
-    }
-    const taskId = normalizeWebPushDisplayLabel(task.id) ?? "failed";
-    const taskTitle = normalizeWebPushDisplayLabel(task.title);
-    return {
-      category: "background-task-failed",
-      title: "OpenClaw background task failed",
-      body: "A background task needs attention.",
-      ...(taskTitle ? { identifiedBody: `${taskTitle} needs attention.` } : {}),
-      tag: `openclaw-task-failed-${taskId}`,
     };
   }
   if (event === "cron" && value.action === "finished" && value.status === "error") {
@@ -155,7 +141,7 @@ export function createEventWebPushDelivery(params: {
       );
       const sessionKeys = opts?.sessionKeys ?? [];
       const groupedResults = await withCurrentWebPushAuthority(
-        { ...params, sessionKeys, agentId },
+        { ...params, sessionKeys, agentId, preparePublication: mention?.prepare },
         (authority) => {
           const { cfg } = authority;
           const recipientProfileId =
@@ -177,10 +163,7 @@ export function createEventWebPushDelivery(params: {
           if (mention && !sessionPath) {
             return undefined;
           }
-          const path =
-            notification.path ??
-            sessionPath?.slice(1) ??
-            (notification.category === "background-task-failed" ? "tasks" : "sessions");
+          const path = notification.path ?? sessionPath?.slice(1) ?? "sessions";
           const url = resolveControlUiWebPushUrl(cfg, path);
           const targets = listCurrentWebPushTargets({
             ...authority,

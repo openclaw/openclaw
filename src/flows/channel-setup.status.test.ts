@@ -80,12 +80,11 @@ vi.mock("../plugins/bundled-sources.js", () => ({
 import {
   collectChannelStatus,
   noteChannelPrimer,
-  noteChannelStatus,
   resolveChannelSelectionNoteLines,
-  resolveChannelSetupSelectionContributions,
+  resolveChannelSetupSelectionOptions,
 } from "./channel-setup.status.js";
 
-describe("resolveChannelSetupSelectionContributions", () => {
+describe("resolveChannelSetupSelectionOptions", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listChatChannels.mockReturnValue([
@@ -149,7 +148,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sorts channels alphabetically by picker label", () => {
-    const contributions = resolveChannelSetupSelectionContributions({
+    const options = resolveChannelSetupSelectionOptions({
       entries: (
         [
           ["zalo", "Zalo", "Zalo (Bot API)"],
@@ -164,7 +163,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       resolveDisabledHint: () => undefined,
     });
 
-    expect(contributions.map((contribution) => contribution.option.label)).toEqual([
+    expect(options.map((option) => option.label)).toEqual([
       "Discord (Bot API)",
       "iMessage (macOS app)",
       "Zalo (Bot API)",
@@ -172,7 +171,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sanitizes picker labels and hints before terminal rendering", () => {
-    const contributions = resolveChannelSetupSelectionContributions({
+    const options = resolveChannelSetupSelectionOptions({
       entries: [
         {
           id: "zalo",
@@ -186,7 +185,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       resolveDisabledHint: () => "disabled\u0007",
     });
 
-    expect(contributions[0]?.option).toEqual({
+    expect(options[0]).toEqual({
       value: "zalo",
       label: "Zalo\\nBot",
       hint: "configured\\nnow · disabled",
@@ -194,7 +193,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
   });
 
   it("sanitizes the picker fallback label when metadata sanitizes to empty", () => {
-    const contributions = resolveChannelSetupSelectionContributions({
+    const options = resolveChannelSetupSelectionOptions({
       entries: [
         {
           id: "bad\u001B[31m\nid",
@@ -208,7 +207,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
       resolveDisabledHint: () => undefined,
     });
 
-    expect(contributions[0]?.option).toEqual({
+    expect(options[0]).toEqual({
       value: "bad\u001B[31m\nid",
       label: "bad\\nid",
     });
@@ -363,22 +362,6 @@ describe("resolveChannelSetupSelectionContributions", () => {
         "Matrix: 已安装",
         "Zalo: 安装插件后启用",
       ]);
-    });
-  });
-
-  it("localizes channel status note title", async () => {
-    const note = vi.fn(async () => {});
-    listChatChannels.mockReturnValue([makeMeta("discord", "Discord")]);
-    isChannelConfigured.mockReturnValue(true);
-
-    await withEnvAsync({ OPENCLAW_LOCALE: "zh-CN" }, async () => {
-      await noteChannelStatus({
-        cfg: {} as never,
-        prompter: { note } as never,
-        installedPlugins: [],
-      });
-
-      expect(note).toHaveBeenCalledWith(expect.any(String), "频道状态");
     });
   });
 

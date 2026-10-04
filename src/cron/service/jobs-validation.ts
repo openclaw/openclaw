@@ -8,13 +8,10 @@ import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import { parseCronPacingBounds } from "../pacing.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import { assertSafeCronSessionTargetId } from "../session-target.js";
-import {
-  isSystemOwnedCronPayloadKind,
-  type CronDelivery,
-  type CronJob,
-  type CronJobPatch,
-} from "../types.js";
+import { assertCanonicalCronDeliveryMode } from "../store/delivery-codec.js";
+import { isSystemOwnedCronPayloadKind, type CronJob, type CronJobPatch } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
+import { computeJobNextRunAtMs } from "./jobs-scheduling.js";
 import type { CronServiceState } from "./state.js";
 
 export async function resolveConfiguredChannelsForValidation(
@@ -186,11 +183,7 @@ export function assertStreamScheduleSupport(
   }
 }
 
-export function assertTimeScheduleSatisfiable(
-  job: CronJob,
-  nowMs: number,
-  computeJobNextRunAtMs: (job: CronJob, nowMs: number) => number | undefined,
-) {
+export function assertTimeScheduleSatisfiable(job: CronJob, nowMs: number) {
   if (job.schedule.kind === "at") {
     if (parseAbsoluteTimeMs(job.schedule.at) === null) {
       throw new Error("cron at schedule must contain a Date-valid absolute timestamp");
@@ -246,6 +239,7 @@ export function assertMainSessionAgentId(
 }
 
 export function assertDeliverySupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
+  assertCanonicalCronDeliveryMode(job.delivery);
   if (!job.delivery) {
     return;
   }
@@ -331,24 +325,15 @@ export function cronPatchTouchesDeliveryResolution(patch: CronJobPatch): boolean
   );
 }
 
-function hasConcreteFailureDestination(
-  destination: CronDelivery["failureDestination"] | undefined,
-): boolean {
-  return Boolean(
-    destination &&
-    (destination.channel !== undefined ||
-      destination.to !== undefined ||
-      destination.accountId !== undefined ||
-      destination.mode !== undefined),
-  );
-}
-
 export function assertFailureDestinationSupport(job: Pick<CronJob, "sessionTarget" | "delivery">) {
   const failureDestination = job.delivery?.failureDestination;
-  if (!failureDestination) {
-    return;
-  }
-  if (!hasConcreteFailureDestination(failureDestination)) {
+  if (
+    !failureDestination ||
+    (failureDestination.channel === undefined &&
+      failureDestination.to === undefined &&
+      failureDestination.accountId === undefined &&
+      failureDestination.mode === undefined)
+  ) {
     return;
   }
   if (job.sessionTarget === "main" && job.delivery?.mode !== "webhook") {

@@ -1,16 +1,9 @@
-// Silent reply policy helpers decide when automated replies should be suppressed.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type SilentReplyPolicy = "allow" | "disallow";
 export type SilentReplyConversationType = "direct" | "group" | "internal";
-export type SilentReplyPolicyShape = Partial<
-  Record<Exclude<SilentReplyConversationType, "direct">, SilentReplyPolicy>
->;
-
-const DEFAULT_SILENT_REPLY_POLICY: Record<SilentReplyConversationType, SilentReplyPolicy> = {
-  direct: "disallow",
-  group: "disallow",
-  internal: "allow",
+export type SilentReplyPolicyShape = {
+  group?: SilentReplyPolicy;
 };
 
 /** Classifies a reply context for silent-reply policy from explicit type, session key, or surface. */
@@ -36,19 +29,13 @@ export function classifySilentReplyConversationType(params: {
   return "internal";
 }
 
-/** Resolves silent-reply policy with surface overrides while keeping direct replies audible. */
 export function resolveSilentReplyPolicyFromPolicies(params: {
   conversationType: SilentReplyConversationType;
   defaultPolicy?: SilentReplyPolicyShape;
   surfacePolicy?: SilentReplyPolicyShape;
 }): SilentReplyPolicy {
-  if (params.conversationType === "direct") {
-    // Direct chats must never be silently swallowed, regardless of config overlays.
+  if (params.conversationType !== "group") {
     return "disallow";
   }
-  return (
-    params.surfacePolicy?.[params.conversationType] ??
-    params.defaultPolicy?.[params.conversationType] ??
-    DEFAULT_SILENT_REPLY_POLICY[params.conversationType]
-  );
+  return params.surfacePolicy?.group ?? params.defaultPolicy?.group ?? "disallow";
 }

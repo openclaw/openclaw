@@ -1,8 +1,9 @@
 /** Caches plugin module loaders and native-load stats for runtime/source module imports. */
 import fs from "node:fs";
-import Module from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import type { NodePath } from "@babel/traverse";
+import type { CallExpression, Program, Statement } from "@babel/types";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
@@ -11,6 +12,7 @@ import {
   resolvePluginLoaderTryNative,
   tryNativeRequireJavaScriptModule,
   tryNativeRequireModule,
+  useNodeModuleHooks,
 } from "./native-module-require.js";
 import { isPathInside, openPluginRootFileSync } from "./path-safety.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
@@ -107,33 +109,15 @@ function resolveAutomaticJitiTsconfig(loaderFilename: string): string | undefine
   }
 }
 
-type BabelImportCallPath = {
-  node: {
-    callee: { type: string; name?: string };
-    arguments: unknown[];
-  };
-  scope: { getBinding(name: string): unknown };
-  replaceWith(node: unknown): void;
-};
-
-type BabelProgramPath = {
-  scope: { generateUidIdentifier(name: string): { name: string } };
-  traverse(visitor: { CallExpression(call: BabelImportCallPath): void }): void;
-  unshiftContainer(name: "body", nodes: unknown): void;
-};
-
 function createBunJitiImportCachePlugin(babel: {
-  types: {
-    callExpression(callee: unknown, args: unknown[]): unknown;
-    identifier(name: string): unknown;
-  };
-  template: { statements: { ast(source: string): unknown } };
+  types: Pick<typeof import("@babel/types"), "callExpression" | "identifier">;
+  template: { statements: { ast(source: string): Statement[] } };
 }) {
   return {
     visitor: {
       Program: {
-        exit(program: BabelProgramPath) {
-          const calls: BabelImportCallPath[] = [];
+        exit(program: NodePath<Program>) {
+          const calls: NodePath<CallExpression>[] = [];
           program.traverse({
             CallExpression(call) {
               if (
@@ -220,7 +204,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
         pluginSdkResolution: params.pluginSdkResolution,
       });
   const moduleConfigCacheKey = `${tryNative ? "native" : "transform"}\0${aliases.cacheKey}`;
-  const lazyNativeAliasFallback = tryNative && typeof Module.registerHooks !== "function";
+  const lazyNativeAliasFallback = tryNative && !useNodeModuleHooks();
   const scopedCacheKey = `${loaderFilename}::${params.cacheScopeKey ? `${params.cacheScopeKey}::` : ""}${moduleConfigCacheKey}`;
   return {
     loaderFilename,

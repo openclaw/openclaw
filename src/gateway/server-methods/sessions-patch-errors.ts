@@ -6,7 +6,7 @@ import {
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { SessionWorktreeLifecycleError } from "../../sessions/session-worktree-lifecycle.js";
-import { ModelAccountConnectAuthorityError } from "../model-account-connect.js";
+import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { sessionLog } from "./sessions-shared.js";
 
@@ -39,9 +39,7 @@ export function createCommitGuard(key: string, assertCurrent: (() => void) | und
       assertCurrent?.();
       return undefined;
     } catch (error) {
-      return error instanceof SessionMutationAuthorizationChangedError
-        ? error.error
-        : unexpectedPatchError(key, error);
+      return unexpectedPatchError(key, error);
     }
   };
 }

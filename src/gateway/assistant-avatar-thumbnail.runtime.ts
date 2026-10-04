@@ -1,6 +1,6 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
 import { fileTypeFromBuffer } from "file-type";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { LruCache } from "../infra/lru-cache.js";
 import { createImageProcessor, isAnimatedWebpBuffer } from "../media/image-ops.js";
 import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
@@ -12,7 +12,8 @@ import {
 } from "./http-image-response.js";
 
 const AVATAR_THUMBNAIL_SIDE = 128;
-const thumbnailCache = new Map<string, HttpImageRepresentation>();
+const thumbnailCache = new LruCache<HttpImageRepresentation>(4);
+// Pending jobs retain their own custody until settlement, independently of the LRU.
 const pendingThumbnails = new Map<string, Promise<HttpImageRepresentation>>();
 
 async function createAvatarThumbnail(
@@ -66,8 +67,6 @@ export async function readGatewayAvatarThumbnail(
   const { revision } = source;
   const cached = thumbnailCache.get(revision);
   if (cached) {
-    thumbnailCache.delete(revision);
-    thumbnailCache.set(revision, cached);
     return cached;
   }
   return getOrCreatePromise(
@@ -76,8 +75,6 @@ export async function readGatewayAvatarThumbnail(
     async () => {
       const image = await createAvatarThumbnail(source);
       thumbnailCache.set(revision, image);
-      // Pending jobs retain their own custody until settlement, independently of the LRU.
-      pruneMapToMaxSize(thumbnailCache, 4);
       return image;
     },
     { evictOnSettled: true },

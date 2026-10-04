@@ -1,10 +1,10 @@
-// Control UI view renders debug screen content.
 import { html, nothing } from "lit";
 import { guard } from "lit/directives/guard.js";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
+import { renderKeyboardShortcut, renderShortcutText } from "../../components/kbd.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsEmpty,
@@ -19,8 +19,8 @@ import type {
   CommandLaneDynamicSummary,
   CommandLaneSnapshot,
 } from "../../lib/gateway-diagnostics.ts";
+import { KEYBOARD_SHORTCUT_COMBOS } from "../../lib/keyboard-shortcut-contract.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
-import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
 import { renderCommandLaneRows } from "./lane-table.ts";
 
 type DebugProps = {
@@ -156,7 +156,12 @@ export function renderDebug(props: DebugProps) {
           ${
             isNativeEmbedHost()
               ? t("debug.overlay.open")
-              : t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })
+              : renderShortcutText(
+                  t("debug.overlay.openWithShortcut", { shortcut: "{shortcut}" }),
+                  renderKeyboardShortcut(KEYBOARD_SHORTCUT_COMBOS.debugOverlay, {
+                    inline: true,
+                  }),
+                )
           }
         </button>
       `,

@@ -1,3 +1,4 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   getRoleSnapshotIdentityKeys,
   type RoleRefMap,
@@ -94,13 +95,7 @@ export function recordSnapshotKeys(
     documentIdentity: params.documentIdentity,
     keys: getRoleSnapshotIdentityKeys(params.refs, params.family.identity),
   });
-  while (cache.size > SNAPSHOT_DELTA_CACHE_MAX_ENTRIES) {
-    const oldest = cache.keys().next().value as string | undefined;
-    if (oldest === undefined) {
-      break;
-    }
-    cache.delete(oldest);
-  }
+  pruneMapToMaxSize(cache, SNAPSHOT_DELTA_CACHE_MAX_ENTRIES);
 }
 
 export function clearSnapshotKeysForTab(

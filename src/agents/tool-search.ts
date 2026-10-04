@@ -5,26 +5,15 @@ import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
-import type { ToolDefinition } from "./sessions/index.js";
 import { resolveToolResultFailureKind } from "./tool-result-error.js";
 import {
-  addClientToolsToToolCatalog,
   applyToolCatalogCompaction,
   isDirectVisibleCatalogTool,
   resolveCatalog,
 } from "./tool-search-catalog.js";
-import { readToolSearchCode, runCodeMode, runCodeModeChild } from "./tool-search-code-mode.js";
-import {
-  isToolSearchCodeModeSupported,
-  resolveToolSearchConfig,
-  setToolSearchCodeModeSupportedForTest,
-  setToolSearchMinCodeTimeoutMsForTest,
-} from "./tool-search-config.js";
+import { resolveToolSearchConfig } from "./tool-search-config.js";
 import { renderToolSearchControlText } from "./tool-search-control-result.js";
-import {
-  applyToolSchemaDirectoryCatalog,
-  MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
-} from "./tool-search-directory.js";
+import { applyToolSchemaDirectoryCatalog } from "./tool-search-directory.js";
 import {
   prepareToolSearchDispatcherArguments,
   readToolSearchCallArgs,
@@ -45,13 +34,12 @@ import {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchMode,
   type ToolSearchToolContext,
 } from "./tool-search-types.js";
-import { textResult, type AnyAgentTool } from "./tools/common.js";
+import { textResult, ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
 export {
   clearToolSearchCatalog,
@@ -68,7 +56,6 @@ export {
 export {
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
-  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search-types.js";
 export type {
@@ -203,19 +190,13 @@ function formatToolSearchBatchResponse(
 }
 
 function shouldExposeControlTool(name: string, mode: ToolSearchMode): boolean {
-  return mode === "code"
-    ? name === TOOL_SEARCH_CODE_MODE_TOOL_NAME
-    : mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
+  return mode === "tools" && TOOL_SCHEMA_DIRECTORY_CONTROL_TOOL_NAMES.has(name);
 }
 
 /** Replace visible tools with Tool Search controls and register hidden catalog entries. */
 export function applyToolSearchCatalog(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
   shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
@@ -233,69 +214,11 @@ export function applyToolSearchCatalog(params: {
 
 export { applyToolSchemaDirectoryCatalog };
 
-/** Move client-provided tools into an existing Tool Search catalog. */
-export function addClientToolsToToolSearchCatalog(params: {
-  tools: ToolDefinition[];
-  config?: OpenClawConfig;
-  sessionId?: string;
-  sessionKey?: string;
-  agentId?: string;
-  runId?: string;
-  catalogRef?: ToolSearchCatalogRef;
-}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
-  const config = resolveToolSearchConfig(params.config);
-  if (config.mode === "directory") {
-    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
-  }
-  return addClientToolsToToolCatalog({ ...params, enabled: config.enabled });
-}
-
 /** Create Tool Search control tools for the current run/session context. */
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
   const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
   const runtime = new ToolSearchRuntime(ctx, config, { validateInput: true });
   return [
-    {
-      name: TOOL_SEARCH_CODE_MODE_TOOL_NAME,
-      label: "Tool Search Code",
-      description:
-        "Run JavaScript in an isolated Node subprocess over a large tool catalog. APIs: `openclaw.tools.search(query: string, options?)`, `openclaw.tools.describe(id: string)`, and `openclaw.tools.call(id: string, args?)`. Search takes a positional query string, which must be in English: matching is lexical against tool names and descriptions, which are written in English. Call returns `{ tool, result }`; JSON values normally live in `result.details`.",
-      parameters: Type.Object({
-        code: Type.String({
-          description:
-            "JavaScript body for an async function. Use return to return the final value. The openclaw.tools bridge is available.",
-        }),
-      }),
-      execute: async (
-        toolCallId: string,
-        args: unknown,
-        signal?: AbortSignal,
-        onUpdate?: AgentToolUpdateCallback,
-      ): Promise<AgentToolResult<unknown>> => {
-        let executionRuntime: ToolSearchRuntime | undefined;
-        try {
-          const result = await runCodeMode({
-            toolCallId,
-            ctx,
-            code: readToolSearchCode(args),
-            config,
-            signal,
-            onUpdate,
-            onRuntime: (value) => {
-              executionRuntime = value;
-            },
-          });
-          return formatToolSearchControlResult(result, executionRuntime);
-        } catch (error) {
-          throw formatToolSearchControlError(
-            error,
-            executionRuntime,
-            toolCallId,
-            signal ?? ctx.abortSignal,
-          );
-        }
-      },
-    },
     {
       name: TOOL_SEARCH_RAW_TOOL_NAME,
       label: "Tool Search",
@@ -399,8 +322,17 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
         signal?: AbortSignal,
         onUpdate?: AgentToolUpdateCallback,
       ): Promise<AgentToolResult<unknown>> => {
-        const call = readToolSearchCallArgs(args, resolveCatalog(ctx));
+        const catalog = resolveCatalog(ctx);
+        const call = readToolSearchCallArgs(args, catalog);
         try {
+          if (
+            ctx.catalogRef?.directOnlyToolNames?.has(call.id) &&
+            !catalog.entries.some((entry) => entry.id === call.id || entry.name === call.id)
+          ) {
+            throw new ToolInputError(
+              "This tool is already available directly, not through the tool catalog. Call it directly by its declared name with its declared parameters.",
+            );
+          }
           const callResult = await runtime.call(call.id, call.input, {
             parentToolCallId: toolCallId,
             signal,
@@ -430,19 +362,4 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
       },
     },
   ];
-}
-
-const testing = {
-  maxToolSchemaDirectoryPromptChars: MAX_TOOL_SCHEMA_DIRECTORY_PROMPT_CHARS,
-  resolveToolSearchConfig,
-  isToolSearchCodeModeSupported,
-  setToolSearchCodeModeSupportedForTest,
-  setToolSearchMinCodeTimeoutMsForTest,
-  applyToolSearchCatalog,
-  addClientToolsToToolSearchCatalog,
-  runCodeModeChild,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.toolSearchTestApi")] = testing;
 }

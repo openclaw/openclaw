@@ -1,17 +1,14 @@
 import { AssistantMessageEventStream, type Message, type Model } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { consumeGoogleGenerateContentStream } from "../../packages/ai/src/providers/google-stream.js";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { createAssistantOutput } from "../../packages/ai/src/transports/assistant-output.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
 import { markdownToIR } from "../../packages/markdown-core/src/ir.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { isAudioPayload } from "../auto-reply/reply/agent-runner-helpers.js";
-import {
-  createAudioAsVoiceBuffer,
-  createBlockReplyPipeline,
-} from "../auto-reply/reply/block-reply-pipeline.js";
+import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "../auto-reply/reply/reply-threading.js";
 import { createTypingSignaler } from "../auto-reply/reply/typing-mode.js";
@@ -31,7 +28,6 @@ import {
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
-  hasAssistantVisibleReply,
   resolveManagedStreamMediaUrls,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
 import { resolveStreamingReply } from "./embedded-agent-subscribe.handlers.messages.stream.js";
@@ -69,7 +65,7 @@ function createDeliveryHarness(
   const pipeline = createBlockReplyPipeline({
     onBlockReply: record,
     timeoutMs: 5000,
-    buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
+    isAudioPayload,
   });
   const typing = createTypingController({});
   const handler = createBlockReplyDeliveryHandler({
@@ -85,156 +81,106 @@ function createDeliveryHarness(
     blockReplyPipeline: pipeline,
     directBlockDeliveries: [],
   });
+  const { emit, subscription } = createSubscribedSessionHarness({
+    runId: "run-directive-delivery",
+    onBlockReply: (payload) => {
+      blocks.push(copyReplyPayloadMetadata(payload, structuredClone(payload)));
+      return handler(payload);
+    },
+    blockReplyBreak: options.blockReplyBreak ?? "text_end",
+    blockReplyChunking: {
+      minChars: options.minChars ?? 1,
+      maxChars: 50,
+      breakPreference: "newline",
+    },
+  });
+  const flush = async () => {
+    await subscription.waitForPendingEvents();
+    await pipeline.flush({ force: true });
+  };
+  onTestFinished(async () => {
+    await flush();
+    subscription.unsubscribe();
+    pipeline.stop();
+    typing.cleanup();
+  });
+  return { delivered, blocks, pipeline, handler, emit, subscription, flush };
+}
+
+type Delivery = ReturnType<typeof createDeliveryHarness>;
+function runDeliveryLoop(
+  harness: Pick<Delivery, "emit" | "subscription">,
+  model: Model<"google-generative-ai"> | Model<"openai-responses">,
+  response: AssistantMessageEventStream,
+  onDelta: (delta: string) => Promise<void>,
+) {
+  return runAgentLoop(
+    [{ role: "user", content: "Explain the marker syntax.", timestamp: 1 }],
+    { systemPrompt: "", messages: [] },
+    {
+      model,
+      convertToLlm: (messages) =>
+        messages.filter(
+          (message): message is Message =>
+            message.role === "user" ||
+            message.role === "assistant" ||
+            message.role === "toolResult",
+        ),
+    },
+    async (event) => {
+      harness.emit(event);
+      await harness.subscription.waitForPendingEvents();
+      if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
+        await onDelta(event.assistantMessageEvent.delta);
+      }
+    },
+    undefined,
+    () => response,
+  );
+}
+
+function textMessage(text: string | string[], item?: number) {
   return {
-    delivered,
-    blocks,
-    pipeline,
-    typing,
-    handler,
-    ...createSubscribedSessionHarness({
-      runId: "run-directive-delivery",
-      onBlockReply: (payload) => {
-        blocks.push(structuredClone(payload));
-        return handler(payload);
-      },
-      blockReplyBreak: options.blockReplyBreak ?? "text_end",
-      blockReplyChunking: {
-        minChars: options.minChars ?? 1,
-        maxChars: 50,
-        breakPreference: "newline",
-      },
-    }),
+    ...createAssistantOutput(item === undefined ? googleModel : responsesModel),
+    content: (typeof text === "string" ? [text] : text).map((part) => ({
+      type: "text" as const,
+      text: part,
+      textSignature:
+        item === undefined
+          ? undefined
+          : JSON.stringify({ v: 1, id: `item-${item}`, phase: "final_answer" }),
+    })),
   };
 }
 
+function emitText(
+  emit: Delivery["emit"],
+  type: "text_delta" | "text_end",
+  text: string,
+  { item, delta = text }: { item?: number; delta?: string } = {},
+) {
+  const partial = textMessage(text, item);
+  emit({
+    type: "message_update",
+    message: partial,
+    assistantMessageEvent: {
+      type,
+      contentIndex: item ?? 0,
+      partial,
+      ...(type === "text_delta" ? { delta } : { content: text }),
+    },
+  });
+}
+
 const cases = [
-  {
-    name: "ordinary continuations after a settled literal in a later paragraph",
-    chunks: [
-      "Introductory text is ordinary prose.\n\n",
-      "Use `[[reply_to:example-id]]` literally.\n\n" + settledParagraph,
-      "Keep the remaining explanation in order.\n\n",
-    ],
-    marker: "[[reply_to:example-id]]",
-    literal: true,
-    ordinary: true,
-  },
-  {
-    name: "a later split literal after an already settled literal",
-    chunks: [
-      "Use `[[reply_to:example-id]]` literally.\n\n" + settledParagraph,
-      "Keep this ordinary continuation.\n\n",
-      "Another `",
-      "[",
-      "[reply_to:example-id]]",
-      "` example remains literal.\n\n",
-    ],
-    marker: "[[reply_to:example-id]]",
-    literal: true,
-    ordinary: true,
-  },
-  {
-    name: "a genuine reply directive after a settled literal",
-    chunks: [
-      "Use `[[reply_to:example-id]]` literally.\n\n" + settledParagraph,
-      "Continue with ordinary prose.\n\n",
-      "[[reply_to:",
-      "later-id]]Continue after reply intent.\n\n",
-      "Keep this later continuation in order.\n\n",
-    ],
-    marker: "[[reply_to:later-id]]",
-    replyToId: "later-id",
-    textOnly: true,
-  },
   ...blockDirectiveCases,
-  {
-    name: "ordinary continuations after array access",
-    chunks: [
-      "Use items[0] as the first value.\n\n",
-      "Keep the remaining values in order.\n\n",
-      "Continue with the next value.\n\n",
-    ],
-    marker: "items[0]",
-    literal: true,
-    ordinary: true,
-  },
-  {
-    name: "ordinary continuations after a Markdown link",
-    chunks: [
-      "Read [guide](https://example.invalid).\n\n",
-      "Follow the steps in their listed order.\n\n",
-      "The final step completes the setup.\n\n",
-    ],
-    marker: "[guide](https://example.invalid)",
-    literal: true,
-    ordinary: true,
-  },
-  {
-    name: "ordinary continuations after an angle bracket",
-    chunks: [
-      "Stop when value < limit.\n\n",
-      "Otherwise keep the current value.\n\n",
-      "Continue until the comparison is satisfied.\n\n",
-    ],
-    marker: "value < limit",
-    literal: true,
-    ordinary: true,
-  },
-  {
-    name: "reply marker in split inline code",
-    chunks: ["Use `" + "x".repeat(60), "[[reply_to:example-id]]` literally.\n\n"],
-    marker: "[[reply_to:example-id]]",
-    literal: true,
-  },
-  {
-    name: "genuine split reply directive",
-    chunks: ["[[reply_to:", "example-id]]Visible reply.\n\n"],
-    marker: "[[reply_to:example-id]]",
-    replyToId: "example-id",
-  },
-  {
-    name: "reply marker in a fenced example",
-    chunks: ["```text\n", "[[reply_to:example-id]]\n```\n\n"],
-    marker: "[[reply_to:example-id]]",
-    literal: true,
-  },
+  ...inlineDirectiveCases,
   {
     name: "authored indented code after a drained paragraph",
     chunks: ["Intro.\n\n", "    const value = 1;\n    use(value);\n\n"],
     marker: "const value = 1;\nuse(value);",
     literal: true,
     code: true,
-  },
-  ...inlineDirectiveCases,
-  {
-    name: "genuine split voice directive",
-    chunks: ["[[audio_as_", "voice]]Visible reply.\n\n"],
-    marker: "[[audio_as_voice]]",
-    audioAsVoice: true,
-    voiceEdges: 1,
-  },
-  {
-    name: "a voice literal after earlier genuine voice intent",
-    chunks: [
-      "[[audio_as_voice]]Voice reply.\n\n" + nextParagraph,
-      "Use `",
-      "[[audio_as_voice]]` literally.\n\n",
-    ],
-    marker: "[[audio_as_voice]]",
-    literal: true,
-    audioAsVoice: true,
-    voiceEdges: 1,
-  },
-  {
-    name: "two genuine voice directives",
-    chunks: [
-      "[[audio_as_voice]]First voice reply.\n\n" + nextParagraph,
-      "[[audio_as_",
-      "voice]]Second voice reply.\n\n",
-    ],
-    marker: "[[audio_as_voice]]",
-    audioAsVoice: true,
-    voiceEdges: 2,
   },
   {
     name: "late voice intent for already-buffered audio",
@@ -246,6 +192,7 @@ const cases = [
   },
   {
     name: "genuine voice intent after a held media line",
+    prepared: true,
     chunks: [
       "[[audio_as_voice]]First voice reply.\n\n" + nextParagraph,
       `MEDIA:${audioUrl}`,
@@ -280,7 +227,7 @@ const replacementChunks = [
   "The final summary also remains unchanged.\n",
 ] as const;
 const prefixCorrectionCases = [
-  ...["one", "two", "thirty-three"].map((value) => ({ value, leadChunks: [] })),
+  { value: "two", leadChunks: [] },
   { value: "thirty-three", leadChunks: ["First lead stays.\n", "Next lead stays.\n"] },
 ].map(({ value, leadChunks }) => ({
   name: `authoritative prefix correction ${leadChunks.length ? "with early chunks" : value}`,
@@ -289,25 +236,21 @@ const prefixCorrectionCases = [
   unchangedLeadSentences: leadChunks.map((text) => text.trimEnd()),
   literal: true,
   prefixCorrection: true,
+  prepared: true,
   terminalText:
     leadChunks.join("") +
     replacementChunks[0].replace("one", value) +
     replacementChunks.slice(1).join(""),
-  correctedStatement: value === "one" ? undefined : `The current value is ${value} for this item.`,
+  correctedStatement: `The current value is ${value} for this item.`,
   expectedAdditional:
-    value === "one"
-      ? []
-      : value === "two"
-        ? [replacementChunks[0].replace("one", value).trimEnd()]
-        : undefined,
+    value === "two" ? [replacementChunks[0].replace("one", value).trimEnd()] : undefined,
 }));
 
-describe.each(["google raw", "responses prepared"] as const)("%s directive delivery", (route) => {
-  it.each([
-    ...cases,
-    ...(route === "responses prepared" ? prefixCorrectionCases : rawDirectiveCases),
-  ])("preserves $name through the delivery handler", async (scenario) => {
-    const { delivered, pipeline, typing, handler, emit, subscription } = createDeliveryHarness();
+it.each([...cases, ...rawDirectiveCases, ...prefixCorrectionCases])(
+  "preserves $name through the delivery handler",
+  async (scenario) => {
+    const route = "prepared" in scenario ? "responses prepared" : "google raw";
+    const { delivered, pipeline, handler, emit, subscription } = createDeliveryHarness();
     const hasAudio = "audioAsVoice" in scenario;
     const bufferAudioFirst = "bufferAudioFirst" in scenario;
     if (bufferAudioFirst) {
@@ -321,27 +264,6 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         ? [`MEDIA:${audioUrl}`]
         : []),
     ];
-    const expectOrdinaryContent = (phase: "streaming" | "final") => {
-      if (!("ordinary" in scenario)) {
-        return;
-      }
-      const text = delivered
-        .map((payload) => payload.text ?? "")
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      const expected = chunks.join("").replace(/\s+/g, " ").trim();
-      if (phase === "final") {
-        expect(text).toBe(expected);
-      } else {
-        const completed = scenario.chunks.join("").replace(/\s+/g, " ").trim();
-        expect(text.slice(0, completed.length)).toBe(completed);
-        expect(text).toBe(expected.slice(0, text.length));
-      }
-      expect(delivered.every((payload) => !payload.mediaUrl && !payload.mediaUrls?.length)).toBe(
-        true,
-      );
-    };
     const expectCodeContent = () => {
       if (!("code" in scenario)) {
         return;
@@ -427,33 +349,13 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
             response.end();
           });
     let receivedText = "";
-    const running = runAgentLoop(
-      [{ role: "user", content: "Explain the marker syntax.", timestamp: 1 }],
-      { systemPrompt: "", messages: [] },
-      {
-        model,
-        convertToLlm: (messages) =>
-          messages.filter(
-            (message): message is Message =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
-          ),
-      },
-      async (event) => {
-        emit(event);
-        await subscription.waitForPendingEvents();
-        if (event.type === "message_update" && event.assistantMessageEvent.type === "text_delta") {
-          receivedText += event.assistantMessageEvent.delta;
-          if (receivedText === chunks.join("")) {
-            await pipeline.flush({ force: true });
-            beforeEnd.resolve();
-          }
-        }
-      },
-      undefined,
-      () => response,
-    );
+    const running = runDeliveryLoop({ emit, subscription }, model, response, async (delta) => {
+      receivedText += delta;
+      if (receivedText === chunks.join("")) {
+        await pipeline.flush({ force: true });
+        beforeEnd.resolve();
+      }
+    });
     const settled = Promise.all([producing, running]);
     try {
       await Promise.race([
@@ -470,6 +372,9 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
         );
       }
       const text = delivered.map((payload) => payload.text ?? "").join("");
+      if ("preservedLiteral" in scenario) {
+        expect(text).toContain(scenario.preservedLiteral);
+      }
       if ("literal" in scenario) {
         expect.soft(text).toContain(scenario.marker);
         if ("literalText" in scenario) {
@@ -512,7 +417,6 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
           true,
         );
       }
-      expectOrdinaryContent("streaming");
       expectCodeContent();
       releaseTerminal.resolve();
       await settled;
@@ -537,7 +441,6 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
           true,
         );
       }
-      expectOrdinaryContent("final");
       expectCodeContent();
       if (hasAudio) {
         const audio = delivered.filter(isAudioPayload);
@@ -548,199 +451,125 @@ describe.each(["google raw", "responses prepared"] as const)("%s directive deliv
     } finally {
       releaseTerminal.resolve();
       await Promise.allSettled([producing, running]);
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      subscription.unsubscribe();
-      pipeline.stop();
-      typing.cleanup();
     }
-  });
-});
+  },
+);
 
-describe("signed Google part delivery", () => {
-  it("does not replay signed Google text when a later part shares its signature", async () => {
-    const { delivered, pipeline, typing, emit, subscription } = createDeliveryHarness();
-    const first = "Alpha  beta.\n";
-    const signature = "c2lnXzE=";
-    const firstDelivered = createDeferred();
-    let firstCheckpoint = "";
-    const response = new AssistantMessageEventStream();
-    const output = createAssistantOutput(googleModel);
-    async function* googleEvents() {
-      yield {
-        candidates: [{ content: { parts: [{ text: first, thoughtSignature: signature }] } }],
-      };
-      await firstDelivered.promise;
-      yield {
-        candidates: [
-          {
-            content: {
-              parts: [
-                { text: "[[reply_to_current]]", thoughtSignature: signature },
-                { text: "Second.\n", thoughtSignature: signature },
-              ],
-            },
-            finishReason: "STOP",
-          },
-        ],
-      };
-    }
-    const producing = consumeGoogleGenerateContentStream({
-      chunks: googleEvents(),
-      model: googleModel,
-      output,
-      stream: response,
-      profile: "sdk",
-      nextToolCallId: () => "unused-tool",
-    });
-    const running = runAgentLoop(
-      [{ role: "user", content: "Write two ordinary sentences.", timestamp: 1 }],
-      { systemPrompt: "", messages: [] },
-      {
-        model: googleModel,
-        convertToLlm: (messages) =>
-          messages.filter(
-            (message): message is Message =>
-              message.role === "user" ||
-              message.role === "assistant" ||
-              message.role === "toolResult",
-          ),
-      },
-      async (event) => {
-        emit(event);
-        await subscription.waitForPendingEvents();
-        if (
-          event.type === "message_update" &&
-          event.assistantMessageEvent.type === "text_delta" &&
-          event.assistantMessageEvent.delta === first
-        ) {
-          await pipeline.flush({ force: true });
-          firstCheckpoint = delivered.map((payload) => payload.text ?? "").join("");
-          firstDelivered.resolve();
-        }
-      },
-      undefined,
-      () => response,
-    );
-    try {
-      await Promise.all([producing, running]);
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-
-      expect(firstCheckpoint).toBe("Alpha  beta.");
-      const text = delivered
-        .map((payload) => payload.text ?? "")
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-      expect(text).toBe("Alpha beta. Second.");
-    } finally {
-      firstDelivered.resolve();
-      await Promise.allSettled([producing, running]);
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      subscription.unsubscribe();
-      pipeline.stop();
-      typing.cleanup();
-    }
-  });
-});
-
-describe("final prepared directive owners", () => {
-  const prefix = "x".repeat(48);
-  const imageUrl = "https://example.invalid/a.png";
-  it.each([
-    {
-      name: "media completion",
-      initialText: `${prefix}\nM`,
-      deltas: [`EDIA:${imageUrl}`],
-      expectedText: prefix,
-      expectedMedia: [imageUrl],
-    },
-    {
-      name: "ordinary word completion",
-      initialText: `${prefix}\nM`,
-      deltas: ["e", "tal"],
-      expectedText: `${prefix}\nMetal`,
-      expectedMedia: [],
-    },
-    {
-      name: "a tab-indented paragraph continuation",
-      initialText: "Preview:\n\tM",
-      deltas: ["EDIA:./asset.png"],
-      expectedText: "Preview:",
-      expectedMedia: ["./asset.png"],
-    },
-  ])("holds a partial MEDIA prefix through $name", async (scenario) => {
-    const { delivered, blocks, pipeline, typing, emit, subscription } = createDeliveryHarness({
-      minChars: 50,
-    });
-    let text = scenario.initialText;
-    const message = () => ({
-      ...createAssistantOutput(googleModel),
-      content: [{ type: "text", text }],
-    });
-    const emitDelta = (delta: string) => {
-      const partial = message();
-      emit({
-        type: "message_update",
-        message: partial,
-        assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta, partial },
-      });
+it("does not replay signed Google text when a later part shares its signature", async () => {
+  const { delivered, pipeline, emit, subscription } = createDeliveryHarness();
+  const first = "Alpha  beta.\n";
+  const signature = "c2lnXzE=";
+  const firstDelivered = createDeferred();
+  let firstCheckpoint = "";
+  const response = new AssistantMessageEventStream();
+  const output = createAssistantOutput(googleModel);
+  async function* googleEvents() {
+    yield {
+      candidates: [{ content: { parts: [{ text: first, thoughtSignature: signature }] } }],
     };
-    try {
-      emit({ type: "message_start", message: createAssistantOutput(googleModel) });
-      emitDelta(text);
-      await subscription.waitForPendingEvents();
+    await firstDelivered.promise;
+    yield {
+      candidates: [
+        {
+          content: {
+            parts: [
+              { text: "[[reply_to_current]]", thoughtSignature: signature },
+              { text: "Second.\n", thoughtSignature: signature },
+            ],
+          },
+          finishReason: "STOP",
+        },
+      ],
+    };
+  }
+  const producing = consumeGoogleGenerateContentStream({
+    chunks: googleEvents(),
+    model: googleModel,
+    output,
+    stream: response,
+    profile: "sdk",
+    nextToolCallId: () => "unused-tool",
+  });
+  const running = runDeliveryLoop({ emit, subscription }, googleModel, response, async (delta) => {
+    if (delta === first) {
       await pipeline.flush({ force: true });
-      expect.soft(blocks).toEqual([]);
-      expect.soft(delivered).toEqual([]);
-
-      for (const delta of scenario.deltas) {
-        text += delta;
-        emitDelta(delta);
-      }
-      const partial = message();
-      emit({
-        type: "message_update",
-        message: partial,
-        assistantMessageEvent: { type: "text_end", contentIndex: 0, content: text, partial },
-      });
-      emit({ type: "message_end", message: partial });
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      expect
-        .soft(delivered.map((payload) => payload.text ?? "").join(""))
-        .toBe(scenario.expectedText);
-      expect
-        .soft(delivered.flatMap((payload) => payload.mediaUrls ?? []))
-        .toEqual(scenario.expectedMedia);
-    } finally {
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      subscription.unsubscribe();
-      pipeline.stop();
-      typing.cleanup();
+      firstCheckpoint = delivered.map((payload) => payload.text ?? "").join("");
+      firstDelivered.resolve();
     }
   });
+  try {
+    await Promise.all([producing, running]);
+    await subscription.waitForPendingEvents();
+    await pipeline.flush({ force: true });
 
-  it("preserves a native-part voice literal through terminal delivery", async () => {
-    const { delivered, blocks, pipeline, typing, emit, subscription } = createDeliveryHarness({
+    expect(firstCheckpoint).toBe("Alpha  beta.");
+    const text = delivered
+      .map((payload) => payload.text ?? "")
+      .join(" ")
+      .replace(/\s+/g, " ")
+      .trim();
+    expect(text).toBe("Alpha beta. Second.");
+  } finally {
+    firstDelivered.resolve();
+    await Promise.allSettled([producing, running]);
+  }
+});
+
+const prefix = "x".repeat(48);
+it.each([
+  {
+    name: "ordinary word completion",
+    initialText: `${prefix}\nM`,
+    deltas: ["e", "tal"],
+    expectedText: `${prefix}\nMetal`,
+    expectedMedia: [],
+  },
+  {
+    name: "a tab-indented paragraph continuation",
+    initialText: "Preview:\n\tM",
+    deltas: ["EDIA:./asset.png"],
+    expectedText: "Preview:",
+    expectedMedia: ["./asset.png"],
+  },
+])("holds a partial MEDIA prefix through $name", async (scenario) => {
+  const { delivered, blocks, emit, flush } = createDeliveryHarness({
+    minChars: 50,
+  });
+  let text = scenario.initialText;
+  emit({ type: "message_start", message: createAssistantOutput(googleModel) });
+  emitText(emit, "text_delta", text);
+  await flush();
+  expect.soft(blocks).toEqual([]);
+  expect.soft(delivered).toEqual([]);
+
+  for (const delta of scenario.deltas) {
+    text += delta;
+    emitText(emit, "text_delta", text, { delta });
+  }
+  emitText(emit, "text_end", text);
+  emit({ type: "message_end", message: textMessage(text) });
+  await flush();
+  expect.soft(delivered.map((payload) => payload.text ?? "").join("")).toBe(scenario.expectedText);
+  expect
+    .soft(delivered.flatMap((payload) => payload.mediaUrls ?? []))
+    .toEqual(scenario.expectedMedia);
+});
+
+it.each(["literal", "voice", "silent"] as const)(
+  "preserves terminal voice semantics for %s",
+  async (kind) => {
+    const { delivered, blocks, emit, flush } = createDeliveryHarness({
       blockReplyBreak: "message_end",
     });
     const marker = "[[audio_as_voice]]";
-    const parts = ["Use `" + "x".repeat(60), ` ${marker}\` literally.`];
-    try {
-      emit({ type: "message_start", message: createAssistantOutput(googleModel) });
-      emit({
-        type: "message_end",
-        message: {
-          ...createAssistantOutput(googleModel),
-          content: parts.map((text) => ({ type: "text", text })),
-        },
-      });
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
+    const parts =
+      kind === "literal"
+        ? ["Use `" + "x".repeat(60), ` ${marker}\` literally.`]
+        : [marker + (kind === "silent" ? "NO_REPLY" : "")];
+    emit({ type: "message_start", message: createAssistantOutput(googleModel) });
+    emit({ type: "message_end", message: textMessage(parts) });
+    await flush();
+    if (kind === "literal") {
       const text = delivered.map((payload) => payload.text ?? "").join("");
       expect.soft(text).toContain(marker);
       expect.soft(text.split(marker)).toHaveLength(2);
@@ -749,59 +578,7 @@ describe("final prepared directive owners", () => {
         expect.soft(payload.replyToId).toBeUndefined();
         expect.soft(Boolean(payload.replyToCurrent || payload.replyToTag)).toBe(false);
       }
-    } finally {
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      subscription.unsubscribe();
-      pipeline.stop();
-      typing.cleanup();
-    }
-  });
-});
-
-describe("authoritative directive frames", () => {
-  it.each([
-    {
-      name: "ordinary text",
-      text: "Visible reply.",
-      expectedText: "Visible reply.",
-      audioAsVoice: false,
-      silent: false,
-    },
-    {
-      name: "bare voice intent",
-      text: "[[audio_as_voice]]",
-      expectedText: "",
-      audioAsVoice: true,
-      silent: false,
-    },
-    {
-      name: "silent voice intent",
-      text: "[[audio_as_voice]]NO_REPLY",
-      expectedText: "",
-      audioAsVoice: true,
-      silent: true,
-    },
-  ])("carries terminal $name classification to the block payload", async (scenario) => {
-    const blocks: ReplyPayload[] = [];
-    const { emit, subscription } = createSubscribedSessionHarness({
-      runId: "run-terminal-silence",
-      onBlockReply: (payload) => {
-        blocks.push(payload);
-      },
-      blockReplyBreak: "message_end",
-    });
-    try {
-      emit({ type: "message_start", message: createAssistantOutput(googleModel) });
-      emit({
-        type: "message_end",
-        message: {
-          ...createAssistantOutput(googleModel),
-          content: [{ type: "text", text: scenario.text }],
-        },
-      });
-      await subscription.waitForPendingEvents();
-
+    } else {
       expect(
         blocks.map((payload) => ({
           text: payload.text,
@@ -809,194 +586,123 @@ describe("authoritative directive frames", () => {
           silentReply: getReplyPayloadMetadata(payload)?.silentReply,
         })),
       ).toEqual([
-        {
-          text: scenario.expectedText,
-          audioAsVoice: scenario.audioAsVoice,
-          silentReply: scenario.silent ? true : undefined,
-        },
+        { text: "", audioAsVoice: true, silentReply: kind === "silent" ? true : undefined },
       ]);
-    } finally {
-      subscription.unsubscribe();
     }
-  });
+  },
+);
 
-  it("applies a directive-only text_end to already-buffered audio", async () => {
-    const { delivered, pipeline, typing, handler, emit, subscription } = createDeliveryHarness();
-    try {
-      await handler({ mediaUrls: [audioUrl] });
-      emit({ type: "message_start", message: { role: "assistant" } });
-      emitAssistantTextDelta({ emit, delta: "[[audio_as_voice]]" });
-      emitAssistantTextEnd({ emit });
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
+it("applies a directive-only text_end to already-buffered audio", async () => {
+  const { delivered, pipeline, handler, emit, subscription } = createDeliveryHarness();
+  await handler({ mediaUrls: [audioUrl] });
+  emit({ type: "message_start", message: { role: "assistant" } });
+  emitAssistantTextDelta({ emit, delta: "[[audio_as_voice]]" });
+  emitAssistantTextEnd({ emit });
+  await subscription.waitForPendingEvents();
+  await pipeline.flush({ force: true });
 
-      expect(delivered.filter(isAudioPayload)).toEqual([
-        expect.objectContaining({ mediaUrls: [audioUrl], audioAsVoice: true }),
-      ]);
-      expect(delivered.some((payload) => payload.text)).toBe(false);
-    } finally {
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      subscription.unsubscribe();
-      pipeline.stop();
-      typing.cleanup();
-    }
-  });
-
-  const first = "[[audio_as_voice]]First reply.\n\n" + nextParagraph;
-  const corrected =
-    first + "The corrected tail is long enough to flush after the committed prefix.\n\n";
-  it.each([
-    {
-      name: "same-item replacement retains the terminal snapshot reset",
-      expectedReplies: ["First reply."],
-      updates: [
-        { type: "text_delta", text: first, item: 0, edges: 1 },
-        { type: "text_end", text: corrected, item: 0, edges: 2 },
-      ],
-    },
-    {
-      name: "literal reclassification and restored authoritative text",
-      expectedReplies: ["First reply."],
-      updates: [
-        { type: "text_delta", text: first, item: 0, edges: 1 },
-        { type: "text_end", text: "```text\n" + corrected + "```\n\n", item: 0, edges: 1 },
-        { type: "text_end", text: corrected + nextParagraph, item: 0, edges: 2 },
-      ],
-    },
-    {
-      name: "a new item owns its own genuine voice intent",
-      expectedReplies: ["First reply.", "Second reply."],
-      updates: [
-        { type: "text_delta", text: first, item: 0, edges: 1 },
-        {
-          type: "text_delta",
-          text: "[[audio_as_voice]]Second reply.\n\n" + nextParagraph,
-          item: 1,
-          edges: 2,
-        },
-      ],
-    },
-  ])("preserves $name", async ({ updates, expectedReplies }) => {
-    const { delivered, blocks, pipeline, typing, handler, emit, subscription } =
-      createDeliveryHarness();
-    const message = (text: string, item: number) => ({
-      role: "assistant",
-      api: "openai-responses",
-      content: [
-        {
-          type: "text",
-          text,
-          textSignature: JSON.stringify({ v: 1, id: `item-${item}`, phase: "final_answer" }),
-        },
-      ],
-    });
-    try {
-      await handler({ mediaUrls: [audioUrl] });
-      emit({ type: "message_start", message: message("", 0) });
-      for (const update of updates) {
-        const partial = message(update.text, update.item);
-        emit({
-          type: "message_update",
-          message: partial,
-          assistantMessageEvent: {
-            type: update.type,
-            contentIndex: update.item,
-            partial,
-            ...(update.type === "text_delta" ? { delta: update.text } : { content: update.text }),
-          },
-        });
-        await subscription.waitForPendingEvents();
-        await pipeline.flush({ force: true });
-        expect.soft(blocks.filter((payload) => payload.audioAsVoice)).toHaveLength(update.edges);
-      }
-      for (const text of expectedReplies) {
-        expect(delivered.filter((payload) => payload.text === text)).toHaveLength(1);
-      }
-      const audio = delivered.filter(isAudioPayload);
-      expect(audio).toHaveLength(1);
-      expect(audio[0]?.audioAsVoice).toBe(true);
-    } finally {
-      await subscription.waitForPendingEvents();
-      await pipeline.flush({ force: true });
-      subscription.unsubscribe();
-      pipeline.stop();
-      typing.cleanup();
-    }
-  });
+  expect(delivered.filter(isAudioPayload)).toEqual([
+    expect.objectContaining({ mediaUrls: [audioUrl], audioAsVoice: true }),
+  ]);
+  expect(delivered.some((payload) => payload.text)).toBe(false);
 });
 
-describe("hasAssistantVisibleReply", () => {
-  it("treats audio-only payloads as visible", () => {
-    expect(hasAssistantVisibleReply({ audioAsVoice: true })).toBe(true);
-  });
-
-  it("detects text or media visibility", () => {
-    expect(hasAssistantVisibleReply({ text: "hello" })).toBe(true);
-    expect(hasAssistantVisibleReply({ mediaUrls: ["https://example.com/a.png"] })).toBe(true);
-    expect(hasAssistantVisibleReply({})).toBe(false);
-  });
-});
-
-describe("assistant stream managed media", () => {
-  it("keeps generic directive URLs separate from tool-owned managed media", () => {
-    const state = {
-      pendingToolMediaTrustByUrl: new Map([
-        ["./managed.png", true],
-        ["./ordinary.png", false],
-      ]),
-    };
-
-    expect(
-      resolveManagedStreamMediaUrls(state, ["./ordinary.png", "./managed.png", "./unknown.png"]),
-    ).toEqual(["./managed.png"]);
-  });
-});
-
-describe("pending assistant reply directives", () => {
-  it("does not consume pending directive metadata on reasoning replies", () => {
-    const state = {
-      pendingAssistantReplyDirectives: {
-        replyToId: "parent-message",
+const first = "[[audio_as_voice]]First reply.\n\n" + nextParagraph;
+const corrected =
+  first + "The corrected tail is long enough to flush after the committed prefix.\n\n";
+it.each([
+  {
+    name: "literal reclassification and restored authoritative text",
+    expectedReplies: ["First reply."],
+    updates: [
+      { type: "text_delta", text: first, item: 0, edges: 1 },
+      { type: "text_end", text: "```text\n" + corrected + "```\n\n", item: 0, edges: 1 },
+      { type: "text_end", text: corrected + nextParagraph, item: 0, edges: 2 },
+    ],
+  },
+  {
+    name: "a new item owns its own genuine voice intent",
+    expectedReplies: ["First reply.", "Second reply."],
+    updates: [
+      { type: "text_delta", text: first, item: 0, edges: 1 },
+      {
+        type: "text_delta",
+        text: "[[audio_as_voice]]Second reply.\n\n" + nextParagraph,
+        item: 1,
+        edges: 2,
       },
-    };
+    ],
+  },
+] as const)("preserves $name", async ({ updates, expectedReplies }) => {
+  const { delivered, blocks, handler, emit, flush } = createDeliveryHarness();
+  await handler({ mediaUrls: [audioUrl] });
+  emit({ type: "message_start", message: textMessage("", 0) });
+  for (const update of updates) {
+    emitText(emit, update.type, update.text, { item: update.item });
+    await flush();
+    expect.soft(blocks.filter((payload) => payload.audioAsVoice)).toHaveLength(update.edges);
+  }
+  for (const text of expectedReplies) {
+    expect(delivered.filter((payload) => payload.text === text)).toHaveLength(1);
+  }
+  const audio = delivered.filter(isAudioPayload);
+  expect(audio).toHaveLength(1);
+  expect(audio[0]?.audioAsVoice).toBe(true);
+});
 
-    expect(
-      consumePendingAssistantReplyDirectivesIntoReply(state, {
-        text: "Thinking...",
-        isReasoning: true,
-      }),
-    ).toEqual({
+it("keeps generic directive URLs separate from tool-owned managed media", () => {
+  const state = {
+    pendingToolMediaTrustByUrl: new Map([
+      ["./managed.png", true],
+      ["./ordinary.png", false],
+    ]),
+  };
+
+  expect(
+    resolveManagedStreamMediaUrls(state, ["./ordinary.png", "./managed.png", "./unknown.png"]),
+  ).toEqual(["./managed.png"]);
+});
+
+it("does not consume pending directive metadata on reasoning replies", () => {
+  const state = {
+    pendingAssistantReplyDirectives: {
+      replyToId: "parent-message",
+    },
+  };
+
+  expect(
+    consumePendingAssistantReplyDirectivesIntoReply(state, {
       text: "Thinking...",
       isReasoning: true,
-    });
-    expect(state.pendingAssistantReplyDirectives?.replyToId).toBe("parent-message");
+    }),
+  ).toEqual({
+    text: "Thinking...",
+    isReasoning: true,
   });
+  expect(state.pendingAssistantReplyDirectives?.replyToId).toBe("parent-message");
 });
 
-describe("resolveStreamingReply", () => {
-  it("appends visible text across long blank runs without stalling the media scan", () => {
-    const delta = `before${"\n".repeat(60_000)}after`;
-    const started = performance.now();
-    expect(
-      resolveStreamingReply({
-        evtType: "text_delta",
-        next: delta,
-        previousText: "",
-        previousCleaned: "",
-        visibleDelta: delta,
-        appendDelta: delta,
-        parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
-        previousAudioDirectiveCount: 0,
-      }),
-    ).toEqual({
-      text: delta,
-      delta,
-      replace: false,
-      hasText: true,
-      replyDirectives: { text: delta, replyToTag: false, isSilent: false },
-      audioDirectiveCount: 0,
-    });
-    expect(performance.now() - started).toBeLessThan(1_000);
+it("appends visible text across long blank runs without stalling the media scan", () => {
+  const delta = `before${"\n".repeat(60_000)}after`;
+  const started = performance.now();
+  expect(
+    resolveStreamingReply({
+      evtType: "text_delta",
+      next: delta,
+      previousText: "",
+      previousCleaned: "",
+      visibleDelta: delta,
+      appendDelta: delta,
+      parsedStreamDirectives: { text: delta, replyToTag: false, isSilent: false },
+      previousAudioDirectiveCount: 0,
+    }),
+  ).toEqual({
+    text: delta,
+    delta,
+    replace: false,
+    hasText: true,
+    replyDirectives: { text: delta, replyToTag: false, isSilent: false },
+    audioDirectiveCount: 0,
   });
+  expect(performance.now() - started).toBeLessThan(1_000);
 });

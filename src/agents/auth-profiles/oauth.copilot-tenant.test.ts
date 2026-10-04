@@ -1,10 +1,12 @@
-/** Local production-store proofs; provider refresh success/failure is simulated. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
@@ -50,6 +52,7 @@ async function withStores(run: (agentDir: string) => Promise<void>) {
       },
     );
   } finally {
+    await closeOpenClawAgentDatabasesAsync(root);
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -71,51 +74,56 @@ function manager(refreshCredential: Parameters<typeof createOAuthManager>[0]["re
   });
 }
 
-for (const [label, mainDomain, sameTenant] of [
-  ["different tenants", "other.ghe.com", false],
-  ["same tenant spelling", "https://acme.ghe.com/", true],
-] as const) {
-  describe(label, () => {
-    it("logout removes only stores that own the selected identity-less credential", async () => {
-      await withStores(async (agentDir) => {
-        const main = credential(mainDomain, "main-fixture", MAX_DATE_TIMESTAMP_MS);
-        save(credential("acme.ghe.com", "child-fixture", MAX_DATE_TIMESTAMP_MS), agentDir);
-        save(main);
-        expect(
-          await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] }),
-        ).toBe(true);
-        expect(read(agentDir)).toBeUndefined();
-        expect(read()).toEqual(sameTenant ? undefined : main);
-      });
+describe("Copilot tenant boundaries", () => {
+  it("logout removes only stores that own the selected identity-less credential", async () => {
+    await withStores(async (agentDir) => {
+      const main = credential("other.ghe.com", "main-fixture", MAX_DATE_TIMESTAMP_MS);
+      save(credential("acme.ghe.com", "child-fixture", MAX_DATE_TIMESTAMP_MS), agentDir);
+      save(main);
+      expect(await removeAuthProfilesAcrossOwnerStores({ agentDir, profileIds: [profileId] })).toBe(
+        true,
+      );
+      expect(read(agentDir)).toBeUndefined();
+      expect(read()).toEqual(main);
     });
+  });
 
-    it("resolves a newer main credential only for a compatible tenant upgrade", async () => {
-      await withStores(async (agentDir) => {
-        const local = credential("acme.ghe.com", "child-fixture", Date.now() + 10 * 60_000);
-        const main = {
-          ...credential(mainDomain, "main-fixture", MAX_DATE_TIMESTAMP_MS),
-          accountId: "main-fixture-account",
-        };
-        save(local, agentDir);
-        save(main);
-        const refresh = vi.fn(async () => null);
-        const result = await manager(refresh).resolveOAuthAccess({
-          store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
-          profileId,
-          credential: local,
-          agentDir,
-        });
-        expect(result?.apiKey).toBe(sameTenant ? main.access : local.access);
-        expect(refresh).not.toHaveBeenCalled();
-        expect(read(agentDir)).toEqual(local);
-        expect(read()).toEqual(main);
+  it("resolves a newer main credential only for a compatible tenant upgrade", async () => {
+    await withStores(async (agentDir) => {
+      const local = credential("acme.ghe.com", "child-fixture", Date.now() + 10 * 60_000);
+      const main = {
+        ...credential("https://acme.ghe.com/", "main-fixture", MAX_DATE_TIMESTAMP_MS),
+        accountId: "main-fixture-account",
+      };
+      save(local, agentDir);
+      save(main);
+      const refresh = vi.fn(async () => null);
+      const result = await manager(refresh).resolveOAuthAccess({
+        store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir),
+        profileId,
+        credential: local,
+        agentDir,
       });
+      expect(result?.apiKey).toBe(main.access);
+      expect(refresh).not.toHaveBeenCalled();
+      expect(read(agentDir)).toEqual(local);
+      expect(read()).toEqual(main);
     });
+  });
 
-    it("persists local refresh and mirrors only to the matching tenant", async () => {
+  it.each([
+    ["other.ghe.com", false],
+    ["https://acme.ghe.com/", true],
+  ] as const)(
+    "persists local refresh and mirrors only to the matching tenant (%s)",
+    async (mainDomain, sameTenant) => {
       await withStores(async (agentDir) => {
         const local = credential("acme.ghe.com", "child-fixture", Date.now() - 60_000);
-        const main = credential(mainDomain, "main-fixture", local.expires - 60_000);
+        const main = credential(
+          mainDomain,
+          "main-fixture",
+          sameTenant ? local.expires - 60_000 : Date.now() + 600_000,
+        );
         const refreshed = {
           ...local,
           access: "refreshed-fixture",
@@ -139,9 +147,15 @@ for (const [label, mainDomain, sameTenant] of [
         expect(read(agentDir)).toEqual(refreshed);
         expect(read()).toEqual(sameTenant ? refreshed : main);
       });
-    });
+    },
+  );
 
-    it("recovers a failed refresh from concurrently renewed main auth only for the same tenant", async () => {
+  it.each([
+    ["other.ghe.com", false],
+    ["https://acme.ghe.com/", true],
+  ] as const)(
+    "recovers failed refresh only within the same tenant (%s)",
+    async (mainDomain, sameTenant) => {
       await withStores(async (agentDir) => {
         // Post-claim recovery requires positive identity, independently of tenant scope.
         const local = {
@@ -187,6 +201,6 @@ for (const [label, mainDomain, sameTenant] of [
         expect(failed.refresh).not.toContain(local.refresh);
         expect(read()).toEqual(renewed);
       });
-    });
-  });
-}
+    },
+  );
+});

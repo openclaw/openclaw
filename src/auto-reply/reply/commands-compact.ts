@@ -1,4 +1,3 @@
-// Implements compaction commands for session context and model state.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -25,12 +24,9 @@ import { resolveSessionStorePathForScope } from "../../config/sessions/session-s
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
-
-const compactRuntimeLoader = createLazyImportLoader(() => import("./commands-compact.runtime.js"));
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -44,15 +40,10 @@ function extractCompactInstructions(params: {
     ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
-  if (!trimmed) {
+  if (!normalizeLowercaseStringOrEmpty(trimmed).startsWith("/compact")) {
     return undefined;
   }
-  const lowered = normalizeLowercaseStringOrEmpty(trimmed);
-  const prefix = lowered.startsWith("/compact") ? "/compact" : null;
-  if (!prefix) {
-    return undefined;
-  }
-  let rest = trimmed.slice(prefix.length).trimStart();
+  let rest = trimmed.slice("/compact".length).trimStart();
   if (rest.startsWith(":")) {
     rest = rest.slice(1).trimStart();
   }
@@ -201,7 +192,7 @@ export async function handleCompactCommand(
       "⚙️ Compaction unavailable (missing session id).",
     );
   }
-  const runtime = await compactRuntimeLoader.load();
+  const runtime = await import("./commands-compact.runtime.js");
   const sessionId = targetSessionEntry.sessionId;
   const sessionAgentId = params.sessionKey
     ? resolveSessionAgentId({

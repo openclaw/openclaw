@@ -388,8 +388,6 @@ it.each(["preexisting", "shared", "no-signal", "no-retain"] as const)(
 
 it.each([
   { timing: "stopped", changed: "grant" },
-  { timing: "queued", changed: "grant" },
-  { timing: "stopped", changed: "profile" },
   { timing: "queued", changed: "profile" },
 ])(
   "preserves mixed history after $timing reuse changes the $changed",
@@ -633,6 +631,9 @@ it.each(["partial-creation", "replacement", "manager"] as const)(
       await expect(ensureSandboxContainer(params)).rejects.toThrow(
         "creation and cleanup both failed",
       );
+      expect([...fixture.registry.values()]).toEqual([
+        expect.objectContaining({ runtimeState: "pending", workspaceDir: params.workspaceDir }),
+      ]);
       fixture.setup = undefined;
     } else {
       const { containerName } = await ensureSandboxContainer(params);

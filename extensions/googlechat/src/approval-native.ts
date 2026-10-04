@@ -215,10 +215,8 @@ export const googleChatApprovalCapability: ChannelApprovalCapability =
     nativeRuntime: createLazyChannelApprovalNativeRuntimeAdapter({
       capabilityBoundary: true,
       eventKinds: ["exec", "plugin", "system-agent"],
-      isConfigured: ({ cfg, accountId }) =>
-        isGoogleChatNativeApprovalClientEnabled({ cfg, accountId }),
-      shouldHandle: ({ cfg, accountId, approvalKind, request }) =>
-        shouldHandleGoogleChatNativeApprovalRequest({ cfg, accountId, approvalKind, request }),
+      isConfigured: isGoogleChatNativeApprovalClientEnabled,
+      shouldHandle: shouldHandleGoogleChatNativeApprovalRequest,
       load: async () =>
         (await import("./approval-handler.runtime.js")).googleChatApprovalNativeRuntime,
     }),

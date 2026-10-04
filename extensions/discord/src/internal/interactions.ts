@@ -2,6 +2,7 @@ import {
   ComponentType,
   InteractionResponseType,
   InteractionType,
+  Routes,
   type APIApplicationCommandAutocompleteInteraction,
   type APIApplicationCommandInteraction,
   type APIApplicationCommandInteractionDataOption,
@@ -12,19 +13,8 @@ import {
   type APIModalSubmitInteraction,
   type APIUser,
 } from "discord-api-types/v10";
-import {
-  createInteractionCallback,
-  createWebhookMessage,
-  deleteWebhookMessage,
-  editWebhookMessage,
-  getWebhookMessage,
-} from "./api.interactions.js";
 import { OptionsHandler } from "./interaction-options.js";
-import {
-  InteractionResponseController,
-  needsComponentsV2Query,
-  type InteractionResponseState,
-} from "./interaction-response.js";
+import { needsComponentsV2Query, type InteractionResponseState } from "./interaction-response.js";
 import { extractModalFields, ModalFields } from "./modal-fields.js";
 import { serializePayload, type MessagePayload } from "./payload.js";
 import { assertDiscordInteractionPayload } from "./schemas.js";
@@ -91,7 +81,7 @@ class BaseInteraction {
   readonly guild: Guild | null;
   readonly channel: DiscordChannel | null;
   message: Message | null = null;
-  private readonly response = new InteractionResponseController();
+  private currentResponseState: InteractionResponseState = "unacknowledged";
   private pendingResponse: Promise<void> = Promise.resolve();
   private sentFollowUp = false;
 
@@ -111,22 +101,18 @@ class BaseInteraction {
   }
 
   get acknowledged(): boolean {
-    return this.response.acknowledged;
+    return this.currentResponseState !== "unacknowledged";
   }
 
   get responseState(): InteractionResponseState {
-    return this.response.state;
+    return this.currentResponseState;
   }
 
   set responseState(nextState: InteractionResponseState) {
-    this.response.state = nextState;
+    this.currentResponseState = nextState;
   }
 
-  /**
-   * True once a follow-up message has been delivered. Follow-ups are visible to
-   * the user but never advance `responseState`, so this is the only record that
-   * the interaction has already produced output.
-   */
+  // Follow-ups produce visible output without advancing responseState.
   get hasSentFollowUp(): boolean {
     return this.sentFollowUp;
   }
@@ -142,16 +128,18 @@ class BaseInteraction {
   }
 
   private async performCallback(type: InteractionResponseType, data?: unknown) {
-    if (this.response.acknowledged) {
+    if (this.currentResponseState !== "unacknowledged") {
       throw new Error("Discord interaction has already been acknowledged.");
     }
-    const result = await createInteractionCallback(
-      this.client.rest,
-      this.id,
-      this.token,
-      data === undefined ? { type } : { type, data },
-    );
-    this.response.recordCallback(type);
+    const result = await this.client.rest.post(Routes.interactionCallback(this.id, this.token), {
+      body: data === undefined ? { type } : { type, data },
+    });
+    this.currentResponseState =
+      type === InteractionResponseType.DeferredChannelMessageWithSource
+        ? "deferred"
+        : type === InteractionResponseType.DeferredMessageUpdate
+          ? "deferred-update"
+          : "replied";
     return result;
   }
 
@@ -161,11 +149,13 @@ class BaseInteraction {
 
   async reply(payload: MessagePayload): Promise<unknown> {
     return await this.enqueueResponse(async () => {
-      const action = this.response.nextReplyAction();
-      if (action === "edit") {
+      if (
+        this.currentResponseState === "deferred" ||
+        this.currentResponseState === "deferred-update"
+      ) {
         return await this.performReplyEdit(payload);
       }
-      if (action === "follow-up") {
+      if (this.currentResponseState !== "unacknowledged") {
         return await this.performFollowUp(payload);
       }
       return await this.performCallback(
@@ -190,17 +180,8 @@ class BaseInteraction {
     return await this.enqueueResponse(() => this.performReplyEdit(payload));
   }
 
-  /**
-   * Edits the deferred placeholder only if this interaction is still an
-   * unanswered spinner when the queue reaches this operation.
-   *
-   * Both conditions are re-read inside the queue. A follow-up that was still in
-   * flight when the caller decided to report will have settled — and recorded
-   * itself in `sentFollowUp` — by the time this runs, so the decision cannot be
-   * made against state that is about to change.
-   *
-   * Resolves true when the edit was sent.
-   */
+  // Recheck inside the queue: an in-flight follow-up may answer the spinner
+  // before this edit runs.
   async editDeferredPlaceholderIfUnanswered(payload: MessagePayload): Promise<boolean> {
     return await this.enqueueResponse(async () => {
       if (this.responseState !== "deferred" || this.sentFollowUp) {
@@ -214,35 +195,27 @@ class BaseInteraction {
   private async performReplyEdit(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
     const query = needsComponentsV2Query(body) ? { with_components: true } : undefined;
-    const result = await editWebhookMessage(
-      this.client.rest,
-      this.client.options.clientId,
-      this.token,
-      "@original",
-      { body },
-      query,
-    );
-    this.response.recordReplyEdit();
+    const result = query
+      ? await this.client.rest.patch(this.originalReplyRoute, { body }, query)
+      : await this.client.rest.patch(this.originalReplyRoute, { body });
+    this.currentResponseState = "replied";
     return result;
   }
 
   async deleteReply(): Promise<unknown> {
     return await this.enqueueResponse(async () => {
-      const result = await deleteWebhookMessage(
-        this.client.rest,
-        this.client.options.clientId,
-        this.token,
-        "@original",
-      );
-      this.response.recordReplyDelete();
+      const result = await this.client.rest.delete(this.originalReplyRoute);
+      this.currentResponseState = "replied";
       return result;
     });
   }
 
   async fetchReply(): Promise<unknown> {
-    return await this.enqueueResponse(() =>
-      getWebhookMessage(this.client.rest, this.client.options.clientId, this.token, "@original"),
-    );
+    return await this.enqueueResponse(() => this.client.rest.get(this.originalReplyRoute));
+  }
+
+  private get originalReplyRoute(): string {
+    return Routes.webhookMessage(this.client.options.clientId, this.token, "@original");
   }
 
   async followUp(payload: MessagePayload): Promise<unknown> {
@@ -251,10 +224,8 @@ class BaseInteraction {
 
   private async performFollowUp(payload: MessagePayload): Promise<unknown> {
     const body = serializePayload(payload);
-    const result = await createWebhookMessage(
-      this.client.rest,
-      this.client.options.clientId,
-      this.token,
+    const result = await this.client.rest.post(
+      Routes.webhook(this.client.options.clientId, this.token),
       { body },
       needsComponentsV2Query(body) ? { with_components: true } : undefined,
     );

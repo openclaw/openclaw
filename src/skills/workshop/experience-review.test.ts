@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getPreparedModelRuntimePluginGeneration,
@@ -144,8 +145,12 @@ describe("skill experience review scheduler", () => {
     },
   );
 
-  it("runs detached review work outside the foreground prepared generation", async () => {
+  it("runs detached review work outside the completed caller and prepared generation", async () => {
+    vi.useFakeTimers();
+    const caller = new AsyncLocalStorage<string>();
+    const observedCallers: Array<string | undefined> = [];
     const generation: PreparedModelRuntimePluginGeneration = {
+      remoteCatalog: null,
       configuredCatalogEntries: [],
       inlineProviderModels: [],
       pluginMetadataSnapshot: {} as never,
@@ -161,10 +166,12 @@ describe("skill experience review scheduler", () => {
     });
     const scheduler = createSkillExperienceReviewScheduler({
       isSystemActive: () => {
+        observedCallers.push(caller.getStore());
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         return false;
       },
       runReview: async (candidate) => {
+        observedCallers.push(caller.getStore());
         observedPluginScopes.push(
           getPluginCache() === foregroundCache,
           getPluginRegistryForContext(),
@@ -174,20 +181,24 @@ describe("skill experience review scheduler", () => {
         observedGenerations.push(getPreparedModelRuntimePluginGeneration());
         finishReview?.();
       },
-      setTimer: (callback) => setTimeout(callback, 0),
+      setTimer: (callback, delayMs) => setTimeout(AsyncLocalStorage.bind(callback), delayMs),
     });
 
-    withPluginCache(foregroundCache, () =>
-      withPluginRuntimeRegistryScope(foregroundRegistry, () =>
-        withPreparedModelRuntimePluginGenerationScope(generation, () => {
-          scheduler.schedule(completedRun());
-        }),
+    caller.run("completed-turn", () =>
+      withPluginCache(foregroundCache, () =>
+        withPluginRuntimeRegistryScope(foregroundRegistry, () =>
+          withPreparedModelRuntimePluginGenerationScope(generation, () => {
+            scheduler.schedule(completedRun());
+          }),
+        ),
       ),
     );
     await retirePluginCache(foregroundCache);
     setActivePluginRegistry(currentRegistry);
+    await vi.advanceTimersByTimeAsync(30_000);
     await reviewFinished;
 
+    expect(observedCallers).toEqual([undefined, undefined]);
     expect(observedGenerations).toEqual([undefined, undefined, undefined]);
     expect(observedPluginScopes).toEqual([false, currentRegistry]);
     scheduler.clear();
@@ -536,30 +547,41 @@ describe("skill experience review scheduler", () => {
     scheduler.clear();
   });
 
-  it("drops the pending review after a failure", async () => {
-    const callbacks: Array<() => void> = [];
-    const setTimer = vi.fn((callback: () => void) => {
-      callbacks.push(callback);
-      const timer = setTimeout(() => {}, 60_000);
-      timer.unref();
-      return timer;
-    });
-    const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
-    const scheduler = createSkillExperienceReviewScheduler({
-      isSystemActive: () => false,
-      runReview,
-      setTimer,
-    });
-    scheduler.schedule(completedRun());
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    expect(setTimer).toHaveBeenCalledOnce();
-    callbacks[0]?.();
-    await flushMicrotasks();
-    expect(runReview).toHaveBeenCalledOnce();
-    scheduler.clear();
-  });
+  it.each(["activity check", "review"])(
+    "drops the pending review after a %s failure",
+    async (phase) => {
+      vi.useFakeTimers();
+      const callbacks: Array<() => void> = [];
+      const setTimer = vi.fn((callback: () => void) => {
+        callbacks.push(callback);
+        const timer = setTimeout(() => {}, 60_000);
+        timer.unref();
+        return timer;
+      });
+      const isSystemActive = vi.fn(() => {
+        if (phase === "activity check") {
+          throw new Error("activity unavailable");
+        }
+        return false;
+      });
+      const runReview = vi.fn().mockRejectedValue(new Error("provider unavailable"));
+      const scheduler = createSkillExperienceReviewScheduler({
+        isSystemActive,
+        runReview,
+        setTimer,
+      });
+      scheduler.schedule(completedRun());
+      expect(() => callbacks[0]?.()).not.toThrow();
+      await flushMicrotasks();
+      expect(runReview).toHaveBeenCalledTimes(phase === "review" ? 1 : 0);
+      expect(setTimer).toHaveBeenCalledOnce();
+      callbacks[0]?.();
+      await flushMicrotasks();
+      expect(isSystemActive).toHaveBeenCalledOnce();
+      expect(runReview).toHaveBeenCalledTimes(phase === "review" ? 1 : 0);
+      scheduler.clear();
+    },
+  );
 
   it("skips errored, disabled, unavailable, and internal runs", async () => {
     vi.useFakeTimers();

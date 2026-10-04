@@ -25,16 +25,12 @@ interface ResolvedCopilotAuth {
   agentId: string;
 }
 
-export function createCopilotByokAuth(input: {
-  agentId?: string;
-  agentDir?: string;
-  workspaceDir?: string;
-  copilotHome?: string;
-  authProfileId?: string;
-  authProfileVersion?: string;
-  env?: NodeJS.ProcessEnv;
-  homeDir?: () => string;
-}): ResolvedCopilotAuth {
+export function createCopilotByokAuth(
+  input: Pick<
+    ResolveCopilotAuthInput,
+    "agentId" | "agentDir" | "workspaceDir" | "copilotHome" | "authProfileId" | "env" | "homeDir"
+  > & { authProfileVersion?: string },
+): ResolvedCopilotAuth {
   const base = resolveCopilotAuth({
     agentId: input.agentId,
     agentDir: input.agentDir,

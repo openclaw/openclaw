@@ -54,6 +54,7 @@ function createRunController(overrides: Partial<RunEmbeddedAgentParams> = {}) {
     runId,
     sessionFile: "/tmp/queued-run.jsonl",
     sessionId: "queued-session",
+    sessionPersistence: "detached",
     timeoutMs: 60_000,
     workspaceDir: "/tmp",
     ...overrides,

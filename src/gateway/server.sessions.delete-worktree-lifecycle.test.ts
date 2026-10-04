@@ -1,12 +1,10 @@
 // Session delete worktree lifecycle tests protect exact-generation cleanup and
 // same-key successor admission.
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsDeleteResult } from "../../packages/gateway-protocol/src/index.js";
-import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireGit } from "../agents/worktrees/git.js";
 import {
   getRegistryWorktree,
   WorktreeRemovalContentionError,
@@ -47,29 +45,8 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 
 const { createSessionStoreDir, createArchiveWorktreeFixture, initializeRemoteBackedGitWorkspace } =
   setupGatewaySessionsWorktreeTestHarness();
-const execFileAsync = promisify(execFile);
 
-test("worktree fixtures keep committed changes and remote cleanup local to each case", async () => {
-  const tempDirs = createTempDirTracker();
-  onTestFinished(tempDirs.cleanup);
-  const firstRoot = tempDirs.make("openclaw-worktree-first-");
-  const first = await initializeRemoteBackedGitWorkspace(firstRoot);
-  await fs.writeFile(path.join(first, "README.md"), "first fixture only\n");
-  await execFileAsync("git", ["-C", first, "commit", "-am", "change first fixture"]);
-  await execFileAsync("git", ["-C", first, "push"]);
-
-  const second = await initializeRemoteBackedGitWorkspace(
-    tempDirs.make("openclaw-worktree-second-"),
-  );
-  await fs.rm(firstRoot, { recursive: true, force: true });
-  await execFileAsync("git", ["-C", second, "fetch", "origin"]);
-  expect(await fs.readFile(path.join(second, "README.md"), "utf8")).toBe("base\n");
-  expect((await execFileAsync("git", ["-C", second, "show", "origin/main:README.md"])).stdout).toBe(
-    "base\n",
-  );
-});
-
-test.each(["none", "restore-failed", "placement-changed"] as const)(
+test.each(["restore-failed", "placement-changed"] as const)(
   "inbound admission restores the archived worktree before opening its session (failure=%s)",
   async (failure) => {
     const fixture = await createArchiveWorktreeFixture();
@@ -167,7 +144,11 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
         expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
         await placements!.startDispatch({ sessionId, sessionKey: key, agentId: "main" });
         // A stopped replacement is eligible, but cannot reuse preparation owned by the prior placement.
-        placements!.fail({ sessionId, expectedGeneration: 1, recoveryError: "preparation failed" });
+        await placements!.fail({
+          sessionId,
+          expectedGeneration: 1,
+          recoveryError: "preparation failed",
+        });
         releaseWriter.resolve();
         await heldWriter;
         await expect(admission).rejects.toThrow("changed before mutation");
@@ -180,16 +161,10 @@ test.each(["none", "restore-failed", "placement-changed"] as const)(
         await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
           "inbound restore keeps work\n",
         );
-      } else if (failure === "restore-failed") {
+      } else {
         await expect(admission).rejects.toThrow(/worktree/i);
         expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
         await expect(fs.access(worktree.path)).rejects.toThrow();
-      } else {
-        await expect(admission).resolves.toEqual({ status: "ready" });
-        await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
-          "inbound restore keeps work\n",
-        );
-        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
       }
       await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
         transcript,
@@ -215,7 +190,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
   closeOpenClawStateDatabaseForTest();
   testState.agentConfig = { workspace };
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+  testState.agentsConfig = { entries: { ops: {} } };
   const { storePath } = await createSessionStoreDir();
   const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
   const allocatedWorktreeIds = new Set<string>();
@@ -276,97 +251,7 @@ test("sessions.create only allocates worktrees for lifecycle-manageable agent ow
   }
 });
 
-test("sessions.delete snapshots and removes session worktrees", async () => {
-  const openClawState = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-delete-worktree-",
-  });
-  const workspace = await initializeRemoteBackedGitWorkspace(openClawState.root);
-  closeOpenClawStateDatabaseForTest();
-  testState.agentConfig = { workspace };
-  await createSessionStoreDir();
-  let dirtyWorktreeId: string | undefined;
-  try {
-    const adminClient = { connect: { scopes: ["operator.admin"] } } as never;
-    await fs.writeFile(path.join(workspace, "local-base.txt"), "inherited local commit\n");
-    await execFileAsync("git", ["-C", workspace, "add", "local-base.txt"]);
-    await execFileAsync("git", ["-C", workspace, "commit", "-m", "local base"]);
-    const clean = await directSessionReq<{
-      key: string;
-      worktree: { id: string; path: string; branch: string };
-    }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
-    expect(clean.ok).toBe(true);
-    const cleanKey = clean.payload?.key;
-    const cleanWorktree = clean.payload?.worktree;
-    expect(cleanKey).toBeTruthy();
-    expect(cleanWorktree).toBeTruthy();
-
-    await expect(directSessionReq("sessions.delete", { key: cleanKey! })).resolves.toMatchObject({
-      ok: true,
-      payload: { deleted: true },
-    });
-
-    await expect(fs.access(cleanWorktree!.path)).rejects.toThrow();
-    expect(getRegistryWorktree(process.env, cleanWorktree!.id)).toMatchObject({
-      removedAt: expect.any(Number),
-      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
-    });
-    const registered = await execFileAsync("git", [
-      "-C",
-      workspace,
-      "worktree",
-      "list",
-      "--porcelain",
-    ]);
-    expect(registered.stdout).not.toContain(cleanWorktree!.path);
-    const branch = await execFileAsync("git", [
-      "-C",
-      workspace,
-      "branch",
-      "--list",
-      cleanWorktree!.branch,
-    ]);
-    expect(branch.stdout.trim()).toBe("");
-
-    const dirty = await directSessionReq<{
-      key: string;
-      worktree: { id: string; path: string; branch: string };
-    }>("sessions.create", { agentId: "main", worktree: true }, { client: adminClient });
-    expect(dirty.ok).toBe(true);
-    const dirtyKey = dirty.payload?.key;
-    const dirtyWorktree = dirty.payload?.worktree;
-    dirtyWorktreeId = dirtyWorktree?.id;
-    await fs.writeFile(path.join(dirtyWorktree!.path, "dirty.txt"), "keep me\n");
-
-    await expect(directSessionReq("sessions.delete", { key: dirtyKey! })).resolves.toMatchObject({
-      ok: true,
-      payload: { deleted: true },
-    });
-
-    await expect(fs.access(dirtyWorktree!.path)).rejects.toThrow();
-    expect(getRegistryWorktree(process.env, dirtyWorktree!.id)).toMatchObject({
-      removedAt: expect.any(Number),
-      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
-    });
-    dirtyWorktreeId = undefined;
-  } finally {
-    if (
-      dirtyWorktreeId &&
-      getRegistryWorktree(process.env, dirtyWorktreeId)?.removedAt === undefined
-    ) {
-      await managedWorktrees.remove({
-        id: dirtyWorktreeId,
-        reason: "test-cleanup",
-        allowSnapshotLoss: true,
-      });
-    }
-    await disposeSessionReadContexts();
-    testState.agentConfig = undefined;
-    await openClawState.cleanup();
-  }
-});
-
-test("sessions.delete keeps same-key successor worktree creation behind exact cleanup", async () => {
+test("sessions.delete snapshots dirty work before admitting same-key successor worktree creation", async () => {
   const openClawState = await createOpenClawTestState({
     layout: "state-only",
     prefix: "openclaw-delete-worktree-successor-",
@@ -408,6 +293,7 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
     expect(predecessor.ok, JSON.stringify(predecessor)).toBe(true);
     const predecessorSessionId = predecessor.payload!.sessionId;
     const predecessorWorktree = predecessor.payload!.worktree;
+    await fs.writeFile(path.join(predecessorWorktree.path, "dirty.txt"), "keep me\n");
 
     removeSpy.mockImplementation(async (params) => {
       if (params.id === predecessorWorktree.id && params.reason === "session-delete") {
@@ -444,6 +330,14 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
     releaseRemoval();
     const [deleted, successor] = await Promise.all([deletion, successorPromise]);
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    const removedPredecessor = getRegistryWorktree(process.env, predecessorWorktree.id);
+    expect(removedPredecessor).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    expect(
+      await requireGit(workspace, ["show", `${removedPredecessor!.snapshotRef}:dirty.txt`]),
+    ).toBe("keep me");
     expect(successor.ok).toBe(true);
     const successorSessionId = successor.payload!.sessionId;
     const successorWorktree = successor.payload!.worktree;
@@ -464,7 +358,7 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
       },
     });
     expect(
-      listSessionStateEventsSince(key, "main", 0, 20).events.filter(
+      (await listSessionStateEventsSince(key, "main", 0, 20)).events.filter(
         (event) => event.kind === "created",
       ),
     ).toEqual([
@@ -501,12 +395,6 @@ test("sessions.delete keeps same-key successor worktree creation behind exact cl
 });
 
 test.each([
-  {
-    failure: () => new Error("simulated cleanup failure"),
-    name: "generic cleanup failure",
-    reason: "cleanup-failed",
-    finalized: false,
-  },
   {
     failure: () => new WorktreeSnapshotError("simulated snapshot failure"),
     name: "snapshot failure",

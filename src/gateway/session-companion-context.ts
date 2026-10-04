@@ -1,14 +1,15 @@
 import { resolveNonNegativeIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { collectTextContentBlocks } from "../agents/content-blocks.js";
 import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
-import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import {
   selectSessionCompanionReferenceItems,
   type SessionCompanionContextMessage,
   type SessionCompanionPreparedContext,
 } from "./session-companion-state.js";
+import { readSessionTranscriptBoundedMessageTailPageAsync } from "./session-transcript-readers.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 
 const CONTEXT_MAX_MESSAGES = 40;
@@ -41,24 +42,8 @@ function normalizeContextText(value: string): string {
 
 function extractUserText(message: unknown): string | undefined {
   const content = asOptionalObjectRecord(message)?.content;
-  if (typeof content === "string") {
-    return normalizeContextText(content) || undefined;
-  }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  const text = content
-    .flatMap((block) => {
-      const record = asOptionalObjectRecord(block);
-      const blockText = record?.type === "text" ? record.text : undefined;
-      return typeof blockText === "string" ? [blockText] : [];
-    })
-    .join("\n");
+  const text = typeof content === "string" ? content : collectTextContentBlocks(content).join("\n");
   return normalizeContextText(text) || undefined;
-}
-
-function readMessageTimestamp(message: unknown): number {
-  return resolveNonNegativeIntegerOption(asOptionalObjectRecord(message)?.timestamp, 0);
 }
 
 function appendContextMessages(
@@ -80,7 +65,7 @@ function appendContextMessages(
           ? extractUserText(message)
           : undefined;
     if (text && (role === "assistant" || role === "user")) {
-      messages.push({ role, text, ts: readMessageTimestamp(message) });
+      messages.push({ role, text, ts: resolveNonNegativeIntegerOption(message?.timestamp, 0) });
     }
   }
 }
@@ -123,7 +108,7 @@ async function readSessionCompanionContext(params: {
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
       scannedMessages < CONTEXT_READ_MAX_SCANNED_MESSAGES
     ) {
-      const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      const page = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
         maxBytes: CONTEXT_READ_MAX_BYTES - rawBytes,
         maxMessages: Math.min(
           CONTEXT_READ_PAGE_MESSAGES,
@@ -179,7 +164,7 @@ async function readSessionCompanionContext(params: {
     ) {
       return { kind: "unavailable" };
     }
-    const fence = readSessionTranscriptBoundedMessageTailPage(scope, {
+    const fence = await readSessionTranscriptBoundedMessageTailPageAsync(scope, {
       maxBytes: 0,
       maxMessages: 0,
       offset: 0,

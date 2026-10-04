@@ -6,6 +6,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as backoff from "../../infra/backoff.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import * as commandExec from "../../process/exec.js";
@@ -16,6 +17,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
+import * as capacity from "./capacity.js";
 import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
@@ -95,24 +97,21 @@ describe("ManagedWorktreeService capacity", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.each([20, 100, 1024])(
-    "uses the same operational reserve on a %s GiB volume",
-    async (total) => {
-      totalBytes = total * GiB;
-      availableBytes = 3 * GiB;
-      const params = { repoRoot: repo, name: "fixed-reserve", baseRef: "HEAD" };
-      await expect(service.create(params)).rejects.toThrow(/disk space/i);
-      expect(await service.listRegistryRecords()).toEqual([]);
-      expect(await git(repo, "branch", "--list", "openclaw/fixed-reserve")).toBe("");
-      expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("fixed-reserve");
+  it("uses a fixed operational reserve even on a 1024 GiB volume", async () => {
+    totalBytes = 1024 * GiB;
+    availableBytes = 3 * GiB;
+    const params = { repoRoot: repo, name: "fixed-reserve", baseRef: "HEAD" };
+    await expect(service.create(params)).rejects.toThrow(/disk space/i);
+    expect(await service.listRegistryRecords()).toEqual([]);
+    expect(await git(repo, "branch", "--list", "openclaw/fixed-reserve")).toBe("");
+    expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("fixed-reserve");
 
-      availableBytes = 5 * GiB;
-      const created = await service.create(params);
-      expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
-      expect(await git(created.path, "status", "--porcelain")).toBe("");
-      expect(await service.listRegistryRecords()).toEqual([created]);
-    },
-  );
+    availableBytes = 5 * GiB;
+    const created = await service.create(params);
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    expect(await git(created.path, "status", "--porcelain")).toBe("");
+    expect(await service.listRegistryRecords()).toEqual([created]);
+  });
 
   it.each(["source", "destination"] as const)(
     "refuses allocation when the separate %s volume lacks its reserve",
@@ -341,6 +340,102 @@ describe("ManagedWorktreeService capacity", () => {
     },
   );
 
+  it.each(["none", "files", "registration"])(
+    "recovers an unprepared branch after lease loss (changed=%s)",
+    async (changed) => {
+      const params = {
+        repoRoot: repo,
+        name: "retry-hydration",
+        baseRef: "HEAD",
+        ownerKind: "session" as const,
+        ownerId: "agent:main:retry-hydration",
+      };
+      let sourceHeld = false;
+      let cleanupEntered = false;
+      const recoveryRegistryReads: string[] = [];
+      let destination: string | undefined;
+      vi.spyOn(capacity, "estimateWorktreeGitBytes").mockImplementationOnce(async () => {
+        expect(sourceHeld).toBe(true);
+        // Hydration starts after Git has registered the new branch but before publication.
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        const listing = await git(repo, "worktree", "list", "--porcelain");
+        destination = listing
+          .split("\n")
+          .find((line) => line.startsWith("worktree ") && line.endsWith("retry-hydration"))
+          ?.slice("worktree ".length);
+        runOpenClawStateWriteTransaction(
+          ({ db }) => {
+            executeSqliteQuerySync(
+              db,
+              getNodeSqliteKysely<Pick<DB, "state_leases">>(db)
+                .deleteFrom("state_leases")
+                .where("scope", "=", "core:managed-worktrees:create")
+                .where("lease_key", "=", "capacity"),
+            );
+          },
+          { env },
+        );
+        return 4096;
+      });
+
+      await expect(
+        service.create({
+          ...params,
+          withSource: async (run) => {
+            sourceHeld = true;
+            try {
+              return await run({ assertCurrent() {} });
+            } finally {
+              sourceHeld = false;
+            }
+          },
+          withRollback: async (run) => {
+            // Recovery must release source custody before taking allocation → source again.
+            expect(sourceHeld).toBe(false);
+            cleanupEntered = true;
+            if (changed === "files") {
+              await fs.writeFile(path.join(destination!, "keep.txt"), "new owner data\n");
+            } else if (changed === "registration") {
+              await fs.writeFile(
+                path.join(destination!, ".git"),
+                `gitdir: ${path.join(repo, ".git")}\n`,
+              );
+            }
+            const sql = observeHostDataSql();
+            try {
+              return await run(() => {});
+            } finally {
+              recoveryRegistryReads.push(
+                ...sql.queries.filter((query) => /\bfrom\s+"?worktrees"?\b/i.test(query)),
+              );
+              sql.restore();
+            }
+          },
+        }),
+      ).rejects.toThrow(/was lost/);
+      expect(recoveryRegistryReads).toEqual([]);
+      expect(await service.listRegistryRecords()).toEqual([]);
+      if (changed === "files") {
+        expect(await fs.readFile(path.join(destination!, "keep.txt"), "utf8")).toBe(
+          "new owner data\n",
+        );
+      }
+      if (changed !== "none") {
+        expect(cleanupEntered).toBe(true);
+        expect(await fs.stat(destination!)).toBeDefined();
+        expect(await git(repo, "branch", "--list", "openclaw/retry-hydration")).not.toBe("");
+        return;
+      }
+      const branchBeforeRetry = await git(repo, "branch", "--list", "openclaw/retry-hydration");
+      const retried = await service.create(params);
+      expect(cleanupEntered).toBe(true);
+      expect(branchBeforeRetry).toBe("");
+      expect(retried.ownerId).toBe(params.ownerId);
+      expect(await fs.readFile(path.join(retried.path, "README.md"), "utf8")).toBe("base\n");
+      expect(await service.listRegistryRecords()).toEqual([retried]);
+    },
+  );
+
   it("budgets repository setup separately from a small Git checkout", async () => {
     const script = path.join(repo, ".openclaw", "worktree-setup.sh");
     await fs.mkdir(path.dirname(script));
@@ -427,7 +522,7 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(rejectedRepo, "branch", "--list", "openclaw/*")).toBe("");
   });
 
-  it.each(["release", "abort", "timeout"] as const)(
+  it.each(["release", "abort"] as const)(
     "waits beyond five minutes for allocation until %s",
     async (ending) => {
       const held = createDeferred();
@@ -471,15 +566,11 @@ describe("ManagedWorktreeService capacity", () => {
           false,
         );
         expect(await service.listRegistryRecords()).toEqual([]);
-        if (ending !== "release") {
-          if (ending === "abort") {
-            controller.abort(new Error("cancel queued worktree"));
-          } else {
-            elapsedMs = 11 * 60_000;
-          }
+        if (ending === "abort") {
+          controller.abort(new Error("cancel queued worktree"));
           await vi.waitFor(() => expect(settled).toBe(true));
           await expect(result).resolves.toMatchObject({
-            code: ending === "abort" ? "OPENCLAW_STATE_LEASE_ABORTED" : "OPENCLAW_STATE_LEASE_HELD",
+            code: "OPENCLAW_STATE_LEASE_ABORTED",
           });
           expect(await service.listRegistryRecords()).toEqual([]);
           expect(await git(repo, "branch", "--list", "openclaw/waiting")).toBe("");
@@ -639,28 +730,11 @@ describe("ManagedWorktreeService capacity", () => {
 
       expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
       expect((await fs.stat(path.join(created.path, "README.md"))).size).toBe(16 * 1024 ** 2);
+      expect(await git(repo, "branch", "--list", "--format=%(refname)", created.branch)).toBe(
+        `refs/heads/${created.branch}`,
+      );
     },
   );
-
-  it("preserves dirty work when there is insufficient room for its safety snapshot", async () => {
-    const created = await service.create({
-      repoRoot: repo,
-      name: "snapshot-space",
-      baseRef: "HEAD",
-    });
-    await fs.writeFile(path.join(created.path, "uncommitted.txt"), "only copy\n");
-    availableBytes = 64 * 1024 ** 2;
-    await expect(service.remove({ id: created.id, reason: "archive" })).rejects.toThrow(
-      /disk space/i,
-    );
-    expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
-    expect(await fs.readFile(path.join(created.path, "uncommitted.txt"), "utf8")).toBe(
-      "only copy\n",
-    );
-    expect(await git(repo, "branch", "--list", "--format=%(refname)", created.branch)).toBe(
-      `refs/heads/${created.branch}`,
-    );
-  });
 
   it("rejects reuse of a broken Git link without destroying its work", async () => {
     const params = {

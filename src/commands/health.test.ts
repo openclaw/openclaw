@@ -18,14 +18,13 @@ import {
   GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
   GATEWAY_HEALTH_REACHABLE_LINE,
 } from "./gateway-health-auth-diagnostic.js";
-import { formatHealthCheckFailure } from "./health-format.js";
-import type { HealthSummary } from "./health.js";
 import {
   formatConfigReloadHealthLine,
   formatContextEngineHealthLine,
-  healthCommand,
-  healthCommandNonExiting,
-} from "./health.js";
+  formatHealthCheckFailure,
+} from "./health-format.js";
+import type { HealthSummary } from "./health.js";
+import { healthCommand, healthCommandNonExiting } from "./health.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const runtime = createTestRuntime();
@@ -177,7 +176,7 @@ describe("healthCommand", () => {
     probeGatewayStatusMock.mockReset();
   });
 
-  it("preserves plugin health in JSON while surfacing activated failures in text", async () => {
+  it("preserves plugin health in JSON while surfacing configured failures and unavailable warnings", async () => {
     const agentSessions = {
       path: "/tmp/sessions.json",
       count: 1,
@@ -217,8 +216,28 @@ describe("healthCommand", () => {
           activated: false,
           error: "inactive plugin load failed",
         },
+        {
+          id: "explicit-owner",
+          origin: "config",
+          activated: false,
+          activationSource: "explicit",
+          failurePhase: "load",
+          error: "runtime entry missing",
+        },
+      ],
+      unavailable: [
+        {
+          id: "memory-owner",
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "unreadable-package-json",
+            detail: "manifest unreadable",
+          },
+        },
       ],
     };
+    const original = structuredClone(snapshot);
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
@@ -229,7 +248,7 @@ describe("healthCommand", () => {
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
-    expect(parsed.plugins).toEqual(snapshot.plugins);
+    expect(parsed.plugins).toEqual(original.plugins);
 
     runtime.log.mockClear();
     callGatewayMock.mockResolvedValueOnce(snapshot);
@@ -241,6 +260,11 @@ describe("healthCommand", () => {
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
     );
     expect(output).not.toContain("inactive plugin load failed");
+    expect(snapshot).toEqual(original);
+    expect(output).toContain("Plugin explicit-owner: failed - runtime entry missing");
+    expect(output).toContain(
+      "Plugin memory-owner: unavailable - unreadable-package-json: manifest unreadable",
+    );
   });
 
   it.each([{ everyMs: 691_265_001, expected: "1w 1d 1m 5s 1ms" }])(

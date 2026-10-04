@@ -16,12 +16,15 @@ pub struct GatewaySnapshot {
     pub reachable: bool,
     pub status: String,
     pub detail: Option<String>,
+    #[serde(skip)]
+    pub runtime_path: Option<std::path::PathBuf>,
 }
 
 impl GatewaySnapshot {
     pub(crate) fn remote_opening() -> Self {
         Self {
             phase: "remoteOpening",
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
@@ -44,6 +47,7 @@ impl GatewaySnapshot {
     pub fn unconfigured() -> Self {
         Self {
             phase: "unconfigured",
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
@@ -55,6 +59,7 @@ impl GatewaySnapshot {
     pub fn missing_cli() -> Self {
         Self {
             phase: "missingCli",
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
@@ -66,6 +71,7 @@ impl GatewaySnapshot {
     pub fn reconnecting(detail: impl Into<String>) -> Self {
         Self {
             phase: "reconnecting",
+            runtime_path: None,
             installed: true,
             running: false,
             reachable: false,
@@ -212,7 +218,15 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             }
         })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
+    let runtime_path = value
+        .service
+        .command
+        .as_ref()
+        .and_then(|command| command.pointer("/programArguments/0"))
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from);
     Ok(GatewaySnapshot {
+        runtime_path,
         phase,
         installed,
         running,
@@ -222,6 +236,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
     })
 }
 
+#[cfg(not(target_os = "linux"))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {

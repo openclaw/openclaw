@@ -16,7 +16,10 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { StoreWriterQueue } from "../shared/store-writer-queue.js";
-import { createLifecycleDiagnosticOperation } from "./session-lifecycle-diagnostics.js";
+import {
+  createLifecycleDiagnosticOperation,
+  type SessionLifecycleMutationOperation,
+} from "./session-lifecycle-diagnostics.js";
 import {
   collectSessionIdentityTargets,
   normalizeSessionIdentities,
@@ -193,7 +196,7 @@ async function runExclusiveSessionLifecycle<T>(params: {
       await waitForNormalizedSessionLifecycleMutationIdle(identities, params.signal);
       continue;
     }
-    const diagnostic = createLifecycleDiagnosticOperation("lifecycle", params.signal);
+    const diagnostic = createLifecycleDiagnosticOperation("lifecycle", identities, params.signal);
     const attempt = await runWithSessionIdentityLocks(
       identities,
       async () => {
@@ -214,6 +217,7 @@ async function runExclusiveSessionLifecycle<T>(params: {
 }
 
 export async function runExclusiveSessionLifecycleMutation<T>(
+  operation: SessionLifecycleMutationOperation,
   params: SessionLifecycleMutationParams<T>,
 ): Promise<T> {
   // Normalize every store and session into one globally ordered identity set.
@@ -232,7 +236,12 @@ export async function runExclusiveSessionLifecycleMutation<T>(
   const signal = params.signal;
   signal?.throwIfAborted();
   const callerAdmissions = new Set(CURRENT_SESSION_WORK_ADMISSIONS.getStore());
-  const diagnostic = createLifecycleDiagnosticOperation(params.kind ?? "mutation", signal);
+  const diagnostic = createLifecycleDiagnosticOperation(
+    params.kind ?? "mutation",
+    identities,
+    signal,
+    operation,
+  );
   const mutationRun: SessionLifecycleMutationOwner = { identities };
   let mutationActivated = false;
   let removeAbortListener = () => {};
@@ -322,10 +331,7 @@ export async function runExclusiveSessionLifecycleMutation<T>(
     "activation",
     "mutation",
   );
-  if (!signal) {
-    return await mutation;
-  }
-  if (mutationActivated) {
+  if (!signal || mutationActivated) {
     return await mutation;
   }
   const aborted = new Promise<never>((_, reject) => {
@@ -527,6 +533,8 @@ export function collectActiveSessionLifecycleMutationIdentities(scope: string): 
 export async function beginSessionWorkAdmission(params: {
   scope: string;
   identities: Iterable<string | undefined>;
+  /** Complete store keys read or written by final validation; omission keeps a store-wide barrier. */
+  storeWriterIdentities?: Iterable<string | undefined>;
   /** Stable process-wide identity for owners that must be observable while still pending. */
   owner?: symbol;
   resolveGatewayContext?: GatewayContextResolver;
@@ -656,7 +664,7 @@ export async function beginSessionWorkAdmission(params: {
             const revalidate = params.revalidateAllowed ?? (() => params.assertAllowed(signal));
             await lease.run(async () => await revalidate());
           },
-          { reentrant: true },
+          { reentrant: true, identities: params.storeWriterIdentities },
         );
         return lease;
       },

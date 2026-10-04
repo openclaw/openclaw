@@ -96,7 +96,7 @@ describe("channelsResolveCommand", () => {
 
   it("uses installed channel plugins for explicit target resolution without installing", async () => {
     mocks.loadConfig.mockReturnValue({
-      agents: { list: [{ id: "main" }, { id: "ops" }] },
+      agents: { entries: { main: {}, ops: {} } },
       channels: {},
     });
     const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>().mockResolvedValue([
@@ -145,28 +145,24 @@ describe("channelsResolveCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith("friends -> 120363000000@g.us (Friends)");
   });
 
-  it.each([
-    [
-      "unknown",
-      "nope-agent",
-      'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
-    ],
-    ["whitespace-only", "   ", "--agent must not be blank"],
-  ])("rejects an %s explicit agent before channel resolution", async (_label, agent, message) => {
-    mocks.loadConfig.mockReturnValue({
-      agents: { list: [{ id: "main" }] },
-      channels: {},
-    });
+  it.each([["whitespace-only", "   ", "--agent must not be blank"]])(
+    "rejects an %s explicit agent before channel resolution",
+    async (_label, agent, message) => {
+      mocks.loadConfig.mockReturnValue({
+        agents: { entries: { main: {} } },
+        channels: {},
+      });
 
-    await expect(
-      channelsResolveCommand({ agent, channel: "telegram", entries: ["friends"] }, runtime),
-    ).rejects.toThrow(message);
+      await expect(
+        channelsResolveCommand({ agent, channel: "telegram", entries: ["friends"] }, runtime),
+      ).rejects.toThrow(message);
 
-    expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
-    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-    expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
-    expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
-  });
+      expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
+      expect(mocks.resolveInstallableChannelPlugin).not.toHaveBeenCalled();
+      expect(mocks.resolveMessageChannelSelection).not.toHaveBeenCalled();
+    },
+  );
 
   it("tells users to add an explicit catalog channel before resolving", async () => {
     mocks.resolveInstallableChannelPlugin.mockResolvedValue({
@@ -190,52 +186,146 @@ describe("channelsResolveCommand", () => {
     );
   });
 
-  it("uses the auto-enabled config snapshot for omitted channel resolution", async () => {
-    const autoEnabledConfig = {
-      channels: { whatsapp: {} },
-      plugins: { allow: ["whatsapp"] },
-    };
-    const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>().mockResolvedValue([
-      {
-        input: "friends",
-        resolved: true,
-        id: "120363000000@g.us",
-        name: "Friends",
-      },
-    ]);
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
-      resolvedConfig: { channels: {} },
-      diagnostics: [],
-    });
-    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
-    mocks.resolveMessageChannelSelection.mockResolvedValue({
-      channel: "whatsapp",
-      plugin: {
-        id: "whatsapp",
-        resolver: { resolveTargets },
-      },
-      configured: ["whatsapp"],
-      source: "single-configured",
-    });
+  it.each([
+    {
+      kind: "auto" as const,
+      expected: [
+        { input: "@alice", resolved: true, id: "user-1" },
+        { input: "#general", resolved: true, id: "group-0" },
+        { input: "missing", resolved: false },
+        { input: "@alice", resolved: true, id: "user-1" },
+      ],
+    },
+    {
+      kind: "channel" as const,
+      expected: [
+        { input: "@alice", resolved: true, id: "group-0" },
+        { input: "#general", resolved: true, id: "group-1" },
+        { input: "@alice", resolved: true, id: "group-2" },
+      ],
+    },
+  ])(
+    "preserves $kind resolution order and projects only public result fields",
+    async ({ kind, expected }) => {
+      const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>(
+        async ({ inputs, kind: targetKind }) =>
+          inputs
+            .toReversed()
+            .filter((input) => input !== "missing")
+            .map((input, index) => ({
+              input,
+              resolved: true,
+              id: `${targetKind}-${index}`,
+              providerDetail: "not part of command output",
+            })),
+      );
+      mocks.resolveMessageChannelSelection.mockResolvedValue({
+        channel: "fixture",
+        plugin: { id: "fixture", resolver: { resolveTargets } },
+      });
 
-    await channelsResolveCommand(
-      {
-        entries: ["friends"],
-      },
-      runtime,
+      await channelsResolveCommand(
+        {
+          kind,
+          json: true,
+          entries: ["@alice", "#general", "missing", "@alice"],
+        },
+        runtime,
+      );
+
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(expected);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(resolveTargets.mock.calls.map(([params]) => [params.kind, params.inputs])).toEqual(
+        kind === "auto"
+          ? [
+              ["user", ["@alice", "@alice"]],
+              ["group", ["#general", "missing"]],
+            ]
+          : [["group", ["@alice", "#general", "missing", "@alice"]]],
+      );
+    },
+  );
+
+  it.each([
+    { input: "team:T11111111:user:U01234567", chatType: "direct", expectedKind: "user" },
+    { input: "team:T11111111:channel:C01234567", chatType: "channel", expectedKind: "group" },
+    { input: "fixture:room-id", chatType: "group", expectedKind: "group" },
+    { input: "fixture:channel-id", chatType: "channel", expectedKind: "group" },
+    { input: "fixture:user-id", chatType: undefined, expectedKind: "user" },
+    { input: "general", chatType: undefined, expectedKind: "group" },
+    { input: "jane@example.com", chatType: "channel", expectedKind: "user" },
+    { input: "@jane.doe", chatType: "channel", expectedKind: "user" },
+  ] as const)(
+    "classifies $input with plugin inference and existing name heuristics",
+    async ({ input, chatType, expectedKind }) => {
+      const inferTargetChatType = vi.fn(() => chatType);
+      const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>(
+        async ({ inputs, kind }) =>
+          inputs.map((entry) => ({ input: entry, resolved: kind === expectedKind, id: entry })),
+      );
+      mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+        channelId: "fixture",
+        plugin: {
+          id: "fixture",
+          messaging: { inferTargetChatType },
+          resolver: { resolveTargets },
+        },
+      });
+
+      await channelsResolveCommand({ channel: "fixture", entries: [input], json: true }, runtime);
+
+      expect(resolveTargets).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: expectedKind, inputs: [input] }),
+      );
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual([
+        { input, resolved: true, id: input },
+      ]);
+    },
+  );
+
+  it("keeps directory name queries working when target inference rejects unresolved names", async () => {
+    const inferTargetChatType = vi.fn(() => {
+      throw new Error("Expected a resolved target ID");
+    });
+    const resolveTargets = vi.fn<ChannelResolverAdapter["resolveTargets"]>(async ({ inputs }) =>
+      inputs.map((input) => ({ input, resolved: true, id: input })),
     );
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "fixture",
+      plugin: { id: "fixture", messaging: { inferTargetChatType }, resolver: { resolveTargets } },
+    });
+    const entries = ["#general-chat", "@jane.doe", "jane@example.com", "general"];
 
-    expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
-      config: { channels: {} },
-      env: process.env,
-    });
-    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
-      cfg: autoEnabledConfig,
-      channel: null,
-    });
-    expect(resolveTargets).toHaveBeenCalledTimes(1);
-    expect(resolveTargets.mock.calls[0]?.[0].cfg).toBe(autoEnabledConfig);
-    expect(resolveTargets.mock.calls[0]?.[0].inputs).toStrictEqual(["friends"]);
-    expect(resolveTargets).toHaveBeenNthCalledWith(1, expect.objectContaining({ kind: "group" }));
+    await channelsResolveCommand({ kind: "auto", entries, json: true }, runtime);
+
+    expect(resolveTargets.mock.calls.map(([params]) => [params.kind, params.inputs])).toEqual([
+      ["group", ["#general-chat", "general"]],
+      ["user", ["@jane.doe", "jane@example.com"]],
+    ]);
+    expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(
+      entries.map((input) => ({ input, resolved: true, id: input })),
+    );
   });
+
+  it.each(["user", "group", "channel"] as const)(
+    "keeps explicit --kind %s ahead of plugin inference",
+    async (kind) => {
+      const input = "team:T11111111:user:U01234567";
+      const inferTargetChatType = vi.fn(() => "direct" as const);
+      const resolveTargets = vi
+        .fn<ChannelResolverAdapter["resolveTargets"]>()
+        .mockResolvedValue([]);
+      mocks.resolveMessageChannelSelection.mockResolvedValue({
+        channel: "fixture",
+        plugin: { id: "fixture", messaging: { inferTargetChatType }, resolver: { resolveTargets } },
+      });
+
+      await channelsResolveCommand({ kind, entries: [input], json: true }, runtime);
+
+      expect(inferTargetChatType).not.toHaveBeenCalled();
+      expect(resolveTargets).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: kind === "user" ? "user" : "group", inputs: [input] }),
+      );
+    },
+  );
 });

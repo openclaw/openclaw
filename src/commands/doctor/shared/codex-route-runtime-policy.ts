@@ -2,7 +2,9 @@ import { AGENT_MODEL_CONFIG_KEYS } from "@openclaw/model-catalog-core/configured
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord as asMutableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString as normalizeString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalAgentRuntimeId } from "../../../agents/agent-runtime-id.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import { ensureRecord } from "../../../config/legacy.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
@@ -10,7 +12,6 @@ import {
   canonicalOpenAIModelUsesCodexRuntime,
   isBlockedLegacyCodexModelRef,
   isOpenAICodexModelRef,
-  normalizeRuntimeString,
   parseCodexRouteModelRef,
   toCanonicalOpenAIModelRef,
   type LegacyCodexModelIdentity,
@@ -52,7 +53,7 @@ function resolveCurrentRuntimeIdForCanonicalModel(params: {
   if (!parsed) {
     return "auto";
   }
-  const configured = normalizeRuntimeString(
+  const configured = normalizeOptionalAgentRuntimeId(
     resolveModelRuntimePolicy({
       config: params.cfg,
       provider: parsed.provider,
@@ -81,14 +82,8 @@ function setModelRuntimePolicy(params: {
   changes: string[];
   reason: string;
 }): void {
-  const models = asMutableRecord(params.agent.models) ?? {};
-  if (params.agent.models !== models) {
-    params.agent.models = models;
-  }
-  const entry = asMutableRecord(models[params.modelRef]) ?? {};
-  if (models[params.modelRef] !== entry) {
-    models[params.modelRef] = entry;
-  }
+  const models = ensureRecord(params.agent, "models");
+  const entry = ensureRecord(models, params.modelRef);
   const priorRuntime = asMutableRecord(entry.agentRuntime);
   if (normalizeString(priorRuntime?.id) === params.runtimeId) {
     return;
@@ -213,7 +208,7 @@ function providerModelExplicitNonDefaultRuntimeId(params: {
       ) {
         continue;
       }
-      const runtimeId = normalizeRuntimeString(asMutableRecord(record?.agentRuntime)?.id);
+      const runtimeId = normalizeOptionalAgentRuntimeId(asMutableRecord(record?.agentRuntime)?.id);
       if (runtimeId && runtimeId !== "auto" && runtimeId !== "default" && runtimeId !== "codex") {
         return runtimeId;
       }
@@ -251,7 +246,7 @@ function agentModelMapExactRuntimeIdForLegacyRef(params: {
       ) {
         continue;
       }
-      const runtimeId = normalizeRuntimeString(
+      const runtimeId = normalizeOptionalAgentRuntimeId(
         asMutableRecord(asMutableRecord(entry)?.agentRuntime)?.id,
       );
       if (runtimeId && runtimeId !== "auto" && runtimeId !== "default") {
@@ -280,7 +275,7 @@ function preRepairLegacyModelPolicyExplicitNonDefaultRuntimePin(params: {
     modelId: parsed.modelId,
     agentId: params.agentId,
   });
-  const runtimeId = normalizeRuntimeString(resolved.policy?.id);
+  const runtimeId = normalizeOptionalAgentRuntimeId(resolved.policy?.id);
   if (!runtimeId || runtimeId === "auto" || runtimeId === "default" || runtimeId === "codex") {
     return undefined;
   }
@@ -463,28 +458,5 @@ export function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
       model: entry.trim(),
       canonicalModel,
     });
-  }
-}
-
-export function clearConfigLegacyAgentRuntimePolicies(cfg: OpenClawConfig): string[] {
-  const changes: string[] = [];
-  clearLegacyAgentRuntimePolicy(asMutableRecord(cfg.agents?.defaults), "agents.defaults", changes);
-  for (const { agent, path } of listMutableCodexRouteAgentEntries(cfg)) {
-    clearLegacyAgentRuntimePolicy(agent, path, changes);
-  }
-  return changes;
-}
-
-function clearLegacyAgentRuntimePolicy(
-  container: MutableRecord | undefined,
-  pathLabel: string,
-  changes: string[],
-): void {
-  if (!container) {
-    return;
-  }
-  if (asMutableRecord(container.agentRuntime)) {
-    delete container.agentRuntime;
-    changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
   }
 }

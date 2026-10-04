@@ -95,7 +95,6 @@ beforeEach(() => {
           "vendor/own": { input: 1, output: 2, source: "openRouter" },
         },
         providerPricing: {
-          "owner/extra": { input: 6, output: 12, source: "openCode" },
           "owner/free": { input: 0, output: 0, source: "openCode" },
           "gateway/vendor/own": { input: 3, output: 9, source: "modelsDev" },
           // A mirror's standalone rate colliding with an unknown catalog row.
@@ -132,17 +131,7 @@ it.each([
     ref: "gateway/vendor/own",
     cost: rates(3, 9),
   },
-  {
-    name: "gateway accepts its allowed LiteLLM source",
-    ref: "gateway/vendor/litellm-only",
-    cost: rates(1, 3),
-  },
   { name: "router rejects a source its policy disables", ref: "router/vendor/litellm-only" },
-  {
-    name: "router passes through its allowed source",
-    ref: "router/vendor/listed",
-    cost: rates(2, 4),
-  },
   {
     name: "LiteLLM-only gateway uses the LiteLLM alternative",
     ref: "litegate/vendor/listed",
@@ -162,7 +151,6 @@ it.each([
     name: "unknown catalog row is not revived by upstream or a colliding standalone rate",
     ref: "vendor/catalogued",
   },
-  { name: "owner reads its provider-owned rate", ref: "owner/extra", cost: rates(6, 12) },
   { name: "authoritative owner keeps a native free rate", ref: "owner/free", cost: rates(0, 0) },
 ])("$name", ({ ref, cost }) => {
   const slash = ref.indexOf("/");

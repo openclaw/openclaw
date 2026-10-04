@@ -28,31 +28,36 @@ const QA_CONFIDENCE_VERDICTS = [
 
 export type QaConfidenceVerdict = (typeof QA_CONFIDENCE_VERDICTS)[number];
 
-type QaConfidenceLaneKind =
-  | "qa-suite-summary"
-  | "runtime-parity-summary"
-  | "harness-parity-summary"
-  | "token-efficiency-summary"
-  | "jsonl-replay-summary"
-  | "self-test-summary"
-  | "generic-pass-summary";
+const QA_CONFIDENCE_LANE_KINDS = [
+  "qa-suite-summary",
+  "runtime-parity-summary",
+  "harness-parity-summary",
+  "token-efficiency-summary",
+  "jsonl-replay-summary",
+  "self-test-summary",
+  "generic-pass-summary",
+] as const;
+type QaConfidenceLaneKind = (typeof QA_CONFIDENCE_LANE_KINDS)[number];
 
-type QaConfidenceManifestLane = {
+type QaConfidenceLane = {
   id: string;
   title: string;
   kind: QaConfidenceLaneKind;
   artifact: string;
   required: boolean;
-  failureVerdict?: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
-  missingVerdict?: "environment-blocked" | "optional-gap";
-  missingReason?: string;
-  expectedTokenUsageSource?: "mock-estimate" | "live-usage";
   skipBackfillLane?: string;
   productImpact?: string;
   qaImpact?: string;
   issue?: string;
   ownerAction?: string;
   labels?: string[];
+};
+
+type QaConfidenceManifestLane = QaConfidenceLane & {
+  failureVerdict?: Exclude<QaConfidenceVerdict, "pass" | "environment-blocked">;
+  missingVerdict?: "environment-blocked" | "optional-gap";
+  missingReason?: string;
+  expectedTokenUsageSource?: "mock-estimate" | "live-usage";
 };
 
 type QaConfidenceManifest = {
@@ -63,45 +68,16 @@ type QaConfidenceManifest = {
 
 type QaConfidenceLaneStatus = "pass" | "fail" | "blocked" | "missing" | "unknown";
 
-type QaConfidenceLaneResult = {
-  id: string;
-  title: string;
-  kind: QaConfidenceLaneKind;
-  artifact: string;
+type QaConfidenceLaneResult = QaConfidenceLane & {
   artifactPath: string;
-  required: boolean;
   status: QaConfidenceLaneStatus;
   verdict?: QaConfidenceVerdict;
   details: string;
-  productImpact?: string;
-  qaImpact?: string;
-  issue?: string;
-  ownerAction?: string;
-  labels?: string[];
   skippedCount?: number;
-  skipBackfillLane?: string;
   skipBackfilled?: boolean;
 };
 
-type QaConfidenceReport = {
-  generatedAt: string;
-  profile: string;
-  strictZeroUnknowns: boolean;
-  strictGlobalPass: boolean;
-  pass: boolean;
-  zeroUnknowns: boolean;
-  globalPass: boolean;
-  counts: {
-    total: number;
-    passed: number;
-    failed: number;
-    blocked: number;
-    missing: number;
-    unknown: number;
-  };
-  failures: string[];
-  lanes: QaConfidenceLaneResult[];
-};
+type QaConfidenceReport = Awaited<ReturnType<typeof buildQaConfidenceReport>>;
 
 const QA_CONFIDENCE_SELF_TEST_CANARY_IDS = [
   "prompt-drift",
@@ -164,7 +140,7 @@ function collectGatewayLogSentinels(value: unknown): GatewayLogSentinelFinding[]
 }
 
 function isQaConfidenceVerdict(value: string): value is QaConfidenceVerdict {
-  return QA_CONFIDENCE_VERDICTS.includes(value as QaConfidenceVerdict);
+  return QA_CONFIDENCE_VERDICTS.some((verdict) => verdict === value);
 }
 
 function readRequiredString(record: Record<string, unknown>, key: string): string {
@@ -190,18 +166,11 @@ function readVerdict(value: unknown, key: string): QaConfidenceVerdict | undefin
 
 function readLaneKind(value: unknown): QaConfidenceLaneKind {
   const text = readString(value);
-  switch (text) {
-    case "qa-suite-summary":
-    case "runtime-parity-summary":
-    case "harness-parity-summary":
-    case "token-efficiency-summary":
-    case "jsonl-replay-summary":
-    case "self-test-summary":
-    case "generic-pass-summary":
-      return text;
-    default:
-      throw new Error(`unknown confidence manifest lane kind: ${text ?? "missing"}`);
+  const kind = QA_CONFIDENCE_LANE_KINDS.find((candidate) => candidate === text);
+  if (!kind) {
+    throw new Error(`unknown confidence manifest lane kind: ${text ?? "missing"}`);
   }
+  return kind;
 }
 
 function normalizeManifestLane(value: unknown): QaConfidenceManifestLane {
@@ -297,18 +266,6 @@ export async function readQaConfidenceManifestFile(
     );
   }
   return normalizeQaConfidenceManifest(payload);
-}
-
-function resolveArtifactPath(artifactRoot: string, artifact: string): string {
-  return path.isAbsolute(artifact) ? artifact : path.resolve(artifactRoot, artifact);
-}
-
-async function readJsonFile(filePath: string): Promise<unknown> {
-  return JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return isRecord(error) && error.code === "ENOENT";
 }
 
 type QaConfidenceLaneEvaluation = {
@@ -595,13 +552,8 @@ function evaluateLaneArtifact(
       return evaluateTokenEfficiencySummary(payload, lane.expectedTokenUsageSource);
     case "jsonl-replay-summary":
       return evaluateJsonlReplaySummary(payload);
-    case "self-test-summary":
-      return evaluateSelfTestSummary(payload);
     default:
-      return {
-        passed: false,
-        details: `unknown confidence lane kind: ${(lane as { kind?: string }).kind ?? "missing"}`,
-      };
+      return evaluateSelfTestSummary(payload);
   }
 }
 
@@ -632,13 +584,15 @@ async function evaluateLane(
   lane: QaConfidenceManifestLane,
   artifactRoot: string,
 ): Promise<QaConfidenceLaneResult> {
-  const artifactPath = resolveArtifactPath(artifactRoot, lane.artifact);
+  const artifactPath = path.isAbsolute(lane.artifact)
+    ? lane.artifact
+    : path.resolve(artifactRoot, lane.artifact);
   const base = baseLaneResult(lane, artifactPath);
   let payload: unknown;
   try {
-    payload = await readJsonFile(artifactPath);
+    payload = JSON.parse(await fs.readFile(artifactPath, "utf8")) as unknown;
   } catch (error) {
-    if (!isMissingFileError(error)) {
+    if (!isRecord(error) || error.code !== "ENOENT") {
       return {
         ...base,
         status: "unknown",
@@ -701,7 +655,7 @@ function applySkipBackfillState(
   });
 }
 
-function countLaneResults(lanes: readonly QaConfidenceLaneResult[]): QaConfidenceReport["counts"] {
+function countLaneResults(lanes: readonly QaConfidenceLaneResult[]) {
   return {
     total: lanes.length,
     passed: lanes.filter((lane) => lane.status === "pass").length,
@@ -720,14 +674,10 @@ function failuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): strin
 
 function globalFailuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
   return lanes.flatMap((lane) => {
-    if (lane.status === "blocked") {
-      return [`${lane.id} is blocked: ${lane.details}`];
-    }
-    if (lane.status === "missing") {
-      return [`${lane.id} is missing: ${lane.details}`];
-    }
-    if (lane.status === "unknown") {
-      return [`${lane.id} is unclassified: ${lane.details}`];
+    if (lane.status === "blocked" || lane.status === "missing" || lane.status === "unknown") {
+      return [
+        `${lane.id} is ${lane.status === "unknown" ? "unclassified" : lane.status}: ${lane.details}`,
+      ];
     }
     if (lane.status === "fail") {
       return [`${lane.id} is classified ${lane.verdict ?? "unclassified"}: ${lane.details}`];
@@ -745,7 +695,7 @@ export async function buildQaConfidenceReport(params: {
   strictZeroUnknowns?: boolean;
   strictGlobalPass?: boolean;
   generatedAt?: string;
-}): Promise<QaConfidenceReport> {
+}) {
   const evaluatedLanes = [];
   for (const lane of params.manifest.lanes) {
     evaluatedLanes.push(await evaluateLane(lane, params.artifactRoot));
@@ -764,11 +714,7 @@ export async function buildQaConfidenceReport(params: {
     profile: params.manifest.profile,
     strictZeroUnknowns,
     strictGlobalPass,
-    pass: strictGlobalPass
-      ? globalPass
-      : strictZeroUnknowns
-        ? zeroUnknowns
-        : unclassifiedFailures.length === 0,
+    pass: strictGlobalPass ? globalPass : zeroUnknowns,
     zeroUnknowns,
     globalPass,
     counts,

@@ -1,13 +1,9 @@
-/** ACP preflight failures settle their task without erasing successor liveness. */
+/** ACP preflight failures release their native turn without erasing successor liveness. */
 import { describe, expect, it, vi } from "vitest";
-import {
-  requireTaskByRunId,
-  withAcpManagerTaskStateDir,
-} from "../../../test/helpers/acp-manager-task-state.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sessionStateEvents from "../../sessions/session-state-events.js";
-import { getTaskById } from "../../tasks/task-registry-query.js";
-import { isAcpTurnActive } from "./active-turns.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { getActiveAcpTurnCount, listActiveAcpSessionsForOwner } from "./active-turns.js";
 import { getAcpSessionResetControls } from "./manager.reset-controls.js";
 import {
   AcpSessionManager,
@@ -21,11 +17,12 @@ import {
 describe("AcpSessionManager", () => {
   installAcpSessionManagerTestLifecycle();
 
-  it.each(["metadata failure", "signal failure", "abort", "actor replacement"] as const)(
-    "settles only the created task when preflight ends with %s",
+  it.each(["signal failure", "abort", "actor replacement"] as const)(
+    "releases only the current native turn when preflight ends with %s",
     async (reason) => {
-      await withAcpManagerTaskStateDir(async () => {
+      await withStateDirEnv("openclaw-acp-preflight-", async () => {
         const sessionKey = "agent:codex:acp:preflight-child";
+        const parentSessionKey = "agent:main:main";
         const requestId = "preflight-run";
         const runtime = createRuntime();
         hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -34,7 +31,7 @@ describe("AcpSessionManager", () => {
         });
         mockParentedAcpSessionEntries({
           childSessionKey: sessionKey,
-          parentSessionKey: "agent:main:main",
+          parentSessionKey,
         });
         const manager = new AcpSessionManager();
         const reached = createDeferred();
@@ -46,9 +43,6 @@ describe("AcpSessionManager", () => {
           readSpy.mockImplementationOnce(async (params) => {
             reached.resolve();
             await release.promise;
-            if (reason === "metadata failure") {
-              throw failure;
-            }
             return await read(params);
           });
         }
@@ -86,12 +80,12 @@ describe("AcpSessionManager", () => {
               outcome.then(() => "settled"),
             ]),
           ).toBe("preflight");
-          const task = requireTaskByRunId(requestId);
-          expect(task.status).toBe("running");
-          expect(isAcpTurnActive({ sessionKey, agentId: "codex" })).toBe(true);
+          expect(getActiveAcpTurnCount()).toBe(1);
+          expect(listActiveAcpSessionsForOwner(parentSessionKey)).toEqual(
+            reason === "signal failure" ? [sessionKey] : [],
+          );
           expect(runtime.ensureSession).not.toHaveBeenCalled();
           expect(hoisted.upsertAcpSessionMetaMock).not.toHaveBeenCalled();
-          let successorTaskId: string | undefined;
           if (reason === "abort") {
             controller.abort();
           } else if (reason === "actor replacement") {
@@ -113,24 +107,32 @@ describe("AcpSessionManager", () => {
                 throw new Error("Successor settled before starting its stream");
               }),
             ]);
-            successorTaskId = requireTaskByRunId(requestId).taskId;
-            expect(successorTaskId).not.toBe(task.taskId);
           }
           const metadataWrites = hoisted.upsertAcpSessionMetaMock.mock.calls.length;
           release.resolve();
           const settled = await outcome;
           expect(settled.ok).toBe(false);
-          expect(getTaskById(task.taskId)?.status).toBe(
-            reason === "abort" || reason === "actor replacement" ? "cancelled" : "failed",
-          );
           expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(metadataWrites);
-          expect(isAcpTurnActive({ sessionKey, agentId: "codex" })).toBe(Boolean(successor));
-          if (successorTaskId) {
-            expect(getTaskById(successorTaskId)?.status).toBe("running");
+          expect(getActiveAcpTurnCount()).toBe(successor ? 1 : 0);
+          expect(listActiveAcpSessionsForOwner(parentSessionKey)).toEqual(
+            successor ? [sessionKey] : [],
+          );
+          expect(
+            (await sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200))
+              .events,
+          ).toMatchObject(
+            reason === "signal failure"
+              ? [{ kind: "run_failed", runId: requestId, payload: { outcome: "error" } }]
+              : [],
+          );
+          if (successor) {
             releaseSuccessor.resolve();
             await successor;
-            expect(getTaskById(successorTaskId)?.status).toBe("succeeded");
-            expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+            expect(getActiveAcpTurnCount()).toBe(0);
+            expect(
+              (await sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200))
+                .events,
+            ).toMatchObject([{ kind: "run_completed", runId: requestId }]);
           }
         } finally {
           release.resolve();

@@ -1,23 +1,39 @@
 import { afterEach, expect, test, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { withGatewayPersonalToolUser } from "../../agents/tools/gateway-caller-context.js";
+import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import * as preferences from "../../state/user-preferences.js";
-import { ensureProfileForEmail, linkEmail, setAvatar } from "../../state/user-profiles.js";
+import { linkEmail, setAvatar } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareGatewayRecipientProfile } from "../expected-profile.js";
+import {
+  createCoreGatewayMethodDescriptors,
+  createGatewayMethodRegistry,
+} from "../methods/registry.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import {
+  dispatchGatewayMethodInProcess,
+  withOperatorToolGatewayAuthority,
+} from "../server-plugin-in-process-dispatch.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "../server-plugin-in-process-dispatch.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { createGatewayWsTestSocket } from "../server/ws-connection.test-helpers.js";
 import { createOperatorWsClient } from "../server/ws-connection/authenticated-request-dispatch.test-support.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestHandler } from "./types.js";
 import { usersHandlers } from "./users.js";
 
 async function invokePreferenceMethod(
@@ -45,6 +61,161 @@ async function invokePreferenceMethod(
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
+});
+
+async function withPreferenceToolTurn(
+  run: (params: {
+    ownerId: string;
+    steer: () => Promise<void>;
+    revoke: () => void;
+    request: (
+      method: "users.prefs.get" | "users.prefs.set",
+      params?: Record<string, unknown>,
+    ) => Promise<unknown>;
+  }) => Promise<void>,
+) {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "prefs-tool-turn-" });
+  try {
+    const owner = ensureProfileForEmail("prefs-owner@example.test");
+    const guest = ensureProfileForEmail("prefs-guest@example.test");
+    const scopes = ["operator.read", "operator.write"];
+    const client = createOperatorClient({ profileId: owner.id, scopes });
+    const context = createContext();
+    const expectSyntheticOwnerCall = (
+      method: "users.prefs.get" | "users.prefs.set",
+    ): GatewayRequestHandler => {
+      const handler = usersHandlers[method];
+      if (!handler) {
+        throw new Error(`missing ${method} handler`);
+      }
+      return (options) => {
+        expect(options.client?.internal?.syntheticClient).toBe(true);
+        expect(options.client?.authenticatedUserProfile?.profileId).toBe(owner.id);
+        return handler(options);
+      };
+    };
+    const descriptors = createCoreGatewayMethodDescriptors({
+      "users.prefs.get": expectSyntheticOwnerCall("users.prefs.get"),
+      "users.prefs.set": expectSyntheticOwnerCall("users.prefs.set"),
+    });
+    context.getGatewayMethodRegistry = () => createGatewayMethodRegistry(descriptors);
+    await withOperatorToolGatewayAuthority(
+      { authenticatedUserProfile: client.authenticatedUserProfile!, scopes },
+      () =>
+        withPersonalToolTurn(
+          { owner: { profileId: owner.id, senderId: "owner", name: "Owner" } },
+          (turn) =>
+            run({
+              ownerId: owner.id,
+              steer: async () => {
+                expect(
+                  await turn.steer({ profileId: guest.id, senderId: "guest", name: "Guest" }),
+                ).toMatchObject({ status: "accepted" });
+              },
+              revoke: () => turn.revoke(owner.id),
+              request: (method, params = {}) =>
+                dispatchGatewayMethodInProcess(method, params, {
+                  forceSyntheticClient: true,
+                  resolveGatewayContext: () => context,
+                }),
+            }),
+        ),
+    );
+  } finally {
+    await state.cleanup();
+  }
+}
+
+test("users.prefs rejects mixed-person synthetic turn calls before reading or writing preferences", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
+    await expect(request("users.prefs.set", { entries: { "ui.theme": "claw" } })).resolves.toEqual({
+      status: "ok",
+    });
+    await expect(request("users.prefs.get")).resolves.toEqual({
+      status: "ok",
+      entries: { "ui.theme": "claw" },
+    });
+    await steer();
+    using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
+    using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
+    await withGatewayPersonalToolUser(ownerId, async () => {
+      await expect(request("users.prefs.get")).rejects.toThrow(/own Control UI turn/i);
+      await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow(
+        /own Control UI turn/i,
+      );
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(write).not.toHaveBeenCalled();
+  });
+});
+
+test.each(["read", "write"] as const)(
+  "users.prefs rejects a steer accepted while the personal %s is pending",
+  async (operation) => {
+    await withPreferenceToolTurn(async ({ ownerId, steer, request }) => {
+      await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const readPreferences = preferences.getCanonicalUserPreferences;
+      const writePreferences = preferences.setCanonicalUserPreferences;
+      using read = vi.spyOn(preferences, "getCanonicalUserPreferences");
+      using write = vi.spyOn(preferences, "setCanonicalUserPreferences");
+      if (operation === "read") {
+        read.mockImplementationOnce(async (...args) => {
+          const result = await readPreferences(...args);
+          entered.resolve();
+          await release.promise;
+          return result;
+        });
+      } else {
+        write.mockImplementationOnce(async (...args) => {
+          entered.resolve();
+          await release.promise;
+          return writePreferences(...args);
+        });
+      }
+      const pending = request(
+        operation === "read" ? "users.prefs.get" : "users.prefs.set",
+        operation === "read" ? {} : { entries: { "ui.theme": "dark" } },
+      );
+      const outcome = Promise.allSettled([pending]);
+      try {
+        await Promise.race([entered.promise, pending]);
+        expect(operation === "read" ? read : write).toHaveBeenCalledOnce();
+        await steer();
+      } finally {
+        release.resolve();
+        await outcome;
+      }
+      expect(await outcome).toMatchObject([
+        { status: "rejected", reason: { message: expect.stringMatching(/own Control UI turn/i) } },
+      ]);
+      expect(await readPreferences(ownerId)).toMatchObject({ entries: { "ui.theme": "claw" } });
+    });
+  },
+);
+
+test("users.prefs refuses a pending write when the participant is revoked before worker commit", async () => {
+  await withPreferenceToolTurn(async ({ ownerId, revoke, request }) => {
+    await request("users.prefs.set", { entries: { "ui.theme": "claw" } });
+    const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+    let reachedCommit = false;
+    using admission = vi.spyOn(workerAdmission, "createSqliteWorkerOperationAdmission");
+    admission.mockImplementation((admit, attachment) =>
+      createAdmission((workerRequest, grant) => {
+        if (workerRequest.stage === "commit") {
+          reachedCommit = true;
+          revoke();
+        }
+        admit(workerRequest, grant);
+      }, attachment),
+    );
+    await expect(request("users.prefs.set", { entries: { "ui.theme": "dark" } })).rejects.toThrow();
+    expect(reachedCommit).toBe(true);
+    expect(await preferences.getCanonicalUserPreferences(ownerId)).toMatchObject({
+      entries: { "ui.theme": "claw" },
+    });
+  });
 });
 
 test.each(["current", "scope", "source", "identity", "error-response", "staff"] as const)(

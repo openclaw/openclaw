@@ -89,6 +89,9 @@
       "workboard_board_create",
       "workboard_board_archive",
       "workboard_board_delete",
+      "workboard_sessions_board_read",
+      "workboard_sessions_board_update",
+      "workboard_sessions_board_move",
       "workboard_stats",
       "workboard_runs",
       "workboard_specify",
@@ -229,9 +232,9 @@
     "properties": {}
   },
   "controlUi": {
-    "entry": "dist/control-ui/a3c523ada91c8f86d01e5f05f8ce460f90ca0b2c5786d40b8679bddf92b130f7/index.js",
+    "entry": "dist/control-ui/1c7279cd26974c2a05afbdff5ae523e8a74482eb94f47d738b6404a644fd0310/index.js",
     "styles": [
-      "dist/control-ui/a3c523ada91c8f86d01e5f05f8ce460f90ca0b2c5786d40b8679bddf92b130f7/index.css"
+      "dist/control-ui/1c7279cd26974c2a05afbdff5ae523e8a74482eb94f47d738b6404a644fd0310/index.css"
     ]
   }
 }

@@ -108,28 +108,6 @@ async function prepareMeetingBrowserTab<
   }
 }
 
-function selectReusableTab<
-  Session,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-  Transcript extends MeetingTranscriptSnapshot,
->(params: {
-  adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
-  tabs: MeetingBrowserCandidateTab[];
-  url: string;
-}) {
-  const matches = params.tabs.filter((tab) =>
-    params.adapter.urls.isRecoverableTab(tab, params.url),
-  );
-  const accountHint = params.adapter.urls.accountHint(params.url);
-  const tab = matches.find(
-    (candidate) =>
-      params.adapter.urls.isPreferredJoinUrl(candidate.url) &&
-      (!accountHint || params.adapter.urls.accountHint(candidate.url) === accountHint),
-  );
-  return { matches, tab };
-}
-
 export async function openMeetingWithBrowser<
   Session extends MeetingBrowserJoinSession<Mode>,
   Mode extends string,
@@ -162,14 +140,17 @@ export async function openMeetingWithBrowser<
         timeoutMs: Math.min(timeoutMs, 5_000),
       }),
     );
-    const reusable = selectReusableTab({
-      adapter: params.adapter,
-      tabs,
-      url: params.session.url,
-    });
-    tab = reusable.tab;
+    const matches = tabs.filter((candidate) =>
+      params.adapter.urls.isRecoverableTab(candidate, params.session.url),
+    );
+    const accountHint = params.adapter.urls.accountHint(params.session.url);
+    tab = matches.find(
+      (candidate) =>
+        params.adapter.urls.isPreferredJoinUrl(candidate.url) &&
+        (!accountHint || params.adapter.urls.accountHint(candidate.url) === accountHint),
+    );
     if (!tab && !params.adapter.urls.accountHint(params.session.url)) {
-      const fallbackUrl = reusable.matches.find((candidate) => candidate.url)?.url;
+      const fallbackUrl = matches.find((candidate) => candidate.url)?.url;
       if (fallbackUrl) {
         openSession = { ...params.session, url: fallbackUrl };
       }
@@ -352,22 +333,14 @@ async function inspectRecoverableTab<
     notes?: string[];
   },
   Transcript extends MeetingTranscriptSnapshot,
->(params: {
-  adapter: BrowserAdapter<Session, Mode, Health, Transcript>;
-  allowSessionAdoption?: boolean;
-  autoJoin?: boolean;
-  callBrowser: MeetingBrowserRequestCaller;
-  captureCaptions?: boolean;
-  config: MeetingBrowserControllerConfig;
-  meetingSessionId?: string;
-  mode: Mode;
-  readOnly?: boolean;
-  requestedMeetingUrl: string | undefined;
-  tab: MeetingBrowserCandidateTab;
-  targetId: string;
-  deadline?: number;
-  timeoutMs: number;
-}) {
+>(
+  params: Parameters<typeof recoverMeetingBrowserTab<Session, Mode, Health, Transcript>>[0] & {
+    tab: MeetingBrowserCandidateTab;
+    targetId: string;
+    deadline?: number;
+    timeoutMs: number;
+  },
+) {
   const allowMicrophone = params.adapter.browser.allowsMicrophone(params.mode);
   const focusTimeoutMs =
     params.deadline === undefined
@@ -574,17 +547,8 @@ export async function recoverMeetingBrowserTab<
     };
   }
   return await inspectRecoverableTab({
-    adapter: params.adapter,
-    allowSessionAdoption: params.allowSessionAdoption,
-    autoJoin: params.autoJoin,
-    callBrowser: params.callBrowser,
-    captureCaptions: params.captureCaptions,
-    config: params.config,
+    ...params,
     ...(deadline === undefined ? {} : { deadline }),
-    meetingSessionId: params.meetingSessionId,
-    mode: params.mode,
-    readOnly: params.readOnly,
-    requestedMeetingUrl: params.requestedMeetingUrl,
     timeoutMs,
     tab,
     targetId,

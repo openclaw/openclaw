@@ -76,7 +76,7 @@ function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
   }
 }
 
-function buildRecallPrompt(params: {
+export function buildRecallPrompt(params: {
   config: ResolvedActiveRecallPluginConfig;
   query: string;
   searchQuery: string;
@@ -158,16 +158,16 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | undefined {
+export function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | undefined {
   const status = normalizeOptionalString(source.status)
     ?.toLowerCase()
     .replace(/[\s-]+/g, "_");
   if (status !== undefined && STRUCTURED_MEMORY_EMPTY_STATUSES.has(status)) {
     return false;
   }
-  const resultCollections = [source.results, source.memories, source.items];
-  if (resultCollections.some((entry) => Array.isArray(entry))) {
-    return resultCollections.some((entry) => Array.isArray(entry) && entry.length > 0);
+  const resultCollections = [source.results, source.memories, source.items].filter(Array.isArray);
+  if (resultCollections.length > 0) {
+    return resultCollections.some((entry) => entry.length > 0);
   }
   const resultCounts = [
     source.count,
@@ -175,11 +175,9 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
     source.memoryCount,
     source.resultCount,
     source.totalMatches,
-  ];
-  if (resultCounts.some((entry) => typeof entry === "number" && Number.isFinite(entry))) {
-    return resultCounts.some(
-      (entry) => typeof entry === "number" && Number.isFinite(entry) && entry > 0,
-    );
+  ].filter((entry): entry is number => typeof entry === "number" && Number.isFinite(entry));
+  if (resultCounts.length > 0) {
+    return resultCounts.some((entry) => entry > 0);
   }
   if (typeof source.found === "boolean" || typeof source.hasResults === "boolean") {
     return source.found === true || source.hasResults === true;
@@ -187,7 +185,7 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
   return undefined;
 }
 
-function readStructuredMemoryFailure(source: unknown): boolean | undefined {
+export function readStructuredMemoryFailure(source: unknown): boolean | undefined {
   const record = asOptionalRecord(source);
   if (!record) {
     return undefined;
@@ -244,11 +242,11 @@ function readStructuredContentState(
   return sawOtherState ? !decisiveState : undefined;
 }
 
-function readStructuredMemoryFailureFromContent(content: unknown): boolean | undefined {
+export function readStructuredMemoryFailureFromContent(content: unknown): boolean | undefined {
   return readStructuredContentState(content, readStructuredMemoryFailure, true);
 }
 
-function readStructuredMemoryEvidenceFromContent(content: unknown): boolean | undefined {
+export function readStructuredMemoryEvidenceFromContent(content: unknown): boolean | undefined {
   return readStructuredContentState(content, readStructuredMemoryEvidence, false);
 }
 
@@ -263,7 +261,7 @@ const ASSISTANT_CHITCHAT_PATTERNS = [
   /^(?:当前模型|当前日期|当前时间|今天).{0,100}(?:帮助|请|如果)/u,
 ];
 
-function normalizeActiveSummary(rawReply: string): string | null {
+export function normalizeActiveSummary(rawReply: string): string | null {
   const singleLine = rawReply.replace(/\s+/g, " ").trim();
   if (
     NO_RECALL_VALUES.has(singleLine.toLowerCase()) ||
@@ -275,7 +273,7 @@ function normalizeActiveSummary(rawReply: string): string | null {
   return singleLine;
 }
 
-function truncateSummary(summary: string, maxSummaryChars: number): string {
+export function truncateSummary(summary: string, maxSummaryChars: number): string {
   const trimmed = summary.trim();
   if (trimmed.length <= maxSummaryChars) {
     return trimmed;
@@ -301,7 +299,7 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
   return `${bounded}${ellipsis}`;
 }
 
-function buildPromptPrefix(summary: string): string {
+export function buildPromptPrefix(summary: string): string {
   return [
     ACTIVE_MEMORY_CONTEXT_HEADER,
     ACTIVE_MEMORY_OPEN_TAG,
@@ -310,18 +308,6 @@ function buildPromptPrefix(summary: string): string {
   ].join("\n");
 }
 
-function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
+export function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
   return buildPromptPrefix(ACTIVE_MEMORY_RECALL_OUTCOME_TEXT[outcome]);
 }
-
-export {
-  buildPromptPrefix,
-  buildRecallOutcomePrefix,
-  buildRecallPrompt,
-  normalizeActiveSummary,
-  readExplicitMemoryEvidence,
-  readStructuredMemoryEvidenceFromContent,
-  readStructuredMemoryFailure,
-  readStructuredMemoryFailureFromContent,
-  truncateSummary,
-};

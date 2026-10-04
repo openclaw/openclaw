@@ -78,52 +78,46 @@ export function buildChannelsStatusMock(baseTime: number) {
 
 export function buildChannelsPairingMock(baseTime: number) {
   const iso = (offsetMs: number) => new Date(baseTime + offsetMs).toISOString();
+  const requests = [
+    {
+      requestId: "pairing-req-1",
+      channel: "telegram",
+      channelLabel: "Telegram",
+      accountId: "default",
+      accountLabel: "Telegram Bot",
+      senderId: "telegram-demo-user",
+      senderLabel: "Mira Delgado (@miradelgado)",
+      metadata: { username: "miradelgado", firstName: "Mira", lastName: "Delgado" },
+      createdAt: iso(-14 * 60_000),
+      lastSeenAt: iso(-2 * 60_000),
+      expiresAt: iso(46 * 60_000),
+      notifySupported: true,
+    },
+    {
+      requestId: "pairing-req-2",
+      channel: "whatsapp",
+      channelLabel: "WhatsApp",
+      accountId: "default",
+      accountLabel: "WhatsApp Web",
+      senderId: "whatsapp-demo-user",
+      senderLabel: "Unknown sender",
+      createdAt: iso(-3 * 60_000),
+      lastSeenAt: iso(-60_000),
+      expiresAt: iso(57 * 60_000),
+      notifySupported: false,
+    },
+  ];
   return {
-    accounts: [
-      {
-        channel: "telegram",
-        channelLabel: "Telegram",
-        accountId: "default",
-        accountLabel: "Telegram Bot",
-        notifySupported: true,
-      },
-      {
-        channel: "whatsapp",
-        channelLabel: "WhatsApp",
-        accountId: "default",
-        accountLabel: "WhatsApp Web",
-        notifySupported: false,
-      },
-    ],
-    requests: [
-      {
-        requestId: "pairing-req-1",
-        channel: "telegram",
-        channelLabel: "Telegram",
-        accountId: "default",
-        accountLabel: "Telegram Bot",
-        senderId: "telegram-demo-user",
-        senderLabel: "Mira Delgado (@miradelgado)",
-        metadata: { username: "miradelgado", firstName: "Mira", lastName: "Delgado" },
-        createdAt: iso(-14 * 60_000),
-        lastSeenAt: iso(-2 * 60_000),
-        expiresAt: iso(46 * 60_000),
-        notifySupported: true,
-      },
-      {
-        requestId: "pairing-req-2",
-        channel: "whatsapp",
-        channelLabel: "WhatsApp",
-        accountId: "default",
-        accountLabel: "WhatsApp Web",
-        senderId: "whatsapp-demo-user",
-        senderLabel: "Unknown sender",
-        createdAt: iso(-3 * 60_000),
-        lastSeenAt: iso(-60_000),
-        expiresAt: iso(57 * 60_000),
-        notifySupported: false,
-      },
-    ],
+    accounts: requests.map(
+      ({ channel, channelLabel, accountId, accountLabel, notifySupported }) => ({
+        channel,
+        channelLabel,
+        accountId,
+        accountLabel,
+        notifySupported,
+      }),
+    ),
+    requests,
     commandOwnerConfigured: false,
     limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
   };

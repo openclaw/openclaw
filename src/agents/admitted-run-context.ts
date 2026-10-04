@@ -9,6 +9,7 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
+import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -20,6 +21,7 @@ import {
 } from "../infra/agent-run-registry.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -49,12 +51,24 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   retain?: () => () => void;
   /** Live assignment from the original prepared profile lease. */
   readCurrentRoleAssignment?: (this: void) => string | null;
+  /** Verified primary login from the same live profile authority. */
+  readCurrentGithubLogin?: (this: void) => string | null;
+  /** Prepared role permissions; source-policy changes revoke the owning authority. */
+  rolePolicy?: Readonly<{
+    sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
+    sandboxRequired: boolean;
+    agents: "*" | readonly string[];
+  }>;
   modelPolicy?: PreparedOperatorModelPolicy;
   /** Committed policy changes invalidate only executions using a removed model. */
   onModelPolicyChanged?: (listener: () => void) => () => void;
 }>;
 
-const operatorAuthorityIssuers = new WeakSet<object>();
+// Source and bundled module instances must recognize the same host-issued object.
+const operatorAuthorityIssuers = resolveGlobalSingleton(
+  Symbol.for("openclaw.admittedRunOperatorAuthority.issuers"),
+  () => new WeakSet<object>(),
+);
 
 /** Host-only construction; public reply options cannot manufacture a source capability. */
 export function createAdmittedRunOperatorAuthority(
@@ -63,19 +77,22 @@ export function createAdmittedRunOperatorAuthority(
   const check = source.assertCurrent;
   const signal = source.signal;
   let revoked = false;
+  let revocationReason: unknown;
   const assertCurrent = () => {
     if (revoked) {
-      throw new Error("operator execution authority is no longer active");
+      throw revocationReason;
     }
     try {
       signal?.throwIfAborted();
       check();
     } catch (error) {
       revoked = true;
+      revocationReason = error;
       throw error;
     }
   };
   const readCurrentRoleAssignment = source.readCurrentRoleAssignment;
+  const readCurrentGithubLogin = source.readCurrentGithubLogin;
   const authority = Object.freeze({
     profileId: source.profileId,
     scopes: Object.freeze([...source.scopes]),
@@ -95,6 +112,21 @@ export function createAdmittedRunOperatorAuthority(
           assertCurrent();
           return readCurrentRoleAssignment();
         }
+      : undefined,
+    readCurrentGithubLogin: readCurrentGithubLogin
+      ? () => {
+          assertCurrent();
+          return readCurrentGithubLogin();
+        }
+      : undefined,
+    rolePolicy: source.rolePolicy
+      ? Object.freeze({
+          ...source.rolePolicy,
+          agents:
+            source.rolePolicy.agents === "*"
+              ? "*"
+              : Object.freeze([...new Set(source.rolePolicy.agents)].toSorted()),
+        })
       : undefined,
   });
   operatorAuthorityIssuers.add(authority);

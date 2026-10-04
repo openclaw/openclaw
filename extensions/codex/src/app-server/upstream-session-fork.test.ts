@@ -130,7 +130,7 @@ describe("forkCodexUpstreamSession", () => {
         return transport.client;
       });
       const config = {
-        agents: { list: [{ id: "main", agentDir: stateDir, workspace: stateDir }] },
+        agents: { entries: { main: { agentDir: stateDir, workspace: stateDir } } },
       };
       const pluginConfig = {
         appServer: {

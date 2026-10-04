@@ -1,4 +1,3 @@
-// Check Workflows tests cover check workflows script behavior.
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -7,6 +6,7 @@ import { parse } from "yaml";
 import { createGatewayTaskSupervisorProbe } from "../../src/daemon/schtasks.task-supervisor.native-test-support.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
+import { evaluateWorkflowExpression } from "./ci-workflow.test-support.js";
 
 const scriptPath = path.resolve("scripts/check-workflows.mts");
 const tempDirs: string[] = [];
@@ -198,168 +198,78 @@ describe("check-workflows", () => {
     },
   );
 
-  it("bootstraps pinned pre-commit in a temporary Python venv when needed", () => {
+  it.each([
+    { mode: "bootstrap", code: 0, errors: [] },
+    {
+      mode: "old-python",
+      code: 1,
+      errors: ["python3 is 3.9.6", "pre-commit 4.6.2 requires Python >=3.10"],
+    },
+    {
+      mode: "missing-venv",
+      code: 1,
+      errors: [
+        "python venv unavailable",
+        "missing pre-commit runtime for actionlint",
+        "Python venv support for pre-commit 4.6.2",
+      ],
+    },
+    { mode: "hook-failure", code: 13, errors: ["hook failed"] },
+  ])("handles $mode through the temporary Python runtime", ({ mode, code, errors }) => {
     const tempDir = makeTempDir(tempDirs, "check-workflows-");
     const binDir = path.join(tempDir, "bin");
     const markerPath = path.join(tempDir, "python.txt");
+    const venvPath = path.join(tempDir, "venv-path.txt");
     mkdirSync(binDir);
     writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(
       path.join(binDir, "python3"),
       [
         "#!/bin/sh",
-        'if [ "$1" = "--version" ]; then exit 0; fi',
+        `if [ "$1" = "--version" ]; then printf '%s\\n' '${mode === "old-python" ? "Python 3.9.6" : ""}'; exit 0; fi`,
         'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then',
-        '  printf "%s\\n" "$*" >> "$PRE_COMMIT_BOOTSTRAP_MARKER"',
-        "  exit 0",
-        "fi",
-        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then',
-        '  printf "%s\\n" "$*" >> "$PRE_COMMIT_BOOTSTRAP_MARKER"',
-        "  exit 0",
-        "fi",
+        'printf "%s\\n" "$*" >> "$PYTHON_MARKER"',
         'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
+        `  if [ '${mode}' = 'missing-venv' ]; then echo 'python venv unavailable' >&2; exit 1; fi`,
         '  /bin/mkdir -p "$3/bin"',
         '  /bin/cp "$0" "$3/bin/python"',
         '  /bin/chmod +x "$3/bin/python"',
-        "  exit 0",
-        "fi",
-        "exit 0",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: binDir,
-        PRE_COMMIT_BOOTSTRAP_MARKER: markerPath,
-      },
-    });
-
-    expect(result.status).toBe(0);
-    const pythonArgs = readFileSync(markerPath, "utf8");
-    expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.6.2");
-    expect(pythonArgs).toContain(
-      "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
-    );
-    expect(pythonArgs).toContain(
-      "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
-    );
-  });
-
-  it("rejects a python3 below the pinned pre-commit runtime floor before building a venv", () => {
-    const tempDir = makeTempDir(tempDirs, "check-workflows-");
-    const binDir = path.join(tempDir, "bin");
-    const markerPath = path.join(tempDir, "venv-attempt.txt");
-    mkdirSync(binDir);
-    writeFileSync(
-      path.join(binDir, "python3"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--version" ]; then printf "Python 3.9.6\\n"; exit 0; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
-        'printf "%s\\n" "$*" >> "$VENV_ATTEMPT_MARKER"',
-        "exit 1",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: binDir,
-        VENV_ATTEMPT_MARKER: markerPath,
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("python3 is 3.9.6");
-    expect(result.stderr).toContain("pre-commit 4.6.2 requires Python >=3.10");
-    expect(existsSync(markerPath)).toBe(false);
-  });
-
-  it("prints the missing runtime diagnostic when Python venv support is unavailable", () => {
-    const tempDir = makeTempDir(tempDirs, "check-workflows-");
-    const binDir = path.join(tempDir, "bin");
-    mkdirSync(binDir);
-    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    writeFileSync(
-      path.join(binDir, "python3"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--version" ]; then exit 0; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
-        '  printf "%s\\n" "python venv unavailable" >&2',
-        "  exit 1",
-        "fi",
-        "exit 1",
-        "",
-      ].join("\n"),
-      { mode: 0o755 },
-    );
-
-    const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: binDir,
-      },
-    });
-
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain("python venv unavailable");
-    expect(result.stderr).toContain("missing pre-commit runtime for actionlint");
-    expect(result.stderr).toContain("Python venv support for pre-commit 4.6.2");
-  });
-
-  it("cleans the temporary Python venv before exiting on hook failure", () => {
-    const tempDir = makeTempDir(tempDirs, "check-workflows-");
-    const binDir = path.join(tempDir, "bin");
-    const markerPath = path.join(tempDir, "venv-path.txt");
-    mkdirSync(binDir);
-    writeFileSync(path.join(binDir, "node"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-    writeFileSync(
-      path.join(binDir, "python3"),
-      [
-        "#!/bin/sh",
-        'if [ "$1" = "--version" ]; then exit 0; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ] && [ "$3" = "--version" ]; then exit 1; fi',
-        'if [ "$1" = "-m" ] && [ "$2" = "venv" ]; then',
-        '  /bin/mkdir -p "$3/bin"',
-        '  /bin/cp "$0" "$3/bin/python"',
-        '  /bin/chmod +x "$3/bin/python"',
-        '  printf "%s\\n" "$3" > "$PRE_COMMIT_VENV_MARKER"',
+        '  printf "%s\\n" "$3" > "$VENV_MARKER"',
         "  exit 0",
         "fi",
         'if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then exit 0; fi',
         'if [ "$1" = "-m" ] && [ "$2" = "pre_commit" ]; then',
-        '  printf "%s\\n" "hook failed" >&2',
-        "  exit 13",
+        `  if [ '${mode}' = 'hook-failure' ]; then echo 'hook failed' >&2; exit 13; fi`,
+        "  exit 0",
         "fi",
+        'if [ "$1" = "scripts/check-composite-action-input-interpolation.py" ]; then exit 0; fi',
         "exit 1",
         "",
       ].join("\n"),
       { mode: 0o755 },
     );
-
     const result = spawnSync(testNodeExecPath, ["--import", "tsx", scriptPath], {
       encoding: "utf8",
-      env: {
-        ...process.env,
-        PATH: binDir,
-        PRE_COMMIT_VENV_MARKER: markerPath,
-      },
+      env: { ...process.env, PATH: binDir, PYTHON_MARKER: markerPath, VENV_MARKER: venvPath },
     });
-
-    expect(result.status).toBe(13);
-    expect(result.stderr).toContain("hook failed");
-    expect(existsSync(readFileSync(markerPath, "utf8").trim())).toBe(false);
+    expect(result.status).toBe(code);
+    for (const error of errors) {
+      expect(result.stderr).toContain(error);
+    }
+    if (mode === "old-python") {
+      expect(existsSync(markerPath)).toBe(false);
+    } else if (mode === "bootstrap") {
+      const pythonArgs = readFileSync(markerPath, "utf8");
+      expect(pythonArgs).toContain("-m pip install --disable-pip-version-check pre-commit==4.6.2");
+      expect(pythonArgs).toContain(
+        "-m pre_commit run --config .pre-commit-config.yaml actionlint --files",
+      );
+      expect(pythonArgs).toContain(
+        "-m pre_commit run --config .pre-commit-config.yaml zizmor --files",
+      );
+    } else if (mode === "hook-failure") {
+      expect(existsSync(readFileSync(venvPath, "utf8").trim())).toBe(false);
+    }
   });
 
   it("keeps Windows WSL2 probe output normalized through the shared wrapper", () => {
@@ -481,13 +391,50 @@ describe("check-workflows", () => {
     );
   });
 
+  it("honors the Defender exclusion opt-out in every Windows proof job", () => {
+    const { workflow } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.skip_defender_exclusions).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const cases = [
+      [false, false, "", false],
+      [false, true, "", true],
+      [false, false, "{}", true],
+      [false, true, "{}", true],
+      [true, false, "", false],
+      [true, true, "", false],
+      [true, false, "{}", false],
+      [true, true, "{}", false],
+    ] as const;
+    for (const jobName of ["probe", "native-schtasks", "native-schtasks-package"]) {
+      const condition = workflow.jobs[jobName]!.steps.find(
+        (step) => step.name === "Try to exclude workspace from Windows Defender (best-effort)",
+      )?.if;
+      expect(condition).toBeDefined();
+      for (const [skipDefenderExclusions, runWindowsCi, windowsCiReplay, expected] of cases) {
+        expect(
+          evaluateWorkflowExpression(condition, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            skipDefenderExclusions,
+            runWindowsCi,
+            windowsCiReplay,
+          }),
+          `${jobName}: skip=${skipDefenderExclusions}, ci=${runWindowsCi}, replay=${windowsCiReplay}`,
+        ).toBe(expected);
+      }
+    }
+  });
+
   it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {
     const { workflow, probe, native } = readWindowsProbe();
     expect(workflow.on.workflow_dispatch.inputs.installed_startup_package).toMatchObject({
       default: "",
       type: "string",
     });
-    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.8.2");
+    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.9.0");
     expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
       default: false,
       type: "boolean",

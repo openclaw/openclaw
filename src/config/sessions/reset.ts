@@ -1,4 +1,3 @@
-// Reset helpers classify session keys and route reset config by session/channel type.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -50,19 +49,13 @@ export function resolveThreadFlag(params: {
   threadStarterBody?: string | null;
   parentSessionKey?: string | null;
 }): boolean {
-  if (params.messageThreadId != null) {
-    return true;
-  }
-  if (params.threadLabel?.trim()) {
-    return true;
-  }
-  if (params.threadStarterBody?.trim()) {
-    return true;
-  }
-  if (params.parentSessionKey?.trim()) {
-    return true;
-  }
-  return isThreadSessionKey(params.sessionKey);
+  return Boolean(
+    params.messageThreadId != null ||
+    params.threadLabel?.trim() ||
+    params.threadStarterBody?.trim() ||
+    params.parentSessionKey?.trim() ||
+    isThreadSessionKey(params.sessionKey),
+  );
 }
 
 export function resolveChannelResetConfig(params: {

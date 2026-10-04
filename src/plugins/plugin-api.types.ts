@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
-import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
+import type { StorageProvider } from "../storage/types.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -73,6 +73,7 @@ import type {
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
+  OpenClawPluginServiceV2,
   PluginInteractiveHandlerRegistration,
   PluginRegistrationMode,
   WidgetPresenter,
@@ -97,6 +98,15 @@ import type { OpenClawPluginNodeHostCommand } from "./types.node-host.js";
 import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-provider-types.js";
 
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
+type AnyChannelPlugin = import("../channels/plugins/types.plugin.js").AnyChannelPlugin;
+
+type ChannelPluginForGatewayVersion<Version extends 1 | 2> = Omit<ChannelPlugin, "gateway"> & {
+  gateway?: Extract<NonNullable<AnyChannelPlugin["gateway"]>, { apiVersion?: Version }>;
+};
+
+type ChannelRegistrationForGatewayVersion<Version extends 1 | 2> =
+  | ChannelPluginForGatewayVersion<Version>
+  | OpenClawPluginChannelRegistration<ChannelPluginForGatewayVersion<Version>>;
 
 export type PluginTextTransformRegistration = PluginTextTransforms;
 
@@ -124,7 +134,7 @@ type OpenClawPluginSessionWorkflowApi = {
   ) => Promise<PluginSessionAttachmentResult>;
   /**
    * Schedule a future agent turn in a session through Cron.
-   * Cron owns timing and creates the task ledger entry when the turn runs.
+   * Cron owns timing and records the run history when the turn runs.
    */
   scheduleSessionTurn: (
     params: PluginSessionTurnScheduleParams,
@@ -229,7 +239,11 @@ export type OpenClawPluginApi = {
     resolver: import("./types.mcp-connection.js").OpenClawPluginMcpServerConnectionResolver,
   ) => void;
   /** Register a native messaging channel plugin (channel capability). */
-  registerChannel: (registration: OpenClawPluginChannelRegistration | ChannelPlugin) => void;
+  registerChannel: {
+    (registration: ChannelRegistrationForGatewayVersion<1>): void;
+    (registration: ChannelRegistrationForGatewayVersion<2>): void;
+    (registration: OpenClawPluginChannelRegistration<AnyChannelPlugin> | AnyChannelPlugin): void;
+  };
   /**
    * Register a gateway RPC method for this plugin.
    *
@@ -271,7 +285,11 @@ export type OpenClawPluginApi = {
   registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => void;
   registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => void;
   registerSecurityAuditCollector: (collector: OpenClawPluginSecurityAuditCollector) => void;
-  registerService: (service: OpenClawPluginService) => void;
+  registerService: {
+    (service: OpenClawPluginService): void;
+    (service: OpenClawPluginServiceV2): void;
+    (service: OpenClawPluginService | OpenClawPluginServiceV2): void;
+  };
   /** Register a local gateway discovery advertiser such as mDNS/Bonjour. */
   registerGatewayDiscoveryService: (service: OpenClawGatewayDiscoveryService) => void;
   /** Register a text-only CLI backend used by the local CLI runner. */
@@ -288,6 +306,7 @@ export type OpenClawPluginApi = {
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register a cloud-worker lifecycle provider. */
   registerWorkerProvider: (provider: WorkerProvider) => void;
+  registerStorageProvider: (provider: StorageProvider) => void;
   /** Register provider-owned model catalog rows for text and media generation. */
   registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
   /** Register a general embedding provider (embedding capability). */
@@ -442,7 +461,7 @@ export type OpenClawPluginApi = {
   sendSessionAttachment: OpenClawPluginSessionWorkflowApi["sendSessionAttachment"];
   /**
    * Schedule a future agent turn in a session through Cron.
-   * Cron owns timing and creates the task ledger entry when the turn runs.
+   * Cron owns timing and records the run history when the turn runs.
    * Bundled plugins only; workspace plugins receive undefined.
    *
    * @deprecated Use `api.session.workflow.scheduleSessionTurn(...)`.
@@ -455,8 +474,6 @@ export type OpenClawPluginApi = {
    * @deprecated Use `api.session.workflow.unscheduleSessionTurnsByTag(...)`.
    */
   unscheduleSessionTurnsByTag: OpenClawPluginSessionWorkflowApi["unscheduleSessionTurnsByTag"];
-  /** Register the active detached task runtime for this plugin (exclusive slot). */
-  registerDetachedTaskRuntime: (runtime: DetachedTaskLifecycleRuntime) => void;
   /** Register the active memory capability for this memory plugin (exclusive slot). */
   registerMemoryCapability: (capability: MemoryPluginCapability) => void;
   /** Register an additive memory-adjacent prompt section (non-exclusive). */

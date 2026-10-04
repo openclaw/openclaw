@@ -49,7 +49,6 @@ import { evaluateGatewayAuthSurfaceStates } from "../secrets/runtime-gateway-aut
 import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
@@ -79,21 +78,6 @@ function isBlockedExecSecretRefPassEnvKey(key: string): boolean {
   return !EXEC_SECRET_REF_PASS_ENV_ALLOWED_OVERRIDE_ONLY_KEYS.has(key.toUpperCase());
 }
 
-const loadDaemonInstallAuthProfileSourceRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-source.runtime.js"),
-  { cacheRejections: true },
-);
-
-const loadDaemonInstallAuthProfileStoreRuntime = createLazyPromise(
-  () => import("./daemon-install-auth-profiles-store.runtime.js"),
-  { cacheRejections: true },
-);
-
-const loadDaemonInstallProviderManifestRuntime = createLazyPromise(
-  () => import("../plugins/manifest-contract-eligibility.js"),
-  { cacheRejections: true },
-);
-
 async function resolveAuthProfileStoreForServiceEnv(
   authStore: AuthProfileStore | undefined,
 ): Promise<AuthProfileStore | undefined> {
@@ -101,12 +85,13 @@ async function resolveAuthProfileStoreForServiceEnv(
     return authStore;
   }
   // Keep the daemon install cold path cheap when there is no auth store to read.
-  const { hasAnyAuthProfileStoreSource } = await loadDaemonInstallAuthProfileSourceRuntime();
+  const { hasAnyAuthProfileStoreSource } =
+    await import("./daemon-install-auth-profiles-source.runtime.js");
   if (!hasAnyAuthProfileStoreSource()) {
     return undefined;
   }
   const { loadAuthProfileStoreForSecretsRuntime } =
-    await loadDaemonInstallAuthProfileStoreRuntime();
+    await import("./daemon-install-auth-profiles-store.runtime.js");
   return loadAuthProfileStoreForSecretsRuntime();
 }
 
@@ -203,7 +188,7 @@ async function collectAmbientProviderApiKeyServiceEnvVars(params: {
     return {};
   }
   const { isManifestPluginAvailableForControlPlane, loadManifestMetadataSnapshot } =
-    await loadDaemonInstallProviderManifestRuntime();
+    await import("../plugins/manifest-contract-eligibility.js");
   const config = params.config ?? {};
   const snapshot = loadManifestMetadataSnapshot({ config, env: params.env });
   return Object.fromEntries(
@@ -632,6 +617,7 @@ export async function buildGatewayInstallPlan(params: {
   port: number;
   allowUnconfigured?: boolean;
   runtime: GatewayDaemonRuntime;
+  runtimeExplicit?: boolean;
   existingEnvironment?: Record<string, string | undefined>;
   existingCommand?: GatewayServiceCommandConfig | null;
   devMode?: boolean;
@@ -670,13 +656,15 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtGeneratedScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
+    runtimeExplicit: params.runtimeExplicit,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
     pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
+    warn: params.warn,
   });
   const serviceInputEnv = { ...params.env };
   if (wrapperPath) {
@@ -693,14 +681,14 @@ export async function buildGatewayInstallPlan(params: {
           "--allow-unconfigured",
         ) === true),
     dev: devMode,
-    runtime: params.runtime,
+    runtime,
     runtimePath,
     wrapperPath,
     ...(params.existingCommand ? { existingCommand: params.existingCommand } : {}),
   });
   await emitNodeRuntimeWarning({
     env: params.env,
-    runtime: params.runtime,
+    runtime,
     nodeProgram: programArguments[0],
     warn: params.warn,
     title: "Gateway runtime",
@@ -708,7 +696,7 @@ export async function buildGatewayInstallPlan(params: {
   const serviceEnvironment = buildServiceEnvironment({
     env: serviceInputEnv,
     port: params.port,
-    runtime: params.runtime,
+    runtime,
     existingNodeOptions: resolveManagedGatewayServiceCommand(params.existingCommand)?.environment
       ?.NODE_OPTIONS,
     launchdLabel:
@@ -736,6 +724,7 @@ export async function buildGatewayInstallPlan(params: {
 
   // Lowest to highest: preserved custom vars, durable config, SecretRef env, generated service env.
   return {
+    runtime,
     programArguments,
     workingDirectory:
       workingDirectory ||

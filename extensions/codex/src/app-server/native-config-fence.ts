@@ -1,5 +1,6 @@
 /** Serializes this Gateway's native config writes with its config-loading requests. */
 
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 
 type CodexNativeConfigFenceOptions = {
@@ -18,27 +19,10 @@ export async function acquireCodexNativeConfigFence(
 ): Promise<() => void> {
   const state = resolveGlobalMap<string, Promise<void>>(CODEX_NATIVE_CONFIG_FENCE_STATE);
   const previous = state.get(key) ?? Promise.resolve();
-  let resolveCurrent: () => void = () => undefined;
-  const current = new Promise<void>((resolve) => {
-    resolveCurrent = resolve;
-  });
+  const { promise: current, resolve: resolveCurrent } = createDeferred<void>();
   state.set(key, current);
-  try {
-    await waitForPreviousFence(previous, options);
-  } catch (error) {
-    // Preserve FIFO exclusion for later waiters even though this caller leaves
-    // the queue before its predecessor releases.
-    void previous.then(() => {
-      resolveCurrent();
-      if (state.get(key) === current) {
-        state.delete(key);
-      }
-    });
-    throw error;
-  }
-
   let released = false;
-  return () => {
+  const release = () => {
     if (released) {
       return;
     }
@@ -48,6 +32,15 @@ export async function acquireCodexNativeConfigFence(
       state.delete(key);
     }
   };
+  try {
+    await waitForPreviousFence(previous, options);
+  } catch (error) {
+    // Preserve FIFO exclusion for later waiters even though this caller leaves
+    // the queue before its predecessor releases.
+    void previous.then(release);
+    throw error;
+  }
+  return release;
 }
 
 async function waitForPreviousFence(

@@ -2,7 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { render } from "lit";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
@@ -15,6 +15,7 @@ let viewState = createDreamingViewState();
 const restoreTranslations = installDreamingViewTestTranslations();
 
 afterAll(() => restoreTranslations());
+afterEach(() => vi.restoreAllMocks());
 
 const setDreamSubTab = (tab: DreamingViewState["activeSubTab"]) => (viewState.activeSubTab = tab);
 
@@ -70,7 +71,6 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
         promotedAt: "2026-04-05T04:00:00.000Z",
       },
     ],
-    dreamingOf: null,
     nextCycle: "4:00 AM",
     timezone: "America/Los_Angeles",
     statusError: null,
@@ -243,10 +243,10 @@ describe("dreaming view", () => {
   });
 
   it("renders the active dream scene chrome and selects another view", () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    viewState.dreamIndex = 0;
     const onViewStateChange = vi.fn();
-    const container = renderInto(
-      buildProps({ dreamingOf: "reindexing old chats\u2026", onViewStateChange }),
-    );
+    const container = renderInto(buildProps({ onViewStateChange }));
 
     expectElement(container, ".dreams__lobster svg");
 
@@ -286,7 +286,7 @@ describe("dreaming view", () => {
     expect(onViewStateChange).toHaveBeenCalledOnce();
     expectElement(container, ".dreams__bubble");
     const text = container.querySelector(".dreams__bubble-text");
-    expect(text?.textContent).toBe("reindexing old chats\u2026");
+    expect(text?.textContent).toBe("consolidating memories…");
     const label = container.querySelector(".dreams__status-label");
     expect(label?.textContent).toBe("Dreaming Active");
     const detail = container.querySelector(".dreams__status-detail span");

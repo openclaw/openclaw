@@ -187,10 +187,7 @@ export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
   if (!match) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const frontmatter = match[1];
-  if (frontmatter === undefined) {
-    return { hasFrontmatter: false, frontmatter: {}, body: content };
-  }
+  const frontmatter = match[1]!;
   const parsed = asNullableRecord(YAML.parse(frontmatter) as unknown);
   if (!parsed) {
     // Every writer spreads this value back into YAML. Reject non-mapping roots
@@ -510,10 +507,10 @@ export function formatWikiLink(params: {
 }
 
 export function renderMarkdownFence(content: string, infoString = "text"): string {
-  const fenceSize = Math.max(
-    3,
-    ...Array.from(content.matchAll(/`+/g), (match) => match[0].length + 1),
-  );
+  let fenceSize = 3;
+  for (const match of content.matchAll(/`+/g)) {
+    fenceSize = Math.max(fenceSize, match[0].length + 1);
+  }
   const fence = "`".repeat(fenceSize);
   return `${fence}${infoString}\n${content}\n${fence}`;
 }

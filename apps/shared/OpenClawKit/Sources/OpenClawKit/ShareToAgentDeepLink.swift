@@ -28,10 +28,10 @@ public enum ShareToAgentDeepLink {
     }
 
     public static func buildMessage(from payload: SharedContentPayload, instruction: String? = nil) -> String {
-        let title = self.clean(payload.title)
-        let text = self.clean(payload.text)
-        let urlText = self.clean(payload.url?.absoluteString)
-        let resolvedInstruction = self.clean(instruction)
+        let title = payload.title?.trimmedNonEmpty
+        let text = payload.text?.trimmedNonEmpty
+        let urlText = payload.url?.absoluteString.trimmedNonEmpty
+        let resolvedInstruction = instruction?.trimmedNonEmpty
         let hasSharedContent = title != nil || text != nil || urlText != nil
 
         guard hasSharedContent || resolvedInstruction != nil else { return "" }
@@ -55,11 +55,5 @@ public enum ShareToAgentDeepLink {
 
         let message = lines.joined(separator: "\n\n")
         return String(message.prefix(2400))
-    }
-
-    private static func clean(_ value: String?) -> String? {
-        guard let value else { return nil }
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
     }
 }

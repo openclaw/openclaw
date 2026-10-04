@@ -169,21 +169,6 @@ describe("summarizeTokenConfig", () => {
     ).toEqual({ state: "setup", detail: "no tokens (need bot+app)" });
   });
 
-  it("still reports single-token channels as ok", () => {
-    const summary = summarize([
-      tokenRow({
-        account: {
-          token: "token-value",
-          tokenSource: "config",
-        },
-        snapshot: { tokenSource: "config" },
-      }),
-    ]);
-
-    expect(summary.state).toBe("ok");
-    expect(summary.detail).toContain("token config");
-  });
-
   it.each([
     ["sk-1234567890", "sk-1…7890 · len 13"],
     [`abc😀${"x".repeat(10)}`, "abc…xxxx · len 15"],

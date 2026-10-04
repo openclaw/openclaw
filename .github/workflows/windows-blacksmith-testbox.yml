@@ -8,7 +8,10 @@ on:
         description: "Testbox session ID"
         required: true
       runner_label:
-        type: string
+        type: choice
+        options:
+          - blacksmith-8vcpu-windows-2025
+          - blacksmith-16vcpu-windows-2025
         description: "Windows runner label"
         required: false
         default: "blacksmith-16vcpu-windows-2025"
@@ -20,10 +23,43 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
+  admission:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      group: ${{ steps.budget.outputs.group }}
+      runner: ${{ steps.budget.outputs.runner }}
+      minutes: ${{ steps.budget.outputs.minutes }}
+      expires_at: ${{ steps.budget.outputs.expires_at }}
+    steps:
+      - name: Checkout admission policy
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: scripts/ci-testbox-budget.mjs
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Admit Testbox within the shared budget
+        id: budget
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TESTBOX_PROFILE: windows
+          TESTBOX_ID: ${{ inputs.testbox_id }}
+          TESTBOX_RUNNER: ${{ inputs.runner_label }}
+        run: node scripts/ci-testbox-budget.mjs admit
+
   windows:
+    needs: admission
+    if: ${{ !cancelled() && needs.admission.result == 'success' }}
+    concurrency:
+      group: ${{ github.event_name == 'workflow_dispatch' && needs.admission.outputs.group || format('testbox-validation-{0}-{1}', github.workflow, github.run_id) }}
+      cancel-in-progress: false
     name: windows
-    runs-on: ${{ inputs.runner_label }}
-    timeout-minutes: 75
+    runs-on: ${{ needs.admission.outputs.runner }}
+    timeout-minutes: ${{ fromJSON(needs.admission.outputs.minutes) }}
     defaults:
       run:
         shell: pwsh
@@ -138,6 +174,18 @@ jobs:
           printf 'public_key_path=%s\n' "$public_key_path" >> "$GITHUB_OUTPUT"
           printf 'bash_os=%s\nbash_user=%s\n' "$(uname -s)" "$(id -un)"
 
+      - name: Reject expired Testbox admission
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          TESTBOX_EXPIRES_AT: ${{ needs.admission.outputs.expires_at }}
+        run: |
+          if [[ ! "$TESTBOX_EXPIRES_AT" =~ ^[0-9]+$ ]] ||
+            (( $(date +%s) >= TESTBOX_EXPIRES_AT / 1000 )); then
+            echo "Testbox admission expired after 60 minutes from dispatch; stop this lease and request a fresh one." >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -217,6 +265,11 @@ jobs:
           auth_token="$(cat "$state/auth_token")"
           idle_timeout="$(cat "$state/idle_timeout" 2>/dev/null || true)"
           idle_timeout="${idle_timeout:-10}"
+          if [[ ! "$idle_timeout" =~ ^[0-9]+$ ]] || (( idle_timeout < 1 )); then
+            echo "Invalid Testbox idle timeout" >&2
+            exit 1
+          fi
+          if (( idle_timeout > 15 )); then idle_timeout=15; fi
           api_url="$(cat "$state/api_url")"
           runner_host="$(cat "$state/runner_host")"
           runner_ssh_port="$(cat "$state/runner_ssh_port")"

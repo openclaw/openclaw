@@ -1,11 +1,7 @@
 import {
-  buildChannelInboundMediaPayload,
   formatInboundMediaUnavailableText,
   formatMediaPlaceholderText,
-  toInboundMediaFactsWithMetadata,
   type ChannelInboundMediaInput,
-  type ChannelInboundMediaPayload,
-  type InboundMediaFacts,
   type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
@@ -31,13 +27,6 @@ import { buildButtonProps, type MattermostInteractionResponse } from "./interact
 type MattermostMediaInfo = Pick<ChannelInboundMediaInput, "contentType" | "fileName" | "path"> & {
   kind: MediaKind;
 };
-
-export async function buildMattermostInboundMediaPayload(
-  media: readonly MattermostMediaInfo[],
-): Promise<ChannelInboundMediaPayload & { media: InboundMediaFacts[] }> {
-  const facts = await toInboundMediaFactsWithMetadata(media);
-  return { ...buildChannelInboundMediaPayload(facts), media: facts };
-}
 
 export function formatMattermostPendingMediaText(params: {
   body: string;

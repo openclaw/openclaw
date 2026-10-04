@@ -1,4 +1,3 @@
-/** Auth probe planning and execution helpers for model diagnostics. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -29,6 +28,7 @@ import {
 import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/order.js";
 import { resolveAuthProfileDatabasePath } from "../../agents/auth-profiles/sqlite.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
+import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
 import {
   prepareInternalSessionEffectsSession,
@@ -68,7 +68,6 @@ import type {
 import type { GatewayLockIdentity, GatewayLockOptions } from "../../infra/gateway-lock.js";
 import { type SecretRefResolveCache, resolveSecretRefString } from "../../secrets/resolve.js";
 import { appendConfigPathSegment } from "../../shared/dot-path.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db.js";
 import { redactStatusSecrets } from "../status-all/format.js";
 import { createAuthProbeWork } from "./list.probe.cleanup.js";
@@ -82,11 +81,6 @@ export function redactAuthProbeError(error: string): string {
   return redactStatusSecrets(error);
 }
 
-const embeddedRunnerModuleLoader = createLazyImportLoader(
-  () => import("../../agents/embedded-agent.js"),
-);
-
-/** Normalized probe status bucket for auth/model diagnostics. */
 export type AuthProbeStatus =
   | "ok"
   | "auth"
@@ -107,7 +101,6 @@ export type AuthProbeReasonCode =
   | "ineligible_profile"
   | "no_model";
 
-/** Result for one profile/env/models.json auth probe target. */
 export type AuthProbeResult = {
   provider: string;
   model?: string;
@@ -155,7 +148,6 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   });
 }
 
-/** Summary for a full auth probe run. */
 export type AuthProbeSummary = {
   startedAt: number;
   finishedAt: number;
@@ -171,7 +163,6 @@ export type AuthProbeSummary = {
   results: AuthProbeResult[];
 };
 
-/** Runtime options controlling provider/profile filtering and probe cost. */
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -181,26 +172,6 @@ export type AuthProbeOptions = {
   maxTokens: number;
 };
 
-const PROBE_STATUS_BY_FAILOVER_REASON = {
-  auth: "auth",
-  auth_permanent: "auth",
-  format: "format",
-  rate_limit: "rate_limit",
-  overloaded: "rate_limit",
-  billing: "billing",
-  server_error: "unknown",
-  timeout: "timeout",
-  tls_certificate: "unknown",
-  context_overflow: "unknown",
-  model_not_found: "format",
-  session_expired: "unknown",
-  empty_response: "unknown",
-  no_error_details: "unknown",
-  unclassified: "unknown",
-  unknown: "unknown",
-} satisfies Record<FailoverReason, AuthProbeStatus>;
-
-/** Maps runtime failover reasons into stable auth probe status buckets. */
 export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
   return reason
     ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
@@ -210,19 +181,15 @@ export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProb
 function mapEligibilityReasonToProbeReasonCode(
   reasonCode: AuthProfileEligibilityReasonCode,
 ): AuthProbeReasonCode {
-  if (reasonCode === "missing_credential") {
-    return "missing_credential";
+  switch (reasonCode) {
+    case "missing_credential":
+    case "expired":
+    case "invalid_expires":
+    case "unresolved_ref":
+      return reasonCode;
+    default:
+      return "ineligible_profile";
   }
-  if (reasonCode === "expired") {
-    return "expired";
-  }
-  if (reasonCode === "invalid_expires") {
-    return "invalid_expires";
-  }
-  if (reasonCode === "unresolved_ref") {
-    return "unresolved_ref";
-  }
-  return "ineligible_profile";
 }
 
 function formatMissingCredentialProbeError(reasonCode: AuthProbeReasonCode): string {
@@ -368,7 +335,6 @@ async function maybeResolveUnresolvedRefIssue(params: {
   }
 }
 
-/** Builds probe targets plus preflight failures for missing/invalid credentials. */
 export async function buildProbeTargets(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -705,14 +671,13 @@ export async function buildProbeTargets(params: {
       continue;
     }
 
-    const label = envKey ? "env" : "models.json";
     const source = envKey ? "env" : "models.json";
     const mode = envKey?.source.includes("OAUTH_TOKEN") ? "oauth" : "api_key";
 
     appendTarget({
       provider: providerKey,
       model,
-      label,
+      label: source,
       source,
       mode,
       ...(hasSyntheticLocalAuth && !envKey && !hasUsableModelsJsonKey
@@ -811,7 +776,7 @@ async function probeTarget(params: {
         throw new Error("Could not prepare isolated auth probe profile");
       }
     }
-    const { runEmbeddedAgent } = await embeddedRunnerModuleLoader.load();
+    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const probeSessionTarget = sessionTarget;
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       probeConfig,
@@ -856,11 +821,7 @@ async function probeTarget(params: {
     );
     const terminalError = extractAgentRunTerminalError(runResult);
     if (terminalError) {
-      const described = describeFailoverError(new Error(terminalError));
-      return buildResult(
-        mapFailoverReasonToProbeStatus(described.reason),
-        redactAuthProbeError(described.message),
-      );
+      throw new Error(terminalError);
     }
     if (!agentRunHasVisibleReply(runResult)) {
       return buildResult("format", "The model did not return a visible probe response.");
@@ -1014,7 +975,6 @@ export async function withAuthProbeStateOwnership<T>(
   }
 }
 
-/** Runs all auth probes with bounded concurrency and returns a summary. */
 export async function runAuthProbes(params: {
   cfg: OpenClawConfig;
   agentId?: string;
@@ -1069,15 +1029,6 @@ export async function runAuthProbes(params: {
   });
 }
 
-/** Formats probe latency for table output. */
-export function formatProbeLatency(latencyMs?: number | null) {
-  if (!latencyMs && latencyMs !== 0) {
-    return "-";
-  }
-  return formatMs(latencyMs);
-}
-
-/** Sorts probe results by provider and display label. */
 export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] {
   return results.toSorted((a, b) => {
     const provider = a.provider.localeCompare(b.provider);
@@ -1090,7 +1041,6 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-/** Produces the terse completion line for auth probe output. */
 export function describeProbeSummary(summary: AuthProbeSummary): string {
   if (summary.totalTargets === 0) {
     return "No probe targets.";

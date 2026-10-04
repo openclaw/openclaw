@@ -23,14 +23,12 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
-import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
   resolveDefaultNpmSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
-import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { OperatorManagedPluginUpdate } from "./installed-plugin-package-ownership.js";
 import { checkMinHostVersion } from "./min-host-version.js";
@@ -51,7 +49,7 @@ export type PluginUpdateLogger = {
 
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type PluginUpdateChannelFallback = {
+type PluginUpdateChannelFallback = {
   requestedSpec: string;
   usedSpec: string;
   requestedLabel: string;
@@ -165,7 +163,10 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     (packageName !== undefined &&
       packageName !== params.pluginId &&
       unscopedPackageName(packageName) === params.pluginId) ||
-    officialInstallRecords.hasOfficialNpmIdReplacement(params)
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId: params.pluginId,
+      record: params.record,
+    })?.replacementPluginId !== undefined
   );
 }
 
@@ -180,10 +181,7 @@ export function shouldSkipUnchangedNpmInstall(params: {
   };
   metadata: NpmSpecResolution;
 }): boolean {
-  if (!params.currentVersion || !params.metadata.version) {
-    return false;
-  }
-  if (params.currentVersion !== params.metadata.version) {
+  if (!params.currentVersion || params.currentVersion !== params.metadata.version) {
     return false;
   }
   if (
@@ -191,15 +189,6 @@ export function shouldSkipUnchangedNpmInstall(params: {
     !params.record.resolvedSpec ||
     !params.record.resolvedVersion
   ) {
-    return false;
-  }
-  if (!params.metadata.name || !params.metadata.resolvedSpec) {
-    return false;
-  }
-  if (params.metadata.integrity && !params.record.integrity) {
-    return false;
-  }
-  if (params.metadata.shasum && !params.record.shasum) {
     return false;
   }
   return (
@@ -350,42 +339,6 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
   return { packageName: parsed.name, registryLine, version };
 }
 
-export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
-  metadata: NpmSpecResolution;
-  spec: string;
-  timeoutMs?: number;
-}): Promise<
-  | {
-      kind: "stable" | "prerelease-only";
-      metadata: NpmSpecResolution;
-    }
-  | undefined
-> {
-  const parsedSpec = parseRegistryNpmSpec(params.spec);
-  if (
-    !parsedSpec ||
-    !parsedSpec.name.startsWith("@openclaw/") ||
-    !params.metadata.version ||
-    isPrereleaseResolutionAllowed({
-      spec: parsedSpec,
-      resolvedVersion: params.metadata.version,
-    })
-  ) {
-    return undefined;
-  }
-  const fallback = await resolveTrustedOfficialPrereleaseResolution({
-    spec: parsedSpec,
-    resolvedPrereleaseVersion: params.metadata.version,
-    timeoutMs: params.timeoutMs,
-  });
-  if (!fallback) {
-    return undefined;
-  }
-  return fallback.kind === "allow-prerelease-only"
-    ? { kind: "prerelease-only", metadata: params.metadata }
-    : { kind: fallback.kind, metadata: fallback.resolution };
-}
-
 export function isNpmMetadataCompatibleWithCurrentHost(
   metadata: NpmSpecResolution,
   options: { hostVersion?: string; allowLegacyBareSemver?: boolean } = {},
@@ -409,14 +362,6 @@ export function isNpmMetadataCompatibleWithCurrentHost(
     return true;
   }
   return satisfiesPluginApiRange(hostVersion, pluginApiRange);
-}
-
-export function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
-  return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
-}
-
-export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
-  return isUnavailableClawHubTarget(result);
 }
 
 export function formatBetaChannelFallbackOutcomeSuffix(params: {
@@ -453,18 +398,13 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
 }
 
-export function resolveNpmResultVersion(result: {
-  npmResolution?: NpmSpecResolution;
-}): string | undefined {
-  return result.npmResolution?.version;
-}
-
 export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   pluginId: string;
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec =
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);

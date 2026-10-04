@@ -8,9 +8,11 @@ import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { errorShapeFromError } from "../error-shape.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
 import { persistGatewaySessionLifecycleEvent } from "../session-lifecycle-state.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
 import { buildAbortedChatSendPayload } from "./chat-abort-authorization.js";
@@ -128,17 +130,18 @@ export async function handleChatSendSetupError(params: {
   clearAgentRunContext(clientRunId, lifecycleGeneration);
   params.context.removeChatRun(clientRunId, clientRunId, sessionKey);
   const error =
-    params.error instanceof SessionGoalOperationError
-      ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
-          details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
-        })
-      : errorShape(
-          ErrorCodes.UNAVAILABLE,
-          errorMessage,
-          failureDisposition === "client-retry"
-            ? { retryable: true, retryAfterMs: 250 }
-            : undefined,
-        );
+    params.error instanceof SessionMutationAuthorizationChangedError
+      ? params.error.error
+      : params.error instanceof SessionGoalOperationError
+        ? errorShape(ErrorCodes.INVALID_REQUEST, params.error.message, {
+            details: { code: "GOAL_OPERATION_REJECTED", reason: params.error.code },
+          })
+        : errorShapeFromError(ErrorCodes.UNAVAILABLE, params.error, {
+            message: errorMessage,
+            ...(failureDisposition === "client-retry"
+              ? { retryable: true, retryAfterMs: 250 }
+              : {}),
+          });
   const payload = { runId: clientRunId, status: "error" as const, summary: errorMessage };
   if (params.cacheResult !== false && failureDisposition !== "client-retry") {
     setGatewayDedupeEntry({
@@ -324,7 +327,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       // Native lifecycle owns its replay result; dispatched runtimes leave
       // failure projection to this owner, including transcript-write failures.
       const publish = () => {
-        const error = errorShape(ErrorCodes.UNAVAILABLE, errorMessage);
+        const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err, { message: errorMessage });
         setGatewayDedupeEntry({
           dedupe: context.dedupe,
           key: `chat:${clientRunId}`,

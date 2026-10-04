@@ -17,12 +17,12 @@ import {
 import * as sessionReaper from "../cron/session-reaper.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
 import {
-  claimCronRunReceiptInDatabase,
   findActiveCronRunReceiptInDatabase,
   isCronRunReceiptOwnerStale,
   prepareCronRunReceiptClaim,
   releaseLocalCronRunReceiptOwnership,
 } from "../cron/store/run-receipt-store.js";
+import { claimCronRunReceiptInDatabaseForTest } from "../cron/store/run-receipt-store.test-support.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import {
   beginAgentDeletionJournal,
@@ -245,13 +245,14 @@ describe("Claw serving monitor cleanup", () => {
         (job) => job.agentId === "worker" && job.payload.kind === "agentTurn",
       )!;
       const prepared = prepareCronRunReceiptClaim({
+        observed: undefined,
         storePath: current.state.statePath("cron", "jobs.json"),
         job: monitor,
         agentId: "worker",
         startedAtMs: Date.now(),
       });
       const handle = runOpenClawStateWriteTransaction(({ db }) =>
-        claimCronRunReceiptInDatabase({
+        claimCronRunReceiptInDatabaseForTest({
           database: db,
           prepared,
           resolveAgentId: () => "worker",
@@ -307,15 +308,13 @@ describe("Claw serving monitor cleanup", () => {
     },
   );
 
-  it("closes idle databases but waits for an agent still configured through agents.list", async () => {
+  it("closes idle databases but waits for an agent still configured through agents.entries", async () => {
     const current = await fixture(false);
     const database = openOpenClawAgentDatabase({ agentId: "worker" });
     const monitors = await current.gateway.inspect("worker");
     await current.withDeletion(async (deletion) => {
       await current.gateway.quiesce("worker", deletion.entry.operationId, monitors);
       expect(() => database.db.prepare("SELECT 1")).toThrow();
-      const config = current.getConfig();
-      config.agents = { ...config.agents, entries: undefined, list: listAgentEntries(config) };
       for (const monitor of monitors) {
         await current.cron.remove(monitor.id, { systemOwned: true });
       }

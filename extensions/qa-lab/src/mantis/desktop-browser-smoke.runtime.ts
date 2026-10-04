@@ -3,8 +3,8 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
-import { trimToValue } from "../mantis-options.runtime.js";
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
@@ -15,7 +15,6 @@ import {
   renderMantisDesktopRecordingScript,
   resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
-  runCommand,
   shellQuote,
 } from "./crabbox-runtime.js";
 import {
@@ -45,7 +44,6 @@ type MantisDesktopBrowserSmokeSummary = MantisCrabboxReportSummary & {
 };
 
 const DEFAULT_BROWSER_URL = "https://openclaw.ai";
-const CRABBOX_BIN_ENV = "OPENCLAW_MANTIS_CRABBOX_BIN";
 const BROWSER_PROFILE_ARCHIVE_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_TGZ_B64";
 const BROWSER_PROFILE_DIR_ENV = "OPENCLAW_MANTIS_BROWSER_PROFILE_DIR";
 const DEFAULT_VIDEO_DURATION_SECONDS = 10;
@@ -87,29 +85,19 @@ function renderRemoteScript(params: {
   remoteOutputDir: string;
   videoDurationSeconds: number;
 }) {
-  const shellUrl = shellQuote(params.browserUrl);
-  const shellUrlJson = shellQuote(JSON.stringify(params.browserUrl));
-  const htmlBase64 = shellQuote(params.htmlBase64 ?? "");
-  const shellOutputDir = shellQuote(params.remoteOutputDir);
-  const videoDurationSeconds = Math.max(1, Math.floor(params.videoDurationSeconds));
   const profileArchiveEnv = params.browserProfileArchiveEnv;
-  const profileDir = shellQuote(
-    params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`,
-  );
-  const temporaryProfile = params.browserProfileDir ? "false" : "true";
-  const inputModeJson = shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"));
-  const openedUrlJson = shellQuote(
-    JSON.stringify(
-      params.htmlBase64 ? `file://${params.remoteOutputDir}/input.html` : params.browserUrl,
-    ),
-  );
+  const profilePath = params.browserProfileDir ?? `${params.remoteOutputDir}/chrome-profile`;
+  const homePrefix = /^(?:~|\$HOME)\//u.exec(profilePath)?.[0];
+  const profileDir = homePrefix
+    ? `"$HOME"/${shellQuote(profilePath.slice(homePrefix.length))}`
+    : shellQuote(profilePath);
   return `set -euo pipefail
-out=${shellOutputDir}
-url=${shellUrl}
-url_json=${shellUrlJson}
-html_b64=${htmlBase64}
-input_mode_json=${inputModeJson}
-opened_url_json=${openedUrlJson}
+out=${shellQuote(params.remoteOutputDir)}
+url=${shellQuote(params.browserUrl)}
+url_json=${shellQuote(JSON.stringify(params.browserUrl))}
+html_b64=${shellQuote(params.htmlBase64 ?? "")}
+input_mode_json=${shellQuote(JSON.stringify(params.htmlBase64 ? "html-file" : "url"))}
+opened_url_json=${shellQuote(JSON.stringify(params.htmlBase64 ? `file://${params.remoteOutputDir}/input.html` : params.browserUrl))}
 rm -rf "$out"
 mkdir -p "$out"
 if [ -n "$html_b64" ]; then
@@ -122,7 +110,7 @@ if ! command -v scrot >/dev/null 2>&1; then
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y scrot >>"$out/apt.log" 2>&1
 fi
 profile=${profileDir}
-temporary_profile=${temporaryProfile}
+temporary_profile=${params.browserProfileDir ? "false" : "true"}
 mkdir -p "$profile"
 profile_restored=false
 profile_archive_b64="\${${profileArchiveEnv}:-}"
@@ -134,7 +122,7 @@ if [ -n "$profile_archive_b64" ]; then
   profile_restored=true
 fi
 ${renderMantisBrowserDiscoveryScript()}
-${renderMantisDesktopRecordingScript("desktop-browser-smoke.mp4", videoDurationSeconds)}
+${renderMantisDesktopRecordingScript("desktop-browser-smoke.mp4", params.videoDurationSeconds)}
 "$browser_bin" \
   --user-data-dir="$profile" \
   --no-first-run \
@@ -212,7 +200,6 @@ export async function runMantisDesktopBrowserSmoke(
   const reportPath = path.join(outputDir, "mantis-desktop-browser-smoke-report.md");
   const crabboxBin = await resolveCrabboxBin({
     env,
-    envName: CRABBOX_BIN_ENV,
     explicit: opts.crabboxBin,
     repoRoot,
   });
@@ -275,9 +262,9 @@ export async function runMantisDesktopBrowserSmoke(
   try {
     const leaseId = await session.acquire({ idleTimeout, machineClass, ttl });
     const inspected = await session.inspect();
-    await runCommand({
-      command: crabboxBin,
-      args: [
+    await runner(
+      crabboxBin,
+      [
         "run",
         "--provider",
         provider,
@@ -297,11 +284,12 @@ export async function runMantisDesktopBrowserSmoke(
           videoDurationSeconds,
         }),
       ],
-      cwd: repoRoot,
-      env,
-      runner,
-      stdio: "inherit",
-    });
+      {
+        cwd: repoRoot,
+        env,
+        stdio: "inherit",
+      },
+    );
     await copyCrabboxArtifacts({
       cwd: repoRoot,
       env,
@@ -320,24 +308,10 @@ export async function runMantisDesktopBrowserSmoke(
     summary.artifacts = { reportPath, screenshotPath, summaryPath, videoPath: copiedVideoPath };
     summary.crabbox = session.describe(inspected);
     summary.status = "pass";
-    return {
-      outputDir,
-      reportPath,
-      screenshotPath,
-      status: "pass",
-      summaryPath,
-      videoPath: copiedVideoPath,
-    };
   } catch (error) {
     summary.crabbox = session.describe();
     summary.error = formatErrorMessage(error);
     await fs.writeFile(path.join(outputDir, "error.txt"), `${summary.error}\n`, "utf8");
-    return {
-      outputDir,
-      reportPath,
-      status: "fail",
-      summaryPath,
-    };
   } finally {
     summary.finishedAt = new Date().toISOString();
     await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -346,4 +320,12 @@ export async function runMantisDesktopBrowserSmoke(
       await session.stop();
     }
   }
+  return {
+    outputDir,
+    reportPath,
+    ...(summary.status === "pass" ? { screenshotPath: summary.artifacts.screenshotPath } : {}),
+    status: summary.status,
+    summaryPath,
+    ...(summary.status === "pass" ? { videoPath: summary.artifacts.videoPath } : {}),
+  };
 }

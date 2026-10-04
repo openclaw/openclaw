@@ -100,7 +100,7 @@ not overwrite the existing skill.
   shared-auth ownership still attached to the old `main` installation.
 - `--flow quickstart`: opens the classic wizard with minimal prompts, uses
   a generated Gateway secret by default, without asking you to choose token or
-  password. Existing password-mode configurations are preserved. Explicit local Gateway flags such as
+  password. Existing password and trusted-proxy configurations are preserved. Explicit local Gateway flags such as
   `--gateway-port`, `--gateway-bind`, `--gateway-auth`, and `--tailscale`
   override the corresponding stored or default quickstart values; omitted
   options keep their current values.
@@ -154,7 +154,13 @@ baseline setup resumes under its existing onboarding owner.
 In guided mode, `--workspace <dir>` supplies OpenClaw's proposed workspace
 and the isolated inference context. It is not persisted until you approve the
 OpenClaw setup proposal. Classic and noninteractive onboarding persist their
-workspace through their normal setup flow. On a rerun with an existing agent
+workspace through their normal setup flow. A workspace must be a directory or
+a new path beneath directories; a file, non-directory ancestor, dangling
+symbolic link, or symlink loop is rejected before setup or reset, with the
+failing path named. Other inspection failures, such as permission errors, are
+reported rather than treated as missing directories.
+Symbolic links to existing directories, including new paths beneath them, are
+allowed. On a rerun with an existing agent
 roster, onboarding preserves the configured fleet workspace: the classic
 wizard shows both paths and requires explicit confirmation before moving it,
 while non-interactive setup warns and keeps the current value.
@@ -188,7 +194,9 @@ loopback Gateway, and waits up to five minutes. A successful connection
 continues in the browser; an unreachable Gateway or a timeout falls back to the
 same terminal hatch as before. Pass `--tui` to skip the browser handoff and
 force that terminal hatch.
-If applying setup fails, onboarding falls back to the conversational OpenClaw
+If applying setup fails after inference succeeds, the status identifies workspace,
+Gateway, or general setup failure rather than an AI check failure. The detailed
+error keeps its recovery guidance, and onboarding falls back to the conversational OpenClaw
 chat to finish interactively. Channels, agents,
 plugins, and other optional features remain OpenClaw chat territory: run
 `openclaw` and use `open channel wizard for <channel>` to hand channel
@@ -259,6 +267,11 @@ acknowledgement, so invoking `--reset` can move state to Trash before you can
 decline that prompt. After reset, the command runs guided, classic, or
 non-interactive onboarding according to the other flags.
 
+Session reset permanently removes canonical SQLite history and its owned archive
+files through the same cleanup as [`openclaw reset`](/cli/reset). It preserves
+auth profiles and unrelated database state. Stop any running Gateway first;
+onboarding refuses session cleanup while another process owns the state directory.
+
 ## Locale
 
 Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses the first nonblank value in this order:
@@ -270,6 +283,11 @@ Interactive onboarding uses the CLI wizard locale for fixed setup copy. It uses 
 5. English fallback
 
 Supported wizard locales are `en`, `zh-CN`, and `zh-TW`. Locale values may use underscore or POSIX suffix forms such as `zh_CN.UTF-8`. Product names, command names, config keys, URLs, provider IDs, model IDs, and plugin/channel labels remain literal.
+
+The Control UI's fixed onboarding welcome and setup choices use the UI language
+reported when it connects to the Gateway. Chinese UI locales use the same
+source-maintained setup translations; command replies such as `yes` and
+`talk to agent` remain unchanged.
 
 ```bash
 OPENCLAW_LOCALE=zh-CN openclaw onboard
@@ -367,6 +385,8 @@ With `--secret-input-mode ref`, onboarding stores new credentials as refs instea
 
 ### Gateway auth (non-interactive)
 
+Existing [trusted-proxy authentication](/gateway/trusted-proxy-auth) and its proxy policy stay intact on rerun unless you explicitly select another auth mode. Selecting Tailscale Funnel while retaining trusted-proxy auth is rejected; switch explicitly with `--gateway-auth password` or keep Tailscale exposure off. Same-host completion uses the configured local password (including SecretRefs) or `OPENCLAW_GATEWAY_PASSWORD`, through the Gateway's loopback listener. Post-setup health checks stay on the configured local Gateway port, ignoring ambient Gateway URL and port overrides.
+
 - Without auth flags or an existing credential, onboarding generates a Gateway secret and stores it as `gateway.auth.token` with `gateway.auth.mode: "token"`. Quickstart keeps its existing plaintext storage default; `--secret-input-mode ref` explicitly requests a reference. Run `openclaw dashboard` to open the Control UI.
 - `--gateway-auth token --gateway-token <token>` stores a supplied plaintext secret.
 - `--gateway-password <value>` selects password mode without an auth-choice prompt; `--gateway-auth password` also explicitly selects password mode. An existing password-mode config stays in password mode on rerun.
@@ -394,7 +414,7 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 
 - Unless you pass `--skip-health`, onboarding waits for a reachable local gateway before exiting successfully.
 - `--install-daemon` starts the managed gateway install path first. With no daemon flag, a local gateway must already be running (for example `openclaw gateway run`).
-- Explicit `--skip-daemon` or `--no-install-daemon` still probes for an existing gateway. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
+- Explicit `--skip-daemon` or `--no-install-daemon` performs one reachability probe without waiting for Gateway startup. If none is listening, setup reports that the gateway was not started and exits successfully; a reachable but unhealthy gateway still fails the health check.
 - `--skip-health` skips the wait if you only want config/workspace/bootstrap writes in automation.
 - `--skip-bootstrap` sets `agents.defaults.skipBootstrap: true` and skips creating `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`.
 - On native Windows, `--install-daemon` tries Scheduled Tasks first and falls back to a per-user Startup-folder login item if task creation is denied.

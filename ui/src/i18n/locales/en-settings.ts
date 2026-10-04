@@ -409,6 +409,9 @@ const enSettings = {
       creating: "Building: creating",
       uncertain: "Paused: uncertain",
       noImage: "No image",
+      coldOnly: "Cold only",
+      captureUnsupportedHint:
+        "Workers use an existing compatible snapshot when one is available and otherwise provision cold. Each eligible worker retries capture, so Crabbox configuration changes apply to the next dispatch. Set settings.warmImage: false on this profile to stop capture attempts.",
       pending: "Pending",
       created: "Created {age}",
       lastUsed: "Last used {age}",
@@ -639,6 +642,8 @@ const enSettings = {
       noProviders: "No providers are available to connect.",
       discover: "On this Gateway",
       description: "Save credentials for this agent. Choose the active model separately.",
+      setupDescription:
+        "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
       done: "Provider credentials saved.",
       missingSelection:
         "The account selected for {model} is no longer available. Connect or choose an account to use with this model.",
@@ -867,7 +872,7 @@ const enSettings = {
       controlUiCommit: "Control UI commit",
       builtAt: "Built",
       installedAt: "Installed",
-      installedAtUnknown: "Unknown · recorded after the next successful update",
+      installedAtUnknown: "Unknown",
       lastCommitAt: "Last commit",
       installKind: "Install type",
       policyTitle: "Update policy",
@@ -963,6 +968,10 @@ const enSettings = {
       launchAtLogin: "Launch at login",
       launchAtLoginUnavailable:
         "Launch at login requires a bundled app without an active app profile.",
+      keepGatewayRunning: "Keep OpenClaw running when the app is closed",
+      keepGatewayRunningHint:
+        "Runs the Gateway as a background service so channels and automations keep working after you quit OpenClaw.",
+      keepGatewayRunningFailed: "Could not change Gateway hosting.",
       quickChat: "Quick Chat enabled",
       quickChatHint:
         "Show a floating composer for quick messages, summoned with a global shortcut.",
@@ -1320,7 +1329,6 @@ const enSettings = {
       agentQuestion: "Agent question",
       humanMentioned: "Someone mentions me",
       scheduledTaskFailed: "Scheduled task failed",
-      backgroundTaskFailed: "Background task failed",
       lockScreenDetail: "Lock-screen detail",
       lockScreenDetailHint: "Private hides names; detailed content is sanitized.",
       private: "Private",
@@ -1411,6 +1419,9 @@ const enSettings = {
       showTaskProgress: "Show task progress cards",
       showTaskProgressHint:
         "Show task progress in the chat composer. Hiding it does not stop the agent or clear saved progress. Dashboard widgets and session previews are unchanged.",
+      openLinksExternally: "Open links outside OpenClaw",
+      openLinksExternallyHint: "Use your browser instead of the OpenClaw built-in browser.",
+      openLinksExternallyStorage: "Saved in this browser only.",
       collapseTaskProgress: "Collapse task progress by default on desktop",
       collapseTaskProgressHint:
         "On desktop, start task progress collapsed. It can expand when the response finishes if you are at the end of the chat. A manual close keeps it collapsed for that session. On mobile, task progress always starts collapsed and only opens when you open it manually.",

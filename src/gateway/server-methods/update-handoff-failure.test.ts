@@ -195,9 +195,8 @@ describe("update.run handoff refusal diagnostics", () => {
       });
       expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          message: expect.stringContaining(
-            "OpenClaw update failed: managed-service-handoff-failed",
-          ),
+          message:
+            "⚠️ OpenClaw couldn't finish updating.\nFor details, open Settings → Updates in the Control UI or run `openclaw update status` in your terminal.",
         }),
         expect.any(Object),
       );
@@ -301,7 +300,7 @@ describe("update.run handoff refusal diagnostics", () => {
       const sentinel = expectDefined(sentinelState.capturedPayload, "restart sentinel");
       expect(sentinel.stats?.steps).toContainEqual(expect.objectContaining({ failureFacts }));
       expect(formatUpdateRestartStatusValue(sentinel)).toContain(statusMessage);
-      expect(buildStatusUpdateRows(sentinel)).toContainEqual({
+      expect(await buildStatusUpdateRows(sentinel)).toContainEqual({
         Item: "Update run",
         Value: expect.stringContaining(statusMessage),
       });
@@ -312,59 +311,43 @@ describe("update.run handoff refusal diagnostics", () => {
 describe("update.run foreground respawn admission", () => {
   const sessionKey = "agent:main:slack:dm:C0123ABC:thread:1234567890.123456";
 
-  it.each(["git", "global"] as const)(
-    "refuses a foreground %s update before acknowledgement when process respawn is disabled",
-    async (kind) => {
-      if (kind === "global") {
-        mockGlobalInstallSurface();
-      }
-      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: "1" }, () =>
-        captureUpdateRunPayload({ sessionKey }),
-      );
-
-      expect(response).toMatchObject({
-        ok: false,
-        ackDelivered: false,
-        result: { reason: "restart-unavailable" },
-        message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
+  it.each(["before", "after"] as const)(
+    "refuses foreground respawn disabled %s acknowledgement",
+    async (timing) => {
+      const acknowledged = timing === "after";
+      await withEnvAsync({ OPENCLAW_NO_RESPAWN: acknowledged ? undefined : "1" }, async () => {
+        if (acknowledged) {
+          sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
+            process.env.OPENCLAW_NO_RESPAWN = "1";
+            return true;
+          });
+        }
+        const response = await captureUpdateRunPayload({ sessionKey });
+        expect(response).toMatchObject({
+          ok: false,
+          ackDelivered: acknowledged,
+          result: { reason: "restart-unavailable" },
+          message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
+        });
+        if (!acknowledged) {
+          const run = getUpdateRun(expectDefined(response, "update response").runId);
+          expect(run).toMatchObject({
+            phase: "finished",
+            reason: "restart-unavailable",
+            origin: { nextAction: expect.stringContaining("openclaw update") },
+          });
+          expect(run?.steps.map(({ step, status }) => ({ step, status }))).toEqual([
+            { step: "requested", status: "failed" },
+            { step: "installation-inspection", status: "completed" },
+          ]);
+          expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
+        }
+        expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+        expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+        expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
       });
-      const run = getUpdateRun(expectDefined(response, "update response").runId);
-      expect(run).toMatchObject({
-        phase: "finished",
-        reason: "restart-unavailable",
-        origin: { nextAction: expect.stringContaining("openclaw update") },
-      });
-      expect(run?.steps.map(({ step, status }) => ({ step, status }))).toEqual([
-        { step: "requested", status: "failed" },
-        { step: "installation-inspection", status: "completed" },
-      ]);
-      expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
-      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
     },
   );
-
-  it("rechecks foreground respawn after awaiting acknowledgement", async () => {
-    await withEnvAsync({ OPENCLAW_NO_RESPAWN: undefined }, async () => {
-      sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
-        process.env.OPENCLAW_NO_RESPAWN = "1";
-        return true;
-      });
-
-      const response = await captureUpdateRunPayload({ sessionKey });
-
-      expect(response).toMatchObject({
-        ok: false,
-        ackDelivered: true,
-        result: { reason: "restart-unavailable" },
-        message: expect.stringContaining("OPENCLAW_NO_RESPAWN"),
-      });
-      expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(transferManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
-      expect(scheduleGatewayRestartMock).not.toHaveBeenCalled();
-    });
-  });
 
   it.each(["before", "during"] as const)(
     "keeps serving when respawn is disabled %s the parking notification",
@@ -392,27 +375,18 @@ describe("update.run foreground respawn admission", () => {
     },
   );
 
-  it.each(["launchd", "systemd"] as const)(
-    "retains %s-managed updates when foreground respawn is disabled",
+  it.each(["launchd", "systemd", null] as const)(
+    "admits updates when supervisor=%s permits respawn",
     async (supervisor) => {
       detectRespawnSupervisorMock.mockReturnValue(supervisor);
-      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: "1" }, () =>
+      const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: supervisor ? "1" : "0" }, () =>
         captureUpdateRunPayload(),
       );
-
       expect(response).toMatchObject({ ok: true, handoff: { status: "started" } });
-      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ supervisor }),
       );
       expect(transferManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
     },
   );
-
-  it("admits foreground updates when the respawn policy is explicitly false", async () => {
-    const response = await withEnvAsync({ OPENCLAW_NO_RESPAWN: "0" }, () =>
-      captureUpdateRunPayload(),
-    );
-    expect(response).toMatchObject({ ok: true, handoff: { status: "started" } });
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledOnce();
-  });
 });

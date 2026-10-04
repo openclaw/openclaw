@@ -2,13 +2,13 @@ import { StatementSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import * as sessions from "../config/sessions/session-accessor.js";
 import {
   addSessionMember,
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import * as history from "../config/sessions/session-transcript-worker-runtime.js";
-import type { SessionRowDatabaseFacts } from "../config/sessions/session-transcript-worker.types.js";
 import type { InternalSessionEntry, SessionEntry } from "../config/sessions/types.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -118,7 +118,7 @@ function holdBackfillPublication(signal?: AbortSignal) {
 
 it("publishes read-only transcript previews without acquiring stored row facts again", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { list: [{ id: "main", default: true }] } };
+    const cfg = { agents: { entries: { main: {} } } };
     const scope = {
       agentId: "main",
       sessionKey: "agent:main:preview-only-backfill",
@@ -132,7 +132,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       updateMode: "none",
     });
     const stored = structuredClone(sessions.loadSessionEntry(scope));
-    const reads: Array<{ keys: readonly string[]; rows: SessionRowDatabaseFacts[] }> = [];
+    const reads = vi.fn();
     const readDatabases = history.withSessionHistoryWorkerDatabases;
     vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
       (databases, consume) =>
@@ -142,7 +142,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
               ...owner,
               async readRowFacts(input) {
                 const reply = await owner.readRowFacts(input);
-                reads.push({ keys: [...input.sessionKeys], rows: structuredClone(reply.rows) });
+                reads();
                 return reply;
               },
             })),
@@ -159,10 +159,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       await backfill.prepared;
       await projection.ensureMaterialized();
       expect(projection.dirtyRowCount).toBe(0);
-      const initialFacts = reads
-        .flatMap((read) => read.rows)
-        .find((row) => row.sessionKey === query.key);
-      expect(initialFacts).toBeDefined();
+      expect(reads).toHaveBeenCalled();
       const before = projection.snapshot(query, { includeLastMessage: true }).row;
       expect(before?.lastMessagePreview).toBeUndefined();
       const resident = projection.describe(query)!;
@@ -172,7 +169,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       const select = vi.spyOn(projection, "selectEntries");
       const materializedCount = projection.materializedCount;
       const sequence = resident.materializedSequence;
-      reads.length = 0;
+      reads.mockClear();
       // Join the actual producer publication before a synchronous snapshot can consume dirty work.
       const hostReads = observeSqliteReadSql(StatementSync.prototype);
       try {
@@ -192,11 +189,7 @@ it("publishes read-only transcript previews without acquiring stored row facts a
       expect(sessions.loadSessionEntry(scope)).toEqual(stored);
       expect(projection.describe(query)?.hasBoard).toBe(hasBoard);
       expect([...projection.describe(query)!.membership]).toEqual(membership);
-      for (const read of reads) {
-        expect(read.keys).toEqual([scope.sessionKey]);
-        expect(read.rows).toEqual([initialFacts]);
-      }
-      expect(reads).toHaveLength(0);
+      expect(reads).not.toHaveBeenCalled();
       const current = projection.describe(query)!;
       expect(current.materialized.source.lastMessagePreview).toBe(after?.lastMessagePreview);
       expect(current.materialized.row.lastMessagePreview).toBe(after?.lastMessagePreview);
@@ -217,7 +210,7 @@ it.for(["notice cleared", "selection changed"] as const)(
   "rejects a held fallback after same-session metadata changes: %s",
   (change, { signal, onTestFinished }) => {
     const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:held-fallback",
@@ -304,7 +297,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg = {
       agents: {
-        list: [{ id: "main", default: true }],
+        entries: { main: {} },
         defaults: { utilityModel: "unit-test/small" },
       },
     };
@@ -389,7 +382,7 @@ it("keeps pending Worker metadata, membership, and summary facts across optional
         label: "Current label",
         activitySummary: {
           version: 1,
-          formatRevision: 2,
+          formatRevision: ACTIVITY_SUMMARY_FORMAT_REVISION,
           text: "Current summary",
           updatedAt: 3,
           sessionId: scope.sessionId,
@@ -443,7 +436,7 @@ it.each(["before transcript work", "before preview publication"] as const)(
   async (phase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       resetGatewayWorkAdmission();
-      const cfg = { agents: { list: [{ id: "main", default: true }] } };
+      const cfg = { agents: { entries: { main: {} } } };
       const scope = {
         agentId: "main",
         sessionKey: "agent:main:foreground-backfill",

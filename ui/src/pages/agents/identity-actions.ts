@@ -1,8 +1,10 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationConfigCapability } from "../../app/config.ts";
 import type { ApplicationContext, ApplicationNavigationPreferences } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { updateAgentIdentity } from "../../lib/agents/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { assertUploadsEnabled, uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
 import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "./avatar-image.ts";
 import type { AgentIdentityDraft } from "./panels-overview.ts";
 
@@ -41,25 +43,44 @@ export function setIdentityDraftField(
   host.identityError = null;
 }
 
-export function selectIdentityAvatar(host: AgentIdentityEditorHost, file: File) {
+export function selectIdentityAvatar(
+  host: AgentIdentityEditorHost,
+  file: File,
+  config?: ApplicationConfigCapability,
+) {
   const epoch = advanceAvatarSelectionEpoch(host);
-  void fileToAvatarDataUrl(file).then((result) => {
-    if (avatarSelectionEpochs.get(host) !== epoch) {
-      return;
-    }
-    if (result.ok) {
-      host.identityDraft = { ...host.identityDraft, avatar: result.dataUrl };
-      host.identityError = null;
-    } else {
-      host.identityError = t(AVATAR_REJECTION_MESSAGE_KEYS[result.reason]);
-    }
-  });
+  if (!uploadsEnabled(config)) {
+    host.identityError = uploadsDisabledMessage();
+    return;
+  }
+  void fileToAvatarDataUrl(file, config)
+    .then((result) => {
+      if (avatarSelectionEpochs.get(host) !== epoch) {
+        return;
+      }
+      if (!uploadsEnabled(config)) {
+        host.identityError = uploadsDisabledMessage();
+        return;
+      }
+      if (result.ok) {
+        host.identityDraft = { ...host.identityDraft, avatar: result.dataUrl };
+        host.identityError = null;
+      } else {
+        host.identityError = t(AVATAR_REJECTION_MESSAGE_KEYS[result.reason]);
+      }
+    })
+    .catch((error: unknown) => {
+      if (avatarSelectionEpochs.get(host) === epoch) {
+        host.identityError = formatUiError(error);
+      }
+    });
 }
 
 /** Persist the draft via agents.update, then refresh the roster and the
     identity cache so the sidebar chip and page pick up the new identity. */
 export async function saveIdentityDraft(params: {
   host: AgentIdentityEditorHost;
+  config?: ApplicationConfigCapability;
   expectedClient: GatewayBrowserClient;
   agentId: string;
   agents: ApplicationContext["agents"];
@@ -86,10 +107,16 @@ export async function saveIdentityDraft(params: {
   host.identitySaving = true;
   host.identityError = null;
   try {
+    if (avatar) {
+      assertUploadsEnabled(params.config);
+    }
     const mutation = await runtimeConfig.runExternalMutation(
       (client) => {
         if (client !== expectedClient) {
           throw new Error("Connection changed before the agent identity update started.");
+        }
+        if (avatar) {
+          assertUploadsEnabled(params.config);
         }
         return updateAgentIdentity(client, { agentId, name, emoji, avatar });
       },

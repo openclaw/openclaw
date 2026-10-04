@@ -38,8 +38,8 @@ function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string 
   if (!sessionKey) {
     throw new ToolInputError("code mode swarm globals require session and run identity.");
   }
-  const { mainKey, alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
-  return resolveInternalSessionKey({ key: sessionKey, alias, mainKey });
+  const { alias } = resolveMainSessionAlias(ctx.runtimeConfig ?? ctx.config ?? {});
+  return resolveInternalSessionKey({ key: sessionKey, alias });
 }
 
 function resolveCodeModeSwarmGroupId(ctx: ToolSearchToolContext): string {
@@ -89,8 +89,14 @@ async function runAgentSpawnBridge(params: {
     throw new ToolInputError("agents.run prompt must be a non-empty string.");
   }
   const fastMode = options.fastMode;
-  if (fastMode !== undefined && fastMode !== true && fastMode !== false && fastMode !== "auto") {
-    throw new ToolInputError('agents.run fastMode must be boolean or "auto".');
+  if (
+    fastMode !== undefined &&
+    fastMode !== true &&
+    fastMode !== false &&
+    fastMode !== "auto" &&
+    fastMode !== "ultrafast"
+  ) {
+    throw new ToolInputError('agents.run fastMode must be boolean, "auto", or "ultrafast".');
   }
   const schema = options.schema;
   if (schema !== undefined && !isRecord(schema)) {
@@ -165,7 +171,7 @@ async function runAgentSpawnBridge(params: {
         throw new ToolInputError("agents.run persisted launch reservation cannot be recovered.");
       }
       // Cold-start restore idempotently re-enqueues this durable launch before agentWait parks.
-      initSubagentRegistry();
+      await initSubagentRegistry();
       existing =
         getSwarmRunByLaunchReplayKey(idempotencyKey, requesterSessionKey, params.ctx.agentId) ??
         existing;

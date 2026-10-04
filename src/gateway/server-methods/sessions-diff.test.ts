@@ -13,7 +13,7 @@ import { captureSessionDiffBaseline } from "../../sessions/session-diff.js";
 import { loadSessionDiff, sessionsDiffHandlers } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
-  loadSessionEntryReadOnly: vi.fn(),
+  readSessionEntryReadOnlyInWorker: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -31,9 +31,14 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
 }));
 
+// mock-isolation: Diff RPC cases control session persistence independently of throwaway Git repos.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
+}));
+
+// mock-isolation: Baseline policy uses the supplied session row without opening a read worker.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryReadOnlyInWorker: hoisted.readSessionEntryReadOnlyInWorker,
 }));
 
 function git(cwd: string, ...args: string[]): string {
@@ -154,6 +159,22 @@ describe("loadSessionDiff", () => {
     mockSession(repoRoot);
     const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
     expect(result.unavailableReason).toBe("not_git");
+  });
+
+  it.each([
+    { pendingWorktree: { titleSource: "New checkout" } },
+    { pendingProjectGitUrl: "https://github.com/example/project.git" },
+  ])("keeps pending checkouts separate from the agent workspace: %j", async (pending) => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "Agent workspace bootstrap\n");
+    mockSession(repoRoot, { spawnedCwd: undefined, ...pending });
+
+    expect(await loadSessionDiff({ sessionKey: "agent:main:s1" })).toEqual({
+      sessionKey: "agent:main:s1",
+      files: [],
+      additions: 0,
+      deletions: 0,
+    });
   });
 
   // Diff and baseline reads run inside the Gateway process against user
@@ -1016,7 +1037,7 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
-    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
+    hoisted.readSessionEntryReadOnlyInWorker.mockResolvedValue(entry);
 
     const result = await ensureSessionDiffBaseline({
       agentId: "main",

@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import type {
   GithubIssueSubmitHooks,
   GithubIssueReconcileHooks,
@@ -21,24 +21,15 @@ import {
   reserveUpdateFailureReportReceipt,
 } from "./restart-sentinel.js";
 import { prepareUpdateFailureReport, submitUpdateFailureReport } from "./update-failure-report.js";
-import { mockCreatedIssue, mockFallbackIssue } from "./update-failure-report.test-support.js";
+import {
+  createUpdateFailureReportFixture,
+  savedReportArtifactPath,
+  mockCreatedIssue,
+  mockFallbackIssue,
+} from "./update-failure-report.test-support.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
-
-function savedReportArtifactPath(
-  prepared: PreparedReport,
-  reservationId: string,
-  previewDigest = prepared.previewDigest,
-): string {
-  const parsed = path.parse(prepared.savedReportPath);
-  const artifactKey = createHash("sha256")
-    .update(`${reservationId}\0${previewDigest}`)
-    .digest("hex");
-  return path.join(parsed.dir, `${parsed.name}.${artifactKey}${parsed.ext}`);
-}
+const tempDirs = useStateDatabaseTempDirs();
 
 function failedUpdate(): UpdateRunResult {
   return {
@@ -59,7 +50,7 @@ async function prepareFailedReport(attemptId: string) {
     { attemptId, result: failedUpdate() },
     { stateDir },
   );
-  return { stateDir, prepared };
+  return createUpdateFailureReportFixture(prepared, stateDir);
 }
 
 function mockRetryableNoStartIssue() {
@@ -75,15 +66,11 @@ function mockRetryableNoStartIssue() {
   });
 }
 
-function stateEnv(stateDir: string): NodeJS.ProcessEnv {
-  return { OPENCLAW_STATE_DIR: stateDir };
-}
-
 describe("update failure report receipt recovery", () => {
   it.each(["created", "fallback"] as const)(
     "recovers a committed %s receipt after its writer loses the acknowledgement",
     async (status) => {
-      const { stateDir, prepared } = await prepareFailedReport(`attempt-${status}-lost-ack`);
+      const { prepared, submit } = await prepareFailedReport(`attempt-${status}-lost-ack`);
       const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
       const createIssue =
         status === "created" ? mockCreatedIssue(issueUrl) : mockFallbackIssue(prepared.url);
@@ -97,15 +84,11 @@ describe("update failure report receipt recovery", () => {
         },
       );
 
-      const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+      const first = await submit({
         createIssue,
         finalizeReceipt,
-        stateDir,
       });
-      const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue,
-        stateDir,
-      });
+      const second = await submit({ createIssue });
 
       expect(first).toMatchObject(
         status === "created" ? { status, url: issueUrl } : { fallbackUrl: prepared.url, status },
@@ -123,19 +106,15 @@ describe("update failure report receipt recovery", () => {
   );
 
   it("keeps a post-create persistence outage pending without replaying transport", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-created-persistence-outage");
+    const { submit } = await prepareFailedReport("attempt-created-persistence-outage");
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
 
-    const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const first = await submit({
       createIssue,
       finalizeReceipt: () => false,
-      stateDir,
     });
-    const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const second = await submit({ createIssue });
 
     expect(first).toMatchObject({
       message: expect.stringContaining("canonical receipt is still pending"),
@@ -148,7 +127,9 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("persists a proven no-start result after transient receipt contention", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-no-start-transient-receipt");
+    const { prepared, receipt, submit } = await prepareFailedReport(
+      "attempt-no-start-transient-receipt",
+    );
     const createIssue = mockRetryableNoStartIssue();
     const finalizeReceipt = vi
       .fn(finalizeUpdateFailureReportReceipt)
@@ -158,15 +139,14 @@ describe("update failure report receipt recovery", () => {
       })
       .mockReturnValueOnce(false);
 
-    const result = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const result = await submit({
       createIssue,
       finalizeReceipt,
-      stateDir,
     });
 
     expect(result).toMatchObject({ status: "retryable" });
     expect(finalizeReceipt).toHaveBeenCalledTimes(4);
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir))).toMatchObject({
+    expect(receipt()).toMatchObject({
       previewDigest: prepared.previewDigest,
       status: "retryable",
     });
@@ -174,13 +154,10 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("retains retryable ownership until interrupted artifact cleanup completes", async () => {
-    const { stateDir, prepared } = await prepareFailedReport(
+    const { prepared, receipt, submit } = await prepareFailedReport(
       "attempt-retryable-cleanup-interruption",
     );
-    const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: mockRetryableNoStartIssue(),
-      stateDir,
-    });
+    const first = await submit({ createIssue: mockRetryableNoStartIssue() });
     const secondCreateIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
     const rm = vi
       .spyOn(fs, "rm")
@@ -188,27 +165,21 @@ describe("update failure report receipt recovery", () => {
 
     let second: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
     try {
-      second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue: secondCreateIssue,
-        stateDir,
-      });
+      second = await submit({ createIssue: secondCreateIssue });
     } finally {
       rm.mockRestore();
     }
 
     expect(second).toMatchObject({ status: "retryable" });
     expect(secondCreateIssue).not.toHaveBeenCalled();
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir))).toMatchObject({
+    expect(receipt()).toMatchObject({
       cleanup: "pending",
       reservationId: expect.any(String),
       status: "retryable",
     });
     await expect(fs.readFile(first.savedReportPath, "utf8")).resolves.toBe(prepared.body);
 
-    const third = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: secondCreateIssue,
-      stateDir,
-    });
+    const third = await submit({ createIssue: secondCreateIssue });
 
     expect(third).toMatchObject({
       status: "created",
@@ -220,29 +191,27 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("keeps a retryable artifact when a later submission is stale", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-retryable-stale");
-    const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue: mockRetryableNoStartIssue(),
-      stateDir,
-    });
+    const { prepared, receipt, submit } = await prepareFailedReport("attempt-retryable-stale");
+    const first = await submit({ createIssue: mockRetryableNoStartIssue() });
     const staleCreateIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
 
-    const stale = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const stale = await submit({
       createIssue: staleCreateIssue,
-      stateDir,
       validateCurrentAttempt: () => false,
     });
 
     expect(stale).toMatchObject({ status: "stale" });
     expect(staleCreateIssue).not.toHaveBeenCalled();
-    const receipt = readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir));
-    expect(receipt).toMatchObject({ status: "retryable" });
-    expect(receipt).not.toHaveProperty("cleanup");
+    const retainedReceipt = receipt();
+    expect(retainedReceipt).toMatchObject({ status: "retryable" });
+    expect(retainedReceipt).not.toHaveProperty("cleanup");
     await expect(fs.readFile(first.savedReportPath, "utf8")).resolves.toBe(prepared.body);
   });
 
   it("retains expired preparation custody when cleanup is interrupted", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-expired-preparation-cleanup");
+    const { env, prepared, receipt, submit } = await prepareFailedReport(
+      "attempt-expired-preparation-cleanup",
+    );
     let nowMs = 1_800_000_000_000;
     const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
     const expiredReservationId = "expired-cleanup-owner";
@@ -251,7 +220,7 @@ describe("update failure report receipt recovery", () => {
         prepared.attemptId,
         expiredReservationId,
         prepared.previewDigest,
-        stateEnv(stateDir),
+        env,
       ),
     ).toMatchObject({ reserved: true });
     const expiredReportPath = savedReportArtifactPath(prepared, expiredReservationId);
@@ -265,27 +234,21 @@ describe("update failure report receipt recovery", () => {
 
     let interrupted: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
     try {
-      interrupted = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue,
-        stateDir,
-      });
+      interrupted = await submit({ createIssue });
     } finally {
       rm.mockRestore();
     }
 
     expect(interrupted).toMatchObject({ status: "retryable" });
     expect(createIssue).not.toHaveBeenCalled();
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir))).toMatchObject({
+    expect(receipt()).toMatchObject({
       cleanup: "pending",
       reservationId: expiredReservationId,
       status: "retryable",
     });
     await expect(fs.readFile(expiredReportPath, "utf8")).resolves.toBe(prepared.body);
 
-    const recovered = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const recovered = await submit({ createIssue });
     now.mockRestore();
 
     expect(recovered).toMatchObject({ status: "created" });
@@ -295,7 +258,7 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("preserves non-growing expired-owner sweep custody across repeated retries", async () => {
-    const { stateDir, prepared } = await prepareFailedReport(
+    const { env, prepared, receipt, submit } = await prepareFailedReport(
       "attempt-expired-owner-successor-retry",
     );
     let nowMs = 1_800_000_000_000;
@@ -306,28 +269,24 @@ describe("update failure report receipt recovery", () => {
         prepared.attemptId,
         expiredReservationId,
         prepared.previewDigest,
-        stateEnv(stateDir),
+        env,
       ),
     ).toMatchObject({ reserved: true });
     nowMs += 10 * 60_000;
 
     let retryable: Awaited<ReturnType<typeof submitUpdateFailureReport>> | undefined;
     for (let index = 0; index < 20; index += 1) {
-      retryable = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue: mockRetryableNoStartIssue(),
-        stateDir,
-      });
+      retryable = await submit({ createIssue: mockRetryableNoStartIssue() });
       expect(retryable).toMatchObject({ status: "retryable" });
     }
 
-    const created = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const created = await submit({
       createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
-      stateDir,
     });
     now.mockRestore();
 
     expect(created).toMatchObject({ status: "created" });
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir))).toMatchObject({
+    expect(receipt()).toMatchObject({
       artifactSweep: "pending",
       status: "created",
     });
@@ -338,27 +297,27 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("reconciles a created issue after restart before stale-attempt validation", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-created-reconcile-restart");
+    const { prepared, receipt, submit } = await prepareFailedReport(
+      "attempt-created-reconcile-restart",
+    );
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
 
-    const submitted = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const submitted = await submit({
       createIssue,
       finalizeReceipt: () => false,
-      stateDir,
     });
     const reconcileIssue = vi.fn(async () => ({ status: "created" as const, url: issueUrl }));
-    const recovered = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const recovered = await submit({
       createIssue,
       reconcileIssue,
-      stateDir,
       validateCurrentAttempt: () => false,
     });
 
     expect(recovered).toMatchObject({ status: "duplicate", url: issueUrl });
     expect(createIssue).toHaveBeenCalledOnce();
     expect(reconcileIssue).toHaveBeenCalledWith(prepared, expect.any(Object));
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir))).toMatchObject({
+    expect(receipt()).toMatchObject({
       previewDigest: prepared.previewDigest,
       status: "created",
       url: issueUrl,
@@ -367,18 +326,16 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("keeps an unreconciled restart pending without replaying issue creation", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-created-reconcile-miss");
+    const { submit } = await prepareFailedReport("attempt-created-reconcile-miss");
     const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
 
-    await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    await submit({
       createIssue,
       finalizeReceipt: () => false,
-      stateDir,
     });
-    const result = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const result = await submit({
       createIssue,
       reconcileIssue: async () => ({ status: "not-found" }),
-      stateDir,
     });
 
     expect(result).toMatchObject({ status: "pending" });
@@ -387,13 +344,12 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("stops restart reconciliation when client authority expires before lookup", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-created-reconcile-revoked");
+    const { receipt, submit } = await prepareFailedReport("attempt-created-reconcile-revoked");
     const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
 
-    await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    await submit({
       createIssue,
       finalizeReceipt: () => false,
-      stateDir,
     });
     let authorityCurrent = true;
     let lookupCalls = 0;
@@ -409,24 +365,23 @@ describe("update failure report receipt recovery", () => {
       },
     );
 
-    const result = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const result = await submit({
       createIssue,
       hasCurrentAuthority: () => authorityCurrent,
       reconcileIssue,
-      stateDir,
     });
 
     expect(result).toMatchObject({ status: "pending" });
     expect(result).not.toHaveProperty("url");
     expect(lookupCalls).toBe(0);
     expect(createIssue).toHaveBeenCalledOnce();
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir))).toMatchObject({
+    expect(receipt()).toMatchObject({
       status: "pending",
     });
   });
 
   it("returns the created URL when post-transport receipt reads are also unavailable", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-created-read-outage");
+    const { submit } = await prepareFailedReport("attempt-created-read-outage");
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
     const readReceipt = vi
@@ -436,16 +391,12 @@ describe("update failure report receipt recovery", () => {
         throw new Error("simulated state read outage after transport");
       });
 
-    const first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
+    const first = await submit({
       createIssue,
       finalizeReceipt: () => false,
       readReceipt,
-      stateDir,
     });
-    const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const second = await submit({ createIssue });
 
     expect(first).toMatchObject({ status: "created", url: issueUrl });
     expect(second).toMatchObject({ status: "pending" });
@@ -453,7 +404,9 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("commits cleanup intent before filesystem deletion and resumes it after reconnect", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-created-cleanup-reconnect");
+    const { prepared, receipt, submit } = await prepareFailedReport(
+      "attempt-created-cleanup-reconnect",
+    );
     const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
     const createIssue = mockCreatedIssue(issueUrl);
     const realRm = fs.rm.bind(fs);
@@ -463,7 +416,7 @@ describe("update failure report receipt recovery", () => {
         path.dirname(String(target)) === path.dirname(prepared.savedReportPath) &&
         path.basename(String(target)).startsWith(`${path.parse(prepared.savedReportPath).name}.`)
       ) {
-        observedReceipt = readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir));
+        observedReceipt = receipt();
         throw new Error("simulated post-commit cleanup interruption");
       }
       return await realRm(target, options);
@@ -471,10 +424,7 @@ describe("update failure report receipt recovery", () => {
 
     let first: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
     try {
-      first = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-        createIssue,
-        stateDir,
-      });
+      first = await submit({ createIssue });
     } finally {
       rm.mockRestore();
     }
@@ -488,15 +438,12 @@ describe("update failure report receipt recovery", () => {
     });
     await expect(fs.readFile(first.savedReportPath, "utf8")).resolves.toBe(prepared.body);
 
-    const second = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const second = await submit({ createIssue });
 
     expect(second).toMatchObject({ status: "duplicate", url: issueUrl });
     expect(createIssue).toHaveBeenCalledOnce();
     await expect(fs.stat(first.savedReportPath)).rejects.toMatchObject({ code: "ENOENT" });
-    const completed = readUpdateFailureReportReceipt(prepared.attemptId, stateEnv(stateDir));
+    const completed = receipt();
     expect(completed).toMatchObject({
       status: "created",
       url: issueUrl,
@@ -505,9 +452,8 @@ describe("update failure report receipt recovery", () => {
   });
 
   it("records abandoned cleanup before deleting and can resume after interruption", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-abandoned-cleanup");
+    const { env, prepared, receipt } = await prepareFailedReport("attempt-abandoned-cleanup");
     const reservationId = "cleanup-owner";
-    const env = stateEnv(stateDir);
     expect(
       reserveUpdateFailureReportReceipt(
         prepared.attemptId,
@@ -523,7 +469,7 @@ describe("update failure report receipt recovery", () => {
     expect(beginUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, env)).toBe(
       true,
     );
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, env)).toMatchObject({
+    expect(receipt()).toMatchObject({
       cleanup: "pending",
       status: "retryable",
     });
@@ -533,12 +479,11 @@ describe("update failure report receipt recovery", () => {
     expect(completeUpdateFailureReportReceiptCleanup(prepared.attemptId, reservationId, env)).toBe(
       true,
     );
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, env)).toBeNull();
+    expect(receipt()).toBeNull();
   });
 
   it("refuses to start transport after the approved preview digest changes", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-pending-digest-change");
-    const env = stateEnv(stateDir);
+    const { env, prepared, receipt } = await prepareFailedReport("attempt-pending-digest-change");
     expect(
       reserveUpdateFailureReportReceipt(
         prepared.attemptId,
@@ -564,7 +509,7 @@ describe("update failure report receipt recovery", () => {
         env,
       ),
     ).toBe(false);
-    expect(readUpdateFailureReportReceipt(prepared.attemptId, env)).toMatchObject({
+    expect(receipt()).toMatchObject({
       previewDigest: prepared.previewDigest,
       status: "prepared",
     });
@@ -579,15 +524,14 @@ describe("update failure report receipt recovery", () => {
     },
   ])(
     "refuses an unreadable terminal receipt without wedging the pending owner",
-    async (receipt) => {
-      const { stateDir, prepared } = await prepareFailedReport(
-        `attempt-invalid-terminal-${receipt.status}`,
+    async (terminalReceipt) => {
+      const { env, prepared, receipt } = await prepareFailedReport(
+        `attempt-invalid-terminal-${terminalReceipt.status}`,
       );
-      const env = stateEnv(stateDir);
       expect(
         reserveUpdateFailureReportReceipt(
           prepared.attemptId,
-          receipt.reservationId,
+          terminalReceipt.reservationId,
           prepared.previewDigest,
           env,
         ),
@@ -595,16 +539,16 @@ describe("update failure report receipt recovery", () => {
       expect(
         markUpdateFailureReportReceiptPrepared(
           prepared.attemptId,
-          receipt.reservationId,
+          terminalReceipt.reservationId,
           prepared.previewDigest,
           env,
         ),
       ).toBe(true);
-      if (receipt.status === "created") {
+      if (terminalReceipt.status === "created") {
         expect(
           markUpdateFailureReportReceiptPending(
             prepared.attemptId,
-            receipt.reservationId,
+            terminalReceipt.reservationId,
             prepared.previewDigest,
             env,
           ),
@@ -614,20 +558,19 @@ describe("update failure report receipt recovery", () => {
       expect(
         finalizeUpdateFailureReportReceipt(
           prepared.attemptId,
-          { ...receipt, previewDigest: prepared.previewDigest },
+          { ...terminalReceipt, previewDigest: prepared.previewDigest },
           env,
         ),
       ).toBe(false);
-      expect(readUpdateFailureReportReceipt(prepared.attemptId, env)).toMatchObject({
+      expect(receipt()).toMatchObject({
         previewDigest: prepared.previewDigest,
-        status: receipt.status === "created" ? "pending" : "prepared",
+        status: terminalReceipt.status === "created" ? "pending" : "prepared",
       });
     },
   );
 
   it("parses a pre-upgrade receipt conservatively without exposing an unbound URL", async () => {
-    const { stateDir, prepared } = await prepareFailedReport("attempt-legacy-receipt");
-    const env = stateEnv(stateDir);
+    const { env, prepared, submit } = await prepareFailedReport("attempt-legacy-receipt");
     expect(
       reserveUpdateFailureReportReceipt(
         prepared.attemptId,
@@ -665,10 +608,7 @@ describe("update failure report receipt recovery", () => {
     );
     const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/124");
 
-    const result = await submitUpdateFailureReport(prepared, prepared.previewDigest, {
-      createIssue,
-      stateDir,
-    });
+    const result = await submit({ createIssue });
 
     expect(result).toMatchObject({
       message: expect.stringContaining("different reviewed preview"),

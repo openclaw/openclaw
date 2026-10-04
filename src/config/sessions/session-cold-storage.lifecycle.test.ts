@@ -10,6 +10,7 @@ import { createVerifiedSqliteSnapshot } from "../../infra/sqlite-snapshot.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -59,6 +60,7 @@ afterEach(async () => {
   for (const storePath of stores.splice(0)) {
     await waitForSessionTranscriptIndexReconcile({ agentId: "main", path: storePath });
   }
+  await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   tempDirs.cleanup();
 });
@@ -153,7 +155,7 @@ async function createColdCurrentSession(
     await expect(
       runSessionColdStorageMaintenance({
         config: {
-          agents: { list: [{ id: "main" }] },
+          agents: { entries: { main: {} } },
           session: {
             store: storePath,
             maintenance: { coldStorage: { enabled: true, afterDays: 30 } },
@@ -341,7 +343,8 @@ describe("cold current transcript lifecycle", () => {
     expect(fixture.snapshot()).toEqual(before);
   });
 
-  it.each(actions)(
+  // Message cuts and parent transcript forks restore before dispatching their mutation modes.
+  it.each(actions.filter((action) => !["rewind", "branch switch", "parent fork"].includes(action)))(
     "refuses %s without changing state when its archive is missing",
     async (action) => {
       const fixture = await createColdCurrentSession();

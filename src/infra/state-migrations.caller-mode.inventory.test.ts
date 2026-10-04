@@ -141,7 +141,7 @@ module.exports = { stateMigrations: [{
 
         await expect(repair()).resolves.toEqual({
           changes: ["migrated kept-owner", "migrated omitted-owner"],
-          completedPluginIds: ["kept-owner", "omitted-owner"],
+          completedPluginIds: undefined,
           requiredPluginIds: ["kept-owner", "omitted-owner"],
           warnings: [],
         });
@@ -152,7 +152,7 @@ module.exports = { stateMigrations: [{
         }
         await expect(repair()).resolves.toEqual({
           changes: [],
-          completedPluginIds: ["kept-owner", "omitted-owner"],
+          completedPluginIds: undefined,
           requiredPluginIds: ["kept-owner", "omitted-owner"],
           warnings: [],
         });
@@ -278,7 +278,7 @@ module.exports = { stateMigrations: [{
 
   await expect(runRepair(baseConfig, frozenActions)).resolves.toEqual({
     changes: ["migrated acpx", "migrated codex"],
-    completedPluginIds: ["acpx", "codex"],
+    completedPluginIds: undefined,
     requiredPluginIds: ["acpx", "codex"],
     warnings: [],
   });
@@ -352,7 +352,7 @@ module.exports = { stateMigrations: [{
 }] };\n`,
     );
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       plugins: { load: { paths: [pluginRoot] }, entries: { [pluginId]: { enabled: true } } },
     };
     const env = {
@@ -468,7 +468,7 @@ module.exports = { stateMigrations: [{
       }),
     ).resolves.toEqual({
       changes: ["migrated session action"],
-      completedPluginIds: ["inventory-owner"],
+      completedPluginIds: undefined,
       requiredPluginIds: ["inventory-owner"],
       warnings: [],
     });

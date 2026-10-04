@@ -1,7 +1,10 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
+import {
+  assertStateDatabaseAccessAllowed,
+  assertStateDatabaseReadAllowed,
+} from "../infra/gateway-state-owner.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   registerNodeSqliteKyselyQueryErrorHandler,
@@ -21,7 +24,6 @@ import {
   createSqliteLifecycleAggregateError,
   throwSqliteLifecycleErrors,
 } from "../infra/sqlite-lifecycle-errors.js";
-import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { createSqliteTerminalOpenLatch } from "../infra/sqlite-terminal-open-latch.js";
 import { cancelSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { registerSqliteCacheExitClose } from "../infra/sqlite-wal.js";
@@ -43,8 +45,12 @@ import {
   createStateDatabaseRetainer,
   type StateDatabaseBorrowers,
 } from "./openclaw-state-db-borrow.js";
+import { createStateDatabaseCacheAdmission } from "./openclaw-state-db-cache.admission.js";
 import { createStateDatabaseIdleRetirement } from "./openclaw-state-db-cache.idle.js";
-import type { StateDatabaseLifecycle } from "./openclaw-state-db-cache.types.js";
+import type {
+  CachedOpenClawStateDatabase,
+  StateDatabaseLifecycle,
+} from "./openclaw-state-db-cache.types.js";
 import { createStateDatabaseWalOwner } from "./openclaw-state-db-cache.wal.js";
 import type {
   OpenClawStateDatabase,
@@ -53,16 +59,14 @@ import type {
   StateDatabaseHandle,
 } from "./openclaw-state-db-contract.js";
 import { closeTrackedStateDatabase } from "./openclaw-state-db-handle.js";
-import { createOpenClawStateDatabaseRuntimeFailureOwner } from "./openclaw-state-db-runtime-failure.js";
 import { assertExistingOpenClawStateSchemaCacheAdmission } from "./openclaw-state-db-schema-policy.js";
-import { assertSupportedStateSchemaVersion } from "./openclaw-state-db-schema-version.js";
 import { openClawStateSnapshotOwners } from "./openclaw-state-db-snapshot-owner.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
   Symbol.for("openclaw.stateDatabaseLifecycle"),
   () => ({
-    cachedDatabases: new Map<string, OpenClawStateDatabase>(),
+    cachedDatabases: new Map<string, CachedOpenClawStateDatabase>(),
     retainedDatabaseHandles: new Map<DatabaseSync, StateDatabaseHandle>(),
     idleTimers: new WeakMap(),
     idleReferences: new WeakMap(),
@@ -71,7 +75,7 @@ const stateDatabaseLifecycle = resolveGlobalSingleton<StateDatabaseLifecycle>(
     borrowers: new WeakMap<DatabaseSync, StateDatabaseBorrowers>(),
     databaseLifecycleListeners: new Set<(event: OpenClawStateDatabaseLifecycleEvent) => void>(),
     terminalOpenLatch: createSqliteTerminalOpenLatch({
-      closeByPath: (pathname, error) => runtimeFailures.closeTerminalFailure(pathname, error),
+      closeByPath: (pathname, error) => cacheAdmission.closeTerminalFailure(pathname, error),
     }),
     asyncResources: createOpenClawStateDatabaseAsyncLifecycle(),
   }),
@@ -91,8 +95,16 @@ const {
 
 const { touch: touchStateDatabase, retain: retainOpenClawStateDatabaseForIdle } =
   createStateDatabaseIdleRetirement(stateDatabaseLifecycle, retireOpenClawStateDatabaseHandle);
-const { register: registerStateDatabaseWalAdmission, readHealth: readOpenClawStateWalHealth } =
-  createStateDatabaseWalOwner(stateDatabaseLifecycle, retainOpenClawStateDatabaseForIdle);
+const {
+  register: registerStateDatabaseWalAdmission,
+  readHealth: readOpenClawStateWalHealth,
+  ownRetirement: ownStateDatabaseRetirement,
+  stop: stopOpenClawStateDatabaseMaintenance,
+} = createStateDatabaseWalOwner(
+  stateDatabaseLifecycle,
+  retainOpenClawStateDatabaseForIdle,
+  requireOpenClawStateDatabaseIdentity,
+);
 export { readOpenClawStateWalHealth, retainOpenClawStateDatabaseForIdle };
 
 function notifyOpenClawStateDatabaseLifecycle(event: OpenClawStateDatabaseLifecycleEvent): void {
@@ -123,9 +135,8 @@ export function requireOpenClawStateDatabaseIdentity(
   return identity;
 }
 
-const runtimeFailures = createOpenClawStateDatabaseRuntimeFailureOwner({
+const cacheAdmission = createStateDatabaseCacheAdmission({
   cachedDatabases,
-  latch: terminalOpenLatch,
   evict: evictCachedOpenClawStateDatabase,
   invalidate: (pathname) => asyncResources.invalidate(pathname),
   notifyTerminalFailure: (pathname, error) =>
@@ -174,7 +185,7 @@ function ownMaintenanceStateDatabaseHandle(database: StateDatabaseHandle): void 
       cachedDatabases.get(database.path) === database ||
       retainedDatabaseHandles.get(database.db) === database
     ) {
-      await cancelSqliteWalWriteAdmission(database.db);
+      await database.walMaintenance?.stop();
       if (
         isOpenClawDatabaseMaintenanceResourceOwned(database.db, closingScope) &&
         (cachedDatabases.get(database.path) === database ||
@@ -200,13 +211,14 @@ export const {
   borrowForRead: borrowOpenClawStateDatabaseForAsyncRead,
   retainForIndependentRead: retainOpenClawStateDatabaseForIndependentRead,
 } = createStateDatabaseRetainer(stateDatabaseLifecycle, {
-  assertOpen(pathname) {
-    assertOpenClawStateDatabaseOpenAllowed(pathname);
+  assertOpen(pathname, ownership) {
+    assertOpenClawStateDatabaseOpenAllowed(pathname, ownership);
     assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
   },
   capture: (pathname) => asyncResources.capture(pathname),
   retire: retireOpenClawStateDatabaseHandle,
   retainFailed: retainStateDatabaseClose,
+  ownRetirement: ownStateDatabaseRetirement,
   touch: touchStateDatabase,
 });
 
@@ -313,11 +325,10 @@ function publishOpenClawStateDatabase(
   env: NodeJS.ProcessEnv,
 ): OpenClawStateDatabase {
   const { db, path: pathname } = database;
-  admitSqliteSchema(db);
-  assertSupportedStateSchemaVersion(db, pathname);
+  const schemaFacts = cacheAdmission.initialize(database);
   const { identity, admission } = asyncResources.publish(pathname);
   databaseIdentities.set(db, identity);
-  cachedDatabases.set(pathname, database);
+  cachedDatabases.set(pathname, Object.assign(database, { schemaFacts }));
   registerStateDatabaseWalAdmission(database, identity, admission, env);
   touchStateDatabase(database);
   openClawStateSnapshotOwners.register(database, () => cachedDatabases.get(pathname));
@@ -344,11 +355,14 @@ function getCachedOpenClawStateDatabase(
     maintenance?.assertAdmission();
   }
   assertExistingOpenClawStateSchemaCacheAdmission(pathname, stateDatabaseLifecycle);
-  const runtimeFailure = runtimeFailures.get(pathname);
+  const runtimeFailure = terminalOpenLatch.get(path.resolve(pathname));
   if (runtimeFailure) {
     throw runtimeFailure;
   }
   const database = cachedDatabases.get(path.resolve(pathname));
+  if (database?.db.isOpen && !cacheAdmission.refresh(database)) {
+    return undefined;
+  }
   if (database && borrowers.get(database.db)?.retiring) {
     throw new Error(`OpenClaw state database native borrower cleanup is pending: ${pathname}`);
   }
@@ -423,8 +437,12 @@ export async function getOpenClawStateDatabaseTerminalFailureAsync(
 }
 
 /** Reject shared-state access after a process-local terminal failure. */
-function assertOpenClawStateDatabaseOpenAllowed(pathname: string): void {
-  assertStateDatabaseAccessAllowed(pathname);
+function assertOpenClawStateDatabaseOpenAllowed(pathname: string, ownership?: "cached-read"): void {
+  if (ownership === "cached-read") {
+    assertStateDatabaseReadAllowed(pathname);
+  } else {
+    assertStateDatabaseAccessAllowed(pathname);
+  }
   const { identity } = asyncResources.capture(pathname);
   const terminalFailure = terminalOpenLatch.get(pathname);
   if (terminalFailure) {
@@ -468,7 +486,7 @@ function assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
   if (quarantineFailure) {
     // Another process can record quarantine. Revoke admitted owners without a
     // process-local latch that could outlive the durable decision's generation.
-    runtimeFailures.closeTerminalFailure(pathname, quarantineFailure);
+    cacheAdmission.closeTerminalFailure(pathname, quarantineFailure);
     throw quarantineFailure;
   }
 }
@@ -573,7 +591,6 @@ export const captureOpenClawStateDatabaseReadAdmission = asyncResources.capture;
 export function publishOpenClawStateDatabaseWorkerAdmission(
   admission: OpenClawStateDatabaseReadAdmission,
 ): void {
-  admission.assertCurrent();
   asyncResources.publish(admission.databasePath);
   admission.assertCurrent();
 }
@@ -584,18 +601,20 @@ export function closeOpenClawStateDatabaseByPathAsync(
   options?: OpenClawStateDatabaseCloseOptions,
 ): Promise<boolean> {
   const resolvedPath = path.resolve(pathname);
-  return asyncResources.close(resolvedPath, (identity) =>
-    retireOpenClawStateDatabaseHandles(resolvedPath, options, identity),
-  );
+  return asyncResources.close(resolvedPath, async (identity) => {
+    await stopOpenClawStateDatabaseMaintenance(resolvedPath, identity);
+    return retireOpenClawStateDatabaseHandles(resolvedPath, options, identity);
+  });
 }
 
 /** Orderly lifecycle close; synchronous close remains native/exit cleanup only. */
 export async function closeOpenClawStateDatabaseAsync(
   options?: OpenClawStateDatabaseCloseOptions,
 ): Promise<void> {
-  await asyncResources.close(undefined, () =>
-    retireOpenClawStateDatabaseHandles(undefined, options),
-  );
+  await asyncResources.close(undefined, async () => {
+    await stopOpenClawStateDatabaseMaintenance();
+    return retireOpenClawStateDatabaseHandles(undefined, options);
+  });
 }
 
 /** Test whether a cached shared state database handle is still open, optionally at one path. */
@@ -606,7 +625,11 @@ export function isOpenClawStateDatabaseOpen(pathname?: string): boolean {
   return Array.from(cachedDatabases.values()).some((database) => database.db.isOpen);
 }
 
-/** Close shared state handles and clear terminal failure latches for test isolation. */
+/**
+ * Close shared state handles and clear terminal failure latches for test isolation.
+ * Worker retirement continues after return; await closeOpenClawStateDatabaseAsync()
+ * before raw SQLite or file access to a database that workers have used.
+ */
 export function closeOpenClawStateDatabaseForTest(): void {
   closeOpenClawStateDatabase();
   terminalOpenLatch.clearAll();
@@ -626,11 +649,13 @@ export const openClawStateDatabaseCache = {
   evictCachedOpenClawStateDatabase,
   evictOpenClawStateDatabaseAfterCorruption,
   getCachedOpenClawStateDatabase,
-  getOpenClawStateDatabaseRuntimeFailure: runtimeFailures.get,
   getOpenClawStateDatabaseRecordedFailure: terminalOpenLatch.peek,
   getOpenClawStateDatabaseIfOpenAtPath,
   getKnownOpenClawStateDatabaseIdentity: asyncResources.knownIdentity,
   isOpenClawStateDatabaseOpen,
+  /** Only the exact published, open owner carries canonical schema readiness. */
+  isOpenClawStateDatabaseSchemaReady: (database: OpenClawStateDatabase): boolean =>
+    cachedDatabases.get(database.path) === database && database.db.isOpen,
   publishOpenClawStateDatabase,
   recordOpenClawStateDatabaseOpenFailure,
   recordOpenClawStateDatabaseLifecycleOpenError,

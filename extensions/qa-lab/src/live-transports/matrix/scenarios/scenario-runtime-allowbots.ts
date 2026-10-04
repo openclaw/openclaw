@@ -1,9 +1,10 @@
-import { MATRIX_QA_BOT_DM_ROOM_KEY, resolveMatrixQaScenarioRoomId } from "./scenario-contract.js";
+import { MATRIX_QA_BOT_DM_ROOM_KEY } from "./scenario-contract.js";
 import {
   buildExactMarkerPrompt,
   buildMatrixQaToken,
   buildMentionPrompt,
   createMatrixQaScenarioClient,
+  resolveMatrixQaActorSyncParams,
   resolveMatrixQaNoReplyWindowMs,
   runNoReplyExpectedScenario,
   runTopologyScopedTopLevelScenario,
@@ -30,25 +31,19 @@ async function runObserverBotReplyScenario(params: {
 
 async function runObserverBotNoReplyScenario(params: {
   context: MatrixQaScenarioContext;
-  roomKey?: string;
   tokenPrefix: string;
   withMention?: boolean;
 }) {
   const token = buildMatrixQaToken(params.tokenPrefix);
   const withMention = params.withMention !== false;
   return await runNoReplyExpectedScenario({
-    accessToken: params.context.observerAccessToken,
-    actorId: "observer",
+    ...resolveMatrixQaActorSyncParams(params.context, "observer"),
     actorUserId: params.context.observerUserId,
-    baseUrl: params.context.baseUrl,
     body: withMention
       ? buildMentionPrompt(params.context.sutUserId, token)
       : buildExactMarkerPrompt(token),
     ...(withMention ? { mentionUserIds: [params.context.sutUserId] } : {}),
-    observedEvents: params.context.observedEvents,
-    roomId: resolveMatrixQaScenarioRoomId(params.context, params.roomKey),
-    syncState: params.context.syncState,
-    syncStreams: params.context.syncStreams,
+    roomId: params.context.roomId,
     sutUserId: params.context.sutUserId,
     timeoutMs: resolveMatrixQaNoReplyWindowMs(params.context.timeoutMs),
     token,
@@ -126,16 +121,11 @@ export async function runAllowBotsSelfSenderIgnoredScenario(
   });
   const token = buildMatrixQaToken("MATRIX_QA_ALLOWBOTS_SELF_IGNORED");
   return await runNoReplyExpectedScenario({
-    accessToken: context.observerAccessToken,
-    actorId: "observer",
+    ...resolveMatrixQaActorSyncParams(context, "observer"),
     actorUserId: context.sutUserId,
-    baseUrl: context.baseUrl,
     body: buildExactMarkerPrompt(token),
-    observedEvents: context.observedEvents,
     roomId: context.roomId,
     sendClient: sutSender,
-    syncState: context.syncState,
-    syncStreams: context.syncStreams,
     sutUserId: context.sutUserId,
     timeoutMs: resolveMatrixQaNoReplyWindowMs(context.timeoutMs),
     token,

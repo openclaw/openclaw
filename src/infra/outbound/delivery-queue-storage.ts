@@ -53,7 +53,6 @@ export type {
   LegacyQueuedDeliveryPreparation,
   QueuedDelivery,
   QueuedReplyPayloadSendingHook,
-  QueuedRenderedMessageBatchPlan,
 } from "./delivery-queue-types.js";
 
 const queuedDeliveryPayloads = (entry: QueuedDelivery) =>
@@ -279,47 +278,25 @@ export async function enqueuePreparedDeliveryOnce(
 
 export { hasActiveDeliveryOwner } from "./delivery-queue-types.js";
 
-const lostPlatformClaim = (id: string) => new Error(`Delivery platform claim was lost: ${id}`);
-
 /** Update retry evidence on the queue worker's exact namespace and claim. */
-export async function failDelivery(
-  id: string,
-  error: string,
-  stateDir?: string,
-  expectedPlatformSendAttemptId?: string | null,
-  context?: DeliveryQueueStateContext,
-): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
-    type: "deliveryQueue.mutateOutbound",
-    input: { kind: "fail", id, error, expectedPlatformSendAttemptId },
-  });
+function deliveryFailureRecorder(kind: "fail" | "fail-before-send" | "fail-after-send") {
+  return async (
+    id: string,
+    error: string,
+    stateDir?: string,
+    expectedPlatformSendAttemptId?: string | null,
+    context?: DeliveryQueueStateContext,
+  ): Promise<void> => {
+    await executeDeliveryQueueOperation(context, stateDir, {
+      type: "deliveryQueue.mutateOutbound",
+      input: { kind, id, error, expectedPlatformSendAttemptId },
+    });
+  };
 }
 
-export async function failDeliveryBeforePlatformSend(
-  id: string,
-  error: string,
-  stateDir?: string,
-  expectedPlatformSendAttemptId?: string | null,
-  context?: DeliveryQueueStateContext,
-): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
-    type: "deliveryQueue.mutateOutbound",
-    input: { kind: "fail-before-send", id, error, expectedPlatformSendAttemptId },
-  });
-}
-
-export async function failDeliveryAfterPlatformSend(
-  id: string,
-  error: string,
-  stateDir?: string,
-  expectedPlatformSendAttemptId?: string | null,
-  context?: DeliveryQueueStateContext,
-): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
-    type: "deliveryQueue.mutateOutbound",
-    input: { kind: "fail-after-send", id, error, expectedPlatformSendAttemptId },
-  });
-}
+export const failDelivery = deliveryFailureRecorder("fail");
+export const failDeliveryBeforePlatformSend = deliveryFailureRecorder("fail-before-send");
+export const failDeliveryAfterPlatformSend = deliveryFailureRecorder("fail-after-send");
 
 export { claimDeliveryPlatformSendAttempt } from "./delivery-queue-platform-lease.js";
 
@@ -525,7 +502,7 @@ export async function moveToFailed(
     context,
   );
   if (result.status !== "failed") {
-    throw lostPlatformClaim(id);
+    throw new Error(`Delivery platform claim was lost: ${id}`);
   }
   return collectEntrySpoolPaths(queuedDeliveryPayloads(entry), stateDir);
 }

@@ -10,10 +10,7 @@ import {
 } from "../plugins/memory-state.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
-import {
-  isRuntimeCompactionDelegate,
-  markRuntimeCompactionDelegate,
-} from "./compaction-watchdog.js";
+import { compactionWatchdogResets } from "./compaction-watchdog.js";
 import type {
   ContextEngine,
   CompactResult,
@@ -112,6 +109,7 @@ export async function delegateCompactionToRuntime(
     force: params.force,
     customInstructions: params.customInstructions,
     abortSignal: params.abortSignal,
+    compactionTimeoutReset: params.abortSignal && compactionWatchdogResets.get(params.abortSignal),
     workspaceDir:
       typeof runtimeContext.workspaceDir === "string" ? runtimeContext.workspaceDir : process.cwd(),
   });
@@ -136,11 +134,6 @@ export async function delegateCompactionToRuntime(
       : undefined,
   };
 }
-
-markRuntimeCompactionDelegate(delegateCompactionToRuntime);
-
-/** True only for the canonical bridge whose runtime owns the compaction watchdog. */
-export { isRuntimeCompactionDelegate };
 
 /**
  * Build a context-engine-ready systemPromptAddition from the active memory

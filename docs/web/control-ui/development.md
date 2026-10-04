@@ -21,7 +21,21 @@ The Gateway serves static files from `dist/control-ui`:
 pnpm ui:build
 ```
 
-For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache serves at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Each pruner claims an old directory before removing it so concurrent publishers do not delete the same tree. Cleanup failures log a warning and may temporarily leave extra files on disk, without discarding a successfully published generation. Later preparation can reclaim abandoned staging directories after one hour. Configured `gateway.controlUi.root` builds do not use this cache.
+The build's performance report keeps the initial-entry JavaScript budget separate
+from the complete chat and new-session boot totals. Those route totals include
+the entry assets and the route's measured immediate dynamic imports, counting
+each asset once even when both preload lists reference it. Moving an existing
+boot import into the first request wave therefore remains visible in the byte
+accounting. The initial-entry ceilings and baseline are unchanged; route byte totals
+are reported without introducing a higher limit. `--base-dist` on
+`scripts/check-control-ui-performance.mts` compares route bytes and requests when
+both builds contain route preload templates. Older builds report that comparison
+as unavailable, so use a cold-load network capture to compare their complete boot
+cost.
+
+Route boot JavaScript is limited to 35 requests per route, with three requests of headroom above the measured maximum, to catch facade regressions caused by top-level await disabling chunk optimization.
+
+For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache serves at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Retained generations omit the precompressed `.br` and `.gz` sidecars, so already-open tabs from an older build receive uncompressed responses for its assets; this keeps the current and previous build within the budget. When the budget cannot keep the previous generation, the Gateway logs a warning. The [Control UI size check](/ci/pipeline#control-ui-size-budgets) limits each build's retained identity assets to half the retention budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Each pruner claims an old directory before removing it so concurrent publishers do not delete the same tree. Cleanup failures log a warning and may temporarily leave extra files on disk, without discarding a successfully published generation. Later preparation can reclaim abandoned staging directories after one hour. Configured `gateway.controlUi.root` builds do not use this cache.
 
 Bundled public assets (themes, fonts, icons, and artwork) use `?v=<build-id>` URLs with a one-year immutable HTTP cache. The ID includes a digest of the public files, so rebuilding changed files at the same commit also changes their URLs. The Gateway snapshots this identity at startup; restart it after rebuilding an in-place installation. Unversioned requests, stale IDs, documents, `sw.js`, and custom `gateway.controlUi.root` installs keep `Cache-Control: no-cache`. The service worker keeps its network-first policy for public assets, allowing the browser's HTTP cache to satisfy matching versioned requests.
 
@@ -139,6 +153,15 @@ observers own geometry changes. The command palette likewise retains its measure
 input layout while navigating results, and remeasures edits, width changes, and
 reconnected fields. Status clocks pause in hidden tabs and render only when their
 displayed value or properties change.
+
+The first connected, presented transcript commit renders two neighboring rows beyond each
+viewport edge. The next animation frame restores the six-row scrolling buffer;
+pending navigation, focus, or anchor reconciliation uses that full buffer immediately,
+including neighboring controls such as folded-work headers. Focused and anchored
+rows remain retained independently. Link-preview discovery
+waits for browser idle time, then follows transcript mutations instead of rescanning
+unchanged content on every pane update. Hiding or retiring the pane cancels pending
+discovery.
 
 Streaming Markdown retains normalized input, split progress, and rendered prefixes
 in one bounded cache. Completed independent blocks render once; replacements,

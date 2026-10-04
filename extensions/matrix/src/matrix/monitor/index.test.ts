@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
 import {
   getMatrixMonitorIndexTestHarness,
@@ -7,14 +7,9 @@ import {
 } from "./index.test-helpers.js";
 
 const hoisted = getMatrixMonitorIndexTestHarness();
-
-let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
+import { monitorMatrixProvider } from "./index.js";
 
 describe("monitorMatrixProvider", () => {
-  beforeAll(async () => {
-    ({ monitorMatrixProvider } = await import("./index.js"));
-  });
-
   async function flushUntil(predicate: () => boolean, message: string): Promise<void> {
     for (let i = 0; i < 20; i++) {
       if (predicate()) {

@@ -288,9 +288,7 @@ export function createReplyRestartRecoveryClaimController(params: {
       deliveryContext && sourceTurnId ? deliveryContext : undefined;
     if (recoverableDeliveryContext) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
-      const persistedSourceTurnId = normalizeOptionalString(
-        (sourceMessage as { idempotencyKey?: unknown } | undefined)?.idempotencyKey,
-      );
+      const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
@@ -329,15 +327,11 @@ export function createReplyRestartRecoveryClaimController(params: {
           restartRecoveryDeliveryRequestFingerprint: undefined,
           restartRecoveryDeliveryRunId: recoveryRunId,
           restartRecoveryDeliverySourceRunId: sourceTurnId,
-          restartRecoveryRequesterAccountId: sourceTurnId
-            ? normalizeOptionalString(params.requesterAccountId)
-            : undefined,
-          restartRecoveryRequesterSenderId: sourceTurnId
-            ? normalizeOptionalString(params.requesterSenderId)
-            : undefined,
+          restartRecoveryRequesterAccountId: normalizeOptionalString(params.requesterAccountId),
+          restartRecoveryRequesterSenderId: normalizeOptionalString(params.requesterSenderId),
           restartRecoverySameChannelThreadRequired:
-            sourceTurnId && params.sameChannelThreadRequired === true ? true : undefined,
-          restartRecoverySourceIngress: sourceTurnId ? "channel" : undefined,
+            params.sameChannelThreadRequired === true ? true : undefined,
+          restartRecoverySourceIngress: "channel",
           restartRecoverySourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           runtimeMs: undefined,
           startedAt: updatedAt,
@@ -360,77 +354,58 @@ export function createReplyRestartRecoveryClaimController(params: {
     return "admitted";
   };
 
-  const checkpointBeforeAgentReply: ReplyRestartRecoveryClaimController["checkpointBeforeAgentReply"] =
-    async ({ state, pendingFinalDelivery }) => {
-      if (!tracked || !params.sessionKey || !params.storePath) {
-        return;
-      }
-      const updatedAt = Date.now();
-      const persisted = await updateSessionEntry(
-        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
-        (current) =>
-          current.sessionId === params.getSessionId() &&
-          current.restartRecoveryDeliveryRunId === recoveryRunId &&
-          current.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
-          current.restartRecoveryBeforeAgentReplyState === "pending"
-            ? {
-                restartRecoveryBeforeAgentReplyState: state,
-                ...(pendingFinalDelivery
-                  ? {
-                      pendingFinalDelivery: {
-                        ...(pendingFinalDelivery.text
-                          ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
-                          : { kind: "transport-only" as const }),
-                        createdAt: updatedAt,
-                        ...(pendingFinalDelivery.intentId
-                          ? { intentId: pendingFinalDelivery.intentId }
-                          : {}),
-                        deliveries: pendingFinalDelivery.deliveries,
-                        ...(pendingFinalDelivery.context
-                          ? { context: pendingFinalDelivery.context }
-                          : {}),
-                      },
-                      // Hook-owned replies are already terminal. A restart may only deliver this
-                      // checkpoint; it must never resume the model or broader tool surface.
-                      restartRecoveryForceSafeTools: true,
-                    }
-                  : {}),
-                updatedAt,
-              }
-            : null,
-        { skipMaintenance: true, takeCacheOwnership: true },
+  const updateBeforeAgentReply = async (
+    expectedState: "pending" | undefined,
+    {
+      state,
+      pendingFinalDelivery,
+    }: Parameters<ReplyRestartRecoveryClaimController["checkpointBeforeAgentReply"]>[0],
+  ): Promise<void> => {
+    if (!tracked || !params.sessionKey || !params.storePath) {
+      return;
+    }
+    const updatedAt = Date.now();
+    const persisted = await updateSessionEntry(
+      { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
+      (current) =>
+        current.sessionId === params.getSessionId() &&
+        current.restartRecoveryDeliveryRunId === recoveryRunId &&
+        current.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
+        current.restartRecoveryBeforeAgentReplyState === expectedState
+          ? {
+              restartRecoveryBeforeAgentReplyState: state,
+              ...(pendingFinalDelivery
+                ? {
+                    pendingFinalDelivery: {
+                      ...(pendingFinalDelivery.text
+                        ? { kind: "replayable" as const, text: pendingFinalDelivery.text }
+                        : { kind: "transport-only" as const }),
+                      createdAt: updatedAt,
+                      ...(pendingFinalDelivery.intentId
+                        ? { intentId: pendingFinalDelivery.intentId }
+                        : {}),
+                      deliveries: pendingFinalDelivery.deliveries,
+                      ...(pendingFinalDelivery.context
+                        ? { context: pendingFinalDelivery.context }
+                        : {}),
+                    },
+                    // Hook-owned replies are already terminal. A restart may only deliver this
+                    // checkpoint; it must never resume the model or broader tool surface.
+                    restartRecoveryForceSafeTools: true,
+                  }
+                : {}),
+              updatedAt,
+            }
+          : null,
+      { skipMaintenance: true, takeCacheOwnership: true },
+    );
+    if (!persisted) {
+      throw new Error(
+        `before_agent_reply ${expectedState === "pending" ? "checkpoint" : "start"} lost restart recovery ownership`,
       );
-      if (!persisted) {
-        throw new Error("before_agent_reply checkpoint lost restart recovery ownership");
-      }
-      params.setEntry(persisted);
-    };
-
-  const beginBeforeAgentReply: ReplyRestartRecoveryClaimController["beginBeforeAgentReply"] =
-    async () => {
-      if (!tracked || !params.sessionKey || !params.storePath) {
-        return true;
-      }
-      // `pending` records only the ambiguous plugin side-effect window. A
-      // finished unhandled hook clears it so recovery can re-enter normally.
-      const updatedAt = Date.now();
-      const persisted = await updateSessionEntry(
-        { agentId: params.agentId, storePath: params.storePath, sessionKey: params.sessionKey },
-        (persistedCurrent) =>
-          persistedCurrent.sessionId === params.getSessionId() &&
-          persistedCurrent.restartRecoveryDeliveryRunId === recoveryRunId &&
-          persistedCurrent.restartRecoveryDeliverySourceRunId === recoverySourceRunId &&
-          persistedCurrent.restartRecoveryBeforeAgentReplyState === undefined
-            ? { restartRecoveryBeforeAgentReplyState: "pending", updatedAt }
-            : null,
-        { skipMaintenance: true, takeCacheOwnership: true },
-      );
-      if (!persisted) {
-        throw new Error("before_agent_reply start lost restart recovery ownership");
-      }
-      params.setEntry(persisted);
-      return true;
-    };
+    }
+    params.setEntry(persisted);
+  };
 
   const clear = async (): Promise<void> => {
     const lifecycleGeneration = params.lifecycleGeneration;
@@ -497,11 +472,13 @@ export function createReplyRestartRecoveryClaimController(params: {
       {
         // Restart recovery can reuse this run id. Validate after async patch preparation,
         // inside the synchronous commit, so old cleanup cannot retire its successor's route.
-        assertCommitAllowed: () => {
-          assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-          if (params.isRestartAbort()) {
-            throw createAgentRunStaleLifecycleError();
-          }
+        workerGuard: {
+          assertCurrent: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+            if (params.isRestartAbort()) {
+              throw createAgentRunStaleLifecycleError();
+            }
+          },
         },
       },
     );
@@ -553,8 +530,13 @@ export function createReplyRestartRecoveryClaimController(params: {
 
   return {
     admitUserTurn,
-    beginBeforeAgentReply,
-    checkpointBeforeAgentReply,
+    async beginBeforeAgentReply() {
+      // `pending` records only the ambiguous plugin side-effect window. A
+      // finished unhandled hook clears it so recovery can re-enter normally.
+      await updateBeforeAgentReply(undefined, { state: "pending" });
+      return true;
+    },
+    checkpointBeforeAgentReply: (checkpoint) => updateBeforeAgentReply("pending", checkpoint),
     clear,
     isArmed,
   };

@@ -138,6 +138,8 @@ describe("registered exec deadline handoff", () => {
     expect(child.kill).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(deadline - Date.now());
+    // Deadline decisions wait one timer turn for pending child exit notifications.
+    await vi.advanceTimersToNextTimerAsync();
     const result = await execution;
     expect(result.details).toMatchObject({ status: "failed", failureKind: "overall-timeout" });
     await waitForDiagnosticEventsDrained();
@@ -235,13 +237,37 @@ describe("registered exec deadline handoff", () => {
         type: "text",
         text: expect.stringContaining(followUp),
       });
+      const processTool = createProcessTool({ scopeKey });
+      for (const action of ["poll", "log", "list"] as const) {
+        const running = await processTool.execute(`still-running-${action}`, {
+          action,
+          sessionId: result.details.sessionId,
+        });
+        const expectedSession = {
+          status: "running",
+          sessionId: result.details.sessionId,
+          ...(notifyOnExit ? {} : { followUp: expect.stringContaining("before ending the turn") }),
+        };
+        expect(running.details).toMatchObject(
+          action === "list" ? { sessions: [expectedSession] } : expectedSession,
+        );
+        if (!notifyOnExit) {
+          expect(running.content).toContainEqual({
+            type: "text",
+            text: expect.stringContaining("Automatic completion wake is disabled"),
+          });
+        } else {
+          expect(JSON.stringify(running)).not.toContain("Automatic completion wake is disabled");
+        }
+      }
       child.completed.resolve({ code: 0, signal: null });
       await waitForExecScope(scopeKey);
-      const completed = await createProcessTool({ scopeKey }).execute("collect", {
+      const completed = await processTool.execute("collect", {
         action: "poll",
         sessionId: result.details.sessionId,
       });
       expect(completed.details).toMatchObject({ status: "completed", exitCode: 0 });
+      expect(completed.details).not.toHaveProperty("followUp");
     },
   );
 
@@ -262,6 +288,8 @@ describe("registered exec deadline handoff", () => {
     controller.abort();
     expect(child.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1_000);
+    // Drain the deferred supervisor decision before checking background termination.
+    await vi.advanceTimersToNextTimerAsync();
     expect(child.kill).toHaveBeenCalledOnce();
   });
 });

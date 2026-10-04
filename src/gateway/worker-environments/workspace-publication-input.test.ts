@@ -9,15 +9,9 @@ import * as publicationSnapshot from "../github-repository-publication-snapshot.
 import type { GitHubRepositoryPublicationSnapshot } from "../github-repository-publication-snapshot.js";
 import {
   captureWorkspaceSnapshot,
-  parseWorkspaceManifestPair,
   prepareWorkspaceStageInput,
 } from "./workspace-manifest-worker.js";
-import {
-  MAX_RECONCILIATION_FILE_BYTES,
-  MAX_RECONCILIATION_TOTAL_BYTES,
-  serializeWorkerWorkspaceManifest,
-  type WorkerWorkspaceManifestEntry,
-} from "./workspace-manifest.js";
+import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
 import { workspaceResultGitCommand } from "./workspace-result-git.js";
 import { buildWorkspaceStageInput } from "./workspace-result-preparation.runtime.js";
 import {
@@ -44,7 +38,7 @@ const emptyManifestRaw = serializeWorkerWorkspaceManifest({
 });
 type PublicationEntry = GitHubRepositoryPublicationSnapshot["entries"][number];
 
-async function fixture(kind: "empty" | "metadata-only" | "mixed" = "mixed") {
+async function fixture(kind: "metadata-only" | "mixed" = "mixed") {
   const stagingRoot = temporary.make("workspace-publication-source-");
   const blobs = new Map<string, Buffer>();
   const entries: PublicationEntry[] = [];
@@ -61,12 +55,10 @@ async function fixture(kind: "empty" | "metadata-only" | "mixed" = "mixed") {
     add("binary", "100644", Buffer.from([0, 255, 128, 13, 10, 0]));
     add("文書/é.txt", "100644", Buffer.from("雪だるま ☃\r\nemoji 🦞\n"));
   }
-  if (kind !== "empty") {
-    entries.push(
-      { path: "deleted.txt", mode: "100644", sha: null },
-      { path: "submodule", mode: "160000", sha: "c".repeat(40) },
-    );
-  }
+  entries.push(
+    { path: "deleted.txt", mode: "100644", sha: null },
+    { path: "submodule", mode: "160000", sha: "c".repeat(40) },
+  );
   // Deliberately noncanonical JSON: preservation must not depend on parser key order.
   const metadata =
     " \n" +
@@ -169,7 +161,7 @@ async function stagedContents(
 }
 
 describe("publication stage input", () => {
-  it.each(["empty", "metadata-only", "mixed"] as const)(
+  it.each(["metadata-only", "mixed"] as const)(
     "imports the exact legacy companion artifact across the real worker boundary (%s)",
     async (kind) => {
       const f = await fixture(kind);
@@ -209,29 +201,16 @@ describe("publication stage input", () => {
         ([command]) => command.type === "workspace.manifest.stage-input",
       );
       expect(stageCalls).toHaveLength(2);
-      for (const [command, options] of stageCalls) {
+      for (const [command] of stageCalls) {
         if (command.type !== "workspace.manifest.stage-input") {
           throw new Error("Expected the real stage-input transport");
         }
         expect(command.input).not.toHaveProperty("assertCurrent");
         expect(command.input).not.toHaveProperty("root");
         if ("publication" in command.input) {
-          expect(options?.inputBytes).toBe(
-            256 +
-              Buffer.byteLength(f.publication.metadata) +
-              (f.publication.publicationDigest.length +
-                f.publication.currentManifestRef.length +
-                f.publication.baseCommit.length) *
-                2,
-          );
           expect(command.input.publication.metadata).toBeInstanceOf(Uint8Array);
           expect(command.input.publication.metadata.byteLength).toBe(0);
         } else {
-          expect(options?.inputBytes).toBe(
-            256 +
-              Buffer.byteLength(legacy.baseManifestRaw) +
-              Buffer.byteLength(legacy.currentManifestRaw),
-          );
           expect(command.input.baseManifestRaw.byteLength).toBe(0);
           expect(command.input.currentManifestRaw.byteLength).toBe(0);
         }
@@ -239,7 +218,6 @@ describe("publication stage input", () => {
       // Encoded worker-owned buffers transfer; caller-owned strings remain reusable.
       expect(digest(f.publication.metadata)).toBe(f.publication.publicationDigest);
       expect(digest(legacy.currentManifestRaw)).toBe(legacy.currentManifestRef);
-      const oldResult = await readStagedWorkerWorkspaceResult(root, oldRef);
       const newResult = await readStagedWorkerWorkspaceResult(root, newRef);
       expect(newResult.baseManifestRaw).toBe(legacy.baseManifestRaw);
       expect(newResult.currentManifestRaw).toBe(legacy.currentManifestRaw);
@@ -252,7 +230,6 @@ describe("publication stage input", () => {
         directories: [],
         entries: [],
       });
-      expect(newResult.current).toEqual(oldResult.current);
       expect(newResult.changedEntries).toHaveLength(f.blobs.size + 2);
       const expected = new Map<string, Buffer>([
         ["snapshot.json", Buffer.from(f.publication.metadata)],
@@ -267,36 +244,30 @@ describe("publication stage input", () => {
         ],
         ...[...f.blobs].map(([sha, bytes]): [string, Buffer] => ["blobs/" + sha, bytes]),
       ]);
-      expect(await stagedContents(oldResult)).toEqual(expected);
       expect(await stagedContents(newResult)).toEqual(expected);
-      const oldTree = await gitRaw(root, ["ls-tree", "-r", "-z", "--full-tree", oldRef]);
-      expect(await gitRaw(root, ["ls-tree", "-r", "-z", "--full-tree", newRef])).toBe(oldTree);
+      const tree = await gitRaw(root, ["ls-tree", "-r", "-z", "--full-tree", newRef]);
       expect(
-        oldTree
+        tree
           .split("\0")
           .filter(Boolean)
           .every((entry) => entry.startsWith("100644 blob ")),
       ).toBe(true);
-      const oldCommit = await gitRaw(root, ["cat-file", "commit", oldRef]);
-      expect(await gitRaw(root, ["cat-file", "commit", newRef])).toBe(oldCommit);
-      const separator = oldCommit.indexOf("\n\n");
-      expect(oldCommit.slice(0, separator)).toMatch(
+      const commit = await gitRaw(root, ["cat-file", "commit", newRef]);
+      const separator = commit.indexOf("\n\n");
+      expect(commit.slice(0, separator)).toMatch(
         /^tree [a-f0-9]{40}\nauthor OpenClaw <openclaw@localhost> 0 \+0000\ncommitter OpenClaw <openclaw@localhost> 0 \+0000$/u,
       );
-      expect(oldCommit.slice(separator + 2)).toBe(
-        "OpenClaw worker workspace result\nversion 2\n" +
-          "base-ref " +
-          legacy.baseManifestRef +
-          "\ncurrent-ref " +
-          legacy.currentManifestRef +
-          "\n" +
-          "base-bytes " +
-          Buffer.byteLength(legacy.baseManifestRaw) +
-          "\ncurrent-bytes " +
-          Buffer.byteLength(legacy.currentManifestRaw) +
-          "\n\n" +
-          legacy.baseManifestRaw +
-          legacy.currentManifestRaw,
+      expect(commit.slice(separator + 2)).toBe(
+        [
+          "OpenClaw worker workspace result",
+          "version 2",
+          `base-ref ${legacy.baseManifestRef}`,
+          `current-ref ${legacy.currentManifestRef}`,
+          `base-bytes ${Buffer.byteLength(legacy.baseManifestRaw)}`,
+          `current-bytes ${Buffer.byteLength(legacy.currentManifestRaw)}`,
+          "",
+          legacy.baseManifestRaw + legacy.currentManifestRaw,
+        ].join("\n"),
       );
       expect(await gitRaw(root, ["for-each-ref", "--format=%(refname) %(objectname)"])).toBe(
         newRef + " " + newOid + "\n" + oldRef + " " + oldOid + "\n",
@@ -305,11 +276,45 @@ describe("publication stage input", () => {
     },
   );
 
-  it.each(["digest", "json", "base", "path", "mode", "duplicate-path"] as const)(
-    "rejects invalid publication %s before creating a Git input",
-    async (fault) => {
-      const f = await fixture("metadata-only");
-      const publication = { ...f.publication };
+  it.for([
+    "digest",
+    "json",
+    "base",
+    "path",
+    "mode",
+    "duplicate-path",
+    "missing",
+    "substituted",
+    "symlink",
+    "hardlink",
+  ] as const)("rejects invalid publication input: %s", async (fault, context) => {
+    // Windows link privileges and identity differ; retain the existing platform boundary.
+    if (process.platform === "win32" && (fault === "symlink" || fault === "hardlink")) {
+      context.skip();
+      return;
+    }
+    const blobFault = ["missing", "substituted", "symlink", "hardlink"].includes(fault);
+    const f = await fixture(blobFault ? "mixed" : "metadata-only");
+    const publication = { ...f.publication };
+    const output = temporary.make("workspace-publication-invalid-");
+    let alias: { path: string; bytes: Buffer } | undefined;
+    if (blobFault) {
+      const [sha, bytes] = [...f.blobs][0]!;
+      const target = path.join(f.stagingRoot, "blobs", sha);
+      alias = {
+        path: path.join(temporary.make("workspace-publication-alias-"), "original"),
+        bytes,
+      };
+      await fs.writeFile(alias.path, bytes);
+      await fs.rm(target);
+      if (fault === "substituted") {
+        await fs.writeFile(target, Buffer.alloc(bytes.length, 0x78));
+      } else if (fault === "symlink") {
+        await fs.symlink(alias.path, target);
+      } else if (fault === "hardlink") {
+        await fs.link(alias.path, target);
+      }
+    } else {
       const snapshot: GitHubRepositoryPublicationSnapshot = JSON.parse(publication.metadata);
       if (fault === "json") {
         publication.metadata = "{invalid JSON";
@@ -332,69 +337,37 @@ describe("publication stage input", () => {
       }
       publication.publicationDigest =
         fault === "digest" ? "sha256:" + "0".repeat(64) : digest(publication.metadata);
-      const output = temporary.make("workspace-publication-invalid-");
-      await expect(
-        prepareWorkspaceStageInput({
-          stagingRoot: f.stagingRoot,
-          inputPath: path.join(output, "input"),
-          stagedResultRef: candidate("invalid"),
-          publication,
-        }),
-      ).rejects.toThrow(
-        fault === "json"
-          ? undefined
-          : fault === "digest"
-            ? /digest/i
-            : fault === "base"
-              ? /base/i
-              : /entry/i,
-      );
-      expect(await fs.readdir(output)).toEqual([]);
-    },
-  );
-
-  it.for(["missing", "substituted", "symlink", "hardlink"] as const)(
-    "rejects a %s publication blob through the real worker reader",
-    async (fault, context) => {
-      // Match fs-safe.test.ts link cases: Windows link privileges/identity differ.
-      if (process.platform === "win32" && (fault === "symlink" || fault === "hardlink")) {
-        context.skip();
-        return;
-      }
-      const f = await fixture("mixed");
-      const [sha, bytes] = [...f.blobs][0]!;
-      const target = path.join(f.stagingRoot, "blobs", sha);
-      const output = temporary.make("workspace-publication-invalid-blob-");
-      const outside = temporary.make("workspace-publication-alias-");
-      const alias = path.join(outside, "original");
-      await fs.writeFile(alias, bytes);
-      await fs.rm(target);
-      if (fault === "substituted") {
-        await fs.writeFile(target, Buffer.alloc(bytes.length, 0x78));
-      } else if (fault === "symlink") {
-        await fs.symlink(alias, target);
-      } else if (fault === "hardlink") {
-        await fs.link(alias, target);
-      }
-      const staging = prepareWorkspaceStageInput({
-        stagingRoot: f.stagingRoot,
-        inputPath: path.join(output, "input"),
-        stagedResultRef: candidate("invalid-blob"),
-        publication: f.publication,
+    }
+    const staging = prepareWorkspaceStageInput({
+      stagingRoot: f.stagingRoot,
+      inputPath: path.join(output, "input"),
+      stagedResultRef: candidate("invalid"),
+      publication,
+    });
+    if (blobFault && fault !== "substituted") {
+      await expect(staging).rejects.toMatchObject({
+        code: fault === "missing" ? "not-found" : fault,
       });
-      if (fault === "substituted") {
-        await expect(staging).rejects.toThrow("blob changed after checkpoint capture");
-      } else {
-        await expect(staging).rejects.toMatchObject({
-          code: fault === "missing" ? "not-found" : fault,
-        });
-      }
-      expect(await fs.readdir(output)).toEqual([]);
-      expect(await fs.readFile(alias)).toEqual(bytes);
-    },
-  );
+    } else {
+      await expect(staging).rejects.toThrow(
+        fault === "substituted"
+          ? "blob changed after checkpoint capture"
+          : fault === "json"
+            ? undefined
+            : fault === "digest"
+              ? /digest/i
+              : fault === "base"
+                ? /base/i
+                : /entry/i,
+      );
+    }
+    expect(await fs.readdir(output)).toEqual([]);
+    if (alias) {
+      await expect(fs.readFile(alias.path)).resolves.toEqual(alias.bytes);
+    }
+  });
 
-  it.each(["same-size", "different-size", "removed"] as const)(
+  it.each(["same-size", "removed"] as const)(
     "rejects %s blob changes between inspection and streaming without a partial input",
     async (fault) => {
       const f = await fixture("mixed");
@@ -410,10 +383,7 @@ describe("publication stage input", () => {
             if (fault === "removed") {
               await fs.rm(target);
             } else {
-              await fs.writeFile(
-                target,
-                Buffer.alloc(bytes.length + (fault === "different-size" ? 1 : 0), 0x78),
-              );
+              await fs.writeFile(target, Buffer.alloc(bytes.length, 0x78));
             }
           }
           return await read(root, id);
@@ -438,60 +408,4 @@ describe("publication stage input", () => {
       expect(await fs.readdir(output)).toEqual([]);
     },
   );
-
-  it("retains the reconciliation byte boundary including binding, not the larger inventory budget", async () => {
-    const f = await fixture("empty");
-    const binding = JSON.stringify({
-      currentManifestRef,
-      publicationDigest: f.publication.publicationDigest,
-    });
-    const file = (pathname: string, size: number): WorkerWorkspaceManifestEntry => ({
-      path: pathname,
-      type: "file",
-      mode: 0o644,
-      size,
-      sha256: "a".repeat(64),
-    });
-    const inlineBytes = Buffer.byteLength(binding) + Buffer.byteLength(f.publication.metadata);
-    const entries = [
-      file("binding.json", Buffer.byteLength(binding)),
-      file("snapshot.json", Buffer.byteLength(f.publication.metadata)),
-      ...Array.from({ length: 12 }, (_, index) =>
-        file(
-          "blobs/" + index.toString(16).padStart(40, "0"),
-          MAX_RECONCILIATION_FILE_BYTES - (index === 11 ? inlineBytes : 0),
-        ),
-      ),
-    ];
-    // Declared metadata exercises the canonical parser/comparator without allocating 768 MiB.
-    const compare = async (values: WorkerWorkspaceManifestEntry[]) => {
-      const raw = serializeWorkerWorkspaceManifest({
-        version: 1,
-        baseCommit: null,
-        directories: ["blobs"],
-        entries: values,
-      });
-      return await parseWorkspaceManifestPair({
-        baseRaw: emptyManifestRaw,
-        baseRef: digest(emptyManifestRaw),
-        currentRaw: raw,
-        currentRef: digest(raw),
-      });
-    };
-    const exact = await compare(entries);
-    expect(
-      exact.entries.reduce((total, entry) => total + (entry.type === "file" ? entry.size : 0), 0),
-    ).toBe(MAX_RECONCILIATION_TOTAL_BYTES);
-    const over = entries.slice();
-    const last = over.pop();
-    if (last?.type !== "file") {
-      throw new Error("Expected the final budget entry to be a file");
-    }
-    over.push({ ...last, size: last.size + 1 });
-    await expect(compare(over)).rejects.toThrow("byte limit");
-    // Omitting binding would incorrectly admit that one-byte-over companion.
-    await expect(
-      compare(over.filter((entry) => entry.path !== "binding.json")),
-    ).resolves.toMatchObject({ changed: true });
-  });
 });

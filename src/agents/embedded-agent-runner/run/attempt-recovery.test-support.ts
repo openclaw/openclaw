@@ -36,6 +36,7 @@ export type TransportDropScenario = {
   lastToolError?: Parameters<typeof makeEmbeddedRunnerAttempt>[0]["lastToolError"];
   pluginHarnessOwnsTransport?: boolean;
   retryAvailable?: boolean;
+  retryConnectionErrors?: boolean;
   replaySafe?: boolean;
   fallbackConfigured?: boolean;
   providerRetryMaxDelayMs?: number;
@@ -136,9 +137,11 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
   const continueFromCurrentTranscript = vi.fn();
   const contextRecoveryState = createEmbeddedRunContextRecoveryState();
   const failoverRetryController = createEmbeddedRunFailoverRetryController({
-    runParams: { runId: "run:transport-drop", config: scenario.config } as Parameters<
-      typeof createEmbeddedRunFailoverRetryController
-    >[0]["runParams"],
+    runParams: {
+      runId: "run:transport-drop",
+      config: scenario.config,
+      retryConnectionErrors: scenario.retryConnectionErrors,
+    } as Parameters<typeof createEmbeddedRunFailoverRetryController>[0]["runParams"],
     provider,
     modelId,
     globalLane: "test",
@@ -208,6 +211,9 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
       runtimePlan: { auth: {} },
       sessionPromptState: {
         sessionFile: "/tmp/session.jsonl",
+        withSessionWriterContext: (run: () => Promise<unknown>) => run(),
+        recordOutputLimitNotice: vi.fn(async () => {}),
+        settleOwnedTranscriptProjection: vi.fn(async () => {}),
         markOwnedTranscriptRetry,
         continueFromCurrentTranscript,
       },

@@ -64,7 +64,7 @@ export function resolveExplicitModelWithRegistry(params: {
   preparedCatalogModel?: ProviderRuntimeModel;
   getStaticCatalogModel?: () => ProviderRuntimeModel | undefined;
 }): ExplicitModelResolution | undefined {
-  const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir, runtimeHooks } = params;
+  const { provider, modelId, modelRegistry, cfg, workspaceDir } = params;
   // Competing activated owners cannot lend either model or transport authority.
   if (params.manifestAlias.ambiguous) {
     return { kind: "unavailable" };
@@ -105,29 +105,19 @@ export function resolveExplicitModelWithRegistry(params: {
     return error ? { kind: "suppressed", error } : undefined;
   }
   const overriddenModel = applyConfiguredProviderOverrides({
-    provider,
+    ...params,
     discoveredModel,
     providerConfig,
-    modelId,
-    cfg,
-    manifestAlias: params.manifestAlias,
     providerMetadataOwners,
-    runtimeHooks,
-    workspaceDir,
     preferDiscoveredTransport: Boolean(inlineModel),
     staticCatalogModel,
-    getStaticCatalogModel: params.getStaticCatalogModel,
   });
   if (!overriddenModel) {
     return undefined;
   }
   const model = normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    workspaceDir,
+    ...params,
     model: overriddenModel,
-    runtimeHooks,
   });
   // Suppression follows the normalized model-level route, including custom endpoint overrides.
   if (
@@ -286,29 +276,21 @@ async function resolvePluginDynamicModelWithRegistry(
     return undefined;
   }
   const overriddenDynamicModel = applyConfiguredProviderOverrides({
-    provider,
+    ...params,
     discoveredModel: pluginDynamicModel,
     providerConfig,
-    modelId,
-    cfg,
-    manifestAlias: params.manifestAlias,
     providerMetadataOwners: getRegistryProviderMetadataOwners(modelRegistry),
     runtimeHooks,
-    workspaceDir,
     preferDiscoveredModelMetadata: shouldCompareProviderRuntimeResolvedModel({
       ...params,
       runtimeHooks,
     }),
-    getStaticCatalogModel: params.getStaticCatalogModel,
   });
   if (!overriddenDynamicModel) {
     return undefined;
   }
   return normalizeResolvedModel({
-    provider,
-    cfg,
-    agentDir,
-    workspaceDir,
+    ...params,
     model: overriddenDynamicModel,
     runtimeHooks,
   });
@@ -416,12 +398,15 @@ export async function resolveModelWithPreparedRegistry(
   if (explicitModel?.kind === "suppressed") {
     return resolveRuntimePreferredSuppressedModel(params);
   }
+  if (
+    explicitModel?.kind === "resolved" &&
+    !shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })
+  ) {
+    return explicitModel.model;
+  }
+  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
+  params.assertCurrent?.();
   if (explicitModel?.kind === "resolved") {
-    if (!shouldCompareProviderRuntimeResolvedModel({ ...params, runtimeHooks })) {
-      return explicitModel.model;
-    }
-    const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
-    params.assertCurrent?.();
     return (
       pluginDynamicModel ??
       (explicitModel.source === "registry" && explicitModel.dropOnRuntimeMiss
@@ -429,8 +414,6 @@ export async function resolveModelWithPreparedRegistry(
         : explicitModel.model)
     );
   }
-  const pluginDynamicModel = await resolvePluginDynamicModelWithRegistry(params);
-  params.assertCurrent?.();
   if (pluginDynamicModel) {
     return pluginDynamicModel;
   }

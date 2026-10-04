@@ -9,15 +9,9 @@ import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
-import {
-  validateWorkerComputerParams,
-  validateWorkerPortalParams,
-  validateWorkerPresenceParams,
-  validateWorkerSessionsSendParams,
-  validateWorkerSessionsSpawnParams,
-} from "../../packages/gateway-protocol/src/index.js";
+import { validateWorkerComputerParams } from "../../packages/gateway-protocol/src/index.js";
 import {
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -28,52 +22,67 @@ import {
   WorkerLiveEventRequestFrameSchema,
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
-  type WorkerPortalParams,
-  type WorkerPresenceParams,
-  type WorkerSessionsSendParams,
-  type WorkerSessionsSpawnParams,
   type WorkerTranscriptCommitParams,
   type WorkerTranscriptCommitRequestFrame,
   WorkerTranscriptCommitRequestFrameSchema,
-  type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { WorkerComputerParams } from "../../packages/gateway-protocol/src/schema/worker-computer.js";
+import {
+  validateWorkerGatewayToolInvokeParams,
+  type WorkerGatewayToolInvokeParams,
+  type WorkerToolSurface,
+} from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   type WorkerInferenceCancelRequestFrame,
   WorkerInferenceCancelRequestFrameSchema,
   type WorkerInferenceEventFrame,
-  WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
   type WorkerInferenceStartParams,
   type WorkerInferenceStartRequestFrame,
   WorkerInferenceStartRequestFrameSchema,
   type WorkerInferenceTerminalFrame,
   type WorkerInferenceTerminalOutcome,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../test/helpers/fixture-receipts.js";
 import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { listRunningSessions, waitForExecScope } from "../agents/bash-process-registry.js";
 import { runExecProcess } from "../agents/bash-tools.exec-runtime.js";
 import { hasModelFallbackStop } from "../agents/failover-error.js";
+import { prepareCoreToolPolicy } from "../agents/prepared-tool-surface.js";
 import * as agentSessionSdk from "../agents/sessions/sdk.js";
-import * as boundaryFileRead from "../infra/boundary-file-read.js";
+import { createToolSurfacePresentationForTest } from "../agents/tool-surface-plan.test-support.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { runExec } from "../process/exec.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import * as workerTranscriptRuntime from "./embedded-agent-transcript.runtime.js";
 import {
   buildWorkerConnectParams,
   parseWorkerLaunchDescriptor,
   type WorkerLaunchDescriptor,
 } from "./launch-descriptor.js";
-import { WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE } from "./transcript-message.js";
 import { runWorkerCommand } from "./worker-command.runtime.js";
 import {
   WorkerAdmissionDeadlineExceededError,
   WorkerConnectionStoppedError,
 } from "./worker-connection-contract.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
-import { parseWorkerProcessResult, type WorkerProcessResult } from "./worker-process-protocol.js";
+import {
+  buildWorkerProcessTurn,
+  parseWorkerProcessMessage,
+  type WorkerProcessResult,
+} from "./worker-process-protocol.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -86,6 +95,9 @@ import {
   registerWorkerGatewayToolRpcTests,
 } from "./worker-runtime-gateway-tools.suite.js";
 import { registerWorkerPermissionTests } from "./worker-runtime-permissions.suite.js";
+import { registerWorkerPromptTests } from "./worker-runtime-prompt.suite.js";
+import { registerWorkerReplayWindowTests } from "./worker-runtime-replay.suite.js";
+import { createWorkerToolSurfaceForTest } from "./worker-tool-surface.test-support.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -122,15 +134,6 @@ const SESSION_ID = "worker-session";
 const RUN_ID = "worker-run";
 const OWNER_EPOCH = 4;
 const MODEL_REF = { provider: "openai", model: "gpt-5.6-luna" } as const;
-const WORKER_LOOP_REPLAY = {
-  v: 1 as const,
-  type: "openai-responses-compaction",
-  data: "opaque-worker-loop-replay",
-  provider: "openai",
-  api: "openai-responses",
-  model: MODEL_REF.model,
-  baseUrlHash: "ozhevd1smnk8s",
-};
 const BUNDLE_HASH = Array.from({ length: 64 }, () => "a").join("");
 const CREDENTIAL = ["worker", "fixture", "admission"].join("-");
 const WORKER_INFERENCE_START_TIMEOUT_MS = 90_000;
@@ -161,7 +164,7 @@ type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
   execCommand?: string;
-  execApprovals?: ExecApprovalsFile;
+  execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
   outageOnInferenceCancel?: boolean;
   ignoreFirstAdmission?: boolean;
@@ -178,6 +181,7 @@ type FakeGatewayOptions = {
   heartbeatIntervalMs?: number;
   computerSnapshot?: string;
   computerCleanupFailure?: boolean;
+  onComputerClose?: () => void;
 };
 
 function assistantMessage(
@@ -204,6 +208,8 @@ function assistantMessage(
 }
 
 class FakeWorkerGateway {
+  config?: OpenClawConfig;
+  toolSurface!: () => WorkerToolSurface;
   private readonly httpServer: Server;
   private readonly webSocketServer: WebSocketServer;
   private readonly clients = new Set<WebSocket>();
@@ -224,10 +230,7 @@ class FakeWorkerGateway {
   readonly acceptedTranscriptRequests: WorkerTranscriptCommitParams[] = [];
   readonly liveEventRequests: WorkerLiveEventParams[] = [];
   readonly inferenceRequests: WorkerInferenceStartParams[] = [];
-  readonly sessionSpawnRequests: WorkerSessionsSpawnParams[] = [];
-  readonly sessionSendRequests: WorkerSessionsSendParams[] = [];
-  readonly portalRequests: WorkerPortalParams[] = [];
-  readonly presenceRequests: WorkerPresenceParams[] = [];
+  readonly gatewayToolRequests: WorkerGatewayToolInvokeParams[] = [];
   readonly computerRequests: WorkerComputerParams[] = [];
   readonly applicationOrder: string[] = [];
 
@@ -304,10 +307,18 @@ class FakeWorkerGateway {
       return;
     }
     if (isRecord(parsed) && parsed.type === "req" && typeof parsed.id === "string") {
+      if (parsed.method === "worker.gatewayTool.cancel") {
+        this.methods.push(parsed.method);
+        this.send(socket, { type: "res", id: parsed.id, ok: true, payload: { cancelled: false } });
+        return;
+      }
       if (parsed.method === "worker.computer" && validateWorkerComputerParams(parsed.params)) {
         this.computerRequests.push(parsed.params);
         const closing = parsed.params.command === "computer.act";
         this.applicationOrder.push(closing ? "computer:close" : "computer:snapshot");
+        if (closing) {
+          this.options.onComputerClose?.();
+        }
         this.send(
           socket,
           this.options.computerCleanupFailure && closing
@@ -343,40 +354,11 @@ class FakeWorkerGateway {
         );
         return;
       }
-      if (parsed.method === "worker.presence" && validateWorkerPresenceParams(parsed.params)) {
-        this.presenceRequests.push(structuredClone(parsed.params));
-        this.send(socket, {
-          type: "res",
-          id: parsed.id,
-          ok: true,
-          payload: {
-            resultJson: JSON.stringify({
-              content: [{ type: "text", text: "Ada is online" }],
-              details: { status: "ok", people: [{ name: "Ada" }] },
-            }),
-          },
-        });
-        return;
-      }
-      const sessionToolMethod =
-        parsed.method === "worker.sessions.spawn" &&
-        validateWorkerSessionsSpawnParams(parsed.params)
-          ? parsed.method
-          : parsed.method === "worker.sessions.send" &&
-              validateWorkerSessionsSendParams(parsed.params)
-            ? parsed.method
-            : parsed.method === "worker.portal" && validateWorkerPortalParams(parsed.params)
-              ? parsed.method
-              : undefined;
-      if (sessionToolMethod) {
-        this.handleSessionTool(socket, {
-          id: parsed.id,
-          method: sessionToolMethod,
-          params: parsed.params as
-            | WorkerSessionsSpawnParams
-            | WorkerSessionsSendParams
-            | WorkerPortalParams,
-        });
+      if (
+        parsed.method === "worker.gatewayTool.invoke" &&
+        validateWorkerGatewayToolInvokeParams(parsed.params)
+      ) {
+        this.handleGatewayTool(socket, parsed.id, parsed.params);
         return;
       }
     }
@@ -417,6 +399,7 @@ class FakeWorkerGateway {
       ok: true,
       payload: {
         type: "worker-hello-ok",
+        toolSurface: this.toolSurface(),
         environmentId: frame.params.admission.environmentId,
         sessionId: frame.params.admission.sessionId,
         ownerEpoch: frame.params.admission.ownerEpoch,
@@ -472,41 +455,32 @@ class FakeWorkerGateway {
     });
   }
 
-  private handleSessionTool(
+  private handleGatewayTool(
     socket: WebSocket,
-    frame: {
-      id: string;
-      method: "worker.sessions.spawn" | "worker.sessions.send" | "worker.portal";
-      params: WorkerSessionsSpawnParams | WorkerSessionsSendParams | WorkerPortalParams;
-    },
+    id: string,
+    request: WorkerGatewayToolInvokeParams,
   ): void {
-    this.methods.push(frame.method);
-    if (frame.method === "worker.sessions.spawn") {
-      this.sessionSpawnRequests.push(structuredClone(frame.params as WorkerSessionsSpawnParams));
-    } else if (frame.method === "worker.sessions.send") {
-      this.sessionSendRequests.push(structuredClone(frame.params as WorkerSessionsSendParams));
-    } else {
-      this.portalRequests.push(structuredClone(frame.params as WorkerPortalParams));
-    }
-    const requestCount =
-      this.sessionSpawnRequests.length +
-      this.sessionSendRequests.length +
-      this.portalRequests.length;
-    if (requestCount <= (this.options.dropSessionToolResponses ?? 0)) {
+    this.methods.push("worker.gatewayTool.invoke");
+    this.gatewayToolRequests.push(structuredClone(request));
+    if (this.gatewayToolRequests.length <= (this.options.dropSessionToolResponses ?? 0)) {
       // Lose the response after recording its request, without a heartbeat race.
       socket.terminate();
       return;
     }
     this.send(socket, {
       type: "res",
-      id: frame.id,
+      id,
       ok: true,
-      payload: {
-        resultJson: JSON.stringify({
-          content: [{ type: "text", text: "child accepted" }],
-          details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
-        }),
-      },
+      payload:
+        request.toolId === "presence"
+          ? {
+              content: [{ type: "text", text: "Ada is online" }],
+              details: { status: "ok", people: [{ name: "Ada" }] },
+            }
+          : {
+              content: [{ type: "text", text: "child accepted" }],
+              details: { status: "accepted", childSessionKey: "agent:main:cloud-child" },
+            },
     });
   }
 
@@ -941,6 +915,14 @@ function descriptor(socketPath: string, workspaceDir: string): WorkerLaunchDescr
 
 const gateways: FakeWorkerGateway[] = [];
 const tempDirs: string[] = [];
+let receipts: FixtureReceiptChannel;
+
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 async function setup(options?: FakeGatewayOptions): Promise<{
   gateway: FakeWorkerGateway;
@@ -952,7 +934,14 @@ async function setup(options?: FakeGatewayOptions): Promise<{
   await gateway.start();
   const workspaceDir = await mkdtemp(path.join(tmpdir(), "openclaw-worker-workspace-"));
   tempDirs.push(workspaceDir);
-  return { gateway, workspaceDir, launch: descriptor(gateway.socketPath, workspaceDir) };
+  const launch = descriptor(gateway.socketPath, workspaceDir);
+  gateway.toolSurface = () =>
+    createWorkerToolSurfaceForTest({
+      assignment: launch.assignment,
+      config: gateway.config,
+      sessionId: SESSION_ID,
+    });
+  return { gateway, workspaceDir, launch };
 }
 
 afterEach(async () => {
@@ -1046,116 +1035,68 @@ describe("worker runtime", () => {
     );
   });
 
-  it("runs a full embedded turn through remote inference, live events, and transcript commits", async () => {
-    const { gateway, workspaceDir, launch } = await setup();
-    await writeFile(path.join(workspaceDir, "AGENTS.md"), "worker-bootstrap-marker", "utf8");
-
-    const result = await runWorkerDescriptor(launch);
-
-    expect(result.status).toBe("completed");
-    expect(gateway.inferenceRequests).toHaveLength(1);
-    expect(gateway.inferenceRequests[0]?.modelRef).toEqual(MODEL_REF);
-    expect(gateway.inferenceRequests[0]?.context.systemPrompt).toContain("worker-bootstrap-marker");
-    const toolNames = gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name) ?? [];
-    expect(toolNames).toHaveLength(6);
-    const terminalIndex = gateway.applicationOrder.findIndex(
-      (entry) => entry === "live:lifecycle:finishing",
-    );
-    const finalTranscriptIndex = gateway.applicationOrder.findLastIndex((entry) =>
-      entry.startsWith("transcript:"),
-    );
-    expect(finalTranscriptIndex).toBeGreaterThanOrEqual(0);
-    expect(terminalIndex).toBeGreaterThan(finalTranscriptIndex);
-    expect(toolNames).toEqual(
-      expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
-    );
-    expect(gateway.liveEventRequests.some((request) => request.event.kind === "assistant")).toBe(
-      true,
-    );
-    const lifecycleEvents = gateway.liveEventRequests.flatMap((request) =>
-      request.event.kind === "lifecycle" ? [request.event.payload.phase] : [],
-    );
-    expect(lifecycleEvents).toContain("start");
-    expect(lifecycleEvents).toContain("finishing");
-    expect(lifecycleEvents).not.toContain("end");
-    expect(gateway.liveEventRequests.at(-1)?.event).toMatchObject({
-      kind: "lifecycle",
-      payload: { phase: "finishing", stopReason: "stop" },
-    });
-    expect(gateway.transcriptRequests.length).toBeGreaterThan(0);
-    expect(gateway.transcriptRequests.map((request) => request.seq)).toEqual(
-      gateway.transcriptRequests.map((_request, index) => index + 3),
-    );
-    expect(
-      gateway.transcriptRequests
-        .flatMap((request) => request.messages)
-        .map((message) => message.role),
-    ).toEqual(["user", "assistant"]);
-    const lastTranscript = gateway.transcriptRequests.at(-1);
-    expect(result).toMatchObject({
-      transcriptLeafId: `leaf-${lastTranscript?.seq}`,
-      transcriptNextSeq: (lastTranscript?.seq ?? 0) + 1,
-    });
-  });
-
-  it.each([false, true])("uses only prepared prompt inputs (Gateway extra: %s)", async (extra) => {
-    const { gateway, workspaceDir, launch } = await setup();
-    const canonicalWorkspaceDir = await realpath(workspaceDir);
-    const promptDir = path.join(workspaceDir, ".openclaw");
-    const literalPrompt = path.join(workspaceDir, "not-a-prompt-file.md");
-    await mkdir(promptDir);
-    await writeFile(path.join(workspaceDir, "AGENTS.md"), "prepared-worker-context");
-    for (const name of ["SOUL.md", "IDENTITY.md", "USER.md", "BOOTSTRAP.md", "MEMORY.md"]) {
-      await writeFile(path.join(workspaceDir, name), "unselected-workspace-bootstrap-marker");
-    }
-    await writeFile(path.join(promptDir, "SYSTEM.md"), "ambient-system-marker");
-    await writeFile(path.join(promptDir, "APPEND_SYSTEM.md"), "ambient-append-marker");
-    await writeFile(literalPrompt, "unrequested-file-contents");
-    if (extra) {
-      launch.assignment.systemPrompt = literalPrompt;
-    }
-
-    const openedFiles = vi.spyOn(boundaryFileRead, "openRootFile");
-    try {
-      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-      expect(
-        openedFiles.mock.calls
-          .map(([params]) => params.absolutePath)
-          .filter((filePath) => path.dirname(filePath) === canonicalWorkspaceDir),
-      ).toEqual([path.join(canonicalWorkspaceDir, "AGENTS.md")]);
-    } finally {
-      openedFiles.mockRestore();
-    }
-
-    const prompt = gateway.inferenceRequests[0]?.context.systemPrompt;
-    expect(prompt).toContain("prepared-worker-context");
-    expect.soft(prompt).toContain("Available tools:");
-    expect.soft(prompt).not.toContain("ambient-system-marker");
-    expect.soft(prompt).not.toContain("ambient-append-marker");
-    expect.soft(prompt).not.toContain("unrequested-file-contents");
-    expect.soft(prompt).not.toContain("unselected-workspace-bootstrap-marker");
-    if (extra) {
-      expect.soft(prompt).toContain(literalPrompt);
-    }
-  });
+  registerWorkerPromptTests({ setup, modelRef: MODEL_REF });
 
   registerWorkerGatewayToolAvailabilityTests({ setup });
 
-  it("materializes exactly the Browser tool and disposes it before finishing", async () => {
-    const { gateway, launch } = await setup();
-    browserRuntimeMocks.dispose.mockImplementationOnce(async () => {
-      gateway.applicationOrder.push("browser:dispose");
+  it("settles Browser, computer, and transcript owners concurrently before finishing", async () => {
+    const browserRelease = createDeferred();
+    let browserPending = false;
+    let overlappingComputerClose = false;
+    let overlappingTranscriptSettlement = false;
+    const { gateway, launch } = await setup({
+      inferencePlans: ["computer", "text"],
+      computerSnapshot: createSolidPngBuffer(512, 512, { r: 0, g: 128, b: 255 }).toString("base64"),
+      onComputerClose: () => {
+        overlappingComputerClose = browserPending;
+        browserRelease.resolve();
+      },
     });
-    launch.assignment.toolAuthority.allowedToolNames = ["browser"];
+    browserRuntimeMocks.dispose.mockImplementationOnce(async () => {
+      browserPending = true;
+      await browserRelease.promise;
+      browserPending = false;
+      gateway.applicationOrder.push("browser:disposed");
+    });
+    const createTranscript = workerTranscriptRuntime.createWorkerTranscriptRuntime;
+    const transcriptSpy = vi
+      .spyOn(workerTranscriptRuntime, "createWorkerTranscriptRuntime")
+      .mockImplementation((client, signal) => {
+        const runtime = createTranscript(client, signal);
+        const settle = runtime.withSessionWriteSettlement;
+        runtime.withSessionWriteSettlement = (operation) => {
+          overlappingTranscriptSettlement ||= browserPending;
+          return settle(operation);
+        };
+        return runtime;
+      });
+    launch.assignment.toolAuthority.allowedToolNames = ["browser", "computer"];
     launch.assignment.browser = {
       cdpUrl: "http://127.0.0.1:9222",
       launcherPath: "/usr/local/bin/openclaw-worker-browser",
     };
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    launch.assignment.computer = {
+      nodeId: "worker-desktop",
+      computerUse: {
+        contractVersion: 2,
+        provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
+        actions: ["screenshot"],
+        targets: ["screen"],
+        deliveryModes: ["foreground"],
+        observations: ["image"],
+        features: { recording: false, agentCursor: false, multiDisplay: false },
+      },
+    };
+    try {
+      await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
+    } finally {
+      browserRelease.resolve();
+      transcriptSpy.mockRestore();
+    }
 
     expect(gateway.inferenceRequests[0]?.context.tools?.map((tool) => tool.name)).toEqual([
       "browser",
+      "computer",
     ]);
     expect(browserRuntimeMocks.createWorkerBrowserToolRuntime).toHaveBeenCalledWith({
       descriptor: launch.assignment.browser,
@@ -1164,9 +1105,17 @@ describe("worker runtime", () => {
       workspaceDir: await realpath(launch.assignment.workspaceDir),
     });
     expect(browserRuntimeMocks.dispose).toHaveBeenCalledOnce();
-    expect(gateway.applicationOrder.indexOf("browser:dispose")).toBeLessThan(
+    expect(overlappingComputerClose).toBe(true);
+    expect(overlappingTranscriptSettlement).toBe(true);
+    expect(gateway.applicationOrder.indexOf("browser:disposed")).toBeLessThan(
       gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
     );
+    expect(gateway.applicationOrder.indexOf("computer:close")).toBeLessThan(
+      gateway.applicationOrder.indexOf("live:lifecycle:finishing"),
+    );
+    expect(
+      gateway.applicationOrder.findLastIndex((entry) => entry.startsWith("transcript:")),
+    ).toBeLessThan(gateway.applicationOrder.indexOf("live:lifecycle:finishing"));
   });
 
   it.each(["text", "error", "setup"] as const)(
@@ -1260,8 +1209,8 @@ describe("worker runtime", () => {
         action: "__close_execution",
       });
       const screenshot = gateway.acceptedTranscriptRequests
-        .flatMap((request) => request.messages)
-        .find((message) => message.role === "toolResult" && message.toolName === "computer");
+        .flatMap((request) => request.messages.filter((message) => message.role === "toolResult"))
+        .find((message) => message.toolName === "computer");
       expect(screenshot).toMatchObject({
         isError: false,
         content: expect.arrayContaining([expect.objectContaining({ type: "image" })]),
@@ -1338,30 +1287,11 @@ describe("worker runtime", () => {
   registerWorkerGatewayToolRpcTests({ setup });
 
   it.each([
-    {
-      name: "spawn",
-      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
-        connection.requestSessionsSpawn({
-          toolCallId: "call-durable-spawn",
-          task: "start a nested cloud child",
-        }),
-      requests: (gateway: FakeWorkerGateway) => gateway.sessionSpawnRequests,
-      request: { toolCallId: "call-durable-spawn", task: "start a nested cloud child" },
-    },
+    { name: "spawn", toolId: "sessions_spawn", arguments: { task: "start a nested cloud child" } },
     {
       name: "send",
-      invoke: (connection: ReturnType<typeof createWorkerConnection>) =>
-        connection.requestSessionsSend({
-          toolCallId: "call-durable-send",
-          sessionKey: "agent:main:cloud-child",
-          message: "status",
-        }),
-      requests: (gateway: FakeWorkerGateway) => gateway.sessionSendRequests,
-      request: {
-        toolCallId: "call-durable-send",
-        sessionKey: "agent:main:cloud-child",
-        message: "status",
-      },
+      toolId: "sessions_send",
+      arguments: { sessionKey: "agent:main:cloud-child", message: "status" },
     },
   ])("replays the same durable $name operation across response loss", async (testCase) => {
     const { gateway, launch } = await setup({ dropSessionToolResponses: 2 });
@@ -1374,20 +1304,21 @@ describe("worker runtime", () => {
     connection.onStateChange((state) => states.push(state.kind));
     try {
       await connection.start();
-
-      const response = await testCase.invoke(connection);
+      const request = {
+        generation: "runtime-surface",
+        toolCallId: `call-durable-${testCase.name}`,
+        toolId: testCase.toolId,
+        arguments: testCase.arguments,
+      };
+      const response = await connection.invokeGatewayTool(request, { replay: true });
 
       expect(response).toMatchObject({
         ok: true,
-        payload: { resultJson: expect.stringContaining("child accepted") },
+        payload: { content: [{ type: "text", text: "child accepted" }] },
       });
       expect(gateway.connectionCount).toBe(3);
       expect(states.filter((state) => state === "ready")).toHaveLength(3);
-      expect(testCase.requests(gateway)).toEqual([
-        testCase.request,
-        testCase.request,
-        testCase.request,
-      ]);
+      expect(gateway.gatewayToolRequests).toEqual([request, request, request]);
     } finally {
       await connection.stop();
     }
@@ -1402,12 +1333,17 @@ describe("worker runtime", () => {
     });
     try {
       await connection.start();
-      const request = { toolCallId: "call-portal-once", action: "open" as const, port: 3000 };
+      const request = {
+        generation: "runtime-surface",
+        toolId: "portal",
+        toolCallId: "call-portal-once",
+        arguments: { action: "open", port: 3000 },
+      };
 
-      await expect(connection.requestPortal(request)).rejects.toMatchObject({
+      await expect(connection.invokeGatewayTool(request)).rejects.toMatchObject({
         name: "WorkerConnectionInterruptedError",
       });
-      expect(gateway.portalRequests).toEqual([request]);
+      expect(gateway.gatewayToolRequests).toEqual([request]);
     } finally {
       await connection.stop();
     }
@@ -1520,6 +1456,12 @@ describe("worker runtime", () => {
       } else {
         start.mockResolvedValue({
           type: "worker-hello-ok",
+          toolSurface: {
+            generation: "surface",
+            presentation: createToolSurfacePresentationForTest(),
+            tools: [],
+            policy: prepareCoreToolPolicy({}),
+          },
           environmentId: launch.admission.environmentId,
           sessionId: SESSION_ID,
           ownerEpoch: OWNER_EPOCH,
@@ -1757,8 +1699,8 @@ describe("worker runtime", () => {
       const output = new PassThrough();
       const results: WorkerProcessResult[] = [];
       output.on("data", (chunk: Buffer) => {
-        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-        if (result) {
+        const result = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+        if (result?.type === "result") {
           results.push(result);
         }
       });
@@ -1870,13 +1812,11 @@ describe("worker runtime", () => {
 
   it("revokes local tool handles when their worker turn closes", async () => {
     const { launch } = await setup();
-    const toolFactory = await import("../agents/agent-tools.finalize.js");
-    const finalize = vi.spyOn(toolFactory, "finalizeAgentTools");
+    const adapter = await import("../agents/agent-tool-definition-adapter.js");
+    const finalize = vi.spyOn(adapter, "toToolDefinitions");
     try {
       await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-      const tools = finalize.mock.results[0]?.value as ReturnType<
-        typeof toolFactory.finalizeAgentTools
-      >;
+      const tools = finalize.mock.calls.at(-1)![0];
       const processTool = tools.find((tool) => tool.name === "process")!;
       await expect(
         processTool.execute("retained-process", { action: "list" }),
@@ -2015,7 +1955,7 @@ describe("worker runtime", () => {
         const profileDir = path.join(
           environment.stateDir,
           "github-profiles",
-          createHash("sha256").update(launch.assignment.runId).digest("hex").slice(0, 16),
+          createHash("sha256").update(launch.assignment.turnId).digest("hex").slice(0, 16),
         );
         const output =
           toolResult?.content
@@ -2055,17 +1995,32 @@ describe("worker runtime", () => {
 
   it.skipIf(process.platform === "win32")(
     "prevents retained processes from reading a later turn's GitHub profile",
-    async () => {
+    async ({ signal }) => {
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: ["background-tool", "text", "tool", "text"],
-        backgroundCommand: [
-          'printf "%s" "$GH_CONFIG_DIR" > retained-profile.txt',
-          "while [ ! -e retained-marker ]; do sleep 0.01; done",
-          '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
-          "mv retained-read.tmp retained-read.txt",
-        ].join("; "),
+        backgroundCommand: `exec '${process.execPath.replaceAll("'", "'\\''")}' retained-profile.mjs`,
         execCommand: "printf turn-b-completed",
       });
+      const profilePath = path.join(workspaceDir, "retained-profile.txt");
+      await writeFile(
+        path.join(workspaceDir, "retained-profile.mjs"),
+        [
+          'import { execFile } from "node:child_process";',
+          'import { writeFileSync } from "node:fs";',
+          fixtureReceiptClientSource(receipts.endpoint),
+          `writeFileSync(${JSON.stringify(profilePath)}, process.env.GH_CONFIG_DIR);`,
+          `sendReceipt(${JSON.stringify(profilePath)}, "ready");`,
+          "await new Promise((resolve, reject) => {",
+          `  execFile("sh", ["-c", ${JSON.stringify(
+            [
+              "while [ ! -e retained-marker ]; do sleep 0.01; done",
+              '{ cat "$GH_CONFIG_DIR/hosts.yml"; printf "exit=%s\\n" "$?"; } > retained-read.tmp 2>&1',
+              "mv retained-read.tmp retained-read.txt",
+            ].join("; "),
+          )}], (error) => error ? reject(error) : resolve());`,
+          "});",
+        ].join("\n"),
+      );
       launch.assignment.github = {
         login: "worker-a",
         token: "worker-turn-a-token",
@@ -2074,10 +2029,13 @@ describe("worker runtime", () => {
       const input = new PassThrough();
       const output = new PassThrough();
       const results: WorkerProcessResult[] = [];
+      const idleReady = createDeferred<string>();
       output.on("data", (chunk: Buffer) => {
-        const result = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-        if (result) {
-          results.push(result);
+        const message = parseWorkerProcessMessage(JSON.parse(chunk.toString("utf8")));
+        if (message?.type === "result") {
+          results.push(message);
+        } else if (message?.type === "idle-ready") {
+          idleReady.resolve(message.turnId);
         }
       });
       const command = runWorkerCommand({ managed: true, input, output });
@@ -2086,23 +2044,20 @@ describe("worker runtime", () => {
       const scopeKey = `worker:${SESSION_ID}`;
       const supervisor = getProcessSupervisor();
       try {
-        input.write(
-          `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
-        );
+        input.write(`${JSON.stringify(buildWorkerProcessTurn(launch, true))}\n`);
         await waitForFast(() => expect(results).toHaveLength(1), { timeout: 30_000 });
         expect(results[0]).toMatchObject({
           turnId: launch.assignment.turnId,
           result: { status: "completed" },
           retainWorker: true,
         });
-        const previousProfileDir = await waitForFast(async () => {
-          const profileDir = await readFile(
-            path.join(workspaceDir, "retained-profile.txt"),
-            "utf8",
-          );
-          expect(profileDir).not.toBe("");
-          return profileDir;
-        });
+        // A receipt can arrive after the exec settles; its durable file is written first.
+        await withinTest(
+          Promise.race([receipts.waitFor(profilePath, "ready"), waitForExecScope(scopeKey)]),
+          signal,
+        );
+        const previousProfileDir = await readFile(profilePath, "utf8");
+        expect(previousProfileDir).not.toBe("");
         const stateDir = process.env.OPENCLAW_STATE_DIR!;
         const next = structuredClone(launch);
         next.assignment.runId = "worker-next-run-2";
@@ -2120,9 +2075,7 @@ describe("worker runtime", () => {
           token: "worker-turn-b-token",
           branch: "openclaw/session-fixture",
         };
-        input.write(
-          `${JSON.stringify({ type: "turn", turnId: next.assignment.turnId, descriptor: next })}\n`,
-        );
+        input.write(`${JSON.stringify(buildWorkerProcessTurn(next, true))}\n`);
         await waitForFast(() => expect(results).toHaveLength(2), { timeout: 30_000 });
         expect(results[1]).toMatchObject({
           turnId: next.assignment.turnId,
@@ -2138,24 +2091,33 @@ describe("worker runtime", () => {
         });
         expect(settled).not.toHaveBeenCalled();
 
-        await writeFile(path.join(workspaceDir, "retained-marker"), "read");
-        const retainedRead = await waitForFast(() =>
-          readFile(path.join(workspaceDir, "retained-read.txt"), "utf8"),
-        );
-        expect(retainedRead).not.toContain(launch.assignment.github.token);
-        expect(retainedRead).not.toContain(next.assignment.github.token);
-        expect(retainedRead).toMatch(/No such file|ENOENT/u);
-        expect(retainedRead).toMatch(/exit=[1-9]\d*/u);
-        await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
         const nextProfileDir = path.join(
           stateDir,
           "github-profiles",
-          createHash("sha256").update(next.assignment.runId).digest("hex").slice(0, 16),
+          createHash("sha256").update(next.assignment.turnId).digest("hex").slice(0, 16),
         );
         const hosts = await readFile(path.join(nextProfileDir, "hosts.yml"), "utf8");
         expect(hosts).toContain("worker-b");
         expect(hosts).not.toContain("worker-a");
         expect(hosts).not.toContain(launch.assignment.github.token);
+        await writeFile(path.join(workspaceDir, "retained-marker"), "read");
+        // idle-ready follows exec settlement and both profile disposals, including the shell's mv.
+        expect(
+          await withinTest(
+            awaitGateBeforeSettlement(
+              idleReady.promise,
+              command,
+              "worker command ended before the retained process became idle",
+            ),
+            signal,
+          ),
+        ).toBe(next.assignment.turnId);
+        const retainedRead = await readFile(path.join(workspaceDir, "retained-read.txt"), "utf8");
+        expect(retainedRead).toContain(launch.assignment.github.token);
+        expect(retainedRead).not.toContain(next.assignment.github.token);
+        expect(retainedRead).toMatch(/exit=0/u);
+        await expect(stat(previousProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
+        await expect(stat(nextProfileDir)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         input.end();
         try {
@@ -2246,88 +2208,7 @@ describe("worker runtime", () => {
     );
   });
 
-  it("keeps a pinned replay anchor through repeated local tool-loop inference", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
-    launch.assignment.initialMessages = Array.from(
-      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 2 },
-      (_value, index): WorkerTranscriptMessage => ({
-        role: "user",
-        content: [{ type: "text", text: `history-${index}` }],
-        timestamp: index + 1,
-      }),
-    );
-    launch.assignment.initialMessages[2] = {
-      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
-      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
-    };
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-
-    expect(gateway.inferenceRequests).toHaveLength(2);
-    for (const request of gateway.inferenceRequests) {
-      expect(request.context.messages.length).toBeLessThanOrEqual(
-        WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
-      );
-      expect(request.context.messages[0]?.role).toBe("user");
-      expect(
-        request.context.messages.find(
-          (message) => message.role === "assistant" && message.providerReplay,
-        ),
-      ).toMatchObject({ providerReplay: WORKER_LOOP_REPLAY });
-    }
-    expect(
-      gateway.inferenceRequests[1]?.context.messages.some(
-        (message) => message.role === "toolResult",
-      ),
-    ).toBe(true);
-    expect(
-      gateway.inferenceRequests[1]?.context.messages.slice(-3).map((message) => message.role),
-    ).toEqual(["user", "assistant", "toolResult"]);
-    expect(
-      gateway.transcriptRequests
-        .flatMap((request) => request.messages)
-        .map((message) => message.role),
-    ).toEqual(["user", "assistant", "toolResult", "assistant"]);
-  });
-
-  it("fails before a second inference when the replay unit outgrows the window", async () => {
-    const { gateway, launch } = await setup({ inferencePlans: ["tool", "text"] });
-    launch.assignment.initialMessages = Array.from(
-      { length: WORKER_INFERENCE_MAX_CONTEXT_MESSAGES - 1 },
-      (_value, index): WorkerTranscriptMessage => ({
-        role: "user",
-        content: [{ type: "text", text: `history-${index}` }],
-        timestamp: index + 1,
-      }),
-    );
-    launch.assignment.initialMessages[0] = {
-      ...assistantMessage([{ type: "text", text: "checkpoint suffix" }], "stop"),
-      providerReplay: structuredClone(WORKER_LOOP_REPLAY),
-    };
-
-    await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({
-      status: "failed",
-      reason: "turn-failed",
-      transcriptLeafId: expect.any(String),
-      transcriptNextSeq: expect.any(Number),
-    });
-
-    expect(gateway.inferenceRequests).toHaveLength(1);
-    expect(gateway.inferenceRequests[0]?.context.messages).toHaveLength(
-      WORKER_INFERENCE_MAX_CONTEXT_MESSAGES,
-    );
-    expect(gateway.inferenceRequests[0]?.context.messages[0]).toMatchObject({
-      providerReplay: WORKER_LOOP_REPLAY,
-    });
-    const terminal = gateway.transcriptRequests
-      .flatMap((request) => request.messages)
-      .toReversed()
-      .find((message) => message.role === "assistant");
-    expect(terminal).toMatchObject({
-      stopReason: "error",
-      errorMessage: `${WORKER_PROVIDER_REPLAY_LOCAL_RETRY_MESSAGE} (provider-replay-message-limit)`,
-    });
-  });
+  registerWorkerReplayWindowTests({ setup, assistantMessage, modelRef: MODEL_REF });
 });
 
 describe("worker reconnect clients", () => {

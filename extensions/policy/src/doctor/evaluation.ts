@@ -1,3 +1,4 @@
+import { resolveExecApprovalsDisplayPath } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import type { HealthCheckContext, HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { policyRoutingRules } from "../policy-routing.js";
@@ -8,19 +9,16 @@ import {
   type PolicyEvidence,
 } from "../policy-state.js";
 import {
-  authProfileMetadataRequirementFindings,
   invalidChannelDenyRuleFindings,
+  metadataRequirementShapeFindings,
 } from "./access-findings.js";
 import { agentWorkspaceFindings } from "./agent-workspace-findings.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { CHECK_IDS } from "./check-ids.js";
 import { dataHandlingFindings, secretAuthProvenanceFindings } from "./data-auth-findings.js";
 import { execApprovalsFindings } from "./exec-approval-findings.js";
 import { ingressFindings } from "./ingress-findings.js";
-import { createOrderedPolicyShape } from "./ordered-shape.js";
-import { SUPPORTED_TOOL_METADATA } from "./policy-constants.js";
 import { policyEvidenceFinding } from "./policy-evidence-finding.js";
 import {
-  execApprovalsDisplayName,
   parsePolicyFile,
   policyChecksEnabled,
   policyDisplayName,
@@ -32,18 +30,7 @@ import {
   requiredToolMetadata,
   type PolicySettings,
 } from "./policy-runtime.js";
-import {
-  policyHasAgentWorkspaceRules,
-  policyHasAuthProfileRules,
-  policyHasDataHandlingRules,
-  policyHasExecApprovalsRules,
-  policyHasGatewayRules,
-  policyHasIngressRules,
-  policyHasRoutingRules,
-  policyHasSandboxPostureRules,
-  policyHasSecretRules,
-  policyHasToolPostureRules,
-} from "./policy-scope.js";
+import { policyHasRules } from "./policy-scope.js";
 import { policyContainerShapeFindings } from "./policy-shape.js";
 import { routingFindings } from "./routing-findings.js";
 import { routingPolicyShapeFinding } from "./routing-shapes.js";
@@ -89,15 +76,16 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     includeExecApprovals: false,
   });
   const findings: HealthFinding[] = [];
+  const initialEvaluation: PolicyEvaluation = {
+    policyPath,
+    evidence,
+    expectedAttestationHash: settings.expectedAttestationHash,
+    findings,
+    attestedFindings: findings,
+  };
 
   if (!policyChecksEnabled(ctx, settings)) {
-    return {
-      policyPath,
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
-    };
+    return initialEvaluation;
   }
 
   const policyFile = await readPolicyFile(ctx);
@@ -110,25 +98,13 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       path: policyPath,
       fixHint: `Restore ${policyPath} or add the policy artifact for this workspace.`,
     });
-    return {
-      policyPath,
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
-    };
+    return initialEvaluation;
   }
 
   const parsedPolicy = parsePolicyFile(policyFile.raw);
   if (!parsedPolicy.ok) {
     findings.push(policyParseFinding(policyFile.displayName, policyFile.ocDocName, parsedPolicy));
-    return {
-      policyPath,
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
-    };
+    return initialEvaluation;
   }
 
   const policy = parsedPolicy.value;
@@ -150,38 +126,29 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       fixHint: `Restore the approved policy artifact or update plugins.entries.policy.config.expectedHash after review.`,
     });
     return {
-      policyPath,
+      ...initialEvaluation,
       policy: { value: policy, hash: policyHash },
-      evidence,
-      expectedAttestationHash: settings.expectedAttestationHash,
-      findings,
-      attestedFindings: findings,
     };
   }
 
-  const metadataRequirementFindings = toolMetadataRequirementFindings(
+  const metadataRequirementFindings = metadataRequirementShapeFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
+    "tools.requireMetadata",
   );
-  const authMetadataRequirementFindings = authProfileMetadataRequirementFindings(
+  const authMetadataRequirementFindings = metadataRequirementShapeFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
+    "auth.profiles.requireMetadata",
   );
   const requiredMetadata =
     metadataRequirementFindings.length === 0 ? requiredToolMetadata(policy) : new Set<string>();
-  const includeSecrets = policyHasSecretRules(policy);
-  const includeAuthProfiles = policyHasAuthProfileRules(policy);
-  const includeIngress = policyHasIngressRules(policy);
-  const includeGatewayExposure = policyHasGatewayRules(policy);
-  const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
-  const includeDataHandling = policyHasDataHandlingRules(policy);
-  const includeSandboxPosture = policyHasSandboxPostureRules(policy);
-  const includeExecApprovals = policyHasExecApprovalsRules(policy);
+  const includeExecApprovals = policyHasRules(policy, "execApprovals");
   const routing =
-    policyHasRoutingRules(policy) &&
     isRecord(policy) &&
+    isRecord(policy.routing) &&
     routingPolicyShapeFinding(policy.routing, {
       policyDocName: policyFile.ocDocName,
       policyPath: policyFile.displayName,
@@ -190,14 +157,14 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       : undefined;
   const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
   const evidenceOptions = {
-    includeIngress,
-    includeGatewayExposure,
-    includeAgentWorkspace,
-    includeDataHandling,
-    includeToolPosture: policyHasToolPostureRules(policy),
-    includeSandboxPosture,
-    includeSecrets,
-    includeAuthProfiles,
+    includeIngress: policyHasRules(policy, "ingress"),
+    includeGatewayExposure: policyHasRules(policy, "gateway"),
+    includeAgentWorkspace: policyHasRules(policy, "agents"),
+    includeDataHandling: policyHasRules(policy, "dataHandling"),
+    includeToolPosture: policyHasRules(policy, "tools"),
+    includeSandboxPosture: policyHasRules(policy, "sandbox"),
+    includeSecrets: policyHasRules(policy, "secrets"),
+    includeAuthProfiles: policyHasRules(policy, "auth"),
     includeExecApprovals,
     execApprovalsRaw: includeExecApprovals ? (execApprovalsFile?.raw ?? null) : undefined,
     routing,
@@ -222,7 +189,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
           "Run `openclaw doctor --fix` to migrate TOOLS.md into the AGENTS.md `## Tools` section.",
       };
     }
-    evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
+    evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
       ...evidenceOptions,
     });
@@ -249,7 +216,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
       policyFile.ocDocName,
       evidence,
       execApprovalsFile,
-      execApprovalsDisplayName(),
+      resolveExecApprovalsDisplayPath(),
     ),
     ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,
@@ -304,13 +271,6 @@ function policyParseFinding(
     target: `oc://${policyDocName}`,
     fixHint: `Fix ${policyPath} so policy conformance checks can run.`,
   };
-}
-
-export function findingsForCheck(
-  evaluation: PolicyEvaluation,
-  checkId: (typeof POLICY_CHECK_IDS)[number],
-): readonly HealthFinding[] {
-  return evaluation.findings.filter((finding) => finding.checkId === checkId);
 }
 
 function hasPolicyValidationFinding(findings: readonly HealthFinding[]): boolean {
@@ -406,25 +366,4 @@ function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
     ...(finding.requirement !== undefined ? { requirement: finding.requirement } : {}),
     ...(finding.fixHint !== undefined ? { fixHint: finding.fixHint } : {}),
   };
-}
-
-function toolMetadataRequirementFindings(
-  policy: unknown,
-  policyPath: string,
-  policyDocName: string,
-): readonly HealthFinding[] {
-  const shape = createOrderedPolicyShape(policy, { policyPath, policyDocName });
-  const finding = shape.list("tools.requireMetadata", {
-    allowed: SUPPORTED_TOOL_METADATA,
-    normalize: "lower",
-    array: {
-      message: "{policy} {property} must be an array of metadata keys.",
-      hint: "Use supported metadata keys: {allowed}.",
-    },
-    entry: {
-      message: "{policy} {property}[{index}] must be a supported metadata key.",
-      hint: "Use supported metadata keys: {allowed}.",
-    },
-  });
-  return finding === undefined ? [] : [finding];
 }

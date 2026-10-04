@@ -37,10 +37,6 @@ const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
   () => import("../infra/fs-safe.js"),
 );
 
-async function loadFsSafeModule(): Promise<FsSafeModule> {
-  return await fsSafeModuleLoader.load();
-}
-
 // F-strings alternate literal text with executable replacement fields. Keep a lexical stack
 // so valid text stays invisible while nested replacement code uses the normal token check.
 function findPythonShellVariable(content: string): RegExpExecArray | null {
@@ -235,7 +231,7 @@ export async function validateScriptFileForShellBleed(params: {
     return;
   }
 
-  const fsSafe = await loadFsSafeModule();
+  const fsSafe = await fsSafeModuleLoader.load();
   const { FsSafeError, root: fsRoot } = fsSafe;
   const workspaceRoot = await fsRoot(params.workdir);
   for (const relOrAbsPath of target.relOrAbsPaths) {
@@ -264,7 +260,6 @@ export async function validateScriptFileForShellBleed(params: {
           })
         : (
             await workspaceRoot.read(relativePath, {
-              nonBlockingRead: true,
               symlinks: "follow-within-root",
               maxBytes: SCRIPT_PREFLIGHT_MAX_BYTES,
             })

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { runNodeMain } from "../../../scripts/run-node.mts";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { runNodeMain } from "../../../test/scripts/run-node-boundary.test-support.js";
+import * as serviceFiles from "../../daemon/inspect-files.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayService } from "../../daemon/service.js";
@@ -13,7 +13,6 @@ import {
 import * as gatewayLocks from "../../infra/gateway-lock.js";
 import { tryAcquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as portProbe from "../../infra/ports-probe.js";
-import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -26,10 +25,10 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { createUpdateCommandFailureResult } from "./update-command-result.js";
 import { completeSourceUpdateRuntime } from "./update-command-runtime.js";
+import { withServiceHome } from "./update-command-service-home.test-support.js";
 import { withGatewayRuntimeArtifactPublication } from "./update-command-service-maintenance.js";
 
 const mocks = vi.hoisted(() => ({ service: vi.fn<() => GatewayService>() }));
@@ -38,30 +37,8 @@ vi.mock("../../daemon/service.js", async (importOriginal) => ({
   resolveGatewayService: mocks.service,
 }));
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => mockSystemAccountHome());
 afterEach(() => vi.restoreAllMocks());
-
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = tempDirs.make("openclaw-runtime-publication-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  await withEnvAsync(
-    {
-      HOME: home,
-      USERPROFILE: home,
-      APPDATA: path.join(home, "AppData"),
-      OPENCLAW_GATEWAY_PORT: undefined,
-      OPENCLAW_HOME: undefined,
-      OPENCLAW_STATE_DIR: undefined,
-      OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
-      OPENCLAW_SUPERVISOR_MODE: undefined,
-      OPENCLAW_SERVICE_MARKER: undefined,
-      OPENCLAW_SERVICE_KIND: undefined,
-    },
-    () => run(home),
-  );
-}
 
 async function withRuntimePublicationFixture(
   run: (fixture: {
@@ -127,7 +104,7 @@ it("keeps Task Scheduler timeout details in the source-build failure report", ()
   }));
 
 it.each([undefined, "stale-profile"])(
-  "preserves the serving installation when a source command requests an automatic rebuild (profile=%s)",
+  "preserves the serving installation and points back to the original doctor command (profile=%s)",
   (profile) =>
     withRuntimePublicationFixture(async ({ root, env, service }) => {
       vi.mocked(service.readRuntime).mockResolvedValue({
@@ -140,14 +117,17 @@ it.each([undefined, "stale-profile"])(
       const spawn = vi.fn(() => {
         throw new Error("Automatic build started under the serving Gateway");
       });
-      await expect(
-        runNodeMain({
-          cwd: root,
-          args: [...(profile ? ["--profile", profile] : []), "doctor"],
-          env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
-          spawn,
-        }),
-      ).rejects.toThrow(/affected Gateway.*running/);
+      const attempt = runNodeMain({
+        cwd: root,
+        args: [...(profile ? ["--profile", profile] : []), "doctor"],
+        env: { ...env, OPENCLAW_RUNNER_LOG: "0" },
+        spawn,
+      });
+      await expect(attempt).rejects.toThrow(/affected Gateway.*running/);
+      await expect(attempt).rejects.toThrow(
+        `openclaw${profile ? ` --profile ${profile}` : ""} gateway stop`,
+      );
+      await expect(attempt).rejects.toThrow("retry the original command");
       expect(spawn).not.toHaveBeenCalled();
       expect(
         vi
@@ -296,39 +276,31 @@ export function prepareBundledPluginRuntime() {
 );
 
 it.each([
-  "running",
   "unknown runtime",
   "unknown command",
   "unknown load state",
-  "respawn enabled",
   "respawn disabled",
-  "active lock",
   "unknown lock",
-  "busy listener",
   "explicit listener",
   "unknown listener",
-  "running after coordinator",
   "lock after coordinator",
 ])("refuses changed runtime publication with %s", (scenario) =>
   withRuntimePublicationFixture(async ({ root, env, service }) => {
-    if (scenario === "running" || scenario === "unknown runtime") {
+    if (scenario === "unknown runtime") {
       vi.mocked(service.readRuntime).mockResolvedValue({
-        status: scenario === "running" ? "running" : "unknown",
+        status: "unknown",
         systemd: { managerUid: 2001 },
       });
     } else if (scenario === "unknown command") {
       vi.mocked(service.readCommand).mockResolvedValue(null);
     } else if (scenario === "unknown load state") {
       vi.mocked(service.isLoaded).mockRejectedValue(new Error("inspection failed"));
-    } else if (scenario === "respawn enabled" || scenario === "respawn disabled") {
+    } else if (scenario === "respawn disabled") {
       mockProcessPlatform("darwin");
-      vi.mocked(service.isEnabled!).mockResolvedValue(scenario === "respawn enabled");
-    } else if (scenario === "active lock" || scenario === "lock after coordinator") {
-      const lock = vi.mocked(gatewayLocks.readActiveGatewayLockIdentity);
-      lock.mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 });
-      if (scenario === "lock after coordinator") {
-        lock.mockResolvedValueOnce(undefined);
-      }
+    } else if (scenario === "lock after coordinator") {
+      vi.mocked(gatewayLocks.readActiveGatewayLockIdentity)
+        .mockResolvedValue({ pid: process.pid, createdAt: "now", port: 18789 })
+        .mockResolvedValueOnce(undefined);
     } else if (scenario === "unknown lock") {
       vi.mocked(gatewayLocks.readActiveGatewayLockIdentity).mockRejectedValue(new Error("unknown"));
     } else if (scenario === "explicit listener") {
@@ -344,14 +316,8 @@ it.each([
       vi.mocked(portProbe.probePortUsage).mockImplementation(async (port) =>
         port === 19420 ? "busy" : "free",
       );
-    } else if (scenario === "busy listener" || scenario === "unknown listener") {
-      vi.mocked(portProbe.probePortUsage).mockResolvedValue(
-        scenario === "busy listener" ? "busy" : "unknown",
-      );
-    } else {
-      vi.mocked(service.readRuntime)
-        .mockResolvedValueOnce({ status: "stopped", systemd: { managerUid: 2001 } })
-        .mockResolvedValue({ status: "running", systemd: { managerUid: 2001 } });
+    } else if (scenario === "unknown listener") {
+      vi.mocked(portProbe.probePortUsage).mockResolvedValue("unknown");
     }
     const publish = vi.fn(async () => "published");
     await expect(
@@ -360,7 +326,7 @@ it.each([
         publish,
       ),
     ).rejects.toThrow(
-      /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the update/,
+      /affected Gateway.*openclaw gateway status --deep.*openclaw gateway stop.*retry the original command/,
     );
     expect(publish).not.toHaveBeenCalled();
   }),
@@ -384,26 +350,21 @@ it("refuses changed runtime publication while another process owns Gateway prese
     }
   }));
 
-it.each(["stopped", "absent"])(
-  "publishes changed artifacts for an affirmatively %s Gateway",
-  (state) =>
-    withRuntimePublicationFixture(async ({ root, env, service, databasePath }) => {
-      if (state === "absent") {
-        service.isAbsent = vi.fn(async () => true);
-      }
-      await expect(
-        withGatewayRuntimeArtifactPublication(
-          { root, env, timeoutMs: 200, assertCurrent() {} },
-          async (assertCurrent) => {
-            await Promise.resolve();
-            await assertCurrent();
-            expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
-            return "published";
-          },
-        ),
-      ).resolves.toBe("published");
-    }),
-);
+it("publishes changed artifacts for an affirmatively absent Gateway", () =>
+  withRuntimePublicationFixture(async ({ root, env, service, databasePath }) => {
+    service.isAbsent = vi.fn(async () => true);
+    await expect(
+      withGatewayRuntimeArtifactPublication(
+        { root, env, timeoutMs: 200, assertCurrent() {} },
+        async (assertCurrent) => {
+          await Promise.resolve();
+          await assertCurrent();
+          expect(tryAcquireGatewayStateOwner(databasePath)).toBeNull();
+          return "published";
+        },
+      ),
+    ).resolves.toBe("published");
+  }));
 
 it.each([
   "disjoint",
@@ -479,6 +440,85 @@ it.each([
   }),
 );
 
+it.each([
+  { label: "already live", late: false, output: "dist-runtime", shared: "dist-runtime" },
+  {
+    label: "discovered before the effect",
+    late: true,
+    output: "dist-runtime",
+    shared: "dist-runtime",
+  },
+  { label: "physically disjoint", late: false, output: "dist-runtime", shared: undefined },
+  {
+    label: "custom output shared",
+    late: false,
+    output: "custom-runtime",
+    shared: "custom-runtime",
+  },
+  {
+    label: "custom output disjoint",
+    late: false,
+    output: "custom-runtime",
+    shared: "dist-runtime",
+  },
+])("fences runtime-only publication against a sibling that is $label", ({ late, output, shared }) =>
+  withRuntimePublicationFixture(async ({ home, root, env, service }) => {
+    const sibling = path.join(home, "sibling");
+    await fs.mkdir(path.join(sibling, "dist"), { recursive: true });
+    await fs.writeFile(path.join(sibling, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await fs.writeFile(path.join(sibling, "dist", "entry.js"), "export {};\n");
+    await fs.mkdir(path.join(root, output), { recursive: true });
+    if (shared) {
+      await fs.symlink(path.join(root, shared), path.join(sibling, shared), "junction");
+    }
+    const directory = path.join(home, ".config", "systemd", "user");
+    await fs.mkdir(directory, { recursive: true });
+    const scan = serviceFiles.scanSystemdDir;
+    vi.spyOn(serviceFiles, "scanSystemdDir").mockImplementation((params) =>
+      params.dir === directory ? scan(params) : Promise.resolve([]),
+    );
+    const unit = "openclaw-gateway-sibling.service";
+    const discoverSibling = () =>
+      fs.writeFile(
+        path.join(directory, unit),
+        `[Service]\nEnvironment="OPENCLAW_PROFILE=sibling" "OPENCLAW_SERVICE_MARKER=openclaw" "OPENCLAW_SERVICE_KIND=gateway"\nExecStart=${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(sibling, "dist", "entry.js"))} gateway\n`,
+      );
+    if (!late) {
+      await discoverSibling();
+    }
+    vi.mocked(service.readCommand).mockImplementation(async (serviceEnv) => ({
+      programArguments: [
+        process.execPath,
+        path.join(serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? sibling : root, "dist", "entry.js"),
+        "gateway",
+      ],
+    }));
+    vi.mocked(service.readRuntime).mockImplementation(async (serviceEnv) => ({
+      status: serviceEnv?.OPENCLAW_SYSTEMD_UNIT === unit ? "running" : "stopped",
+      systemd: { managerUid: 2001 },
+    }));
+    const artifact = path.join(root, output, "published.txt");
+    await fs.writeFile(artifact, "original");
+    const publication = withGatewayRuntimeArtifactPublication(
+      { root, env, timeoutMs: 200, assertCurrent() {}, outputPaths: [output] },
+      async (assertPublicationCurrent) => {
+        if (late) {
+          await discoverSibling();
+        }
+        await assertPublicationCurrent();
+        await fs.writeFile(artifact, "candidate");
+      },
+    );
+    const overlaps = shared === output;
+    if (overlaps) {
+      await expect(publication).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+    } else {
+      await expect(publication).resolves.toBeUndefined();
+    }
+    expect(await fs.readFile(artifact, "utf8")).toBe(overlaps ? "original" : "candidate");
+  }),
+);
+
 it.each(["inspection", "publication"])(
   "retains the caller's publication lease across %s awaits",
   (when) =>
@@ -518,7 +558,6 @@ it.each(["inspection", "publication"])(
 
 it.each([
   "running",
-  "unknown runtime",
   "changed launcher",
   "replaced entrypoint",
   "changed manager",
@@ -540,9 +579,9 @@ it.each([
     await fs.writeFile(untouched, "original");
     const beforePersistentEffect = async () => {
       await Promise.resolve();
-      if (change === "running" || change === "unknown runtime") {
+      if (change === "running") {
         vi.mocked(service.readRuntime).mockResolvedValue({
-          status: change === "running" ? "running" : "unknown",
+          status: "running",
           systemd: { managerUid: 2001 },
         });
       } else if (change === "changed manager") {

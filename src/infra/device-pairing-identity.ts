@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { NodePairingGeneration, NodePairingState } from "./device-pairing-core.types.js";
 import {
   mergeDevicePairingRoles,
@@ -68,18 +68,16 @@ function resolveNodePairingIdentity(
   if (!nodeToken) {
     return null;
   }
-  const key = createHash("sha256")
-    .update(
-      [
-        device.publicKey,
-        device.createdAtMs,
-        nodeToken.token,
-        nodeToken.createdAtMs,
-        nodeToken.rotatedAtMs ?? "",
-        nodeToken.revokedAtMs ?? "",
-      ].join("\0"),
-    )
-    .digest("hex");
+  const key = sha256Hex(
+    [
+      device.publicKey,
+      device.createdAtMs,
+      nodeToken.token,
+      nodeToken.createdAtMs,
+      nodeToken.rotatedAtMs ?? "",
+      nodeToken.revokedAtMs ?? "",
+    ].join("\0"),
+  );
   return { nodeId: device.deviceId, key };
 }
 
@@ -94,18 +92,16 @@ export function resolveNodePairingGeneration(
   const nodeSurface = device.nodeSurface;
   // Device-wide approval also changes for unrelated operator upgrades, so only
   // node-owned identity participates in the generation.
-  const key = createHash("sha256")
-    .update(
-      [
-        device.publicKey,
-        device.createdAtMs,
-        nodeToken?.token ?? "",
-        nodeToken?.revokedAtMs ?? "",
-        nodeSurface.createdAtMs,
-        nodeSurface.approvedAtMs,
-      ].join("\0"),
-    )
-    .digest("hex");
+  const key = sha256Hex(
+    [
+      device.publicKey,
+      device.createdAtMs,
+      nodeToken?.token ?? "",
+      nodeToken?.revokedAtMs ?? "",
+      nodeSurface.createdAtMs,
+      nodeSurface.approvedAtMs,
+    ].join("\0"),
+  );
   return { nodeId: device.deviceId, key };
 }
 

@@ -32,17 +32,10 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
-  TasksCancelResult,
-  TasksGetResult,
-  TasksListParams,
-  TasksListResult,
   ToolsEffectiveParams,
   ToolInvokeParams,
   ToolInvokeResult,
 } from "./types.js";
-
-// High-level OpenClaw SDK client. Namespaces below translate friendly SDK calls
-// into current Gateway RPC methods and normalize event streams for consumers.
 
 /** Connection and transport options for the OpenClaw SDK client. */
 export type OpenClawOptions = {
@@ -72,14 +65,6 @@ function normalizeTimeoutMs(timeoutMs: number | undefined): number | undefined {
     throw new Error("timeoutMs must be a finite non-negative number");
   }
   return Math.floor(timeoutMs);
-}
-
-function timeoutSecondsFromMs(timeoutMs: number | undefined): number | undefined {
-  const normalized = normalizeTimeoutMs(timeoutMs);
-  if (normalized === undefined) {
-    return undefined;
-  }
-  return normalized === 0 ? 0 : Math.ceil(normalized / 1000);
 }
 
 function splitModelRef(model: string | undefined): { provider?: string; model?: string } {
@@ -113,10 +98,12 @@ function assertNoUnsupportedRunOptions(params: AgentRunParams): void {
   );
 }
 
-function buildAgentParams(params: AgentRunParams): Record<string, unknown> {
+function buildAgentParams(
+  params: AgentRunParams,
+  timeoutMs: number | undefined,
+): Record<string, unknown> {
   assertNoUnsupportedRunOptions(params);
   const modelRef = splitModelRef(params.model);
-  const timeoutSeconds = timeoutSecondsFromMs(params.timeoutMs);
   return {
     message: params.input,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -127,24 +114,22 @@ function buildAgentParams(params: AgentRunParams): Record<string, unknown> {
     ...(params.thinking ? { thinking: params.thinking } : {}),
     ...(typeof params.deliver === "boolean" ? { deliver: params.deliver } : {}),
     ...(params.attachments ? { attachments: params.attachments } : {}),
-    ...(timeoutSeconds !== undefined ? { timeout: timeoutSeconds } : {}),
+    ...(timeoutMs !== undefined
+      ? { timeout: timeoutMs === 0 ? 0 : Math.ceil(timeoutMs / 1000) }
+      : {}),
     ...(params.label ? { label: params.label } : {}),
     idempotencyKey: params.idempotencyKey ?? randomUUID(),
   };
 }
 
-function unsupportedGatewayApi(api: string): never {
-  throw new Error(`${api} is not supported by the current OpenClaw Gateway yet`);
-}
-
 function requireArtifactQueryScope(api: string, params: ArtifactQuery): ArtifactQuery {
   const record = asRecord(params);
   if (
-    ![record.sessionKey, record.runId, record.taskId].some(
+    ![record.sessionKey, record.runId].some(
       (value) => typeof value === "string" && value.trim().length > 0,
     )
   ) {
-    throw new Error(`${api} requires one of sessionKey, runId, or taskId`);
+    throw new Error(`${api} requires sessionKey or runId`);
   }
   return params;
 }
@@ -162,7 +147,6 @@ export class OpenClaw {
   readonly agents: AgentsNamespace;
   readonly sessions: SessionsNamespace;
   readonly runs: RunsNamespace;
-  readonly tasks: TasksNamespace;
   readonly models: ModelsNamespace;
   readonly tools: ToolsNamespace;
   readonly artifacts: ArtifactsNamespace;
@@ -193,7 +177,6 @@ export class OpenClaw {
     this.agents = new AgentsNamespace(this);
     this.sessions = new SessionsNamespace(this);
     this.runs = new RunsNamespace(this);
-    this.tasks = new TasksNamespace(this);
     this.models = new ModelsNamespace(this);
     this.tools = new ToolsNamespace(this);
     this.artifacts = new ArtifactsNamespace(this);
@@ -262,10 +245,6 @@ export class OpenClaw {
     return result;
   }
 
-  events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
-    return this.iterateEvents(filter);
-  }
-
   runEvents(
     runId: string,
     filter?: (event: OpenClawEvent) => boolean,
@@ -297,9 +276,7 @@ export class OpenClaw {
     }
   }
 
-  private async *iterateEvents(
-    filter?: (event: OpenClawEvent) => boolean,
-  ): AsyncIterable<OpenClawEvent> {
+  async *events(filter?: (event: OpenClawEvent) => boolean): AsyncIterable<OpenClawEvent> {
     await this.connect();
     this.assertOpen();
     for await (const event of this.replay.events.stream(filter)) {
@@ -336,15 +313,8 @@ export class OpenClaw {
       return this.eventPumpReady;
     }
     let markReady = () => {};
-    let ready = false;
     this.eventPumpReady = new Promise<void>((resolve) => {
-      markReady = () => {
-        if (ready) {
-          return;
-        }
-        ready = true;
-        resolve();
-      };
+      markReady = resolve;
     });
     this.eventPumpPromise = (async () => {
       let iterator: AsyncIterator<GatewayEvent> | undefined;
@@ -569,8 +539,7 @@ export class RunsNamespace {
 
   async create(params: RunCreateParams): Promise<Run> {
     const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
-    const normalizedParams = timeoutMs !== undefined ? { ...params, timeoutMs } : params;
-    const raw = await this.client.request("agent", buildAgentParams(normalizedParams), {
+    const raw = await this.client.request("agent", buildAgentParams(params, timeoutMs), {
       expectFinal: false,
       ...(timeoutMs !== undefined ? { timeoutMs: timeoutMs === 0 ? null : timeoutMs } : {}),
     });
@@ -611,28 +580,6 @@ class RpcNamespace {
     options?: GatewayRequestOptions,
   ): Promise<T> {
     return await this.client.request<T>(`${this.prefix}.${method}`, params, options);
-  }
-}
-
-/** Task query and cancellation namespace. */
-export class TasksNamespace extends RpcNamespace {
-  constructor(client: OpenClaw) {
-    super(client, "tasks");
-  }
-
-  async list(params?: TasksListParams): Promise<TasksListResult> {
-    return await this.call("list", params === undefined ? {} : params);
-  }
-
-  async get(taskId: string): Promise<TasksGetResult> {
-    return await this.call("get", { taskId });
-  }
-
-  async cancel(taskId: string, options?: { reason?: string }): Promise<TasksCancelResult> {
-    return await this.call("cancel", {
-      taskId,
-      ...(options?.reason ? { reason: options.reason } : {}),
-    });
   }
 }
 
@@ -743,6 +690,6 @@ export class EnvironmentsNamespace extends RpcNamespace {
 
   async delete(environmentId: string): Promise<unknown> {
     void environmentId;
-    return unsupportedGatewayApi("oc.environments.delete");
+    throw new Error("oc.environments.delete is not supported by the current OpenClaw Gateway yet");
   }
 }

@@ -108,6 +108,33 @@ async function mount() {
 }
 
 describe("command palette paste-only images", () => {
+  it.each([true, false])(
+    "keeps non-image paste native with uploads enabled=%s",
+    async (uploadsEnabled) => {
+      const { palette, context, input } = await mount();
+      context.config.current.uploadsEnabled = uploadsEnabled;
+      for (const text of ["ordinary search", "long search ".repeat(200)]) {
+        expect(paste(input, [], text).defaultPrevented).toBe(false);
+      }
+      expect(
+        paste(input, [new File(["pdf"], "document.pdf", { type: "application/pdf" })])
+          .defaultPrevented,
+      ).toBe(false);
+      if (!uploadsEnabled) {
+        expect(paste(input, [image()]).defaultPrevented).toBe(true);
+        const loading = new CommandPaletteLoadingState({ context, requestUpdate: vi.fn() });
+        loading.begin();
+        const loadingInput = document.createElement("textarea");
+        loadingInput.addEventListener("paste", loading.handlePaste);
+        expect(paste(loadingInput, [image()]).defaultPrevented).toBe(true);
+        expect(loading.captureHandoff()()?.imageFiles).toBeUndefined();
+      }
+      expect(readers).toHaveLength(0);
+      expect(palette.querySelector(".chat-attachments-preview")).toBeNull();
+      expect(context.sessions.createResult).not.toHaveBeenCalled();
+    },
+  );
+
   it("preserves the input and submits text with images in the background", async () => {
     const message = "Describe these images";
     const { palette, input, context, start } = await mount();
@@ -145,20 +172,6 @@ describe("command palette paste-only images", () => {
     );
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     expect(context.gateway.setSessionKey).not.toHaveBeenCalled();
-  });
-
-  it("keeps text and non-image paste native, including long search prompts", async () => {
-    const { palette, input, context } = await mount();
-    for (const text of ["ordinary search", "long search ".repeat(200)]) {
-      expect(paste(input, [], text).defaultPrevented).toBe(false);
-    }
-    expect(
-      paste(input, [new File(["pdf"], "document.pdf", { type: "application/pdf" })])
-        .defaultPrevented,
-    ).toBe(false);
-    expect(readers).toHaveLength(0);
-    expect(palette.querySelector(".chat-attachments-preview")).toBeNull();
-    expect(context.sessions.createResult).not.toHaveBeenCalled();
   });
 
   it.each(["dismiss", "disconnect", "owner"])(
@@ -249,7 +262,10 @@ describe("command palette paste-only images", () => {
       await palette.updateComplete;
       if (outcome === "oversized" || outcome === "partial") {
         Object.assign(context.gateway.snapshot.hello!, {
-          policy: { attachments: { maxBytes: 65_536, maxImageBytes: 4 } },
+          policy: {
+            maxPayload: 25 * 1024 * 1024,
+            attachments: { maxBytes: 65_536, maxImageBytes: 4 },
+          },
         });
       }
       const state = new CommandPaletteLoadingState({ requestUpdate: () => {} });
@@ -264,10 +280,16 @@ describe("command palette paste-only images", () => {
         coldInput.value = "Keep every image";
         coldInput.dispatchEvent(new Event("input", { bubbles: true }));
       }
+      // PNGs enter asynchronous resize preparation; use a non-resizable image
+      // to exercise synchronous admission rejection and partial-batch custody.
+      const candidate =
+        outcome === "oversized" || outcome === "partial"
+          ? new File(["image"], "oversized.gif", { type: "image/gif" })
+          : image();
       const files =
         outcome === "partial"
-          ? [new File(["ok"], "small.png", { type: "image/png" }), image()]
-          : [image()];
+          ? [new File(["ok"], "small.png", { type: "image/png" }), candidate]
+          : [candidate];
       paste(coldInput, files);
       key(coldInput, { key: "Enter", metaKey: true });
       const take = state.captureHandoff();

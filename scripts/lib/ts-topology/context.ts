@@ -1,4 +1,3 @@
-// Context script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -59,44 +58,21 @@ function comparableSymbol(checker: Checker, symbol: Symbol | undefined): Symbol 
   return symbol.flags & SymbolFlags.Alias ? checker.getAliasedSymbol(symbol) : symbol;
 }
 
+const SYMBOL_KINDS: Array<[ts.SyntaxKind, number, SymbolKind]> = [
+  [ts.SyntaxKind.FunctionDeclaration, SymbolFlags.Function, "function"],
+  [ts.SyntaxKind.ClassDeclaration, SymbolFlags.Class, "class"],
+  [ts.SyntaxKind.InterfaceDeclaration, SymbolFlags.Interface, "interface"],
+  [ts.SyntaxKind.TypeAliasDeclaration, SymbolFlags.TypeAlias, "type"],
+  [ts.SyntaxKind.EnumDeclaration, SymbolFlags.Enum, "enum"],
+  [ts.SyntaxKind.VariableDeclaration, SymbolFlags.Variable, "variable"],
+];
+
 function symbolKind(symbol: Symbol, declaration: ts.Node | undefined): SymbolKind {
-  if (declaration) {
-    switch (declaration.kind) {
-      case ts.SyntaxKind.FunctionDeclaration:
-        return "function";
-      case ts.SyntaxKind.ClassDeclaration:
-        return "class";
-      case ts.SyntaxKind.InterfaceDeclaration:
-        return "interface";
-      case ts.SyntaxKind.TypeAliasDeclaration:
-        return "type";
-      case ts.SyntaxKind.EnumDeclaration:
-        return "enum";
-      case ts.SyntaxKind.VariableDeclaration:
-        return "variable";
-      default:
-        break;
-    }
-  }
-  if (symbol.flags & SymbolFlags.Function) {
-    return "function";
-  }
-  if (symbol.flags & SymbolFlags.Class) {
-    return "class";
-  }
-  if (symbol.flags & SymbolFlags.Interface) {
-    return "interface";
-  }
-  if (symbol.flags & SymbolFlags.TypeAlias) {
-    return "type";
-  }
-  if (symbol.flags & SymbolFlags.Enum) {
-    return "enum";
-  }
-  if (symbol.flags & SymbolFlags.Variable) {
-    return "variable";
-  }
-  return "unknown";
+  return (
+    SYMBOL_KINDS.find(([kind]) => declaration?.kind === kind)?.[2] ??
+    SYMBOL_KINDS.find(([, flag]) => symbol.flags & flag)?.[2] ??
+    "unknown"
+  );
 }
 
 export function canonicalSymbolInfo(context: ProgramContext, symbol: Symbol): CanonicalSymbol {

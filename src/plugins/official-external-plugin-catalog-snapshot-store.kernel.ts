@@ -11,6 +11,7 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-numb
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   HostedCatalogSignedFeedMonotonicityError,
+  isOfficialExternalPluginCatalogRollback,
   isOfficialExternalPluginCatalogSequence,
   parseOfficialExternalPluginCatalogTimestamp,
 } from "./official-external-plugin-catalog-source.js";
@@ -21,20 +22,7 @@ import type {
   HostedOfficialExternalPluginCatalogTrustState,
 } from "./official-external-plugin-catalog.types.js";
 
-type HostedCatalogSnapshotRow = {
-  feed_url: string;
-  body: string;
-  status: number | bigint;
-  etag: string | null;
-  last_modified: string | null;
-  checksum: string;
-  saved_at: string;
-  trust_mode: string | null;
-  trust_key_id: string | null;
-  trust_signature_count: number | bigint | null;
-  trust_threshold: number | bigint | null;
-  trust_verified_at: string | null;
-};
+type HostedCatalogSnapshotRow = NonNullable<ReturnType<typeof readHostedCatalogSnapshotRow>>;
 
 type HostedCatalogSnapshotDatabase = Pick<
   OpenClawStateKyselyDatabase,
@@ -104,22 +92,6 @@ function readMonotonicStateFromBody(body: string): StoredHostedCatalogMonotonicS
   }
 }
 
-function isMonotonicRollback(params: {
-  candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState;
-  current: StoredHostedCatalogMonotonicState;
-}): boolean {
-  if (params.candidate.sequence < params.current.sequence) {
-    return true;
-  }
-  if (params.candidate.sequence > params.current.sequence) {
-    return false;
-  }
-  if (params.candidate.generatedAt === undefined || params.current.generatedAt === undefined) {
-    return false;
-  }
-  return Date.parse(params.candidate.generatedAt) < Date.parse(params.current.generatedAt);
-}
-
 function assertSignedSnapshotWriteIsMonotonic(params: {
   candidate: HostedOfficialExternalPluginCatalogSnapshotMonotonicState | undefined;
   candidateBody: string;
@@ -132,7 +104,7 @@ function assertSignedSnapshotWriteIsMonotonic(params: {
   if (!current) {
     return;
   }
-  if (isMonotonicRollback({ candidate: params.candidate, current })) {
+  if (isOfficialExternalPluginCatalogRollback({ candidate: params.candidate, current })) {
     throw new HostedCatalogSignedFeedMonotonicityError(
       "hosted catalog signed feed sequence is older than current snapshot",
     );
@@ -182,10 +154,7 @@ function rowToSnapshot(
   };
 }
 
-function readHostedCatalogSnapshotRow(
-  db: DatabaseSync,
-  url: string,
-): HostedCatalogSnapshotRow | undefined {
+function readHostedCatalogSnapshotRow(db: DatabaseSync, url: string) {
   const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(db);
   return executeSqliteQueryTakeFirstSync(
     db,

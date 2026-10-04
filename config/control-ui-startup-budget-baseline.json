@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 370756,
-  "reason": "Main 05804bcf passes at 370,367 B under its 370,876 B limit; this PR adds 389 B for a 370,756 B startup bundle. Set the paired measured baseline and cap to main plus this PR delta. The unchanged 512 B growth and 64 B build-variance allowances give a 371,332 B enforcement limit; KiB rounding is display-only.",
-  "updatedAt": "2026-09-22"
+  "startupJsGzipBytes": 372878,
+  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
+  "updatedAt": "2026-10-02"
 }

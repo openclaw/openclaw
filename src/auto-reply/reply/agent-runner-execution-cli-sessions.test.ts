@@ -4,26 +4,31 @@ import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
 import { FailoverError } from "../../agents/failover-error.js";
+import { registerGeneratedMediaTaskActivity } from "../../agents/media-generation-activity.js";
+import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-generation-activity.test-support.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
-import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
-import type { TemplateContext } from "../templating.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
-  setupAgentRunnerExecutionTestState,
-  getExecuteAgentTurnForTest,
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
+import type { TemplateContext } from "../templating.js";
+import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
+import {
   createFollowupRun,
-  createTestUserTurnRecorder,
-  requireRecord,
-  requireMockCall,
-  expectMockCallArgFields,
-  initialFallbackAttemptOptions,
   createMinimalRunAgentTurnParams,
   createRunAgentTurnParams,
+  createTestUserTurnRecorder,
+  expectMockCallArgFields,
+  getExecuteAgentTurnForTest,
+  initialFallbackAttemptOptions,
   makeTestSessionStorePath,
+  requireMockCall,
+  requireRecord,
+  setupAgentRunnerExecutionTestState,
 } from "./agent-runner-execution.test-support.js";
-import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 
 const state = await setupAgentRunnerExecutionTestState();
 
@@ -81,6 +86,86 @@ describe("executeAgentTurn: CLI session routing", () => {
       modelContextWindow: 400_000,
       modelContextTokens: 321_000,
       currentThreadTs: "42",
+    });
+  });
+
+  async function runSlackCliTurn(sessionCtx: Record<string, unknown>) {
+    // Mirrors Slack's adapter contract: a thread-originated turn requires its
+    // thread and upgrades the reply mode; standalone turns anchor on the message.
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            threading: {
+              buildToolContext: ({
+                context,
+              }: {
+                context: {
+                  To?: string;
+                  CurrentMessageId?: string | number;
+                  MessageThreadId?: string | number;
+                  ReplyToMode?: string;
+                };
+              }) => {
+                const threadTs =
+                  context.MessageThreadId != null ? String(context.MessageThreadId) : undefined;
+                return {
+                  currentChannelId: context.To,
+                  currentThreadTs: threadTs ?? String(context.CurrentMessageId),
+                  replyToMode: threadTs ? "all" : context.ReplyToMode,
+                  sameChannelThreadRequired: threadTs !== undefined,
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    try {
+      const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {},
+      });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "slack",
+            OriginatingChannel: "slack",
+            OriginatingTo: "channel:C123",
+            ChatType: "channel",
+            MessageSid: "1700000000.000200",
+            ReplyToMode: "off",
+            ...sessionCtx,
+          } as unknown as TemplateContext,
+        }),
+      );
+      expect(result.kind).toBe("success");
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  }
+
+  it("keeps untargeted message-tool sends from a thread turn in that thread", async () => {
+    await runSlackCliTurn({ MessageThreadId: "1700000000.000100" });
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentThreadTs: "1700000000.000100",
+      replyToMode: "all",
+    });
+  });
+
+  it("keeps standalone turn route facts when the adapter requires no thread", async () => {
+    await runSlackCliTurn({});
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentThreadTs: undefined,
+      replyToMode: "off",
     });
   });
 

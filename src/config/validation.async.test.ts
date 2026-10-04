@@ -51,7 +51,10 @@ describe("async config plugin validation", () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.agents?.list).toEqual([{ id: "main" }]);
+      expect(Object.getOwnPropertyDescriptor(result.config.agents, "list")).toMatchObject({
+        enumerable: false,
+        value: [{ id: "main" }],
+      });
     }
   });
 
@@ -119,11 +122,15 @@ describe("async config plugin validation", () => {
   });
 
   it.each(["full", "skip", "core-only"] as const)(
-    "keeps synchronous %s policy and legacy ownership results",
+    "keeps synchronous %s policy and explicit ownership results",
     async (pluginValidation) => {
       const metadata = preparedMetadata();
       const raw = {
-        agents: { entries: { main: { default: true }, ops: {} } },
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: { agentId: "main" } },
+          entries: { main: {}, ops: {} },
+        },
         plugins: {
           allow: ["validation-fixture"],
           entries: { "validation-fixture": { enabled: true, config: {} } },

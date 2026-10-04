@@ -1,5 +1,6 @@
 // Model/auth provider selection step shared by the classic wizard and bootstrap onboarding.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { PreparedAuthChoiceResult } from "../commands/auth-choice.apply.types.js";
 import {
   applyOnboardingPrimaryModel,
   applyOnboardingUtilityModel,
@@ -11,13 +12,8 @@ import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
-
-type PreparedAuthChoiceResult = Awaited<
-  ReturnType<typeof import("../commands/auth-choice.js").prepareAuthChoice>
->;
 
 export type SetupModelAuthCandidate = {
   config: OpenClawConfig;
@@ -25,16 +21,12 @@ export type SetupModelAuthCandidate = {
   persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"];
 };
 
-const loadAuthChoiceModule = createLazyRuntimeModule(() => import("../commands/auth-choice.js"));
-
-const loadModelPickerModule = createLazyRuntimeModule(() => import("../commands/model-picker.js"));
-
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
-  resolvePreferredProviderForAuthChoice: (typeof import("../commands/auth-choice.js"))["resolvePreferredProviderForAuthChoice"];
+  resolvePreferredProviderForAuthChoice: (typeof import("../plugins/provider-auth-choice-preference.js"))["resolvePreferredProviderForAuthChoice"];
 }): Promise<{
   preferredProvider?: string;
   promptWhenAuthChoiceProvided: boolean;
@@ -222,7 +214,7 @@ export async function runSetupModelAuthStep(params: {
       // Explicit skip should stay cold: do not bootstrap auth/profile machinery
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
-        const { promptDefaultModel } = await loadModelPickerModule();
+        const { promptDefaultModel } = await import("../flows/model-picker.js");
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
@@ -242,7 +234,8 @@ export async function runSetupModelAuthStep(params: {
           nextConfig = applyOnboardingPrimaryModel(nextConfig, target, modelSelection.model);
         }
 
-        const { warnIfModelConfigLooksOff } = await loadAuthChoiceModule();
+        const { warnIfModelConfigLooksOff } =
+          await import("../commands/auth-choice.model-check.js");
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: target.agentId,
           agentDir: target.agentDir,
@@ -252,9 +245,16 @@ export async function runSetupModelAuthStep(params: {
     }
 
     const [
-      { prepareAuthChoice, resolvePreferredProviderForAuthChoice, warnIfModelConfigLooksOff },
+      { prepareAuthChoice },
+      { warnIfModelConfigLooksOff },
+      { resolvePreferredProviderForAuthChoice },
       { promptDefaultModel },
-    ] = await Promise.all([loadAuthChoiceModule(), loadModelPickerModule()]);
+    ] = await Promise.all([
+      import("../commands/auth-choice.apply.js"),
+      import("../commands/auth-choice.model-check.js"),
+      import("../plugins/provider-auth-choice-preference.js"),
+      import("../flows/model-picker.js"),
+    ]);
     prompter.disableBackNavigation?.();
     const agentScopedModels = nextConfig.agents?.ownership === "explicit";
     let authResult: PreparedAuthChoiceResult;

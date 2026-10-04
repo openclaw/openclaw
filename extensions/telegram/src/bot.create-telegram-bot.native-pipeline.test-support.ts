@@ -222,6 +222,17 @@ export async function admitSpooledUpdate(
 
 let messageId = 10000;
 
+/**
+ * Deliver Telegram's JSON form of an update through the same `handleUpdate` path the durable
+ * ingress drain uses. grammY's webhook adapter adds a 10 s wall-clock deadline that cold worker
+ * preparation can exceed on loaded CI, so only webhook-contract tests should use it.
+ */
+export async function deliverTelegramUpdate(bot: Bot, update: object): Promise<void> {
+  // Round-trip the wire body: Telegram JSON omits undefined-only fields, and like the webhook
+  // adapter it is trusted as an Update without runtime validation.
+  await bot.handleUpdate(await new Response(JSON.stringify(update)).json());
+}
+
 export function nextTelegramTestMessageId(): number {
   return ++messageId;
 }
@@ -316,6 +327,7 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   clearTelegramRuntimeForTest();
   resetPluginRuntimeStateForTest();
-  resetPluginStateStoreForTests();
+  // The state owner drains agent workers before retiring their shared-state admission.
+  resetPluginStateStoreForTests({ closeDatabase: false });
   await state.cleanup();
 });

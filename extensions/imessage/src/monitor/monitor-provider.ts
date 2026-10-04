@@ -47,6 +47,7 @@ import {
   danger,
   logVerbose,
   shouldLogVerbose,
+  sleepWithAbort,
   warn,
 } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -304,28 +305,8 @@ function describeIMessageWatchSubscribeStartupFailure(params: {
   );
 }
 
-async function waitForWatchSubscribeRetryDelay(params: {
-  ms: number;
-  abortSignal?: AbortSignal;
-}): Promise<void> {
-  if (params.ms <= 0) {
-    return;
-  }
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    }, params.ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      params.abortSignal?.removeEventListener("abort", onAbort);
-      resolve();
-    };
-    params.abortSignal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
+export async function monitorIMessageProvider(opts: MonitorIMessageOpts): Promise<void> {
+  const { scheduler } = opts;
   const runtime = opts.runtime ?? createNonExitingRuntime();
   const cfg = opts.config ?? getRuntimeConfig();
   const readConfig = createRuntimeConfigReader(cfg);
@@ -420,21 +401,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   let staleBacklogSuppressed = 0;
   const loggedThrottledDropDiagnostics = createIMessageThrottledDropDiagnosticCache();
 
-  // Downtime recovery. We pass the persisted recovery cursor (the last durably
-  // admitted rowid) to watch.subscribe as since_rowid so imsg replays the rows
-  // that landed while the gateway was down — over the same RPC client, so this
-  // works for remote SSH `cliPath` setups too — then tails live. GUID tombstones
-  // reject anything already completed.
-  //
-  // `recoveryBoundaryRowid` (M) is the local MAX(ROWID) at startup, read before
-  // the transport probe. It is only available when the gateway can read chat.db
-  // (not a remote bridge). When present it (a) caps the replay span to the most
-  // recent IMESSAGE_RECOVERY_MAX_ROWS, and (b) splits the age fence: rows at or
-  // below M are replay (delivered up to IMESSAGE_RECOVERY_MAX_AGE_MS old), rows
-  // above M are live (the tighter fence where #89237's Push-flush backlog
-  // appears). Without it (remote) the replay is uncapped and every row uses the
-  // live fence, so recovery still delivers recently-missed messages and still
-  // suppresses old backlog, just with the narrower live window.
+  // Capture local MAX(ROWID) before probing: it caps replay and separates recovery
+  // from fresh-rowid Push backlog. Remote bridges lack this boundary and use the live age fence.
   const watchSourceDbPath = resolveIMessageChatDbLookupPath({ cliPath, dbPath, remoteHost });
   const recoveryBoundaryRowid = watchSourceDbPath
     ? await resolveIMessageStartupRowidWatermark(watchSourceDbPath)
@@ -562,18 +530,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
               await abandon();
               return;
             }
-            if (entries.length === 1) {
-              await handleMessageNow(
-                expectDefined(entries[0], "single iMessage dispatch entry").message,
-                admissionLifecycle,
-              );
-              await settle();
-              return;
-            }
-
-            const messages = entries.map((entry) => entry.message);
-            const combined = combineIMessagePayloads(messages);
-            if (shouldLogVerbose()) {
+            const combined =
+              entries.length === 1
+                ? expectDefined(entries[0], "single iMessage dispatch entry").message
+                : combineIMessagePayloads(entries.map((entry) => entry.message));
+            if (entries.length > 1 && shouldLogVerbose()) {
               const text = combined.text ?? "";
               const preview = sliceUtf16Safe(text, 0, 50);
               const ellipsis = text.length > 50 ? "..." : "";
@@ -660,9 +621,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
   }
 
-  // iMessage delivers a poll's comment as a separate inline reply to the poll
-  // balloon; fold it into the poll so the agent votes once instead of also
-  // replying to the caption in prose (a redundant restatement of the vote).
   const pollCommentFolder = createPollCommentFolder();
 
   function resolveIMessageInboundBodyText(message: IMessagePayload) {
@@ -698,12 +656,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
-    // Remember native polls so a caption reply that lands WITH the poll is
-    // recognized and folded. The poll balloon (rendered with options + a vote
-    // cue) is still delivered; only the near-simultaneous comment is dropped so
-    // the agent votes without also answering it as a standalone question. A
-    // deliberate later inline reply to the poll falls outside the window and is
-    // delivered normally.
+    // Fold only the near-simultaneous caption; later replies remain ordinary discussion.
     const pollFoldAtMs = message.created_at ? Date.parse(message.created_at) : Number.NaN;
     if (message.poll) {
       pollCommentFolder.rememberPoll(message.guid, pollFoldAtMs, message.sender);
@@ -758,7 +711,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       logVerbose,
     });
 
-    // Build conversation key for rate limiting (used by both drop and dispatch paths).
     const chatId = message.chat_id ?? undefined;
     const senderForKey = (message.sender ?? "").trim();
     const conversationKey = chatId != null ? `group:${chatId}` : `dm:${senderForKey}`;
@@ -787,10 +739,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           runtime.log?.(warn(diagnostic));
         }
       }
-      // Surface the silent-allowlist drop once per chat. Without this, operators
-      // who set groupPolicy="allowlist" without populating
-      // channels.imessage.groups see every group message vanish at default log
-      // level. See issue #78749.
       if (decision.reason === "group id not in allowlist") {
         warnGroupAllowlistDropPerChatOnce({
           accountId: accountInfo.accountId,
@@ -801,12 +749,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       return;
     }
 
-    // After repeated echo/reflection drops for a conversation, suppress all
-    // remaining messages as a safety net against amplification that slips
-    // through the primary guards.
+    // Catch amplification that escaped the primary guards, with a visible per-chat warning.
     if (decision.kind === "dispatch" && loopRateLimiter.isRateLimited(rateLimitKey)) {
-      // A tripped limiter silently eats real user messages — surface it at
-      // default log level (once per conversation) instead of verbose-only.
       if (!loggedThrottledDropDiagnostics.check(`${rateLimitKey}:rate-limited`)) {
         const conversationKind = chatId != null ? "group" : "dm";
         const diagnosticConversationKey = `${conversationKind}:${redactIdentifier(conversationKey)}`;
@@ -854,8 +798,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           });
         },
         onReplyError: (err) => {
-          // Pairing relies on the user receiving the challenge — silent
-          // failure here is the user's only "pairing seems broken" signal.
           runtime.error?.(`imessage pairing reply failed for ${decision.senderId}: ${String(err)}`);
         },
       });
@@ -895,18 +837,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const storePath = resolveStorePath(cfg.session?.store, {
       agentId: decision.route.agentId,
     });
-    // A bridge stall invalidates the process-wide capability snapshot before
-    // recovery re-injects the helper. Re-resolve a missing/expired snapshot so
-    // later inbound turns can resume typing and read receipts without waiting
-    // for an unrelated action or a gateway restart to populate the cache.
+    // A stall invalidates capabilities; re-probing here restores typing/read after recovery.
     const privateApiStatus = await probeIMessagePrivateApi(cliPath, probeTimeoutMs);
     const supportsTyping = imessageRpcSupportsMethod(privateApiStatus, "typing");
     const supportsRead = imessageRpcSupportsMethod(privateApiStatus, "read");
     if (privateApiStatus.available) {
-      // Surface a single warning per restart when the bridge is up but we
-      // had to gate off typing/read because the imsg build pre-dates the
-      // capability list. Otherwise the user sees no typing bubble / no
-      // "Read" receipt with no visible reason.
       if (!supportsTyping || !supportsRead) {
         warnIfImsgUpgradeNeeded.fireOnce(privateApiStatus.rpcMethods, runtime);
       }
@@ -1045,10 +980,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       !decision.isGroup && decision.chatGuid ? `chat_guid:${decision.chatGuid}` : typingTarget;
 
     if (supportsRead && sendReadReceipts && readTarget) {
-      // Read receipts are best-effort channel UI. Do not put them on the
-      // critical path before model dispatch; slow private-API reads otherwise
-      // make accepted iMessage turns feel stuck before the agent starts. Use
-      // a short-lived client so a stuck read cannot block monitor-client typing.
+      // Detached, short-lived RPC keeps slow read receipts off the dispatch/watch path.
       void markIMessageChatRead(readTarget, {
         cfg,
         accountId: accountInfo.accountId,
@@ -1127,14 +1059,13 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       },
     };
     let directTypingController: IMessageTypingController | undefined;
+    const startDirectToolTyping = async () => {
+      await directTypingController?.startTypingLoop();
+      return false;
+    };
     const directToolTypingOptions = shouldUseDirectToolTypingOptions
       ? ({
-          // iMessage's native typing bubble is channel-owned UI, not a
-          // visible tool-progress message. The lifecycle flag lets dispatch
-          // forward it while text progress is hidden; allowProgress covers
-          // message_tool_only source delivery. Keep this on the direct
-          // instant/default path even when older imsg builds do not report
-          // native typing support.
+          // Native typing stays active even while text progress is hidden or source-suppressed.
           suppressDefaultToolProgressMessages: true,
           allowToolLifecycleWhenProgressHidden: true,
           allowProgressCallbacksWhenSourceDeliverySuppressed: true,
@@ -1144,18 +1075,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
           // Keep the channel-owned progress lane present even when private-API
           // typing is unavailable. Fast-mode notices are then consumed here
           // instead of falling back to a durable iMessage bubble.
-          onToolResult: async () => {
-            await directTypingController?.startTypingLoop();
-            return false;
-          },
-          ...(supportsTyping
-            ? {
-                onToolStart: async () => {
-                  await directTypingController?.startTypingLoop();
-                  return false;
-                },
-              }
-            : {}),
+          onToolResult: startDirectToolTyping,
+          ...(supportsTyping ? { onToolStart: startDirectToolTyping } : {}),
         } as const)
       : {};
     const configuredBlockStreaming = resolveChannelStreamingBlockEnabled(accountInfo.config);
@@ -1356,26 +1277,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
     },
     dispatch: async (message, ingressLifecycle, receivedAt, provenance) => {
-      // Age fence with two windows, split on the recovery boundary:
-      //  - rows at/below recoveryBoundaryRowid are the downtime-recovery replay
-      //    imsg emits from since_rowid — deliver them up to the wider recovery
-      //    age, suppressing only ancient history.
-      //  - rows above it are genuinely live — suppress at the tighter live
-      //    threshold, which is where #89237's Push-flush backlog (old send date,
-      //    fresh rowid) appears.
-      // Logged at default level so suppressed traffic is never silent (#89237).
-      // Catchup rows are operator-requested history: the catchup query's own
-      // maxAge window is their age gate. Running them through the live fence
-      // would suppress AND tombstone rows older than 15 minutes — losing
-      // messages the operator explicitly asked to replay.
+      // Recovery rows get the wider age fence; explicit catchup uses its own age window.
       if (suppressStaleIngress(message, receivedAt, provenance)) {
-        // Returning completes the durable GUID claim. A later restart cannot
-        // reinterpret this live-fence suppression under the wider replay fence.
-        // Accepted overlap: a legacy-catchup redelivery of this GUID stays
-        // tombstone-blocked, so Push-flush backlog suppressed here is not
-        // recoverable via catchup either. The window is narrow (downtime
-        // backlog + catchup enabled) and preferring it over releasable
-        // suppressions keeps restart replay deterministic.
+        // Complete the claim so restart or catchup cannot reinterpret a suppressed live row.
         return { kind: "completed" };
       }
       const repairedMessage = await repairMessageConversationAnchor(message);
@@ -1467,15 +1371,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         client: attemptClient,
         getSubscriptionId: () => attemptSubscriptionId,
       });
-      // since_rowid = the recovery cursor (last durably admitted rowid, capped),
-      // captured before the transport-ready probe, so imsg replays messages that
-      // landed while the gateway was down and during the startup window instead
-      // of self-fencing them at subscribe-time MAX(ROWID). When unavailable
-      // (remote bridge) imsg self-fences at the current MAX(ROWID)
-      // (MessageWatcher.start: `if cursor == 0 { cursor = maxRowID() }`), so it
-      // tails new rows only. The replay's age is bounded by the recovery age
-      // window in handleMessage; backlog Apple writes *after* subscribe (fresh
-      // rowid, old send date) is handled by the live age fence.
+      // The pre-probe durable cursor replays startup/downtime rows. Without a cursor,
+      // imsg self-fences at subscribe-time MAX(ROWID) and tails only new rows.
       const result = await attemptClient.request<{ subscription?: number }>(
         "watch.subscribe",
         {
@@ -1497,6 +1394,18 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       }
       const retriable = isRetriableWatchSubscribeStartupError(err);
       const shouldRetry = attempt < WATCH_SUBSCRIBE_MAX_ATTEMPTS && retriable;
+      const failureParams = {
+        accountId: accountInfo.accountId,
+        attempt,
+        maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
+        cliPath,
+        dbPath,
+        remoteHost,
+        includeAttachments,
+        probeTimeoutMs,
+        watchSinceRowid,
+        error: err,
+      };
       if (!shouldRetry) {
         opts.statusSink?.({
           connected: false,
@@ -1506,18 +1415,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         });
         runtime.error?.(
           danger(
-            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure({
-              accountId: accountInfo.accountId,
-              attempt,
-              maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-              cliPath,
-              dbPath,
-              remoteHost,
-              includeAttachments,
-              probeTimeoutMs,
-              watchSinceRowid,
-              error: err,
-            })}`,
+            `imessage: monitor failed: ${describeIMessageWatchSubscribeStartupFailure(failureParams)}`,
           ),
         );
         throw err;
@@ -1530,16 +1428,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       runtime.log?.(
         warn(
           describeIMessageWatchSubscribeStartupFailure({
-            accountId: accountInfo.accountId,
-            attempt,
-            maxAttempts: WATCH_SUBSCRIBE_MAX_ATTEMPTS,
-            cliPath,
-            dbPath,
-            remoteHost,
-            includeAttachments,
-            probeTimeoutMs,
-            watchSinceRowid,
-            error: err,
+            ...failureParams,
             retryDelayMs: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
           }),
         ),
@@ -1550,9 +1439,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       attemptDetachAbortHandler = () => {};
       await attemptClient?.stop();
       attemptClient = undefined;
-      await waitForWatchSubscribeRetryDelay({
-        ms: WATCH_SUBSCRIBE_RETRY_DELAY_MS,
-        abortSignal: abort,
+      await sleepWithAbort(WATCH_SUBSCRIBE_RETRY_DELAY_MS, abort).catch((error: unknown) => {
+        if (!abort?.aborted) {
+          throw error;
+        }
       });
       if (abort?.aborted) {
         return;
@@ -1566,17 +1456,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   }
 
   const activeClient = client;
-  if (!activeClient) {
+  if (!activeClient || scheduler.signal.aborted) {
+    detachAbortHandler();
+    await activeClient?.stop();
     return;
   }
   ingress.start();
 
-  // Register the iMessage approval native runtime context with the gateway so
-  // proactive exec/plugin approval prompts can be delivered through the
-  // imessageApprovalCapability's lazy nativeRuntime adapter. Without this
-  // registration the adapter's `Boolean(context)` gates always fail and the
-  // gateway can never push native approval prompts to iMessage targets — only
-  // the reaction shortcut and `/approve` text fallback would work.
+  // The lazy native approval adapter requires a live account runtime context.
   const approvalContextLease = opts.channelRuntime
     ? registerChannelRuntimeContext({
         channelRuntime: opts.channelRuntime,
@@ -1587,34 +1474,31 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         abortSignal: abort,
       })
     : undefined;
-  let approvalReactionPollInFlight = false;
-  const pollApprovalReactions = async (allowRecentChatDiscovery = false) => {
-    if (approvalReactionPollInFlight) {
-      return;
-    }
-    approvalReactionPollInFlight = true;
-    try {
-      await pollPendingIMessageApprovalReactions({
+  const approvalScheduler = scheduler.scope();
+  let nextDiscoveryAt = 0;
+  approvalScheduler.schedule({
+    id: "approval-reactions",
+    delayMs: 0,
+    everyMs: APPROVAL_REACTION_POLL_INTERVAL_MS,
+    run: () => {
+      const now = approvalScheduler.now();
+      const allowRecentChatDiscovery = now >= nextDiscoveryAt;
+      if (allowRecentChatDiscovery) {
+        nextDiscoveryAt = now + APPROVAL_REACTION_DISCOVERY_INTERVAL_MS;
+      }
+      return pollPendingIMessageApprovalReactions({
+        signal: approvalScheduler.signal,
         client: activeClient,
         cfg,
         accountId: accountInfo.accountId,
         allowRecentChatDiscovery,
         gatewayRuntime: approvalGatewayRuntime,
         logVerboseMessage: logVerbose,
+      }).catch((err: unknown) => {
+        logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
       });
-    } catch (err) {
-      logVerbose(`imessage: approval reaction poll failed: ${String(err)}`);
-    } finally {
-      approvalReactionPollInFlight = false;
-    }
-  };
-  const approvalReactionPollTimer = setInterval(() => {
-    void pollApprovalReactions();
-  }, APPROVAL_REACTION_POLL_INTERVAL_MS);
-  const approvalReactionDiscoveryTimer = setInterval(() => {
-    void pollApprovalReactions(true);
-  }, APPROVAL_REACTION_DISCOVERY_INTERVAL_MS);
-  void pollApprovalReactions(true);
+    },
+  });
 
   // Legacy opt-in catchup remains the compatibility path for users who
   // explicitly enabled it, including remote SSH setups where the gateway
@@ -1627,9 +1511,6 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         accountId: accountInfo.accountId,
         config: catchupCfg,
         includeAttachments,
-        // Legacy history rows enter the same durable GUID queue as watch rows.
-        // A watch/catchup overlap is therefore rejected before either copy can
-        // dispatch, replacing the retired standalone GUID guard.
         dispatchPayload: async (_message, rawEnvelope) => {
           await ingress.receive(rawEnvelope, { catchup: true });
         },
@@ -1668,11 +1549,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     runtime.error?.(danger(`imessage: monitor failed: ${String(err)}`));
     throw err;
   } finally {
-    clearInterval(approvalReactionPollTimer);
-    clearInterval(approvalReactionDiscoveryTimer);
+    approvalScheduler.beginClose();
     approvalContextLease?.dispose();
     detachAbortHandler();
     await activeClient.stop();
+    await approvalScheduler.stop();
     await ingress.stop();
   }
 }

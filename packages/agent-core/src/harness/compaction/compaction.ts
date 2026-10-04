@@ -207,18 +207,14 @@ export function calculateContextTokens(usage: Usage): number {
   return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
 }
 function getAssistantUsage(msg: AgentMessage): Usage | undefined {
-  if (msg.role === "assistant" && "usage" in msg) {
-    const assistantMsg = msg;
-    if (
-      assistantMsg.stopReason !== "aborted" &&
-      assistantMsg.stopReason !== "error" &&
-      assistantMsg.usage &&
-      calculateContextTokens(assistantMsg.usage) > 0
-    ) {
-      return assistantMsg.usage;
-    }
-  }
-  return undefined;
+  return msg.role === "assistant" &&
+    "usage" in msg &&
+    msg.stopReason !== "aborted" &&
+    msg.stopReason !== "error" &&
+    msg.usage &&
+    calculateContextTokens(msg.usage) > 0
+    ? msg.usage
+    : undefined;
 }
 
 function isUnavailableContextBarrier(message: AgentMessage): boolean {
@@ -266,9 +262,10 @@ export interface ContextUsageEstimate {
   lastUsageIndex: number | null;
 }
 
-function getLastAssistantUsageInfo(
-  messages: AgentMessage[],
-): { usage: Usage; index: number } | undefined {
+/** Estimate context tokens for messages using provider usage when available. */
+export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
+  let usageTokens = 0;
+  let lastUsageIndex: number | null = null;
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages.at(i);
     if (!message) {
@@ -277,36 +274,17 @@ function getLastAssistantUsageInfo(
     if (isUnavailableContextBarrier(message)) {
       // Synthetic CLI markers invalidate older usage without contributing a
       // replacement. Estimate the whole transcript instead of scanning past it.
-      return undefined;
+      break;
     }
     const usage = getAssistantUsage(message);
     if (usage && usage.contextUsage?.state !== "unavailable") {
-      return { usage, index: i };
+      usageTokens = calculateContextTokens(usage);
+      lastUsageIndex = i;
+      break;
     }
   }
-  return undefined;
-}
-
-/** Estimate context tokens for messages using provider usage when available. */
-export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEstimate {
-  const usageInfo = getLastAssistantUsageInfo(messages);
-
-  if (!usageInfo) {
-    let estimated = 0;
-    for (const message of messages) {
-      estimated += estimateTokens(message);
-    }
-    return {
-      tokens: estimated,
-      usageTokens: 0,
-      trailingTokens: estimated,
-      lastUsageIndex: null,
-    };
-  }
-
-  const usageTokens = calculateContextTokens(usageInfo.usage);
   let trailingTokens = 0;
-  for (const message of messages.slice(usageInfo.index + 1)) {
+  for (const message of lastUsageIndex === null ? messages : messages.slice(lastUsageIndex + 1)) {
     trailingTokens += estimateTokens(message);
   }
 
@@ -314,7 +292,7 @@ export function estimateContextTokens(messages: AgentMessage[]): ContextUsageEst
     tokens: usageTokens + trailingTokens,
     usageTokens,
     trailingTokens,
-    lastUsageIndex: usageInfo.index,
+    lastUsageIndex,
   };
 }
 
@@ -365,47 +343,34 @@ export function estimateTokens(message: AgentMessage): number {
             estimateStringChars(stringifyCompactionValue(block.arguments));
         }
       }
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      break;
     }
     case "user": {
       chars = countContentChars(message.content);
       // serializeConversation projects this exact persisted-sender suffix.
       chars += estimateStringChars(formatPersistedSenderSuffix(message));
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      break;
     }
     case "custom":
     case "toolResult": {
       chars = countContentChars(message.content);
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      break;
     }
     case "bashExecution": {
       chars = estimateStringChars(message.command) + estimateStringChars(message.output);
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      break;
     }
     case "branchSummary":
     case "compactionSummary": {
       chars = estimateStringChars(message.summary);
-      return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
+      break;
     }
   }
 
-  return 0;
+  return Math.ceil(chars / CHARS_PER_TOKEN_ESTIMATE);
 }
 function isCutPointMessage(message: AgentMessage): boolean {
-  switch (message.role) {
-    case "custom":
-      return !isRuntimeContextCarrier(message);
-    case "user":
-    case "assistant":
-    case "bashExecution":
-    case "branchSummary":
-    case "compactionSummary":
-      return true;
-    case "toolResult":
-      return false;
-  }
-
-  return false;
+  return message.role === "assistant" || isTurnStartMessage(message);
 }
 
 function isTurnStartMessage(message: AgentMessage): boolean {
@@ -610,7 +575,7 @@ const UPDATE_SUMMARIZATION_PROMPT = `The messages above are NEW conversation mes
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
 - ADD new progress, decisions, and context from the new messages
-- UPDATE the Progress section: move items from "In Progress" to "Done" when completed
+- UPDATE the Progress section: move items from "In Progress" to "Done" when completed. Record checks that ran and their results as completed, even when they failed; keep unresolved blockers separate.
 - UPDATE "Next Steps" based on what was accomplished
 - PRESERVE exact file paths, function names, and error messages
 - If something is no longer relevant, you may remove it
@@ -744,14 +709,9 @@ export function prepareCompaction(
     return ok(undefined);
   }
 
-  let prevBoundaryIndex = -1;
-  for (let i = pathEntries.length - 1; i >= 0; i--) {
-    const type = pathEntries.at(i)?.type;
-    if (type === "compaction" || type === "reset") {
-      prevBoundaryIndex = i;
-      break;
-    }
-  }
+  let prevBoundaryIndex = pathEntries.findLastIndex(
+    (entry) => entry?.type === "compaction" || entry?.type === "reset",
+  );
 
   let previousSummary: string | undefined;
   let previousSummaryDetails: CompactionDetails | undefined;
@@ -853,21 +813,12 @@ export function prepareCompaction(
 
   const historyEnd = cutPoint.isSplitTurn ? cutPoint.turnStartIndex : cutPoint.firstKeptEntryIndex;
   const messagesToSummarize: AgentMessage[] = [...resetPreludeMessages];
-  for (let i = boundaryStart; i < historyEnd; i++) {
+  const turnPrefixMessages: AgentMessage[] = [];
+  for (let i = boundaryStart; i < cutPoint.firstKeptEntryIndex; i++) {
     const entry = effectiveEntries.at(i);
     const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
     if (msg) {
-      messagesToSummarize.push(msg);
-    }
-  }
-  const turnPrefixMessages: AgentMessage[] = [];
-  if (cutPoint.isSplitTurn) {
-    for (let i = cutPoint.turnStartIndex; i < cutPoint.firstKeptEntryIndex; i++) {
-      const entry = effectiveEntries.at(i);
-      const msg = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-      if (msg) {
-        turnPrefixMessages.push(msg);
-      }
+      (i < historyEnd ? messagesToSummarize : turnPrefixMessages).push(msg);
     }
   }
   if (messagesToSummarize.length === 0 && turnPrefixMessages.length === 0) {

@@ -1,8 +1,6 @@
-/**
- * Accumulates per-call token usage and monetary totals across embedded runs.
- */
 import { hasBillableUsage, hasRecordedUsageCost, USAGE_COST_COMPONENTS } from "../usage.js";
 import type { NormalizedUsage } from "../usage.js";
+import type { EmbeddedAgentMeta } from "./types.js";
 
 export type UsageAccumulator = {
   input: number;
@@ -16,21 +14,10 @@ export type UsageAccumulator = {
   total: number;
   /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
   cost: NormalizedUsage["cost"] | "unavailable";
-  /**
-   * Completed assistant round trips across every model attempt of the run.
-   * Kept beside token totals so retried attempts stay counted like their usage.
-   */
+  /** Counts every attempt, including retries. */
   assistantTurns: number;
-  /**
-   * Cumulative inner bridge calls across attempts. Present only once an
-   * attempt reported a tool-search/code-mode catalog, so catalog-less runs
-   * omit the field instead of publishing zero sentinels.
-   */
-  bridgeCalls?: {
-    search: number;
-    describe: number;
-    call: number;
-  };
+  /** Omitted until an attempt reports a tool-search/code-mode catalog. */
+  bridgeCalls?: EmbeddedAgentMeta["bridgeCalls"];
 };
 
 export const createUsageAccumulator = (): UsageAccumulator => ({
@@ -96,17 +83,10 @@ export const mergeUsageIntoAccumulator = (
   target.cost = cost;
 };
 
-/**
- * Folds one attempt's run stats into the accumulator. Attempt cleanup clears
- * the per-attempt tool-search catalog, so retries would otherwise discard
- * earlier bridge counts and undercount the documented cumulative run totals.
- */
+/** Retains bridge counts before attempt cleanup clears its tool-search catalog. */
 export const mergeAttemptRunStatsIntoAccumulator = (
   target: UsageAccumulator,
-  attempt: {
-    assistantTurns?: number;
-    bridgeCalls?: { search: number; describe: number; call: number };
-  },
+  attempt: Pick<EmbeddedAgentMeta, "assistantTurns" | "bridgeCalls">,
 ) => {
   target.assistantTurns += attempt.assistantTurns ?? 0;
   if (!attempt.bridgeCalls) {

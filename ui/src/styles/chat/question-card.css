@@ -67,22 +67,28 @@ openclaw-chat-question-panel {
   font-variant-numeric: tabular-nums;
 }
 
-.chat-question-panel__request-nav button {
+.chat-question-panel__request-nav button,
+.chat-question-panel__collapse {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: inherit;
   cursor: var(--cursor-action);
 }
 
+.chat-question-panel__request-nav button {
+  width: 26px;
+  height: 26px;
+  color: inherit;
+}
+
 .chat-question-panel__request-nav button:hover,
-.chat-question-panel__request-nav button:focus-visible {
+.chat-question-panel__request-nav button:focus-visible,
+.chat-question-panel__collapse:hover,
+.chat-question-panel__collapse:focus-visible {
   background: var(--panel-hover);
   color: var(--text);
   outline: none;
@@ -115,24 +121,9 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__collapse {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
   color: var(--muted);
-  cursor: var(--cursor-action);
-}
-
-.chat-question-panel__collapse:hover,
-.chat-question-panel__collapse:focus-visible {
-  background: var(--panel-hover);
-  color: var(--text);
-  outline: none;
 }
 
 .chat-question-panel__collapse svg,
@@ -192,8 +183,7 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__option {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  display: flex;
   align-items: center;
   gap: 9px;
   width: 100%;
@@ -221,7 +211,7 @@ openclaw-chat-question-panel {
   outline-offset: -2px;
 }
 
-.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-copy strong {
+.chat-question-panel__option:hover:not(:disabled) .chat-question-panel__option-label {
   color: var(--text-strong);
 }
 
@@ -242,6 +232,7 @@ openclaw-chat-question-panel {
 
 .chat-question-panel__option-marker {
   display: inline-flex;
+  flex: 0 0 16px;
   align-items: center;
   justify-content: center;
   width: 16px;
@@ -261,12 +252,32 @@ openclaw-chat-question-panel {
   border-color: var(--accent);
 }
 
+.chat-question-panel__thumbnail {
+  display: grid;
+  place-items: center;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+  background: var(--bg-muted);
+  color: var(--muted);
+}
+
+.chat-question-panel__thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .chat-question-panel__option-copy {
   display: block;
+  flex: 1;
+  overflow-wrap: anywhere;
   min-width: 0;
 }
 
-.chat-question-panel__option-copy strong {
+.chat-question-panel__option-label {
   display: block;
   font-size: var(--control-ui-text-sm);
   font-weight: 600;
@@ -379,12 +390,22 @@ openclaw-chat-question-panel {
 }
 
 .chat-question-panel__error-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  vertical-align: middle;
   margin-left: 4px;
   padding: 0 2px;
   border: 0;
   background: transparent;
   color: inherit;
   cursor: var(--cursor-action);
+}
+
+.chat-question-panel__error-dismiss svg {
+  width: 14px;
+  height: 14px;
 }
 
 .chat-question-panel__skip {
@@ -400,11 +421,7 @@ openclaw-chat-question-panel {
   color: var(--muted);
 }
 
-.chat-question-panel__back:hover:not(:disabled) {
-  color: var(--text);
-  background: var(--panel-hover);
-}
-
+.chat-question-panel__back:hover:not(:disabled),
 .chat-question-panel__skip:hover:not(:disabled) {
   color: var(--text);
   background: var(--panel-hover);
@@ -506,4 +523,21 @@ openclaw-chat-question-panel {
   .chat-question-panel {
     animation: none;
   }
+}
+
+.chat-question-panel__resource-preview {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.chat-question-panel__resource-image {
+  max-width: 100%;
+  max-height: 320px;
+  object-fit: contain;
+}
+
+.chat-question-panel__resource-actions {
+  display: grid;
+  gap: 8px;
 }

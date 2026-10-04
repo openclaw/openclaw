@@ -6,7 +6,8 @@ import { expect, it } from "vitest";
 import { appendTranscriptMessages } from "../../../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import { encodePngRgba } from "../../../src/media/png-encode.js";
-import { ensureGatewayOwnerProfile, setAvatar } from "../../../src/state/user-profiles.js";
+import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
+import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -116,7 +117,6 @@ const suite = createControlUiE2eSuite({
           defaults: { workspace },
           entries: {
             main: {
-              default: true,
               workspace,
               identity: { name: "Synthetic loading assistant", avatar: "avatar.png" },
             },
@@ -273,7 +273,7 @@ suite.define(() => {
             }
           }
           window.localStorage.setItem(
-            "openclaw:control-ui:community-invite",
+            "openclaw:control-ui:community-invite:v2",
             JSON.stringify({ dismissedAtMs: 1770000000000 }),
           );
           const sample: BrowserPerformanceSample = {
@@ -315,16 +315,20 @@ suite.define(() => {
           }).observe({ type: "longtask", buffered: true });
         });
         const pending = new Map<string, RpcMetric>();
-        const waitForResolutionResponse = (requestStart = 0) =>
+        const waitForStartupResponses = (requestStart = 0) =>
           expect
-            .poll(() =>
-              rpc
-                .slice(requestStart)
-                .some(
+            .poll(() => {
+              const metrics = rpc.slice(requestStart);
+              return (
+                metrics.some(
                   (metric) =>
                     metric.method === "sessions.resolve" && metric.receivedMs !== undefined,
-                ),
-            )
+                ) &&
+                metrics
+                  .filter((metric) => ["agents.list", "agent.identity.get"].includes(metric.method))
+                  .every((metric) => metric.receivedMs !== undefined)
+              );
+            })
             .toBe(true);
         const waitForStartupCommit = async (
           sessionKey: string,
@@ -490,8 +494,9 @@ suite.define(() => {
         if (captureUiProof) {
           await page.screenshot({ path: path.join(artifactDir, "02-selected-and-home-ready.png") });
         }
-        // An accepted identity publication can render the tail before resolve replies.
-        await waitForResolutionResponse();
+        // Transcript and roster avatars can render before the dedicated identity reply.
+        // Freeze only completed payloads; keep the earlier visibility timings unchanged.
+        await waitForStartupResponses();
         const startupMetrics = structuredClone(rpc);
         const startupIdentity = await page.evaluate(() => window.chatLoadingReadiness);
         const images = await page
@@ -695,7 +700,7 @@ suite.define(() => {
           if (captureUiProof) {
             await page.screenshot({ path: path.join(artifactDir, `${stage}.png`) });
           }
-          await waitForResolutionResponse(requestStart);
+          await waitForStartupResponses(requestStart);
           return {
             width: 1050,
             homeOpen,

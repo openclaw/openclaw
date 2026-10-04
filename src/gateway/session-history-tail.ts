@@ -1,7 +1,7 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import type { SessionEntry } from "../config/sessions.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveTranscriptPageEnd } from "../sessions/transcript-anchor-page.js";
 import type { TranscriptReadWindow } from "../sessions/transcript-read-window.js";
 import {
@@ -16,19 +16,15 @@ import {
 } from "./chat-display-projection.history.js";
 import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import type {
-  SessionTranscriptReader,
+  SessionTranscriptPageReader,
   ReadRecentSessionMessagesResult,
   SessionTranscriptReadScope,
-} from "./session-transcript-read-kernel.js";
+} from "./session-transcript-read.types.js";
 
-export const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
+const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES = 8_000;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES = 100;
 const SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_CHUNK_MESSAGES = 400;
 const HISTORY_PAGE_MAX_BYTES = 1024 * 1024;
-
-export function resolveChatHistoryTailReadMaxBytes(maxBytes: number): number {
-  return Math.max(maxBytes * 2, 1024 * 1024);
-}
 
 export function readChatHistoryMessageId(message: unknown): string | undefined {
   const id = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id;
@@ -40,18 +36,31 @@ export function readChatHistoryMessageSeq(message: unknown): number | undefined 
   return asPositiveSafeInteger(metadata?.seq);
 }
 
-function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
+export function readChatHistoryPaginationKey(message: unknown): string | undefined {
+  const id = readChatHistoryMessageId(message);
+  if (id) {
+    return `id:${id}`;
+  }
+  const seq = readChatHistoryMessageSeq(message);
+  return seq === undefined ? undefined : `seq:${seq}`;
+}
+
+function capOffsetChatHistoryProjectedMessages(
+  messages: unknown[],
+  max: number,
+  sequence = readChatHistoryMessageSeq,
+): unknown[] {
   if (messages.length <= max) {
     return messages;
   }
   const start = Math.max(0, messages.length - max);
-  const boundarySeq = readChatHistoryMessageSeq(messages[start]);
+  const boundarySeq = sequence(messages[start]);
   if (boundarySeq === undefined) {
     return messages.slice(start);
   }
   // Numeric cursors resume at transcript records, so projected siblings stay together.
   let safeStart = start;
-  while (safeStart > 0 && readChatHistoryMessageSeq(messages[safeStart - 1]) === boundarySeq) {
+  while (safeStart > 0 && sequence(messages[safeStart - 1]) === boundarySeq) {
     safeStart--;
   }
   return messages.slice(safeStart);
@@ -82,7 +91,7 @@ async function readNewerChatHistoryMessages(params: {
   anchorId: string;
   limit: number;
   readScope: SessionTranscriptReadScope;
-  readers: SessionTranscriptReader;
+  readers: SessionTranscriptPageReader;
   displaySource: string | undefined;
   expectedReadWindow?: TranscriptReadWindow;
   readOnly?: boolean;
@@ -122,20 +131,23 @@ export async function readChatHistoryRecoveryContext(params: {
     readonly pending: boolean;
   };
   readScope: SessionTranscriptReadScope;
-  readers: SessionTranscriptReader;
+  readers: SessionTranscriptPageReader;
   displaySource: string | undefined;
   expectedReadWindow?: TranscriptReadWindow;
   maxBytes: number;
   readOnly?: boolean;
+  sessionStartedAt?: number;
 }): Promise<unknown[]> {
   const context: unknown[] = [];
+  const filterAnnounces = createPreSessionStartAnnouncePairFilter(params.sessionStartedAt);
   let recovery: ReturnType<typeof params.createRecovery> | undefined;
   let anchorId = readChatHistoryMessageId(params.messages.at(-1));
   let scannedBytes = 0;
-  while (anchorId && context.length < SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES) {
+  let scannedMessages = 0;
+  while (anchorId && scannedMessages < SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES) {
     const chunkSize = Math.min(
       SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES,
-      SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES - context.length,
+      SILENT_CHAT_HISTORY_TAIL_SCAN_MAX_MESSAGES - scannedMessages,
     );
     const newer = await readNewerChatHistoryMessages({
       anchorId,
@@ -152,9 +164,15 @@ export async function readChatHistoryRecoveryContext(params: {
     const previousContextLength = context.length;
     let boundaryReached = false;
     for (const message of newer) {
+      scannedMessages++;
       scannedBytes += Buffer.byteLength(JSON.stringify(message), "utf8");
       if (scannedBytes > params.maxBytes) {
         return context;
+      }
+      // Hidden rows still consume the scan budget and advance the next indexed anchor.
+      anchorId = readChatHistoryMessageId(message);
+      if (filterAnnounces([message]).length === 0) {
+        continue;
       }
       context.push(message);
       if (asOptionalRecord(message)?.role === "user") {
@@ -170,7 +188,6 @@ export async function readChatHistoryRecoveryContext(params: {
     if (!recovery.pending) {
       break;
     }
-    anchorId = readChatHistoryMessageId(context.at(-1));
   }
   return context;
 }
@@ -179,19 +196,21 @@ export async function readChatHistoryRecoveryContext(params: {
 async function readIncrementalChatHistoryTailAttempt(params: {
   entry: SessionEntry | undefined;
   readScope: SessionTranscriptReadScope;
-  readers: SessionTranscriptReader;
+  readers: SessionTranscriptPageReader;
   effectiveMaxChars: number;
   max: number;
   maxBytes: number;
   offset?: number;
   beforeSeq?: number;
   preserveProjectionContext?: boolean;
+  readMessageSequence?: (message: unknown) => number | undefined;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
   resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
 }): Promise<IncrementalChatHistoryTail> {
   const { resolveCurrentUserProfileDisplay } = params;
+  const readSequence = params.readMessageSequence ?? readChatHistoryMessageSeq;
   let offset = params.offset ?? 0;
   const requestedBeforeSeq = params.beforeSeq;
   const rawHistoryWindowMessages = Math.max(1, Math.floor(params.max)) * 20 + 20;
@@ -261,7 +280,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     overreadContextMessage,
   );
   let recoveryContext: unknown[] | undefined = offset === 0 ? [] : undefined;
-  const newestPageSeq = readChatHistoryMessageSeq(rawMessages.at(-1));
+  const newestPageSeq = readSequence(rawMessages.at(-1));
   const filterWindowMessages = (messages: unknown[], contextMessage: unknown) =>
     sessionStartedAt === undefined
       ? messages
@@ -294,7 +313,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     );
     if (newerContext.length > 0) {
       projection.messages = projection.messages.filter(
-        (message) => (readChatHistoryMessageSeq(message) ?? Infinity) <= (newestPageSeq ?? -1),
+        (message) => (readSequence(message) ?? Infinity) <= (newestPageSeq ?? -1),
       );
     }
     const projected =
@@ -302,7 +321,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
         ? projection.messages.length > params.max
           ? projection.messages.slice(-params.max)
           : projection.messages
-        : capOffsetChatHistoryProjectedMessages(projection.messages, params.max);
+        : capOffsetChatHistoryProjectedMessages(projection.messages, params.max, readSequence);
     return { filteredRawMessages, projected, projection };
   };
   const projectWindow = async () => {
@@ -321,29 +340,8 @@ async function readIncrementalChatHistoryTailAttempt(params: {
           subagentCoordination: params.readers.subagentCoordination,
           maxChars: params.effectiveMaxChars,
         });
-        if (sessionStartedAt === undefined) {
-          recovery.append(messages);
-          return recovery;
-        }
-        const filter = createPreSessionStartAnnouncePairFilter(sessionStartedAt);
-        let contextRemoved = overreadContextMessage === undefined;
-        const append = (chunk: unknown[]) => {
-          const filtered = filter(chunk);
-          const prepared = contextRemoved
-            ? filtered
-            : dropChatHistoryOverreadContextMessage(filtered, overreadContextMessage);
-          contextRemoved ||= prepared.length !== filtered.length;
-          recovery.append(prepared);
-        };
-        append(
-          overreadContextMessage === undefined ? messages : [overreadContextMessage, ...messages],
-        );
-        return {
-          append,
-          get pending() {
-            return recovery.pending;
-          },
-        };
+        recovery.append(messages);
+        return recovery;
       },
       readScope: params.readScope,
       readers: params.readers,
@@ -351,6 +349,7 @@ async function readIncrementalChatHistoryTailAttempt(params: {
       expectedReadWindow: readWindow,
       maxBytes: params.maxBytes,
       readOnly: params.readOnly,
+      sessionStartedAt,
     });
     return project();
   };

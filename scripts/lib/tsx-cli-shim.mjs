@@ -54,11 +54,26 @@ export function resolveTsxImport(checkoutRoot) {
   );
 }
 
-export async function registerToolingTsx() {
+function configureToolingTsx() {
   // tsx indexes the entire shared disk cache before expiration, coupling startup
   // to other checkouts' cache size. This flag retains its in-process Map and
   // reaches descendant tooling before their loaders initialize.
   process.env.TSX_DISABLE_CACHE = "1";
+  // Fixtures run this checkout's tooling from a cwd without a tsconfig, which
+  // disables tsx paths mapping for workspace imports. Pin this checkout's
+  // tsconfig only for that foreign cwd; explicit env and cwd tsconfigs win.
+  const checkoutTsconfig = path.join(SHIM_CHECKOUT_ROOT, "tsconfig.json");
+  if (
+    process.env.TSX_TSCONFIG_PATH === undefined &&
+    !existsSync(path.join(process.cwd(), "tsconfig.json")) &&
+    existsSync(checkoutTsconfig)
+  ) {
+    process.env.TSX_TSCONFIG_PATH = checkoutTsconfig;
+  }
+}
+
+export async function registerToolingTsx() {
+  configureToolingTsx();
   await import(resolveTsxImport(SHIM_CHECKOUT_ROOT));
 }
 
@@ -191,6 +206,25 @@ export function runNodeCliShim(moduleUrl, options = {}) {
   return runCliShim(moduleUrl, options, []);
 }
 
-export function runTsxCliShim(moduleUrl, options = {}) {
+export async function runTsxCliShim(moduleUrl, options = {}) {
+  if (options.toolingDependencies) {
+    try {
+      const { toolingDependencyOptions } = await import("./tooling-dependencies.mjs");
+      const tooling = toolingDependencyOptions(SHIM_CHECKOUT_ROOT, options.toolingDependencies, {
+        tsx: true,
+      });
+      if (tooling.tsxImport) {
+        configureToolingTsx();
+        // Install qualified resolution before TSX loads source imports. Keeping
+        // its absolute preload also preserves fork() without a workspace link.
+        return runCliShim(moduleUrl, options, [...tooling.execArgv, "--import", tooling.tsxImport]);
+      }
+    } catch (error) {
+      console.error(error);
+      writeFailureTrailer(options.failureTool, 1);
+      process.exitCode = 1;
+      return;
+    }
+  }
   return runCliShim(moduleUrl, options, ["--import", new URL("../tsx.mjs", import.meta.url).href]);
 }

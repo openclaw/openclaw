@@ -230,7 +230,6 @@ export async function inspectLocalOverrideTarget(params: {
   const target = await params.packageFs.read(params.relativePath, {
     hardlinks: "reject",
     maxBytes: params.expectedSize,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   return {

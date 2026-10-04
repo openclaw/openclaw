@@ -2,8 +2,11 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import { showToast } from "../../lib/toast.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
+import { attachmentBatchRejection } from "../chat/components/chat-attachment-admission.ts";
 import { prepareBackgroundSessionCompletion } from "./background-session-notice.ts";
 import type { NewSessionCapabilityController } from "./capability-controller.ts";
 import type { DraftSessionCreateOverrides, NewSessionVisibility } from "./create-params.ts";
@@ -12,7 +15,6 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
 import type { DraftSubmissionSnapshot } from "./draft-submission-contract.ts";
-import type { NewSessionPermissionSelection } from "./permission-selection.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
 
 /** Project the draft's explicit choices through the existing session-create parameter owner. */
@@ -21,7 +23,7 @@ export function buildDraftSubmissionCreateParams(
   gateway: DraftGatewayState,
   draft: {
     capabilities: Pick<NewSessionCapabilityController, "toolOverrides">;
-    permission: Pick<NewSessionPermissionSelection, "value">;
+    permissionMode: SessionCreateParams["permissionMode"];
     visibility: NewSessionVisibility;
   },
   snapshot: DraftSubmissionSnapshot,
@@ -31,7 +33,7 @@ export function buildDraftSubmissionCreateParams(
     ...options,
     message: options.message ?? "",
     toolOverrides: draft.capabilities.toolOverrides,
-    permissionMode: draft.permission.value,
+    permissionMode: draft.permissionMode,
     visibility: options.visibility ?? draft.visibility,
     catalogId: snapshot.data?.catalogId,
     category: gateway.resolvedGroupCategory(),
@@ -60,6 +62,13 @@ export function prepareDraftSubmission(
     startup ? startup.params.mentions : pendingPlacement ? pending.mentions : submitted.mentions
   )?.map(({ profileId, start, end }) => ({ profileId, start, end }));
   const attachments = draft.attachmentDraft.attachments;
+  if (!startup && !pendingPlacement) {
+    const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
+    if (error !== undefined) {
+      showToast({ message: error });
+      return null;
+    }
+  }
   const draftAttachments = startup
     ? startup.params.attachments
     : pendingPlacement

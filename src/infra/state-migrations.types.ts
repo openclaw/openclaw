@@ -30,6 +30,11 @@ export type SessionStoreAliasPlan = {
   hasUnresolvedIdentity: boolean;
 };
 
+type LegacyFileDetection = {
+  sourcePath: string;
+  hasLegacy: boolean;
+};
+
 export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" | "outcome"> & {
   doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
@@ -39,8 +44,6 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
   oauthDir: string;
   pluginSessionStoreAgentIds: readonly string[];
   sessions: {
-    legacyDir: string;
-    legacyStorePath: string;
     targetDir: string;
     targetStorePath: string;
     hasLegacy: boolean;
@@ -58,10 +61,7 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     hasLegacy: boolean;
     plans: DetectedPluginDoctorStateMigrationPlan[];
   };
-  pluginInstallIndex: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  pluginInstallIndex: LegacyFileDetection;
   debugProxyCaptureSidecar: {
     sourcePath: string;
     blobDir: string;
@@ -77,54 +77,25 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     legacyIds: string[];
     pathRewrites: Array<{ id: string; fromPath: string; toPath: string }>;
   };
-  deliveryQueues: {
-    outboundPath: string;
-    sessionPath: string;
-    hasLegacy: boolean;
-  };
   pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
   voiceWake: {
     triggersPath: string;
     routingPath: string;
     hasLegacy: boolean;
   };
-  updateCheck: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  configHealth: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  pluginBindingApprovals: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  currentConversationBindings: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  tuiLastSessions: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
-  commitments?: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  updateCheck: LegacyFileDetection;
+  configHealth: LegacyFileDetection;
+  pluginBindingApprovals: LegacyFileDetection;
+  currentConversationBindings: LegacyFileDetection;
+  tuiLastSessions: LegacyFileDetection;
+  commitments?: LegacyFileDetection;
   auditLogs: LegacyAuditLogsDetection;
-  acpReplayLedger: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  acpReplayLedger: LegacyFileDetection;
   managedOutgoingImages: {
     sourceDir: string;
     hasLegacy: boolean;
   };
-  apns: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  apns: LegacyFileDetection;
   deviceAuth: {
     sourcePath: string;
     sourcePresent: boolean;
@@ -141,10 +112,7 @@ export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" 
     vapidKeysPath: string;
     hasLegacy: boolean;
   };
-  nodeHost: {
-    sourcePath: string;
-    hasLegacy: boolean;
-  };
+  nodeHost: LegacyFileDetection;
   rescuePending: LegacyRescuePendingDetection;
   channelPairing: LegacyChannelPairingStateDetection;
   warnings: string[];

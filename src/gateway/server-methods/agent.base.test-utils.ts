@@ -938,7 +938,7 @@ describe("gateway agent handler", () => {
     const runId = "idem-abort-during-admission";
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: "/tmp/sessions.json",
       identities: [sessionKey, "existing-session-id"],
       run: async () => {
@@ -995,7 +995,7 @@ describe("gateway agent handler", () => {
     const runId = "idem-expired-during-admission";
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: "/tmp/sessions.json",
       identities: [sessionKey, "existing-session-id"],
       run: async () => {
@@ -1054,7 +1054,7 @@ describe("gateway agent handler", () => {
     const runId = "idem-terminal-during-admission";
     let releaseMutation = () => {};
     const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("patch", {
       scope: "/tmp/sessions.json",
       identities: [sessionKey, "existing-session-id"],
       run: async () => {
@@ -1147,7 +1147,7 @@ describe("gateway agent handler", () => {
       const handoffId = admission.createHandoff();
       const { promise: mutationStarted, resolve: markMutationStarted } = createDeferredCore();
       let mutationRan = false;
-      const mutation = runExclusiveSessionLifecycleMutation({
+      const mutation = runExclusiveSessionLifecycleMutation("patch", {
         scope,
         identities: [sessionKey, sessionId],
         prepare: async () => {
@@ -1316,7 +1316,7 @@ describe("gateway agent handler", () => {
   it("uses the freshest alias when checking archive state before migration", async () => {
     const cfg = {
       session: { mainKey: "work" },
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
     };
     mocks.loadConfigReturn = cfg;
     mocks.loadSessionEntry.mockReturnValue({

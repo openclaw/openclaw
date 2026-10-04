@@ -15,17 +15,17 @@ forward-ports until after publication.
 ## Version and channel
 
 `YYYY.M.PATCH` uses a sequential monthly train number, not the calendar day.
-Choose beta trains from stable/beta tags only; alpha-only tags do not consume a
-train. Continue an existing beta train with its next `beta.N` when appropriate,
+Choose beta trains from stable/beta tags only; historical alpha-only tags do
+not consume a train. Continue an existing beta train with its next `beta.N` when appropriate,
 otherwise increment the highest stable/beta patch and start at `beta.1`.
 Prefer `-beta.N`, never new numeric-only beta suffixes.
 
-| Track           | Branch/version                                                        | Registry selector                                                |
-| --------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Regular beta    | `release/YYYY.M.PATCH`, `YYYY.M.PATCH-beta.N`                         | `beta`                                                           |
-| Regular stable  | `release/YYYY.M.PATCH`, `YYYY.M.PATCH`                                | `beta` by default; intentional publication/promotion to `latest` |
-| Extended stable | `extended-stable/YYYY.M.33`, either trailing completed month's `.33+` | `extended-stable`                                                |
-| Development     | moving main                                                           | not a release                                                    |
+| Track           | Branch/version                                                 | Registry selector                                                |
+| --------------- | -------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Regular beta    | `release/YYYY.M.PATCH`, `YYYY.M.PATCH-beta.N`                  | `beta`                                                           |
+| Regular stable  | `release/YYYY.M.PATCH`, `YYYY.M.PATCH`                         | `beta` by default; intentional publication/promotion to `latest` |
+| Extended stable | `extended-stable/YYYY.M.33`, trailing completed month's `.33+` | `extended-stable`                                                |
+| Development     | moving main                                                    | not a release                                                    |
 
 Use the release preparation controller before manual version edits:
 

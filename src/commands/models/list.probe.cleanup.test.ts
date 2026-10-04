@@ -9,7 +9,10 @@ import { validateConfigObject } from "../../config/validation.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabase from "../../state/openclaw-agent-db.js";
-import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { runAuthProbes, withAuthProbeStateOwnership } from "./list.probe.js";
 
 const runner = vi.hoisted(() =>
@@ -56,6 +59,44 @@ function createProbeConfig(workspaceDir: string): OpenClawConfig {
   };
 }
 
+function stateOwnership(state: OpenClawTestState, signals: EventEmitter) {
+  return {
+    mode: "exclusive" as const,
+    process: signals,
+    gatewayLockOptions: {
+      allowInTests: true,
+      env: state.env,
+      lockDir: state.path("locks"),
+      readProcessStartTime: () => 123456,
+      timeoutMs: 100,
+    },
+  };
+}
+
+function probeParams(
+  state: OpenClawTestState,
+  cfg: OpenClawConfig,
+  signals: EventEmitter,
+  concurrency: number,
+) {
+  return {
+    cfg,
+    agentId: "main",
+    agentDir: state.agentDir(),
+    workspaceDir: state.workspaceDir,
+    providers: ["probe-control"],
+    modelCandidates: ["probe-control/probe-model"],
+    options: {
+      provider: "probe-control",
+      includeDirectKeys: true,
+      timeoutMs: 10_000,
+      concurrency,
+      maxTokens: 8,
+    },
+    stateOwnership: stateOwnership(state, signals),
+  };
+}
+
 it("holds state ownership for an in-flight sibling after progress rejects the probe batch", async () => {
   const state = await createOpenClawTestState({
     label: "probe-sibling-cleanup",
@@ -97,30 +138,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   try {
     operation = parent.track(() =>
       runAuthProbes({
-        cfg,
-        agentId: "main",
-        agentDir: state.agentDir(),
-        workspaceDir: state.workspaceDir,
-        providers: ["probe-control"],
-        modelCandidates: ["probe-control/probe-model"],
-        options: {
-          provider: "probe-control",
-          includeDirectKeys: true,
-          timeoutMs: 10_000,
-          concurrency: 2,
-          maxTokens: 8,
-        },
-        stateOwnership: {
-          mode: "exclusive",
-          process: signals,
-          gatewayLockOptions: {
-            allowInTests: true,
-            env: state.env,
-            lockDir,
-            readProcessStartTime: () => 123456,
-            timeoutMs: 100,
-          },
-        },
+        ...probeParams(state, cfg, signals, 2),
         onProgress(update) {
           expect(update.total).toBe(2);
           if (update.label && ++starts === 2) {
@@ -181,34 +199,7 @@ it("removes the staged directory and releases state ownership when database disp
   const cleanup = createAgentCleanupScope();
   try {
     await expect(
-      cleanup.run(() =>
-        runAuthProbes({
-          cfg,
-          agentId: "main",
-          agentDir: state.agentDir(),
-          workspaceDir: state.workspaceDir,
-          providers: ["probe-control"],
-          modelCandidates: ["probe-control/probe-model"],
-          options: {
-            provider: "probe-control",
-            includeDirectKeys: true,
-            timeoutMs: 10_000,
-            concurrency: 1,
-            maxTokens: 8,
-          },
-          stateOwnership: {
-            mode: "exclusive",
-            process: signals,
-            gatewayLockOptions: {
-              allowInTests: true,
-              env: state.env,
-              lockDir,
-              readProcessStartTime: () => 123456,
-              timeoutMs: 100,
-            },
-          },
-        }),
-      ),
+      cleanup.run(() => runAuthProbes(probeParams(state, cfg, signals, 1))),
     ).rejects.toBe(original);
     expect(stagedDir).toContain("openclaw-auth-probe-");
     expect(fs.existsSync(stagedDir!)).toBe(false);
@@ -231,22 +222,7 @@ it("does not acquire probe state from a closed caller scope", async () => {
   const run = vi.fn(async () => undefined);
   try {
     await expect(
-      inParent(() =>
-        withAuthProbeStateOwnership(
-          {
-            mode: "exclusive",
-            process: signals,
-            gatewayLockOptions: {
-              allowInTests: true,
-              env: state.env,
-              lockDir,
-              readProcessStartTime: () => 123456,
-              timeoutMs: 100,
-            },
-          },
-          run,
-        ),
-      ),
+      inParent(() => withAuthProbeStateOwnership(stateOwnership(state, signals), run)),
     ).rejects.toThrow("Async work scope is closed");
     expect(run).not.toHaveBeenCalled();
     expect(fs.existsSync(path.join(lockDir, "gateway.state.lock"))).toBe(false);

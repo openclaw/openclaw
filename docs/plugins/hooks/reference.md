@@ -122,16 +122,16 @@ contracts above; a modifying hook is not an observation hook.
 
 **Agent turn**
 
-| Hook                            | Kind    | Purpose                                                                                                     |
-| ------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- |
-| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                     |
-| `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                  |
-| `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment |
-| `before_agent_run`              | Gate    | Inspect the final prompt and session messages before model submission; can block the run                    |
-| `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                              |
-| `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                            |
-| `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                     |
-| `heartbeat_prompt_contribution` | Modify  | Add heartbeat-only context for background monitor and lifecycle plugins                                     |
+| Hook                            | Kind    | Purpose                                                                                                                         |
+| ------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `before_model_resolve`          | Modify  | Override provider or model before session messages load                                                                         |
+| `agent_turn_prepare`            | Modify  | Inspect drained plugin turn injections and add context before prompt hooks                                                      |
+| `before_prompt_build`           | Modify  | Add prompt context, narrow the current turn's submitted tools, or perform authorized post-policy enrichment                     |
+| `before_agent_run`              | Gate    | Inspect prompt and session messages before model submission; node turns gate Gateway input before worker-local context assembly |
+| `before_agent_reply`            | Claim   | Short-circuit the model turn with a synthetic reply or silence                                                                  |
+| `before_agent_finalize`         | Modify  | Inspect the natural final answer and request one more model pass                                                                |
+| `agent_end`                     | Observe | Observe final messages, success state, and run duration                                                                         |
+| `heartbeat_prompt_contribution` | Modify  | Add heartbeat-only context for background monitor and lifecycle plugins                                                         |
 
 **Conversation observation**
 
@@ -188,6 +188,33 @@ emit that completion hook.
 field; it can include `resumedFrom`. Shutdown/restart events come from the
 Gateway finalizer for active sessions, so plugins can close session state
 before the process exits.
+
+On current hosts, `session_end` context includes `endedTranscript`. Plugins
+with conversation access receive `{ available: true, readTail }` when OpenClaw
+has an immutable ended-session source. Calls must supply positive
+`maxMessages` and `maxBytes`; OpenClaw enforces host caps and returns
+`{ messages, totalMessages, truncated }`. The reader remains valid while the
+admitted handler is active. Retained or still-pending reads reject after the
+handler settles, its configured hook timeout, forced retirement of the owning
+plugin instance, or the shutdown/restart drain deadline.
+
+When no safe source exists, the value is `{ available: false, reason }`.
+Current reasons distinguish missing conversation permission, a lifecycle with
+no stable cutoff, deleted incognito state, an unavailable archive, and an
+unsupported source. This is an explicit non-result, not an empty transcript.
+Plugins compiled against this contract should still treat an absent field as
+an older host.
+
+`session_end` itself remains a metadata hook and can register without
+conversation access. For non-bundled plugins,
+`plugins.entries.<id>.hooks.allowConversationAccess=true` grants only the
+bounded ended-transcript reader. Bundled plugins follow the same effective
+policy and can be denied with `allowConversationAccess: false`.
+Permission changes apply to handlers admitted by a successfully published plugin
+runtime replacement. A handler already running retains its generation's grant
+while its bounded invocation remains admitted; handler settlement, a hook
+timeout, forced instance retirement, or shutdown drain expiry ends that lease.
+Predecessor drain and successor publication may overlap.
 
 Shutdown and restart share one **2-second total `session_end` drain budget**
 across all active sessions and plugin handlers; the budget is not per handler.

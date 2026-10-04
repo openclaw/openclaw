@@ -1,19 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
+  createSessionEntryWithTranscript,
   inspectTranscriptEventsSync,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import {
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
+} from "../../config/sessions/session-accessor.pending-inputs.js";
 import * as transcriptScope from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import type { SqliteWorkerOperations, SqliteWorkerStore } from "../../infra/sqlite-worker-store.js";
 import type { Message } from "../../llm/types.js";
+import { applyLoggingConfig, resetLogger } from "../../logging/logger.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { SessionManager as SdkSessionManager } from "../../plugin-sdk/agent-sessions.js";
@@ -86,6 +94,118 @@ describe("released agent-sessions SDK static append", () => {
       });
     },
   );
+
+  it("awaits direct static writes while preserving keyed custom replay and admitted user custody", async () => {
+    await withOpenClawTestState({ label: "sdk-static-async-parity" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "sdk-static-parity",
+        sessionKey: "agent:main:sdk-static-parity",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const custom = {
+        role: "custom" as const,
+        customType: "sdk-keyed-note",
+        content: "Synthetic keyed SDK note",
+        display: true,
+        timestamp: 1,
+        idempotencyKey: "static-parity:custom",
+      };
+      const first = SdkSessionManager.appendMessageToTranscript(target, custom);
+      const nextCustom = {
+        ...custom,
+        idempotencyKey: "static-parity:next",
+      };
+      const next = await SdkSessionManager.appendMessageToTranscriptAsync(target, nextCustom);
+      const beforeReplay = await loadTranscriptEvents(target);
+      expect(beforeReplay.slice(-2)).toMatchObject([
+        { id: first, parentId: null },
+        { id: next, parentId: first },
+      ]);
+      await expect(SdkSessionManager.appendMessageToTranscriptAsync(target, custom)).resolves.toBe(
+        first,
+      );
+      expect(await loadTranscriptEvents(target)).toEqual(beforeReplay);
+
+      const receipt = expectDefined(
+        await stageSessionPendingInput(target, {
+          runId: "static-user",
+          message: {
+            ...makeUserMessage("Synthetic admitted SDK user", 2),
+            idempotencyKey: "static-user:user",
+          },
+          assertCurrent: () => {},
+        }),
+        "Expected admitted static input",
+      );
+      try {
+        await expect(
+          receipt.run(() =>
+            SdkSessionManager.appendMessageToTranscriptAsync(target, receipt.message),
+          ),
+        ).resolves.toBe(receipt.inputId);
+        expect(receipt.state).toBe("consumed");
+        const afterPromotion = await loadTranscriptEvents(target);
+        expect(afterPromotion.at(-1)).toMatchObject({
+          id: receipt.inputId,
+          parentId: next,
+          message: receipt.message,
+        });
+        receipt.finish("cancelled");
+        await expect(
+          withSessionPendingInputPersistence(receipt, () =>
+            SdkSessionManager.appendMessageToTranscriptAsync(target, receipt.message),
+          ),
+        ).resolves.toBe(receipt.inputId);
+        expect(await loadTranscriptEvents(target)).toEqual(afterPromotion);
+      } finally {
+        receipt.finish("interrupted");
+      }
+    });
+  });
+
+  it("keeps incognito instance and static async appends in invocation order", async () => {
+    await withOpenClawTestState({ label: "sdk-static-incognito-fifo" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:incognito-static-order",
+        env: state.env,
+      };
+      const created = await createSessionEntryWithTranscript(
+        scope,
+        () => ({
+          ok: true as const,
+          entry: { sessionId: "incognito-static-order", incognito: true as const, updatedAt: 1 },
+        }),
+        { cwd: state.workspaceDir },
+      );
+      if (!created.ok) {
+        throw new Error("Expected incognito session fixture");
+      }
+      const target = {
+        ...scope,
+        sessionId: created.entry.sessionId,
+        storePath: resolveSessionStorePathCore(undefined, scope),
+      };
+      const manager = await SdkSessionManager.openAsync(target);
+      const seed = await manager.appendMessageAsync(makeUserMessage("Synthetic seed", 1));
+      const first = manager.appendMessageAsync(makeUserMessage("Instance first", 2));
+      const second = SdkSessionManager.appendMessageToTranscriptAsync(target, {
+        role: "custom",
+        customType: "static-second",
+        content: "Static second",
+        display: true,
+        timestamp: 3,
+      });
+      const [firstId, secondId] = await Promise.all([first, second]);
+      expect((await loadTranscriptEvents(target)).slice(-3)).toMatchObject([
+        { id: seed, parentId: null, message: { content: "Synthetic seed" } },
+        { id: firstId, parentId: seed, message: { content: "Instance first" } },
+        { id: secondId, parentId: firstId, message: { content: "Static second" } },
+      ]);
+    });
+  });
 });
 
 describe("appendSessionTranscriptNote", () => {
@@ -261,7 +381,7 @@ describe("appendSessionTranscriptNote", () => {
     },
   );
 
-  it.each(["canonical", "shared", "custom-family"] as const)(
+  it.each(["canonical", "custom-family"] as const)(
     "keeps invocation order while the first %s target preparation waits",
     async (layout) => {
       await withOpenClawTestState({ label: "static-note-preparation-order" }, async (state) => {
@@ -273,7 +393,7 @@ describe("appendSessionTranscriptNote", () => {
           storePath:
             layout === "canonical"
               ? path.join(state.agentDir("main"), "openclaw-agent.sqlite")
-              : state.path(layout === "custom-family" ? "shared.json" : "shared.sqlite"),
+              : state.path("shared.json"),
         };
         if (layout === "custom-family") {
           const external = state.path("external.sqlite");
@@ -582,73 +702,85 @@ describe("appendSessionTranscriptNote", () => {
     });
   });
 
-  it("rolls back a static note when registered redaction changes before commit", async () => {
-    await withOpenClawTestState({ label: "static-note-redaction" }, async (state) => {
-      const target = {
-        agentId: "main",
-        sessionId: "redaction",
-        sessionKey: "agent:main:static-redaction",
-        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
-      };
-      await upsertSessionEntryCore(target, {
-        sessionId: target.sessionId,
-        updatedAt: 1,
-        lifecycleRevision: "redaction-generation",
-      });
-      SessionManager.open(target).appendMessage(makeUserMessage("Retained prefix", 1));
-      await waitForSessionTranscriptProjection(target);
-      const before = await loadTranscriptEvents(target);
-      const marker = "synthetic-static-note-registry-value";
-      const note = {
-        role: "custom" as const,
-        customType: "openclaw.system-note",
-        content: `Visible ${marker} end`,
-        display: true,
-        timestamp: 2,
-      };
-      resetSecretRedactionRegistryForTest();
-      let changed = 0;
-      const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
-      const spy = vi
-        .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
-        .mockImplementation((admit, attachment) =>
-          createAdmission((request, grant) => {
-            if (request.stage === "commit" && changed === 0) {
-              changed++;
-              registerSecretValueForRedaction(marker);
-            }
-            admit(request, grant);
-          }, attachment),
-        );
-      try {
-        const rejected = await appendSessionTranscriptNote(target, note).then(
-          () => {
-            throw new Error("Expected changed redaction to refuse the commit");
-          },
-          (error: unknown) => error,
-        );
-        expect(changed).toBe(1);
-        expect(rejected).toMatchObject({
-          message: "Transcript message redaction changed before persistence",
+  it.each(["registry", "pattern"] as const)(
+    "rolls back a static note when %s redaction changes before commit",
+    async (policy) => {
+      await withOpenClawTestState({ label: "static-note-redaction" }, async (state) => {
+        const target = {
+          agentId: "main",
+          sessionId: "redaction",
+          sessionKey: "agent:main:static-redaction",
+          storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(target, {
+          sessionId: target.sessionId,
+          updatedAt: 1,
+          lifecycleRevision: "redaction-generation",
         });
-        expect(isRecordedModelFallbackStop(rejected)).toBe(false);
-        expect(await loadTranscriptEvents(target)).toEqual(before);
-        spy.mockRestore();
-        const result = await appendSessionTranscriptNote(target, note);
-        const after = await loadTranscriptEvents(target);
-        expect(after.slice(0, before.length)).toEqual(before);
-        expect(after).toHaveLength(before.length + 1);
-        const stored = SessionManager.open(target).getEntry(result.messageId);
-        expect(stored).toMatchObject({
-          type: "message",
-          message: { content: expect.stringContaining("Visible") },
-        });
-        expect(JSON.stringify(stored)).not.toContain(marker);
-        expect(stored).toHaveProperty("message", result.message);
-      } finally {
-        spy.mockRestore();
+        SessionManager.open(target).appendMessage(makeUserMessage("Retained prefix", 1));
+        await waitForSessionTranscriptProjection(target);
+        const before = await loadTranscriptEvents(target);
+        const marker = "synthetic-static-note-registry-value";
+        const note = {
+          role: "custom" as const,
+          customType: "openclaw.system-note",
+          content: `Visible ${marker} end`,
+          display: true,
+          timestamp: 2,
+        };
         resetSecretRedactionRegistryForTest();
-      }
-    });
-  });
+        const patterns: string[] = [];
+        if (policy === "pattern") {
+          applyLoggingConfig({ redactPatterns: patterns });
+        }
+        let changed = 0;
+        const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+        const spy = vi
+          .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+          .mockImplementation((admit, attachment) =>
+            createAdmission((request, grant) => {
+              if (request.stage === "commit" && changed === 0) {
+                changed++;
+                if (policy === "registry") {
+                  registerSecretValueForRedaction(marker);
+                } else {
+                  patterns.push(marker);
+                }
+              }
+              admit(request, grant);
+            }, attachment),
+          );
+        try {
+          const rejected = await appendSessionTranscriptNote(target, note).then(
+            () => {
+              throw new Error("Expected changed redaction to refuse the commit");
+            },
+            (error: unknown) => error,
+          );
+          expect(changed).toBe(1);
+          expect(rejected).toMatchObject({
+            message: "Transcript message redaction changed before persistence",
+          });
+          expect(isRecordedModelFallbackStop(rejected)).toBe(false);
+          expect(await loadTranscriptEvents(target)).toEqual(before);
+          spy.mockRestore();
+          const result = await appendSessionTranscriptNote(target, note);
+          const after = await loadTranscriptEvents(target);
+          expect(after.slice(0, before.length)).toEqual(before);
+          expect(after).toHaveLength(before.length + 1);
+          const stored = SessionManager.open(target).getEntry(result.messageId);
+          expect(stored).toMatchObject({
+            type: "message",
+            message: { content: expect.stringContaining("Visible") },
+          });
+          expect(JSON.stringify(stored)).not.toContain(marker);
+          expect(stored).toHaveProperty("message", result.message);
+        } finally {
+          spy.mockRestore();
+          resetSecretRedactionRegistryForTest();
+          resetLogger();
+        }
+      });
+    },
+  );
 });

@@ -13,7 +13,6 @@ import (
 type routeIndex struct {
 	targetLang      string
 	redirects       map[string]string
-	sourceRoutes    map[string]struct{}
 	localizedRoutes map[string]struct{}
 	localePrefixes  map[string]struct{}
 }
@@ -40,7 +39,6 @@ func loadRouteIndex(docsRoot, targetLang string) (*routeIndex, error) {
 	index := &routeIndex{
 		targetLang:      strings.TrimSpace(targetLang),
 		redirects:       map[string]string{},
-		sourceRoutes:    map[string]struct{}{},
 		localizedRoutes: map[string]struct{}{},
 		localePrefixes:  map[string]struct{}{},
 	}
@@ -107,16 +105,9 @@ func (ri *routeIndex) loadRoutes(docsRoot string) error {
 		if err != nil {
 			return err
 		}
-		permalinks := extractPermalinks(content)
-
-		switch {
-		case firstSegment == ri.targetLang:
+		if firstSegment == ri.targetLang {
 			trimmedRel := strings.TrimPrefix(relPath, firstSegment+"/")
-			addRouteCandidates(ri.localizedRoutes, trimmedRel, permalinks)
-		case ri.isLocalePrefix(firstSegment):
-			return nil
-		default:
-			addRouteCandidates(ri.sourceRoutes, relPath, permalinks)
+			addRouteCandidates(ri.localizedRoutes, trimmedRel, extractPermalinks(content))
 		}
 		return nil
 	})
@@ -153,11 +144,8 @@ func normalizeSlashes(path string) string {
 }
 
 func firstPathSegment(relPath string) string {
-	if relPath == "" {
-		return ""
-	}
-	parts := strings.SplitN(relPath, "/", 2)
-	return parts[0]
+	segment, _, _ := strings.Cut(relPath, "/")
+	return segment
 }
 
 func addRouteCandidates(routes map[string]struct{}, relPath string, permalinks []string) {
@@ -256,49 +244,36 @@ func (ri *routeIndex) localizeURL(raw string) string {
 	if strings.HasPrefix(trimmed, "#") || strings.HasPrefix(trimmed, "//") {
 		return raw
 	}
-	if hasURLScheme(trimmed) {
-		return raw
-	}
 
 	pathPart, suffix := splitURLSuffix(trimmed)
 	if !strings.HasPrefix(pathPart, "/") {
 		return raw
 	}
 
-	normalized := normalizeRoute(pathPart)
-	if ri.routeHasLocalePrefix(normalized) {
+	canonical := normalizeRoute(pathPart)
+	if ri.routeHasLocalePrefix(canonical) {
 		return raw
 	}
 
-	canonical, ok := ri.resolveRoute(normalized)
-	if !ok {
-		return raw
+	seen := map[string]struct{}{canonical: {}}
+	for {
+		next, ok := ri.redirects[canonical]
+		if !ok {
+			break
+		}
+		if _, ok := seen[next]; ok {
+			return raw
+		}
+		seen[next] = struct{}{}
+		canonical = next
 	}
 	if _, ok := ri.localizedRoutes[canonical]; !ok {
 		return raw
 	}
-
-	return prefixLocaleRoute(ri.targetLang, canonical) + suffix
-}
-
-func hasURLScheme(raw string) bool {
-	switch {
-	case hasSchemePrefix(raw, "http://"), hasSchemePrefix(raw, "https://"):
-		return true
-	case hasSchemePrefix(raw, "mailto:"), hasSchemePrefix(raw, "tel:"):
-		return true
-	case hasSchemePrefix(raw, "data:"), hasSchemePrefix(raw, "javascript:"), hasSchemePrefix(raw, "vbscript:"):
-		return true
-	default:
-		return false
+	if canonical == "/" {
+		canonical = ""
 	}
-}
-
-func hasSchemePrefix(raw, prefix string) bool {
-	if len(raw) < len(prefix) {
-		return false
-	}
-	return strings.EqualFold(raw[:len(prefix)], prefix)
+	return "/" + ri.targetLang + canonical + suffix
 }
 
 func splitURLSuffix(raw string) (string, string) {
@@ -309,20 +284,8 @@ func splitURLSuffix(raw string) (string, string) {
 	return raw[:index], raw[index:]
 }
 
-func prefixLocaleRoute(lang, route string) string {
-	if route == "/" {
-		return "/" + lang
-	}
-	return "/" + lang + route
-}
-
 func (ri *routeIndex) routeHasLocalePrefix(route string) bool {
-	if route == "/" {
-		return false
-	}
-	firstSegment := strings.TrimPrefix(route, "/")
-	firstSegment = strings.SplitN(firstSegment, "/", 2)[0]
-	return ri.isLocalePrefix(firstSegment)
+	return ri.isLocalePrefix(firstPathSegment(strings.TrimPrefix(route, "/")))
 }
 
 func (ri *routeIndex) isLocalePrefix(segment string) bool {
@@ -331,36 +294,4 @@ func (ri *routeIndex) isLocalePrefix(segment string) bool {
 	}
 	_, ok := ri.localePrefixes[segment]
 	return ok
-}
-
-func (ri *routeIndex) resolveRoute(route string) (string, bool) {
-	current := normalizeRoute(route)
-	if current == "" {
-		return "", false
-	}
-
-	seen := map[string]struct{}{current: {}}
-	for {
-		next, ok := ri.redirects[current]
-		if !ok {
-			break
-		}
-		current = next
-		if _, ok := seen[current]; ok {
-			return "", false
-		}
-		seen[current] = struct{}{}
-	}
-
-	if current == "/" {
-		_, ok := ri.localizedRoutes[current]
-		return current, ok
-	}
-	if _, ok := ri.sourceRoutes[current]; ok {
-		return current, true
-	}
-	if _, ok := ri.localizedRoutes[current]; ok {
-		return current, true
-	}
-	return "", false
 }

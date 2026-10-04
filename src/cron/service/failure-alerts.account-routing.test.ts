@@ -9,7 +9,8 @@ import { makeCronJob } from "../delivery.test-helpers.js";
 import { resolveFailureAlert } from "./failure-alerts.js";
 import { createCronServiceState, type DeferredCronNotifications } from "./state.js";
 import { runPostPersistCronNotifications } from "./store.js";
-import { applyJobResult, authorCronRunCompletion } from "./timer.js";
+import { applyJobResult } from "./timer-outcomes.js";
+import { authorCronRunCompletion } from "./timer.js";
 
 function stripTestTargetPrefix(raw: string, prefixes: readonly string[]): string | undefined {
   const target = raw
@@ -472,7 +473,7 @@ describe("cron failure alert account routing", () => {
         failureAlert: { mode: "webhook", to: "https://alerts.example.test/cron" },
       });
       const deferredNotifications: DeferredCronNotifications = [];
-      const outcome = authorCronRunCompletion(state, job, {
+      const outcome = authorCronRunCompletion(job, {
         status: "ok",
         deliveryState: {
           delivered: deliveryStatus === "not-delivered" ? false : undefined,

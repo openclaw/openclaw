@@ -1,32 +1,35 @@
 import type { DatabaseSync } from "node:sqlite";
+import { UPDATE_RUN_PHASES } from "../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { runExistingOpenClawStateWriteTransaction } from "../state/openclaw-state-db-existing-write.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
+import { completeUpdateFailureSummary } from "./update-failure-result.js";
 import { encodeRun, isRetainedStep, type UpdateRunLedgerOptions } from "./update-run-codec.js";
+import type { UpdateRunPhasePatch } from "./update-run-mutation.types.js";
 import { decodeRun, readUpdateRunRecord } from "./update-run-read.kernel.js";
 import {
   finishUpdateRunRecord,
   type FinishUpdateRunResult,
+  type UpdateRunPhase,
   type UpdateRunRecord,
   type UpdateRunStep,
 } from "./update-run-record.js";
+import type { UpdateRunResult } from "./update-run-result.js";
 import { updateRunStepKey } from "./update-run-step-key.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
-import type { UpdateRunResult } from "./update-runner-types.js";
 
-const schemaStart = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS update_runs (");
-const schemaEndMarker = "ON update_runs(status, created_at_ms DESC, run_id);";
-const schemaEnd = OPENCLAW_STATE_SCHEMA_SQL.indexOf(schemaEndMarker, schemaStart);
-if (schemaStart < 0 || schemaEnd < 0) {
-  throw new Error("Update run schema markers are missing");
-}
-export const updateRunLedgerSchema = OPENCLAW_STATE_SCHEMA_SQL.slice(
-  schemaStart,
-  schemaEnd + schemaEndMarker.length,
+export const updateRunLedgerSchema = extractSqliteTableSchema(
+  OPENCLAW_STATE_SCHEMA_SQL,
+  "update_runs",
+  {
+    endMarker: "ON update_runs(status, created_at_ms DESC, run_id);",
+    errorMessage: "Update run schema markers are missing",
+  },
 );
 
 export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void {
@@ -43,6 +46,66 @@ export function upsertStep(record: UpdateRunRecord, input: UpdateRunStep): void 
       throw new Error("Update run retained steps exceed the step limit");
     }
     record.steps.splice(disposable, 1);
+  }
+}
+
+export function applyUpdateRunPhase(
+  record: UpdateRunRecord,
+  phase: UpdateRunPhase,
+  patch: UpdateRunPhasePatch,
+): void {
+  if (record.status !== "running") {
+    return;
+  }
+  if (patch.origin) {
+    record.origin = { ...record.origin, ...patch.origin };
+  }
+  if (patch.target) {
+    record.target = { ...record.target, ...patch.target };
+  }
+  if (patch.before) {
+    record.before = { ...record.before, ...patch.before };
+  }
+  if (patch.after) {
+    record.after = { ...record.after, ...patch.after };
+  }
+  if (patch.trigger) {
+    record.trigger = patch.trigger;
+  }
+  const repairsVerification = phase === "repairing" && record.phase === "verifying";
+  const advances = UPDATE_RUN_PHASES.indexOf(phase) > UPDATE_RUN_PHASES.indexOf(record.phase);
+  // Post-activation repair may only return to verification; stale staging
+  // writers must not reopen activation while the live candidate is repaired.
+  const resumesVerification =
+    record.phase === "repairing" && record.steps.some((step) => step.step === "verifying");
+  if (
+    phase !== "finished" &&
+    (repairsVerification || (advances && (!resumesVerification || phase === "verifying")))
+  ) {
+    const now = Date.now();
+    upsertStep(record, { step: record.phase, status: "completed", endedAtMs: now });
+    record.phase = phase;
+    upsertStep(record, {
+      step: phase,
+      status: "in_progress",
+      startedAtMs: now,
+      endedAtMs: undefined,
+    });
+  }
+  if (patch.step) {
+    upsertStep(record, patch.step);
+  }
+}
+
+export function applyUpdateRunStep(
+  record: UpdateRunRecord,
+  { reason, ...step }: UpdateRunStep & { reason?: string },
+): void {
+  if (record.status === "running") {
+    upsertStep(record, step);
+    if (reason !== undefined) {
+      record.reason = reason;
+    }
   }
 }
 
@@ -162,13 +225,7 @@ export function recordUpdateRunDiagnostics(
     ) {
       return undefined;
     }
-    return mutateRun(
-      runId,
-      (record) => {
-        applyUpdateRunDiagnostics(record, diagnostics);
-      },
-      options,
-    );
+    return mutateRun(runId, (record) => applyUpdateRunDiagnostics(record, diagnostics), options);
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
@@ -203,8 +260,26 @@ export function finishUpdateRun(
           }
         }
         record.before = { ...record.before, ...result.before };
+        const failed =
+          record.steps.find((step) => step.status === "failed" && step.failureFacts?.length) ??
+          (result.status === "failed"
+            ? record.steps.find((step) => step.step === record.phase)
+            : undefined);
+        finishUpdateRunRecord(record, result);
+        if (result.status === "failed" || result.status === "rolled-back") {
+          const summary = completeUpdateFailureSummary(record.reason, failed?.failureFacts);
+          record.reason = summary.reason;
+          if (failed) {
+            failed.failureFacts = summary.failureFacts;
+          } else {
+            upsertStep(record, {
+              step: "update",
+              status: "failed",
+              failureFacts: summary.failureFacts,
+            });
+          }
+        }
       }
-      finishUpdateRunRecord(record, result);
     },
     options,
   );

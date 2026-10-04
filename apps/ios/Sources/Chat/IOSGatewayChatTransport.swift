@@ -276,13 +276,13 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeSessionsList(res, agentID: agentID)
     }
 
-    func listChildSessions(parentKey: String) async throws -> [OpenClawChatSessionEntry] {
+    func listChildSessions(parentKey: String) async throws -> OpenClawChatChildSessionsResult {
         try await self.listChildSessions(parentKey: parentKey, ifCurrentRoute: nil)
     }
 
     private func listChildSessions(
         parentKey: String,
-        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> [OpenClawChatSessionEntry]
+        ifCurrentRoute route: GatewayNodeSessionRoute?) async throws -> OpenClawChatChildSessionsResult
     {
         try await OpenClawChatChildSessionPager.collect { offset in
             let request = OpenClawChatGatewayRequests.sessionsList(
@@ -375,11 +375,7 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         patch: OpenClawChatSessionSettingsPatch,
         ifCurrentRoute expectedRoute: GatewayNodeSessionRoute?) async throws -> OpenClawChatModelPatchResult?
     {
-        let requiresSettingsContract = patch.expectedSessionID != nil ||
-            patch.permissionMode != nil || patch.toolOverrides != nil
-        let requiresSettingsCAS = patch.expectedPermissionMode != nil ||
-            patch.expectedToolOverrides != nil || patch.permissionMode != nil || patch.toolOverrides != nil
-        let fallbackRoute: GatewayNodeSessionRoute? = if requiresSettingsContract, expectedRoute == nil {
+        let fallbackRoute: GatewayNodeSessionRoute? = if patch.requiresSessionSettingsContract, expectedRoute == nil {
             await self.currentSessionMutationRoute()
         } else {
             nil
@@ -390,25 +386,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         } else {
             (settingsContract: false, settingsCAS: false)
         }
-        guard !requiresSettingsContract || settingsSupport.settingsContract else {
-            throw OpenClawChatTransportSendError.notDispatched
-        }
-        guard !requiresSettingsCAS || settingsSupport.settingsCAS else {
-            throw OpenClawChatTransportSendError.notDispatched
-        }
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
-        let request = OpenClawChatGatewayRequests.patchSessionSettings(
+        let request = try OpenClawChatGatewayRequests.patchSessionSettings(
             sessionKey: target.sessionKey,
             agentID: target.agentID,
-            expectedSessionID: patch.expectedSessionID,
-            expectedPermissionMode: patch.expectedPermissionMode,
-            expectedToolOverrides: patch.expectedToolOverrides,
-            model: patch.model,
-            thinkingLevel: patch.thinkingLevel,
-            fastMode: patch.fastMode,
-            verboseLevel: patch.verboseLevel,
-            permissionMode: patch.permissionMode,
-            toolOverrides: patch.toolOverrides,
+            patch: patch,
             supportsSessionSettingsContract: settingsSupport.settingsContract,
             supportsSessionSettingsCAS: settingsSupport.settingsCAS)
         let response = if let settingsRoute {
@@ -450,14 +432,6 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
             unread: unread)
     }
 
-    func forkSession(parentKey: String) async throws -> String {
-        try await self.forkSession(parentKey: parentKey, fromLastCompleted: false)
-    }
-
-    func forkSession(parentKey: String, fromLastCompleted: Bool) async throws -> String {
-        try await self.forkSession(parentKey: parentKey, fromLastCompleted: fromLastCompleted, agentID: nil)
-    }
-
     func forkSession(parentKey: String, fromLastCompleted: Bool, agentID: String?) async throws -> String {
         let target = self.sessionTarget(for: parentKey, overrideAgentID: agentID)
         let childAgentID = target.agentID ?? OpenClawChatSessionKey.agentID(from: target.sessionKey)
@@ -487,6 +461,11 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return await self.gateway.supportsServerMethod(method, ifCurrentRoute: route)
     }
 
+    func attachmentLimits() async -> GatewayAttachmentLimits? {
+        guard let route = await self.currentSessionMutationRoute() else { return nil }
+        return await self.gateway.currentAttachmentLimits(ifCurrentRoute: route)
+    }
+
     func fetchProgressCard(sessionKey: String, agentID: String?) async throws -> ProgressCard? {
         let target = self.sessionTarget(for: sessionKey, overrideAgentID: agentID)
         let request = OpenClawChatGatewayRequests.progressCardGet(
@@ -505,6 +484,24 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
         return try OpenClawChatGatewayPayloadCodec.decodeProgressCard(
             data,
             agentID: OpenClawChatSessionKey.agentID(from: target.sessionKey) ?? target.agentID)
+    }
+
+    func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
+        guard let route = await self.currentSessionMutationRoute(),
+              let facts = await self.gateway.currentReactionAccess(ifCurrentRoute: route)
+        else { return nil }
+        return self.reactionsRouteLease(
+            routeID: facts.routeID,
+            access: OpenClawChatReactionAccess(
+                role: facts.role,
+                scopes: facts.scopes,
+                sessionCap: facts.sessionCap,
+                methods: facts.methods,
+                userID: facts.userID),
+            isCurrent: { await self.gateway.currentRoute() == route },
+            request: { request in
+                try await self.gateway.request(request, ifCurrentRoute: route)
+            })
     }
 
     func resolveInlineWidgetResource(
@@ -601,10 +598,6 @@ struct IOSGatewayChatTransport: OpenClawChatGatewayTransport {
               error.code == "INVALID_REQUEST"
         else { return false }
         return error.message == "invalid chat.history params: at root: unexpected property 'inputRunIds'"
-    }
-
-    var supportsSlashCommandCatalog: Bool {
-        true
     }
 
     func waitForRunCompletion(

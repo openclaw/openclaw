@@ -25,6 +25,7 @@ import {
   setPreparedModelFullCatalogAuth,
   bindPreparedModelRuntimeAuth,
   type PreparedModelRuntimeAuth,
+  type PreparedAccountCatalogAccess,
   type PreparedModelRuntimeAuthScope,
   type PreparedModelCatalogAuth,
 } from "./prepared-model-runtime-auth.js";
@@ -587,6 +588,7 @@ export function markPreparedModelCatalogFull(snapshot: ModelCatalogSnapshot): Mo
 
 export type PreparedModelRuntimeCatalogAccess = Readonly<{
   initialAuth: PreparedModelCatalogAuth;
+  accountCatalog?: PreparedAccountCatalogAccess;
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
@@ -627,7 +629,7 @@ export function createPreparedModelRuntimeSnapshot(
   prepareModelCatalogThinkingPolicies({
     catalog: modelCatalog,
     metadataSnapshot: pluginMetadataSnapshot,
-    providers: pluginRegistry?.providers,
+    pluginRegistry,
   });
   const createStores = (): PreparedModelRuntimeStores => {
     // Runtime API keys and session extensions mutate these objects. Fork them per run while the
@@ -645,6 +647,7 @@ export function createPreparedModelRuntimeSnapshot(
     config: publishedConfig,
     observationConfig: input.config,
     isCurrent: catalogAccess.isCurrent,
+    accountCatalog: catalogAccess.accountCatalog,
     authModes: catalogAccess.initialAuth.authModes,
     metadataSnapshot: pluginMetadataSnapshot,
     allowGatewaySubagentBinding: input.allowGatewaySubagentBinding === true,

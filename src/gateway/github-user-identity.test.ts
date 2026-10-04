@@ -2,12 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { setDisplayName, syncGitHubIdentity } from "../state/user-profile-writes.worker.js";
 import {
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
   getUserProfileListItem,
-  setDisplayName,
-  syncGitHubIdentity,
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
@@ -88,13 +87,18 @@ afterEach(() => {
 
 describe("authenticated GitHub identity sync", () => {
   it.each(["tailscale", "access"] as const)(
-    "verifies a fresh %s identity with the service credential when anonymous quota is exhausted",
+    "verifies a fresh public %s identity without using the Enterprise repository credential",
     async (provider) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
         setRuntimeConfigSnapshot({
-          gateway: { controlUi: { github: { token: "configured-service-token" } } },
+          gateway: {
+            github: { host: "ghe.example.test", apiBaseUrl: "https://ghe.example.test/api/v3" },
+            controlUi: {
+              github: { host: "ghe.example.test", token: "enterprise-service-token" },
+            },
+          },
         });
-        vi.stubEnv("GH_TOKEN", "other-process-token");
+        vi.stubEnv("GH_TOKEN", "configured-service-token");
         const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
           const url =
             typeof input === "string" ? input : input instanceof URL ? input.href : input.url;

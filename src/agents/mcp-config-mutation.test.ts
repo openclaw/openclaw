@@ -231,6 +231,8 @@ describe("configured MCP read-only results", () => {
         "mcpServers",
         "ok",
         "path",
+        "runtimeConfig",
+        "sourceConfigBeforeMigrations",
       ]);
       const missing = await unsetConfiguredMcpServer({ name: "missing" });
       expect(missing).toMatchObject({ ok: true, removed: false });

@@ -130,7 +130,7 @@ async function fixture(suffix = "default") {
   vi.stubEnv("CODEX_HOME", home);
   vi.stubEnv("PATH", "");
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true, agentDir }] },
+    agents: { entries: { main: { agentDir } } },
   };
   const pluginConfig = {
     supervision: { enabled: true },

@@ -15,7 +15,10 @@ import {
   createWorkerSessionPlacementStore,
   type WorkerSessionPlacementStore,
 } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import {
+  advancePlacementFixtureToActive,
+  seedAttachedPlacementEnvironment,
+} from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-move",
@@ -41,48 +44,11 @@ describe("worker session placement moves", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function advanceToActive() {
-    let placement = await store.startDispatch(SESSION);
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: "environment-move" },
-    });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-        remoteWorkspaceDir: "/workspace/move",
-      },
-    });
-    seedAttachedPlacementEnvironment(database, {
+  function advanceToActive() {
+    return advancePlacementFixtureToActive(store, database, SESSION, {
       environmentId: "environment-move",
-      sessionId: SESSION.sessionId,
-      ownerEpoch: 7,
+      remoteWorkspaceDir: "/workspace/move",
     });
-    const active = store.transition({
-      sessionId: SESSION.sessionId,
-      from: "starting",
-      to: "active",
-      expectedGeneration: placement.generation,
-      patch: { activeOwnerEpoch: 7 },
-    });
-    if (active.state !== "active") {
-      throw new Error("expected active worker placement");
-    }
-    return active;
   }
 
   function seedAttachedEnvironment(input: {
@@ -119,10 +85,11 @@ describe("worker session placement moves", () => {
         .prepare("SELECT 1 AS ok FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("worker_session_placement_moves"),
     ).toBeUndefined();
-    expect(store.listPlacementMoves()).toEqual([]);
     expect(await store.readProjection([SESSION.sessionId])).toEqual({
       placements: new Map(),
       moves: new Map(),
+      pendingResults: new Map(),
+      workspaceJournalOwnerSessionIds: new Set(),
       environments: new Map(),
       workspaceResultReconcilingSessionIds: new Set(),
       workspaceRecoveryPendingSessionIds: new Set(),
@@ -172,14 +139,11 @@ describe("worker session placement moves", () => {
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
     expect(store.getPlacementMove(SESSION.sessionId)).toEqual(begun.intent);
-    expect(await store.readProjection([SESSION.sessionId])).toMatchObject({
+    expect(await store.readProjection([SESSION.sessionId, "missing"])).toMatchObject({
       placements: new Map([[SESSION.sessionId, begun.placement]]),
       moves: new Map([[SESSION.sessionId, begun.intent]]),
       workspaceResultReconcilingSessionIds: new Set(),
     });
-    expect(store.getPlacementMoves([SESSION.sessionId, "missing"])).toEqual(
-      new Map([[SESSION.sessionId, begun.intent]]),
-    );
 
     expect(
       store.beginPlacementMove({
@@ -214,14 +178,14 @@ describe("worker session placement moves", () => {
       abandonSource: true,
     });
     expect(store.getPlacementMove(active.sessionId)).toMatchObject({ abandonSource: true });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: begun.placement.generation,
     });
     const recoveryError = "Worker result abandoned by forced operator teardown";
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: active.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError,
@@ -263,8 +227,8 @@ describe("worker session placement moves", () => {
       claimId: "pending-claim",
       runId: "pending-run",
     });
-    store.markWorkspaceResultPending(claim);
-    expect(store.listPendingWorkspaceResults()).toHaveLength(1);
+    await store.markWorkspaceResultPending(claim);
+    expect(await store.listPendingWorkspaceResultsAsync()).toHaveLength(1);
 
     const source = {
       generation: active.generation,
@@ -466,7 +430,7 @@ describe("worker session placement moves", () => {
     );
     expect(observed).toEqual(["workspace reconciliation is waiting"]);
 
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: SESSION.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -503,7 +467,7 @@ describe("worker session placement moves", () => {
         os: "os-a",
       },
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: SESSION.sessionId,
       environmentId: source.environmentId,
       ownerEpoch: source.activeOwnerEpoch,
@@ -555,14 +519,14 @@ describe("worker session placement moves", () => {
       target: { kind: "gateway" },
       abandonSource: true,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: begun.placement.generation,
     });
     const recoveryError = "Worker result abandoned by forced operator teardown";
-    const failed = store.fail({
+    const failed = await store.fail({
       sessionId: active.sessionId,
       expectedGeneration: reconciling.generation,
       recoveryError,
@@ -589,13 +553,13 @@ describe("worker session placement moves", () => {
       resolveDestination: vi.fn(),
     });
 
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     expect(store.get(active.sessionId)).toEqual(failed);
     expect(store.getPlacementMove(active.sessionId)?.lastError).toBe(
       "device teardown is still pending",
     );
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     expect(store.get(active.sessionId)).toMatchObject({
       sessionId: active.sessionId,
@@ -613,7 +577,7 @@ describe("worker session placement moves", () => {
       source: sourceFor(active),
       target: { kind: "gateway" },
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
@@ -630,12 +594,12 @@ describe("worker session placement moves", () => {
       resolveDestination: vi.fn(),
     });
 
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
 
     const recovered = store.get(active.sessionId);
     expect(recovered).toMatchObject({ state: "local", generation: reconciling.generation + 1 });
     expect(store.getPlacementMove(active.sessionId)).toBeUndefined();
-    await moves.recoverAll();
+    await moves.recoverSession(await store.readProjection([active.sessionId], { current: true }));
     expect(store.get(active.sessionId)).toEqual(recovered);
   });
 
@@ -651,7 +615,7 @@ describe("worker session placement moves", () => {
         os: "os-a",
       },
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: source.sessionId,
       environmentId: source.environmentId,
       ownerEpoch: source.activeOwnerEpoch,
@@ -690,7 +654,9 @@ describe("worker session placement moves", () => {
       },
     });
 
-    await moves.recoverAll();
+    await moves.recoverSession(
+      await restartedStore.readProjection([source.sessionId], { current: true }),
+    );
 
     expect(reclaimSource).not.toHaveBeenCalled();
     expect(dispatch).not.toHaveBeenCalled();

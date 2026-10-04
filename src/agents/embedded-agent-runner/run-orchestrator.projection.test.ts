@@ -10,11 +10,13 @@ import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   persistSessionTranscriptTurn,
+  replaceSessionEntry,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import * as reconciliation from "../../config/sessions/session-transcript-reconcile.js";
 import { useReconcileWorkerObserver } from "../../config/sessions/session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerMessage } from "../../config/sessions/session-transcript-reconcile.worker.js";
+import { computeBackoff } from "../../infra/backoff.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -34,6 +36,7 @@ import {
 } from "../test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   installEmbeddedRunnerBaseE2eMocks,
+  installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerFastRunE2eMocks,
 } from "../test-helpers/embedded-agent-runner-e2e-mocks.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./run/types.js";
@@ -52,6 +55,7 @@ let runEmbeddedAgent: ProductionRun;
 
 beforeAll(async () => {
   installEmbeddedRunnerBaseE2eMocks();
+  installEmbeddedRunnerBackoffE2eMocks({ computeBackoff, sleepWithAbort: async () => {} });
   installEmbeddedRunnerFastRunE2eMocks({ runEmbeddedAttempt: runAttempt });
   vi.doMock("../models-config.js", () => ({ ensureOpenClawModelsJson: vi.fn() }));
   vi.doMock("./model.js", () => ({
@@ -158,6 +162,7 @@ describe("embedded retry transcript ownership", () => {
     ["durable", false, "idle", false, "disconnect"],
     ["detached", false, "absent", false, "output-limit"],
     ["durable", false, "active", false, "output-limit"],
+    ["detached", false, "absent", false, "output-limit-repeat"],
   ] as const)(
     "%s metadata, caller manager=%s, projection=%s, abort=%s, failure=%s",
     async (sessionPersistence, suppliedManager, projection, abort, failure) => {
@@ -185,7 +190,7 @@ describe("embedded retry transcript ownership", () => {
       const fetchMock = vi
         .fn<typeof fetch>()
         .mockRejectedValue(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }));
-      if (failure === "output-limit") {
+      if (failure.startsWith("output-limit")) {
         const item = {
           type: "function_call",
           id: "fc_unfinished",
@@ -248,7 +253,7 @@ describe("embedded retry transcript ownership", () => {
       }
       expect(responseMessages.some((message) => message.role === "toolResult")).toBe(false);
       expect(fetchMock).toHaveBeenCalledOnce();
-      if (failure === "output-limit") {
+      if (failure.startsWith("output-limit")) {
         expect(erroredAssistant).toMatchObject({
           errorCode: "incomplete_tool_call",
           usage: { output: 128_000 },
@@ -320,12 +325,37 @@ describe("embedded retry transcript ownership", () => {
           if (callerOwned) {
             expect(attempt.sessionManager).toBe(firstManager);
             expect(attempt.sessionTarget).toBeUndefined();
-            expect(attempt.sessionManager?.buildSessionContext().messages).toEqual(history);
             fence?.expectDirty();
           } else {
             expect(attempt.sessionManager).toBeUndefined();
             expect(attempt.sessionTarget).toMatchObject(target);
-            expect(SessionManager.open(target).buildSessionContext().messages).toEqual(history);
+          }
+          const resumedHistory = (
+            attempt.sessionManager ?? (await SessionManager.openAsync(target))
+          ).buildSessionContext().messages;
+          expect(resumedHistory.slice(0, history.length)).toEqual(history);
+          if (failure.startsWith("output-limit")) {
+            expect(resumedHistory.slice(history.length)).toEqual([
+              expect.objectContaining({
+                role: "custom",
+                customType: "incomplete-tool-call",
+                content: expect.stringContaining(
+                  "Split the remaining work into smaller tool calls",
+                ),
+                details: { reason: "max_output_tokens", toolCallId: "unfinished|fc_unfinished" },
+              }),
+            ]);
+            expect(JSON.stringify(resumedHistory.at(-1))).toContain("provider's output limit");
+          } else {
+            expect(resumedHistory).toEqual(history);
+          }
+          if (failure === "output-limit-repeat") {
+            return makeEmbeddedRunnerAttempt({
+              sessionIdUsed: target.sessionId,
+              messagesSnapshot: resumedHistory,
+              lastAssistant: erroredAssistant,
+              currentAttemptAssistant: erroredAssistant,
+            });
           }
           return makeEmbeddedRunnerAttempt({
             sessionIdUsed: target.sessionId,
@@ -339,6 +369,7 @@ describe("embedded retry transcript ownership", () => {
       let outcome: Promise<unknown> | undefined;
       try {
         if (projection !== "absent") {
+          await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
           await persistSessionTranscriptTurn(target, {
             messages: history.map((message, index) => ({ eventId: `seed-${index}`, message })),
             touchSessionEntry: false,
@@ -385,7 +416,16 @@ describe("embedded retry transcript ownership", () => {
           }
         }
         await expect(outcome).resolves.toMatchObject({
-          result: { payloads: [{ text: "Verified." }] },
+          result: {
+            payloads: [
+              failure === "output-limit-repeat"
+                ? {
+                    text: "⚠️ The task couldn't finish. Some actions may have completed; check their results before continuing.",
+                    isError: true,
+                  }
+                : { text: "Verified." },
+            ],
+          },
         });
         expect(runAttempt).toHaveBeenCalledTimes(2);
         expect(fetchMock).toHaveBeenCalledOnce();

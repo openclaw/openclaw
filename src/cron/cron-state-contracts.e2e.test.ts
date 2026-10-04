@@ -1,7 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { reloadTaskRegistryFromStoreAsync } from "../tasks/task-registry-state.js";
-import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
@@ -45,7 +42,6 @@ describe("cron state contracts", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-state-lifecycle-" },
       async (state) => {
-        resetTaskRegistryForTests({ persist: false });
         const storePath = state.path("cron", "jobs.json");
         const baseTimeMs = Date.parse(BASE_TIME_ISO);
         const clock = createGatewaySchedulerClock(baseTimeMs);
@@ -201,7 +197,6 @@ describe("cron state contracts", () => {
           first?.stop();
           restarted?.stop();
           reloaded?.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );
@@ -211,7 +206,6 @@ describe("cron state contracts", () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-cron-state-dedup-" },
       async (state) => {
-        resetTaskRegistryForTests({ persist: false });
         const storePath = state.path("cron", "jobs.json");
         const atMs = Date.parse(BASE_TIME_ISO) + 1_000;
         const firstClock = createGatewaySchedulerClock(Date.parse(BASE_TIME_ISO));
@@ -293,8 +287,6 @@ describe("cron state contracts", () => {
           first = undefined;
           second.stop();
           second = undefined;
-          resetTaskRegistryForTests({ persist: false });
-          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
           const reloadedHistory = readCronRunHistoryPageForTests({
             storeKey: cronStoreKey(storePath),
@@ -320,7 +312,6 @@ describe("cron state contracts", () => {
           first?.stop();
           second?.stop();
           restarted?.stop();
-          resetTaskRegistryForTests({ persist: false });
         }
       },
     );

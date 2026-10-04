@@ -52,7 +52,6 @@ export function createMSTeamsReplyDispatcher(params: {
   runtime: RuntimeEnv;
   log: MSTeamsMonitorLogger;
   app: MSTeamsApp;
-  appId: string;
   conversationRef: StoredConversationReference;
   context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
@@ -194,11 +193,9 @@ export function createMSTeamsReplyDispatcher(params: {
     return sendMSTeamsMessages({
       replyStyle: params.replyStyle,
       app: params.app,
-      appId: params.appId,
       conversationRef: params.conversationRef,
       context: params.context,
       messages,
-      retry: {},
       onRetry: (event) => {
         params.log.debug?.("retrying send", {
           replyStyle: params.replyStyle,
@@ -247,8 +244,6 @@ export function createMSTeamsReplyDispatcher(params: {
   const renderReplyPayload = (payload: ReplyPayload) => {
     return renderReplyPayloadsToMessages([payload], {
       textChunkLimit: params.textLimit,
-      chunkText: true,
-      mediaMode: "split",
       tableMode,
       chunkMode,
     });

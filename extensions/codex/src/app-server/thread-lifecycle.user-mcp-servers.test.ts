@@ -1,15 +1,13 @@
-// Codex tests cover thread lifecycle.user mcp servers plugin behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import http from "node:http";
-import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   hashCodexAppServerBindingFingerprint,
   readCodexAppServerBinding,
   registerCodexTestSessionIdentity,
-  resetCodexTestBindingStore,
   seedCodexTestBinding,
   writeCodexAppServerBinding,
 } from "./session-binding.test-helpers.js";
@@ -17,22 +15,20 @@ import {
   createAppServerOptions,
   createLeasedCodexLifecycleHarness,
   createParams,
-  resetThreadLifecycleTestFixtures,
   startOrResumeThread,
   threadResumeResult,
   threadStartResult,
 } from "./thread-lifecycle.test-fixtures.js";
 import {
-  closePolicyHttpServers,
+  setupUserMcpServerTestHooks,
   startPolicyHttpServer,
+  tempDir,
   writePolicyProbeServer,
 } from "./thread-lifecycle.user-mcp-servers.test-support.js";
 
-function createRequest(
-  startThreadId: string,
-  options: { readRequirements?: boolean; resumeThreadId?: string } = {},
-) {
-  return vi.fn(async (method: string, _params: unknown) => {
+function createRequest(startThreadId: string, options: { readRequirements?: boolean } = {}) {
+  let startCount = 0;
+  return vi.fn(async (method: string, params: unknown) => {
     if (method === "config/read") {
       return { config: {}, origins: {}, layers: [] };
     }
@@ -40,86 +36,37 @@ function createRequest(
       return { requirements: null };
     }
     if (method === "thread/start") {
-      return threadStartResult(startThreadId);
+      startCount += 1;
+      return threadStartResult(startCount === 1 ? startThreadId : `${startThreadId}-${startCount}`);
     }
-    if (method === "thread/resume" && options.resumeThreadId) {
-      return threadResumeResult(options.resumeThreadId);
+    if (method === "thread/resume") {
+      assert(
+        params !== null &&
+          typeof params === "object" &&
+          "threadId" in params &&
+          typeof params.threadId === "string",
+      );
+      return threadResumeResult(params.threadId);
     }
     throw new Error(`unexpected method: ${method}`);
   });
 }
 
+function lifecycleOptions(
+  sessionFile: string,
+  cwd: string,
+  config?: EmbeddedRunAttemptParams["config"],
+) {
+  return {
+    params: createParams(sessionFile, cwd, config),
+    cwd,
+    dynamicTools: [],
+    appServer: createAppServerOptions(),
+  };
+}
+
 describe("startOrResumeThread — user mcp.servers projection (regression: #80814)", () => {
-  let tempDir = "";
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-80814-"));
-    // Bindings are keyed by session identity, not tempDir, so sibling tests
-    // would otherwise leak resumable threads into fresh-start expectations.
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    resetThreadLifecycleTestFixtures();
-    await closePolicyHttpServers();
-    if (tempDir) {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("projects cfg.mcp.servers into the thread/start config patch under mcp_servers", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const serverPath = await writePolicyProbeServer(tempDir);
-    const request = vi.fn(async (method: string, _params: unknown) => {
-      if (method === "config/read") {
-        return { config: {}, origins: {}, layers: [] };
-      }
-      if (method === "configRequirements/read") {
-        return { requirements: null };
-      }
-      if (method === "thread/start") {
-        return threadStartResult();
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, {
-        mcp: {
-          servers: {
-            docs: {
-              transport: "stdio",
-              command: process.execPath,
-              args: [serverPath],
-              connectionTimeoutMs: 12_345,
-              requestTimeoutMs: 20_125,
-              supportsParallelToolCalls: true,
-            },
-          },
-        },
-      } as unknown as EmbeddedRunAttemptParams["config"]),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
-    expect(startParams?.config?.mcp_servers).toBeDefined();
-    expect(startParams.config!.mcp_servers).toMatchObject({
-      docs: {
-        command: process.execPath,
-        args: [serverPath],
-        startup_timeout_sec: 12.345,
-        tool_timeout_sec: 20.125,
-        supports_parallel_tool_calls: true,
-        enabled_tools: ["delete_docs", "read_docs"],
-        disabled_tools: ["app_docs", "task_docs"],
-      },
-    });
-  });
+  setupUserMcpServerTestHooks();
 
   it("projects wildcard filters as exact names before thread/start and thread/resume", async () => {
     const sessionFile = path.join(tempDir, "policy-session.jsonl");
@@ -139,7 +86,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         },
       },
     };
-    const request = createRequest("thread-policy", { resumeThreadId: "thread-policy" });
+    const request = createRequest("thread-policy");
     let wire = await createLeasedCodexLifecycleHarness({
       agentDir: path.join(tempDir, "agent"),
       respond: request,
@@ -147,10 +94,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const run = async () =>
       await startOrResumeThread({
         client: wire.client,
-        params: createParams(sessionFile, workspaceDir, config),
-        cwd: workspaceDir,
-        dynamicTools: [],
-        appServer: createAppServerOptions(),
+        ...lifecycleOptions(sessionFile, workspaceDir, config),
       });
 
     await run();
@@ -227,16 +171,22 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
-  it("does not start an MCP server scoped to another Codex agent", async () => {
+  it("projects only the current agent's MCP servers without starting excluded servers", async () => {
     const sessionFile = path.join(tempDir, "agent-scope-session.jsonl");
-    registerCodexTestSessionIdentity(sessionFile, "scope-session", "agent:main:scope-session");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:atlas:session-1");
     const workspaceDir = path.join(tempDir, "workspace-scope");
     const serverPath = await writePolicyProbeServer(tempDir);
     const startedPath = path.join(tempDir, "excluded-server-started");
+    const url = await startPolicyHttpServer();
     const config: EmbeddedRunAttemptParams["config"] = {
       tools: { deny: ["docs__delete_docs"] },
       mcp: {
         servers: {
+          atlas: {
+            transport: "streamable-http",
+            url,
+            codex: { agents: ["atlas"], defaultToolsApprovalMode: "approve" },
+          },
           docs: {
             transport: "stdio",
             command: process.execPath,
@@ -251,7 +201,11 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
     await startOrResumeThread({
       client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, config),
+      params: {
+        ...createParams(sessionFile, workspaceDir, config),
+        sessionKey: "agent:atlas:session-1",
+      },
+      agentId: "atlas",
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
@@ -261,42 +215,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     const callParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
       config?: { mcp_servers?: Record<string, unknown> };
     };
-    expect(callParams.config?.mcp_servers?.docs).toBeUndefined();
-  });
-
-  it("stores large user MCP server fingerprints as bounded hashes", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const serverPath = await writePolicyProbeServer(tempDir);
-    const request = createRequest("thread-1");
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, {
-        mcp: {
-          servers: {
-            server_large: {
-              transport: "stdio",
-              command: process.execPath,
-              args: [serverPath, "--description", "x".repeat(60_000)],
-            },
-          },
-        },
-      } as unknown as EmbeddedRunAttemptParams["config"]),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
+    expect(callParams.config?.mcp_servers).toStrictEqual({
+      atlas: { url, default_tools_approval_mode: "approve", enabled_tools: ["read_docs"] },
     });
-
-    const binding = await readCodexAppServerBinding(sessionFile);
-    expect(binding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
-    expect(binding?.userMcpServersFingerprint?.length).toBe(71);
-    expect(binding?.userMcpServersFingerprint).not.toContain("x".repeat(100));
   });
 
   it.each(["raw", "doctor-hashed"] as const)(
-    "restarts beta5 user MCP bindings stored as %s fingerprints before converging",
+    "restarts a beta5 MCP binding stored as a %s fingerprint before converging",
     async (legacyForm) => {
       const sessionFile = path.join(tempDir, "session.jsonl");
       registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
@@ -317,7 +242,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       } as unknown as EmbeddedRunAttemptParams["config"];
-      const request = createRequest("thread-beta5", { resumeThreadId: "thread-beta5" });
+      const request = createRequest("thread-beta5");
       let wire = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: request,
@@ -325,15 +250,13 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       const run = () =>
         startOrResumeThread({
           client: wire.client,
-          params: createParams(sessionFile, workspaceDir, config),
-          cwd: workspaceDir,
-          dynamicTools: [],
-          appServer: createAppServerOptions(),
+          ...lifecycleOptions(sessionFile, workspaceDir, config),
         });
 
       await run();
       const currentBinding = await readCodexAppServerBinding(sessionFile);
       expect(currentBinding).toBeDefined();
+      expect(currentBinding?.threadId).toBe("thread-beta5");
 
       const legacyFingerprint = JSON.stringify({
         mcp_servers: {
@@ -362,6 +285,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         "thread/start",
       ]);
       const convergedBinding = await readCodexAppServerBinding(sessionFile);
+      expect(convergedBinding?.threadId).toBe("thread-beta5-2");
+      expect(convergedBinding?.threadId).not.toBe(currentBinding?.threadId);
       expect(convergedBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
       expect(convergedBinding?.userMcpServersFingerprint).not.toContain("beta5-access-token");
       expect(convergedBinding?.userMcpServersFingerprint).not.toBe(legacyFingerprint);
@@ -373,7 +298,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       wire = await createLeasedCodexLifecycleHarness({
         agentDir: path.join(tempDir, "agent"),
         respond: request,
-        persistedThreads: ["thread-beta5"],
+        persistedThreads: ["thread-beta5-2"],
       });
       request.mockClear();
       await run();
@@ -389,282 +314,58 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
         "thread/resume",
         "thread/inject_items",
       ]);
+      expect(request).toHaveBeenCalledWith(
+        "thread/resume",
+        expect.objectContaining({ threadId: convergedBinding?.threadId }),
+      );
+      expect((await readCodexAppServerBinding(sessionFile))?.threadId).toBe(
+        convergedBinding?.threadId,
+      );
     },
   );
 
-  it("projects only Codex user MCP servers scoped to the current agent", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:atlas:session-1");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const url = await startPolicyHttpServer();
-    const request = createRequest("thread-1");
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: {
-        ...createParams(sessionFile, workspaceDir, {
-          mcp: {
-            servers: {
-              atlas: {
-                transport: "streamable-http",
-                url,
-                codex: {
-                  agents: ["atlas"],
-                  defaultToolsApprovalMode: "approve",
-                },
-              },
-              apolo: {
-                transport: "streamable-http",
-                url,
-                codex: {
-                  agents: ["apolo"],
-                  defaultToolsApprovalMode: "approve",
-                },
-              },
-            },
-          },
-        } as unknown as EmbeddedRunAttemptParams["config"]),
-        // Explicit multi-agent ownership (#114388): the session key owner must
-        // match the explicit agentId below.
-        sessionKey: "agent:atlas:session-1",
-      },
-      agentId: "atlas",
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
-    expect(startParams?.config?.mcp_servers).toStrictEqual({
-      atlas: {
-        url,
-        default_tools_approval_mode: "approve",
-        enabled_tools: ["read_docs"],
-      },
-    });
-  });
-
-  it("omits mcp_servers from the start config when cfg has no user MCP servers", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const request = createRequest("thread-1");
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
-    expect(startParams?.config?.mcp_servers).toBeUndefined();
-  });
-
-  it("starts a new thread when an existing binding lacks the matching user MCP fingerprint", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const serverPath = await writePolicyProbeServer(tempDir);
-
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-    });
-
-    const request = createRequest("thread-restarted");
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, {
-        mcp: {
-          servers: {
-            notes: {
-              transport: "stdio",
-              command: process.execPath,
-              args: [serverPath],
-            },
-          },
-        },
-      } as unknown as EmbeddedRunAttemptParams["config"]),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    expect(request.mock.calls.some(([method]) => method === "thread/resume")).toBe(false);
-    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
-    const startParams = startCall?.[1] as {
-      config?: { mcp_servers?: Record<string, unknown> };
-    };
-    expect(startParams?.config?.mcp_servers).toBeDefined();
-    expect(startParams.config!.mcp_servers).toMatchObject({
-      notes: { command: process.execPath, args: [serverPath] },
-    });
-  });
-
-  it("does not resume an existing native thread when runtime policy disables native tools", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-native",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-    });
-    const request = createRequest("thread-restricted", {
-      readRequirements: false,
-      resumeThreadId: "thread-native",
-    });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
-    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
-      environments?: unknown[];
-      config?: {
-        "features.code_mode"?: boolean;
-        "features.code_mode_only"?: boolean;
-        mcp_servers?: Record<string, unknown>;
-      };
-    };
-    expect(startParams?.environments).toEqual([]);
-    expect(startParams?.config?.["features.code_mode"]).toBe(false);
-    expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
-    expect(startParams?.config?.mcp_servers).toBeUndefined();
-    const preservedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(preservedBinding?.threadId).toBe("thread-native");
-  });
-
-  it("preserves MCP-mismatched bindings across transient native-tool-disabled turns", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-native",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      mcpServersFingerprint: "mcp-v1",
-    });
-    const request = createRequest("thread-restricted", { readRequirements: false });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      mcpServersFingerprint: undefined,
-      mcpServersFingerprintEvaluated: true,
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
-    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
-      config?: {
-        "features.code_mode"?: boolean;
-        mcp_servers?: Record<string, unknown>;
-      };
-    };
-    expect(startParams?.config?.["features.code_mode"]).toBe(false);
-    expect(startParams?.config?.mcp_servers).toBeUndefined();
-    const preservedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(preservedBinding?.threadId).toBe("thread-native");
-    expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
-  });
-
-  it("preserves MCP-mismatched bindings when provider web-search support is unknown", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-native",
-      cwd: workspaceDir,
-      model: "gpt-5.4-codex",
-      modelProvider: "openai",
-      dynamicToolsFingerprint: "[]",
-      webSearchThreadConfigFingerprint: "web-search-v1",
-      mcpServersFingerprint: "mcp-v1",
-    });
-    const request = createRequest("thread-fallback");
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      mcpServersFingerprint: undefined,
-      mcpServersFingerprintEvaluated: true,
-      nativeProviderWebSearchSupport: "unknown",
-      userMcpServersEnabled: false,
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "config/read",
-      "configRequirements/read",
-      "thread/start",
-    ]);
-    const preservedBinding = await readCodexAppServerBinding(sessionFile);
-    expect(preservedBinding?.threadId).toBe("thread-native");
-    expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
-  });
-
-  it("starts a new thread without user MCP servers when runtime policy disables them", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
-    const workspaceDir = path.join(tempDir, "workspace");
-    const config = {
-      mcp: {
-        servers: {
-          notes: {
-            transport: "stdio",
-            command: "node",
-            args: ["/opt/notes-mcp/dist/index.js"],
-          },
-        },
-      },
-    } as unknown as EmbeddedRunAttemptParams["config"];
-    const request = createRequest("thread-started", { resumeThreadId: "thread-existing" });
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, config),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-    });
-
-    request.mockClear();
-
-    await startOrResumeThread({
-      client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, config),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
-      nativeCodeModeEnabled: false,
-      userMcpServersEnabled: false,
-    });
-
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["config/read", "thread/start"]);
-    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as {
-      config?: { mcp_servers?: Record<string, unknown> };
-    };
-    expect(startParams?.config?.mcp_servers).toBeUndefined();
-  });
+  it.each(["native-tools-disabled", "unknown-search-support"] as const)(
+    "preserves MCP-mismatched bindings for transient %s turns",
+    async (restriction) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      const nativeDisabled = restriction === "native-tools-disabled";
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-native",
+        cwd: workspaceDir,
+        model: "gpt-5.4-codex",
+        modelProvider: "openai",
+        dynamicToolsFingerprint: "[]",
+        mcpServersFingerprint: "mcp-v1",
+        ...(nativeDisabled ? {} : { webSearchThreadConfigFingerprint: "web-search-v1" }),
+      });
+      const request = createRequest("thread-transient", { readRequirements: !nativeDisabled });
+      await startOrResumeThread({
+        client: { request } as never,
+        ...lifecycleOptions(sessionFile, workspaceDir),
+        mcpServersFingerprint: undefined,
+        mcpServersFingerprintEvaluated: true,
+        userMcpServersEnabled: false,
+        ...(nativeDisabled
+          ? { nativeCodeModeEnabled: false }
+          : { nativeProviderWebSearchSupport: "unknown" }),
+      });
+      expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "config/read",
+        ...(nativeDisabled ? [] : ["configRequirements/read"]),
+        "thread/start",
+      ]);
+      if (nativeDisabled) {
+        const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1];
+        expect(startParams).toMatchObject({ config: { "features.code_mode": false } });
+        expect(startParams).not.toHaveProperty("config.mcp_servers");
+      }
+      expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+        threadId: "thread-native",
+        mcpServersFingerprint: "mcp-v1",
+      });
+    },
+  );
 
   it("starts a new thread when a user MCP Authorization bearer changes without storing the bearer", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
@@ -686,18 +387,14 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
           },
         },
       }) as unknown as EmbeddedRunAttemptParams["config"];
-    const request = createRequest("thread-with-current-bearer", {
-      resumeThreadId: "thread-with-stale-bearer",
-    });
+    const request = createRequest("thread-with-current-bearer");
 
     await startOrResumeThread({
       client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
+      ...lifecycleOptions(sessionFile, workspaceDir, createConfig("Bearer access-token-one")),
     });
     const firstBinding = await readCodexAppServerBinding(sessionFile);
+    expect(firstBinding?.threadId).toBe("thread-with-current-bearer");
     expect(firstBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(firstBinding?.userMcpServersFingerprint).not.toContain("access-token-one");
 
@@ -705,10 +402,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
 
     await startOrResumeThread({
       client: { request } as never,
-      params: createParams(sessionFile, workspaceDir, createConfig("Bearer access-token-two")),
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer: createAppServerOptions(),
+      ...lifecycleOptions(sessionFile, workspaceDir, createConfig("Bearer access-token-two")),
     });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -723,6 +417,8 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       "Bearer access-token-two",
     );
     const secondBinding = await readCodexAppServerBinding(sessionFile);
+    expect(secondBinding?.threadId).toBe("thread-with-current-bearer-2");
+    expect(secondBinding?.threadId).not.toBe(firstBinding?.threadId);
     expect(secondBinding?.userMcpServersFingerprint).toMatch(/^sha256:[a-f0-9]{64}$/);
     expect(secondBinding?.userMcpServersFingerprint).not.toContain("access-token-two");
     expect(secondBinding?.userMcpServersFingerprint).not.toBe(

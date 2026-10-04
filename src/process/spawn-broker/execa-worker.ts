@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { Socket } from "node:net";
 import type { Transform } from "node:stream";
 import { execa } from "execa";
+import { setProcessTimeout } from "../process-deadline.js";
 import { createExecaOutput } from "./execa-output.js";
 import {
   serializeExecaError,
@@ -46,7 +47,7 @@ export async function startBrokerExeca(
       }
     }
     assertCurrent();
-    const { encoding, ...processOptions } = options;
+    const { encoding, executionDeadlineMs, ...processOptions } = options;
     const spawnOptions = {
       ...processOptions,
       ...(outputs.has(1)
@@ -58,10 +59,16 @@ export async function startBrokerExeca(
       cancelSignal: controller.signal,
     };
     // Execa separates its text and binary option contracts at the encoding discriminant.
-    const subprocess =
+    const start = () =>
       encoding === undefined || encoding === "utf8" || encoding === "utf16le"
         ? execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding })
         : execa(argv[0]!, argv.slice(1), { ...spawnOptions, encoding });
+    let subprocess: ReturnType<typeof start>;
+    try {
+      subprocess = start();
+    } catch (error) {
+      throw await adoptAbandonedSpawnError(error);
+    }
     const child = subprocess.nodeChildProcess;
     const stdio = [0, 1, 2].map((fd) => {
       if (fd === 0 && options.input !== undefined) {
@@ -80,22 +87,48 @@ export async function startBrokerExeca(
       }
       return stream;
     });
-    const result = subprocess.then(serializeResult, (error: unknown) => {
-      // Execa's promise rejects with the same result fields when reject:true.
-      if (error instanceof Error && "failed" in error && error.failed === true) {
-        // SAFETY: This rejection comes directly from execa, whose failed errors carry its result fields.
-        return serializeResult(error as Awaited<typeof subprocess>);
-      }
-      throw error;
-    });
+    let executionTimedOut = false;
+    const deadline =
+      executionDeadlineMs === undefined
+        ? undefined
+        : setProcessTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) {
+              executionTimedOut = true;
+              subprocess.kill();
+            }
+          }, executionDeadlineMs);
+    const clearDeadline = () => deadline?.clear();
+    child.once("exit", clearDeadline);
+    const result = subprocess
+      .then(
+        (value) => serializeResult(value, executionTimedOut),
+        (error: unknown) => {
+          // Execa's promise rejects with the same result fields when reject:true.
+          if (error instanceof Error && "failed" in error && error.failed === true) {
+            // SAFETY: This rejection comes directly from execa, whose failed errors carry its result fields.
+            return serializeResult(error as Awaited<typeof subprocess>, executionTimedOut);
+          }
+          throw error;
+        },
+      )
+      .finally(() => {
+        clearDeadline();
+        child.removeListener("exit", clearDeadline);
+      });
     // Result delivery is attached by the broker after handing off every descriptor.
     void result.catch(() => {});
     return {
       child,
       stdio,
       result,
-      cancel: () => controller.abort(),
-      kill: (signal) => subprocess.kill(signal),
+      cancel() {
+        clearDeadline();
+        controller.abort();
+      },
+      kill(signal) {
+        clearDeadline();
+        return subprocess.kill(signal);
+      },
       outputDrained(fd, error) {
         const output = outputs.get(fd);
         if (output) {
@@ -122,17 +155,68 @@ export async function startBrokerExeca(
   }
 }
 
-function serializeResult(result: Awaited<ReturnType<typeof execa>>): BrokerExecaResult {
+function isDescriptorSpawnError(error: unknown): error is NodeJS.ErrnoException {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const syscall = "syscall" in error ? error.syscall : undefined;
+  const code = "code" in error ? error.code : undefined;
+  return (
+    typeof syscall === "string" &&
+    syscall.startsWith("spawn") &&
+    (code === "EMFILE" || code === "ENFILE")
+  );
+}
+
+// Node returns a child without stdio when spawn hits EMFILE or ENFILE and emits that error on the
+// next tick. Execa reads the missing stdio first and throws, so the child it abandons has no error
+// listener and its spawn error would end this worker. Claim that error for the caller instead.
+async function adoptAbandonedSpawnError(thrown: unknown): Promise<unknown> {
+  if (!(thrown instanceof TypeError)) {
+    return thrown;
+  }
+  return await new Promise<unknown>((resolve) => {
+    const settle = (error: unknown) => {
+      process.off("uncaughtException", onUncaught);
+      clearImmediate(deadline);
+      resolve(error);
+    };
+    const onUncaught = (error: Error) => {
+      if (isDescriptorSpawnError(error)) {
+        settle(error);
+        return;
+      }
+      // Anything else keeps the default fatal handling once this listener is gone.
+      settle(thrown);
+      process.nextTick(() => {
+        throw error;
+      });
+    };
+    process.on("uncaughtException", onUncaught);
+    const deadline = setImmediate(() => settle(thrown));
+  });
+}
+
+function serializeResult(
+  result: Awaited<ReturnType<typeof execa>>,
+  executionTimedOut: boolean,
+): BrokerExecaResult {
   const output = {
     stdout: byteOrTextOutput(result.stdout),
     stderr: byteOrTextOutput(result.stderr),
   };
+  const error =
+    result instanceof Error
+      ? result
+      : executionTimedOut
+        ? new Error("Command timed out")
+        : undefined;
   return {
     ...output,
     exitCode: result.exitCode,
     signal: result.signal,
-    failed: result.failed,
-    timedOut: result.timedOut,
+    failed: result.failed || executionTimedOut,
+    timedOut: result.timedOut || executionTimedOut,
     isCanceled: result.isCanceled,
     isGracefullyCanceled: result.isGracefullyCanceled,
     isMaxBuffer: result.isMaxBuffer,
@@ -146,7 +230,7 @@ function serializeResult(result: Awaited<ReturnType<typeof execa>>): BrokerExeca
     cwd: result.cwd,
     durationMs: result.durationMs,
     signalDescription: result.signalDescription,
-    ...(result instanceof Error ? { error: serializeExecaError(result, output) } : {}),
+    ...(error ? { error: serializeExecaError(error, output) } : {}),
   };
 }
 

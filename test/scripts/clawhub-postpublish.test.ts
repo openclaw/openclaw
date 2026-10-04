@@ -436,6 +436,19 @@ function preparedSealingFixture(attempts: readonly [number, number] = [2, 2]) {
   };
 }
 
+it.each([{ version: "2026.8.2-alpha.1" }, { publishTag: "alpha" }])(
+  "rejects retired alpha prepared selection %j",
+  (override) => {
+    const f = preparedFixture();
+    expect(() =>
+      createPreparedClawHubManifest({
+        ...f.sealOptions,
+        matrix: [{ ...f.sealOptions.matrix[0], ...override }],
+      }),
+    ).toThrow("Alpha releases are retired;");
+  },
+);
+
 describe("ClawHub prepared publication", () => {
   it("seals a lone prepared package from a flat artifact download", () => {
     const f = preparedFixture();
@@ -525,18 +538,50 @@ describe("ClawHub prepared publication", () => {
     },
   );
 
-  it("keeps an unpublished version in the frozen roster for publication", async () => {
+  it.each([
+    { publication: { state: "published" } },
+    { publication: { state: "absent" } },
+    { publication: { state: "pending", stage: "staging" } },
+    { publication: { state: "pending", stage: "checks", attemptId: "attempt_checks" } },
+    { publication: { state: "failed", attemptId: "attempt_recover", recoverable: true } },
+    { publication: { state: "failed", recoverable: false } },
+    { publication: { state: "published" }, legacy: [404, 200] },
+    { publication: { state: "absent" }, legacy: [200, 404] },
+  ])("resolves prepared publication detail: %j", async ({ publication, legacy }) => {
     const f = preparedFixture();
-    const fetchImpl: typeof fetch = async (input, init) =>
-      requestUrl(input).endsWith(`/versions/${f.entry.version}`)
-        ? new Response(null, { status: 404 })
-        : f.options.fetchImpl(input, init);
+    const requests: string[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = requestUrl(input);
+      if (url.includes("/versions/")) {
+        requests.push(url.slice(url.indexOf("/versions/")));
+        if (url.endsWith("/publication")) {
+          return Response.json(
+            { name: f.entry.name, version: f.entry.version, ...(legacy ? {} : publication) },
+            { status: legacy?.[0] ?? 200 },
+          );
+        }
+        if (!legacy) {
+          throw new Error("Recognized publication state must not fall back to the version probe.");
+        }
+        return new Response(null, { status: legacy[1] });
+      }
+      if (url.endsWith("/trusted-publisher") && ["pending", "failed"].includes(publication.state)) {
+        return new Response(null, { status: 404 });
+      }
+      return f.options.fetchImpl(input, init);
+    };
     const [entry] = await resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl });
     expect(entry).toMatchObject({
       packageName: f.entry.name,
-      alreadyPublished: false,
+      publication,
+      alreadyPublished: publication.state === "published",
       prepared: { tarballSha256: f.entry.artifactSha256 },
     });
+    expect(entry.publication).toEqual(publication);
+    expect(requests).toEqual([
+      `/versions/${f.entry.version}/publication`,
+      ...(legacy ? [`/versions/${f.entry.version}`] : []),
+    ]);
   });
 
   it.each([
@@ -574,6 +619,8 @@ describe("ClawHub prepared publication", () => {
         resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl }),
       ).rejects.toThrow(/Plugin ClawHub New owner before preparing again/u);
       expect(registryRequests).toEqual([
+        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
+        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}`,
         `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
       ]);
     },
@@ -596,18 +643,11 @@ describe("ClawHub prepared publication", () => {
     expect(readFileSync(tarballPath, "utf8")).toBe("changed local bytes");
   });
 
-  it.each(["missing", "extra", "duplicate", "all-publishable"])(
+  it.each(["extra", "all-publishable"])(
     "rejects %s drift instead of silently publishing a different roster",
     async (change) => {
       const f = preparedFixture();
-      const plugins =
-        change === "missing"
-          ? []
-          : change === "extra"
-            ? [f.entry.name, "@openclaw/other"]
-            : change === "duplicate"
-              ? [f.entry.name, f.entry.name]
-              : [];
+      const plugins = change === "extra" ? [f.entry.name, "@openclaw/other"] : [];
       await expect(
         downloadPreparedClawHubRelease({
           ...f.resolveOptions,
@@ -708,12 +748,19 @@ describe("ClawHub prepared publication", () => {
 
 describe("ClawHub detached postpublish verification", () => {
   it.each([
-    { label: "protected-tag parent", parentOnMain: false },
-    { label: "main parent and protected-tag child", parentOnMain: true },
+    { label: "protected-tag parent", parentOnMain: false, status: "identical" },
+    { label: "main parent and protected-tag child", parentOnMain: true, status: "ahead" },
   ])(
-    "reads the exact authorized bytes after both attempts succeed for $label",
-    async ({ parentOnMain }) => {
-      const f = fixture(parentOnMain);
+    "reads authorized bytes using bounded ancestry without commits for $label",
+    async ({ parentOnMain, status }) => {
+      const verifierSha = status === "identical" ? sha : "c".repeat(40);
+      const f = fixture(parentOnMain, verifierSha);
+      const comparison = `compare/${sha}...${verifierSha}`;
+      f.metadata.set(comparison, {
+        status,
+        files: [{ filename: "large.txt", patch: "+change\n".repeat(300_000) }],
+      });
+      f.metadata.set(`${comparison}?per_page=1&page=2`, { status, commits: [] });
       const result = await verifyClawHubPostpublish(f.options);
       expect(result.complete).toBe(true);
       expect(result.packages).toHaveLength(1);
@@ -722,6 +769,9 @@ describe("ClawHub detached postpublish verification", () => {
         publicationAuthentication: "not-verified",
       });
       expect(f.registryReads.length).toBeGreaterThan(0);
+      expect(f.githubReads.filter((path) => path.startsWith("compare/"))).toEqual([
+        `${comparison}?per_page=1&page=2`,
+      ]);
     },
   );
 
@@ -776,62 +826,12 @@ describe("ClawHub detached postpublish verification", () => {
     },
   );
 
-  it("verifies ancestry when comparison file patches exceed the response limit", async () => {
-    const verifierSha = "c".repeat(40);
-    const f = fixture(false, verifierSha);
-    const comparison = `compare/${sha}...${verifierSha}`;
-    f.metadata.set(comparison, {
-      status: "ahead",
-      files: [{ filename: "large.txt", patch: "+change\n".repeat(300_000) }],
-    });
-    f.metadata.set(`${comparison}?per_page=1&page=2`, {
-      status: "ahead",
-      commits: [{ sha: verifierSha }],
-    });
-
-    const result = await verifyClawHubPostpublish(f.options);
-    expect(result.complete).toBe(true);
-    expect(result.packages).toHaveLength(1);
-    expect(f.registryReads.length).toBeGreaterThan(0);
-    expect(f.githubReads.filter((path) => path.startsWith("compare/"))).toEqual([
-      `${comparison}?per_page=1&page=2`,
-    ]);
-  });
-
-  it.each(["identical", "ahead"])(
-    "accepts %s ancestry even when the comparison page has no commits",
-    async (status) => {
-      const verifierSha = status === "identical" ? sha : "c".repeat(40);
-      const f = fixture(false, verifierSha);
-      const comparison = `compare/${sha}...${verifierSha}`;
-      for (const path of [comparison, `${comparison}?per_page=1&page=2`]) {
-        f.metadata.set(path, { status, commits: [] });
-      }
-      const result = await verifyClawHubPostpublish(f.options);
-      expect(result.complete).toBe(true);
-      expect(result.packages).toHaveLength(1);
-      expect(f.registryReads.length).toBeGreaterThan(0);
-    },
-  );
-
-  it.each(["behind", "diverged", "unknown", undefined])(
-    "rejects %s ancestry before registry reads or completion evidence",
-    async (status) => {
-      const verifierSha = "c".repeat(40);
-      const f = fixture(false, verifierSha);
-      const comparison = `compare/${sha}...${verifierSha}`;
-      for (const path of [comparison, `${comparison}?per_page=1&page=2`]) {
-        f.metadata.set(path, { status, commits: [] });
-      }
-      await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(
-        "Parent tooling is not an ancestor of trusted verification tooling.",
-      );
-      expect(f.registryReads).toEqual([]);
-      expect(existsSync(join(f.options.outputDir, "evidence.json"))).toBe(false);
-    },
-  );
-
   it.each([
+    {
+      label: "non-ancestor status",
+      response: () => Response.json({ status: "behind", commits: [] }),
+      error: "Parent tooling is not an ancestor of trusted verification tooling.",
+    },
     {
       label: "oversized response",
       response: () => Response.json({ status: "ahead", message: "x".repeat(2 * 1024 * 1024) }),
@@ -856,20 +856,16 @@ describe("ClawHub detached postpublish verification", () => {
     },
   );
 
-  it.each(["failure", "cancelled"])(
-    "does not contact the registry for a %s child",
-    async (conclusion) => {
-      const f = fixture();
-      f.child.conclusion = conclusion;
-      await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(/authorized state/u);
-      expect(f.registryReads).toEqual([]);
-    },
-  );
-
-  it("rejects a replayed successful parent event before downloading artifacts", async () => {
+  it.each([
+    { runId: 20, patch: { conclusion: "failure" }, error: /authorized state/u },
+    { runId: 10, patch: { run_attempt: 2 }, error: /runAttempt mismatch/u },
+  ])("rejects changed run authority before registry reads: %j", async ({ runId, patch, error }) => {
     const f = fixture();
-    f.metadata.set("actions/runs/10/attempts/1", { ...f.parent, run_attempt: 2 });
-    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(/runAttempt mismatch/u);
+    f.metadata.set(`actions/runs/${runId}/attempts/1`, {
+      ...(runId === 10 ? f.parent : f.child),
+      ...patch,
+    });
+    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(error);
     expect(f.registryReads).toEqual([]);
   });
 

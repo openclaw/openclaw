@@ -14,59 +14,15 @@ import {
   type ProviderRequestTransport,
   resolveProviderRequestCapabilities,
 } from "./provider-attribution.js";
+import type {
+  ModelProviderRequestTransportOverrides,
+  ProviderRequestAuthOverride,
+  ProviderRequestProxyOverride,
+  ProviderRequestTlsOverride,
+  ProviderRequestTransportOverrides,
+} from "./provider-request-config.types.js";
 
 type RequestApi = Api | ModelDefinitionConfig["api"];
-
-/** Auth override accepted from sanitized provider/model request config. */
-export type ProviderRequestAuthOverride =
-  | {
-      mode: "provider-default";
-    }
-  | {
-      mode: "authorization-bearer";
-      token: string;
-    }
-  | {
-      mode: "header";
-      headerName: string;
-      value: string;
-      prefix?: string;
-    };
-
-/** TLS override accepted from sanitized provider/model request config. */
-export type ProviderRequestTlsOverride = {
-  ca?: string;
-  cert?: string;
-  key?: string;
-  passphrase?: string;
-  serverName?: string;
-  insecureSkipVerify?: boolean;
-};
-
-/** Proxy override accepted from sanitized provider/model request config. */
-export type ProviderRequestProxyOverride =
-  | {
-      mode: "env-proxy";
-      tls?: ProviderRequestTlsOverride;
-    }
-  | {
-      mode: "explicit-proxy";
-      url: string;
-      tls?: ProviderRequestTlsOverride;
-    };
-
-/** Transport override block shared by provider and model request config. */
-export type ProviderRequestTransportOverrides = {
-  headers?: Record<string, string>;
-  auth?: ProviderRequestAuthOverride;
-  proxy?: ProviderRequestProxyOverride;
-  tls?: ProviderRequestTlsOverride;
-};
-
-/** Model-scoped transport overrides, including private-network policy. */
-export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
-  allowPrivateNetwork?: boolean;
-};
 
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
@@ -438,10 +394,7 @@ export function applyPreparedRuntimeAuthToModel<
     ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
     headers: requestConfig.headers,
   };
-  const routeFacts = getModelProviderRequestRouteFacts(model);
-  return routeFacts
-    ? attachModelProviderRequestRouteFacts(next, routeFacts.providerMetadataOwners)
-    : next;
+  return inheritModelProviderRequestRouteFacts(model, next);
 }
 
 function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {
@@ -715,7 +668,6 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
   if (!providerMetadataOwners || !model.provider) {
     return model;
   }
-  const next = { ...model } as TModel & ModelWithProviderRequestRouteFacts;
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
     api: model.api,
@@ -726,14 +678,16 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
     modelId: model.id,
     compat: model.compat,
   });
-  next[MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL] = {
-    providerMetadataOwners,
-    capabilities,
-    ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
-      ? { providerOwner: capabilities.endpointClass }
-      : {}),
+  return {
+    ...model,
+    [MODEL_PROVIDER_REQUEST_ROUTE_FACTS_SYMBOL]: {
+      providerMetadataOwners,
+      capabilities,
+      ...(!["default", "invalid", "local", "custom"].includes(capabilities.endpointClass)
+        ? { providerOwner: capabilities.endpointClass }
+        : {}),
+    },
   };
-  return next;
 }
 
 /** Reads the prepared provider route attached to a transport model. */

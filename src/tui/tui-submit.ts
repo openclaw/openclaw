@@ -46,12 +46,12 @@ export function createEditorSubmitHandler(params: {
     setText: (value: string) => void;
     addToHistory: (value: string) => void;
   };
-  handleCommand: (value: string) => Promise<void> | void;
+  handleCommand: (value: string, onBlockedChat?: () => void) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
   onSubmitError: (action: TuiSubmitAction, error: unknown) => void;
   admitMessage?: (value: string, snapshot?: TuiChatSubmitSnapshot) => TuiChatSubmitAdmission;
-  onBlockedMessageSubmit?: (value: string, admission: TuiChatSubmitBlock) => void;
+  onBlockedMessageSubmit?: (admission: TuiChatSubmitBlock) => void;
 }) {
   const clearSubmittedEditor = () => {
     // pi-tui clears before onSubmit; a delayed paste flush must not erase a newer draft.
@@ -81,11 +81,17 @@ export function createEditorSubmitHandler(params: {
     if (action !== "message") {
       clearSubmittedEditor();
       const command = action === "local shell" ? raw : value;
-      const handle = action === "local shell" ? params.handleBangLine : params.handleCommand;
       if (!isBrowserSetupInput(command)) {
         params.editor.addToHistory(command);
       }
-      runSubmitAction(action, () => handle(command), params.onSubmitError);
+      runSubmitAction(
+        action,
+        () =>
+          action === "local shell"
+            ? params.handleBangLine(command)
+            : params.handleCommand(command, () => restoreBlockedEditor(command)),
+        params.onSubmitError,
+      );
       return;
     }
 
@@ -94,7 +100,7 @@ export function createEditorSubmitHandler(params: {
       : params.admitMessage?.(value)) ?? { status: "allowed" };
     if (admission.status === "blocked") {
       restoreBlockedEditor(trimChangesAction ? raw : value);
-      params.onBlockedMessageSubmit?.(value, admission);
+      params.onBlockedMessageSubmit?.(admission);
       return;
     }
 

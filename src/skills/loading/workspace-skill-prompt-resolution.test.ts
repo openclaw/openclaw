@@ -362,7 +362,7 @@ describe("resolveSkillsPrompt", () => {
           defaults: {
             skills: ["github"],
           },
-          list: [{ id: "writer" }],
+          entries: { writer: {} },
         },
       },
       workspaceDir: "/tmp/openclaw",
@@ -373,7 +373,7 @@ describe("resolveSkillsPrompt", () => {
     expect(prompt).not.toContain("/app/skills/hidden-skill/SKILL.md");
   });
 
-  it("uses agents.list[].skills as a full replacement for defaults", async () => {
+  it("uses agents.entries.<id>.skills as a full replacement for defaults", async () => {
     const inheritedEntry: SkillEntry = createEntry("weather", "Weather");
     const explicitEntry: SkillEntry = createEntry("docs-search", "Docs");
 
@@ -384,7 +384,7 @@ describe("resolveSkillsPrompt", () => {
           defaults: {
             skills: ["weather"],
           },
-          list: [{ id: "writer", skills: ["docs-search"] }],
+          entries: { writer: { skills: ["docs-search"] } },
         },
       },
       workspaceDir: "/tmp/openclaw",

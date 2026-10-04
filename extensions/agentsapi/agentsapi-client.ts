@@ -10,10 +10,12 @@ import type {
 import type { EventCreateParams } from "openai/resources/beta/agents/sessions/events";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { responseWithRelease } from "openclaw/plugin-sdk/fetch-runtime";
+import { resolveProviderRequestHeaders } from "openclaw/plugin-sdk/provider-http";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { z } from "zod";
+import { DEFAULT_NATIVE_TOOLS, type AgentsApiConfig, type AgentsApiEnvironment } from "./config.js";
 
 const usageSchema = z.looseObject({
   input_tokens: z.number(),
@@ -40,8 +42,14 @@ const sessionSchema = z.looseObject({
   status: z.enum(["idle", "in_progress", "requires_action", "failed"]),
   error: z.string().nullable(),
   usage: usageSchema.nullable().optional(),
-  environment: z.union([
+  environment: z.discriminatedUnion("type", [
     z.looseObject({ type: z.literal("openai_hosted"), id: z.string().min(1) }),
+    z.looseObject({
+      type: z.literal("self_hosted"),
+      id: z.string().min(1),
+      workspace_directory: z.string(),
+      remote_url: z.string().min(1),
+    }),
     z.looseObject({ type: z.literal("none") }),
   ]),
   required_actions: z.array(
@@ -136,6 +144,7 @@ export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
 export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
 export type AgentsApiInputFile = HostedEnvironmentFileParam.HostedEnvironmentFileParamInline;
+export type AgentsApiFileUploadResult = { status: "uploaded" } | { status: "unavailable" };
 export type AgentsApiArtifact = z.infer<typeof artifactSchema>;
 export type AgentsApiFunctionResult =
   | { success: true; output: string }
@@ -164,9 +173,16 @@ export class AgentsApiClient {
       },
       fetch: async (input, init) => {
         this.assertCurrent();
+        const url = input instanceof Request ? input.url : String(input);
+        const headers = resolveProviderRequestHeaders({
+          provider: "openai",
+          baseUrl: url,
+          transport: "http",
+          callerHeaders: Object.fromEntries(new Headers(init?.headers)),
+        });
         const guarded = await fetchWithSsrFGuard({
-          url: input instanceof Request ? input.url : String(input),
-          init,
+          url,
+          init: { ...init, headers },
           signal: init?.signal ?? undefined,
           beforeRequest: assertRequestCurrent,
         });
@@ -189,24 +205,38 @@ export class AgentsApiClient {
     instructions: string,
     model: string,
     options?: {
+      nativeTools?: AgentsApiConfig["nativeTools"];
       functions?: AgentToolParam.AgentToolConfigParamFunction[];
+      mcpTools?: AgentToolParam.AgentToolConfigParamMcp[];
       files?: AgentsApiInputFile[];
       reasoning?: AgentReasoningParam;
+      environment?: AgentsApiEnvironment;
     },
   ): Promise<string> {
-    const session = await this.sessions.create(
-      {
-        agent: {
-          model,
-          instructions,
-          reasoning: options?.reasoning,
-          multi_agent: { enabled: false },
-          tools: [{ type: "web_search", mode: "live" }, ...(options?.functions ?? [])],
-        },
-        environment: { type: "openai_hosted", files: options?.files ?? [] },
+    const environment: AgentsApiEnvironment = options?.environment ?? { type: "openai_hosted" };
+    const tools = [
+      ...(options?.nativeTools ?? DEFAULT_NATIVE_TOOLS),
+      ...(options?.mcpTools ?? []),
+      ...(options?.functions ?? []),
+    ];
+    const body = {
+      agent: {
+        model,
+        instructions,
+        reasoning: options?.reasoning,
+        multi_agent: { enabled: false },
       },
-      { signal, headers: { "Idempotency-Key": randomUUID() } },
-    );
+      environment:
+        environment.type === "openai_hosted"
+          ? { ...environment, files: options?.files ?? [] }
+          : environment,
+    };
+    const session = await this.sessions.create(body, {
+      signal,
+      headers: { "Idempotency-Key": randomUUID() },
+      // The SDK body override forwards new tool types/options before its types catch up.
+      body: { ...body, agent: { ...body.agent, tools } },
+    });
     this.assertCurrent();
     return session.id;
   }
@@ -292,12 +322,22 @@ export class AgentsApiClient {
     if (session.status !== "requires_action") {
       return [];
     }
-    return session.required_actions.map((action) => {
+    const calls: AgentsApiFunctionCall[] = [];
+    for (const action of session.required_actions) {
+      if (
+        action.type === "environment_connection" &&
+        session.environment.type === "self_hosted" &&
+        action.environment_id === session.environment.id
+      ) {
+        // The operator's executor connects independently; keep the event stream open.
+        continue;
+      }
       if (action.type !== "function_call") {
         throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
       }
-      return action;
-    });
+      calls.push(action);
+    }
+    return calls;
   }
 
   async toolResult(
@@ -335,8 +375,9 @@ export class AgentsApiClient {
     sessionId: string,
     file: AgentsApiInputFile,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<AgentsApiFileUploadResult> {
     const session = await this.session(sessionId, signal);
+    signal.throwIfAborted();
     if (session.environment.type !== "openai_hosted") {
       throw new Error("Agents API file upload requires the session's connected hosted environment");
     }
@@ -345,17 +386,43 @@ export class AgentsApiClient {
       .object({ id: z.string(), type: z.literal("openai_hosted"), status: z.string() })
       .parse(retrieved);
     this.assertCurrent();
-    if (environment.id !== session.environment.id || environment.status !== "connected") {
+    signal.throwIfAborted();
+    if (environment.id !== session.environment.id) {
       throw new Error("Agents API file upload requires the session's connected hosted environment");
     }
-    const uploaded = await this.environments.files.create(session.environment.id, file, {
-      signal,
-      headers: { "Idempotency-Key": randomUUID() },
-    });
+    if (environment.status === "disconnected") {
+      return { status: "unavailable" };
+    }
+    if (environment.status !== "connected") {
+      throw new Error("Agents API file upload requires the session's connected hosted environment");
+    }
+    let uploaded: unknown;
+    try {
+      uploaded = await this.environments.files.create(session.environment.id, file, {
+        signal,
+        headers: { "Idempotency-Key": randomUUID() },
+      });
+    } catch (error) {
+      if (error instanceof OpenAI.ConflictError && error.status === 409) {
+        const failure = errorSchema.safeParse(error.error);
+        if (
+          failure.success &&
+          failure.data.type === "conflict_error" &&
+          failure.data.message ===
+            "the hosted environment is dormant; submit new input to start a fresh sandbox"
+        ) {
+          this.assertCurrent();
+          signal.throwIfAborted();
+          return { status: "unavailable" };
+        }
+      }
+      throw error;
+    }
     const saved = z
       .object({ environment_id: z.string(), path: z.string(), size_bytes: z.number() })
       .parse(uploaded);
     this.assertCurrent();
+    signal.throwIfAborted();
     if (
       saved.environment_id !== session.environment.id ||
       saved.path !== file.path ||
@@ -365,6 +432,7 @@ export class AgentsApiClient {
         "Agents API uploaded file did not match the requested environment, path, or size",
       );
     }
+    return { status: "uploaded" };
   }
 
   async artifacts(
@@ -556,31 +624,6 @@ export class AgentsApiClient {
       },
     );
     this.assertCurrent();
-  }
-}
-
-/** Customer-safe native failure facts remain available to host result classification. */
-export class AgentsApiError extends Error {
-  readonly code: string | null | undefined;
-  readonly status: number | undefined;
-  readonly type: string | undefined;
-  readonly param: string | null | undefined;
-
-  constructor(
-    message: string,
-    details: {
-      code?: string | null;
-      status?: number;
-      type?: string;
-      param?: string | null;
-    } = {},
-  ) {
-    super(message);
-    this.name = "AgentsApiError";
-    this.code = details.code;
-    this.status = details.status;
-    this.type = details.type;
-    this.param = details.param;
   }
 }
 

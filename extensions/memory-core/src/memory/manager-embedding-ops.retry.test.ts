@@ -14,7 +14,6 @@ type EmbeddingQueryRetryHarness = {
     text: string,
     signal?: AbortSignal,
     provider?: EmbeddingProvider,
-    markDegraded?: boolean,
     providerRuntime?: EmbeddingProviderRuntime,
     deadlineControl?: MemorySearchDeadlineControl,
   ) => Promise<number[]>;
@@ -80,7 +79,6 @@ describe("memory embedding query retry cancellation", () => {
       "search terms",
       undefined,
       undefined,
-      true,
       undefined,
       control,
     );

@@ -31,7 +31,7 @@ function parseIpLiteral(value: string | undefined): string | undefined {
   return undefined;
 }
 
-// Preserve v2026.9.6 auth-failure buckets; these addresses never grant Gateway authority.
+// Forwarding ports retain their auth-failure buckets; these addresses never grant Gateway authority.
 export function createTelegramLegacyWebhookAuthLimiter(config: OpenClawConfig | undefined) {
   const rateLimiter = createFixedWindowRateLimiter(WEBHOOK_RATE_LIMIT_DEFAULTS);
   const trusted = new net.BlockList();

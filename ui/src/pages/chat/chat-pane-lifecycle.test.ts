@@ -14,19 +14,23 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { QUEUED_EDIT_RETENTION_CHANGE_EVENT } from "./chat-page-retained-sessions.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import {
   createGatewayBrowserClientFixture,
   createInitializationContext,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { enqueueChatMessage } from "./chat-queue.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
-} from "./components/chat-message.ts";
+} from "./components/chat-message-confirmation.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import { handleChatDraftChange } from "./input-history.ts";
+import { beginQueuedMessageEdit, cancelQueuedMessageEdit } from "./queued-message-edit.ts";
 import { isSidebarSlotVisible, openSlot, setSidebarOpen } from "./sidebar-layout.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 
@@ -44,6 +48,41 @@ function pendingSuggestion(sessionKey: string, id: string, text: string): Sessio
 
 const SKIP_REWIND_CONFIRM_PREFERENCE = "openclaw:skip-rewind-confirm";
 const confirmationOwners = new Set<HTMLElement>();
+
+it("publishes queued-edit retention changes while its pane is parked", async () => {
+  vi.useFakeTimers();
+  const key = "agent:main:parked-edit";
+  const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
+  const pane = fixture.mount(key);
+  const updates = vi.spyOn(pane, "performUpdate");
+  await pane.updateComplete;
+  expect(updates).toHaveBeenCalledTimes(1);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(160);
+  await vi.dynamicImportSettled();
+  await vi.advanceTimersByTimeAsync(160);
+  expect(pane.querySelector(".agent-chat__composer-combobox textarea")).not.toBeNull();
+  expect(pane.state.chatLoading).toBe(false);
+
+  pane.presented = false;
+  const retained = vi.fn();
+  pane.addEventListener(QUEUED_EDIT_RETENTION_CHANGE_EVENT, retained);
+  updates.mockClear();
+  const state = pane.state;
+  state.connected = false;
+  const queued = enqueueChatMessage(state, "queued original");
+  expect(queued).not.toBeNull();
+  expect(beginQueuedMessageEdit(state, queued!.id)).toBe("started");
+  state.requestUpdate();
+  expect(retained).toHaveBeenCalledTimes(1);
+  expect(cancelQueuedMessageEdit(state)).toBe(true);
+  state.requestUpdate();
+  expect(retained).toHaveBeenCalledTimes(2);
+  await Promise.resolve();
+  expect(updates).not.toHaveBeenCalled();
+  pane.presented = true;
+  await pane.updateComplete;
+});
 
 describe("chat pane composer prefill attention", () => {
   it.each([
@@ -143,7 +182,7 @@ describe("chat pane initial panel layout", () => {
       const left = "agent:main:left";
       const right = "agent:main:right";
       const rightLayout = openSlot({ columns: [] }, "workspace");
-      const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "tasks"), preference === "open");
+      const leftLayout = setSidebarOpen(openSlot({ columns: [] }, "detail"), preference === "open");
       const client = createGatewayBrowserClientFixture();
       const context = createInitializationContext(client);
       const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
@@ -158,7 +197,7 @@ describe("chat pane initial panel layout", () => {
         },
         sidebarSessionActivePanels: {
           [right]: "workspace",
-          ...(preference !== "absent" ? { [left]: "tasks" } : {}),
+          ...(preference !== "absent" ? { [left]: "detail" } : {}),
         },
       });
       const stopAfterAttach = new Error("stop after attach");
@@ -168,8 +207,10 @@ describe("chat pane initial panel layout", () => {
       const expectOwnLayout = () => {
         expect(pane.state.sessionKey).toBe(left);
         expect(isSidebarSlotVisible(pane.state.sidebarLayout, "workspace")).toBe(false);
-        expect(isSidebarSlotVisible(pane.state.sidebarLayout, "tasks")).toBe(preference === "open");
-        expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "tasks");
+        expect(isSidebarSlotVisible(pane.state.sidebarLayout, "detail")).toBe(
+          preference === "open",
+        );
+        expect(pane.state.sidebarFocusPanelId).toBe(preference === "absent" ? "" : "detail");
       };
       try {
         expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);

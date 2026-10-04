@@ -15,7 +15,10 @@ import {
   type ConfigPreflightSnapshotRead,
 } from "./config-preflight-snapshot.js";
 import { refreshStartupPluginQuarantine } from "./doctor-config-preflight-plugin-verification.js";
-import { throwStartupMigrationGuardRejected } from "./doctor-startup-migration-refusal.js";
+import {
+  rethrowStartupConfigFailure,
+  throwStartupMigrationGuardRejected,
+} from "./doctor-startup-migration-refusal.js";
 import { cleanupStartupPluginSourceCaptures } from "./startup-plugin-source-captures.js";
 
 export type StartupConfigPreflightOptions = {
@@ -37,7 +40,14 @@ export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
   const { withSqliteReadOnlyWorkerScope } = await import("../infra/sqlite-readonly-worker.js");
-  return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
+  try {
+    return await withSqliteReadOnlyWorkerScope(() => prepareStartupConfig(options));
+  } catch (error) {
+    if (options.gateway) {
+      rethrowStartupConfigFailure(error);
+    }
+    throw error;
+  }
 }
 
 async function prepareStartupConfig(
@@ -59,6 +69,7 @@ async function prepareStartupConfig(
     if (options.beforeStatePreparation && !(await options.beforeStatePreparation(snapshot))) {
       throwStartupMigrationGuardRejected();
     }
+    return true;
   };
   if (!options.gateway) {
     const read = await readSnapshot();
@@ -74,7 +85,7 @@ async function prepareStartupConfig(
       env,
       readSnapshot,
       validateConfig: options.validateStartupConfig,
-      beforeStatePreparation: options.beforeStatePreparation,
+      beforeStatePreparation,
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
@@ -94,7 +105,7 @@ async function prepareStartupConfig(
   };
   const assertLeaseCurrent = () => {
     assertHeartbeatCurrent();
-    lease?.heartbeat();
+    lease?.assertOwned();
   };
   try {
     if (read.recovery || needsRefreshedPluginIndexPersistence(read)) {
@@ -134,6 +145,39 @@ async function prepareStartupConfig(
           assertCurrent: assertHeartbeatCurrent,
         });
         read = persisted.snapshotRead;
+      }
+    }
+    const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
+      await import("./doctor/shared/legacy-webhook-pins.js");
+    const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
+    if (
+      webhookCompletion !== true &&
+      !HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(webhookCompletion ?? {}, id))
+    ) {
+      const { applyPluginDoctorCompatibilityMigrations } =
+        await import("../plugins/doctor-contract-registry.js");
+      const migration = applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
+        config: read.snapshot.sourceConfig,
+        env,
+        pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
+        historicalWebhookListeners: true,
+        startup: true,
+      });
+      if (migration.warnings?.length) {
+        throw new Error(migration.warnings.join("\n"));
+      }
+      if (migration.changes.length) {
+        await beforeStatePreparation(read.snapshot);
+        assertPreflightConfigUnchanged(read.snapshot, (await readSnapshot()).snapshot);
+        assertLeaseCurrent();
+        if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
+          const { StartupMaintenanceRequiredError } =
+            await import("../infra/startup-maintenance-required.js");
+          throw new StartupMaintenanceRequiredError(
+            "state-migrations",
+            `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
+          );
+        }
       }
     }
     const verification = await refreshStartupPluginQuarantine({

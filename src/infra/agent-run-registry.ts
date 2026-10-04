@@ -103,8 +103,9 @@ export function registerAgentRunSequenceResetHandler(handler: (runId: string) =>
 }
 
 function storeRunContext(runId: string, context: AgentRunContext, predecessor?: AgentRunContext) {
-  // Callers supply a fresh record; scheduler leases never transfer with its metadata.
+  // Scheduler leases and observed activity never transfer to a fresh registration.
   context.capacityWaits = undefined;
+  context.executionActivity = undefined;
   context.registeredAt ??= Date.now();
   getAgentRunRegistryState().contexts.set(runId, context);
   recordAgentEventRouting(runId, context, predecessor);
@@ -144,33 +145,25 @@ export function registerAgentRunContext(
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
   const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
-  if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
-    existing.sessionKey = context.sessionKey;
-  }
-  if (context.sessionId && existing.sessionId !== context.sessionId) {
-    existing.sessionId = context.sessionId;
-  }
-  if (context.agentId && existing.agentId !== context.agentId) {
-    existing.agentId = context.agentId;
+  for (const key of ["sessionKey", "sessionId", "agentId"] as const) {
+    if (context[key] && existing[key] !== context[key]) {
+      existing[key] = context[key];
+    }
   }
   if (context.verboseLevel && existing.verboseLevel !== context.verboseLevel) {
     existing.verboseLevel = context.verboseLevel;
   }
   existing.completionSource ??= context.completionSource;
-  if (context.isControlUiVisible !== undefined) {
-    existing.isControlUiVisible = context.isControlUiVisible;
-  }
-  if (
-    context.projectSessionActive !== undefined &&
-    existing.projectSessionActive !== context.projectSessionActive
-  ) {
-    existing.projectSessionActive = context.projectSessionActive;
-  }
-  if (context.projectSessionLifecycle !== undefined) {
-    existing.projectSessionLifecycle = context.projectSessionLifecycle;
-  }
-  if (context.projectSessionMessages !== undefined) {
-    existing.projectSessionMessages = context.projectSessionMessages;
+  for (const key of [
+    "isControlUiVisible",
+    "projectSessionActive",
+    "projectSessionLifecycle",
+    "projectSessionMessages",
+    "isHeartbeat",
+  ] as const) {
+    if (context[key] !== undefined) {
+      existing[key] = context[key];
+    }
   }
   if (context.mainSessionRestartRecovery === true) {
     existing.mainSessionRestartRecovery = true;
@@ -181,14 +174,10 @@ export function registerAgentRunContext(
       existing.cronRunsByJobId.set(jobId, cronRun);
     }
   }
-  if (context.isHeartbeat !== undefined && existing.isHeartbeat !== context.isHeartbeat) {
-    existing.isHeartbeat = context.isHeartbeat;
-  }
-  if (context.registeredAt !== undefined) {
-    existing.registeredAt = context.registeredAt;
-  }
-  if (context.lastActiveAt !== undefined) {
-    existing.lastActiveAt = context.lastActiveAt;
+  for (const key of ["registeredAt", "lastActiveAt"] as const) {
+    if (context[key] !== undefined) {
+      existing[key] = context[key];
+    }
   }
   recordAgentEventRouting(runId, existing);
   if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
@@ -201,8 +190,6 @@ export function claimAgentRunContext(
   runId: string,
   context: AgentRunContext,
   options: {
-    /** Adopt a same-generation context only when no tracked execution owns it. */
-    adoptExistingUnowned?: boolean;
     trackOwner?: boolean;
     ownsContext?: boolean;
     exclusive?: boolean;
@@ -219,16 +206,10 @@ export function claimAgentRunContext(
   const existingOwners = state.owners.get(runId);
   const currentOwners =
     existingOwners?.lifecycleGeneration === lifecycleGeneration ? existingOwners : undefined;
-  const adoptsExistingUnowned =
-    options.exclusive === true &&
-    options.adoptExistingUnowned === true &&
-    existing?.lifecycleGeneration === lifecycleGeneration &&
-    currentOwners === undefined;
   if (
     currentOwners?.exclusiveClaimId ||
     (options.exclusive &&
-      ((existing?.lifecycleGeneration === lifecycleGeneration && !adoptsExistingUnowned) ||
-        currentOwners !== undefined))
+      (existing?.lifecycleGeneration === lifecycleGeneration || currentOwners !== undefined))
   ) {
     return undefined;
   }
@@ -540,6 +521,17 @@ export function hasAgentRunContextExecutionOwner(runId: string): boolean {
     (owners?.lifecycleGeneration === state.lifecycleGeneration && owners.claimIds.size > 0) ||
     (state.queuedRunContextLeases?.get(context) ?? 0) > 0
   );
+}
+
+/** Counts admitted executions, excluding retained display-only context. */
+export function getActiveAgentRunContextCount(): number {
+  let count = 0;
+  for (const runId of getAgentRunRegistryState().contexts.keys()) {
+    if (hasAgentRunContextExecutionOwner(runId)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** Live display projection also includes a producer's active-session marker. */

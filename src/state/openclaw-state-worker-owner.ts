@@ -3,7 +3,10 @@ import { performance } from "node:perf_hooks";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -13,11 +16,15 @@ import {
   getSqliteWorkerActorIdentity,
   retireSqliteWorkerActor,
   runSqliteWorkerStoreOperation,
+  SqliteWorkerError,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
+  captureOpenClawStateDatabaseReadAdmission,
+  openClawStateDatabaseCache,
   publishOpenClawStateDatabaseWorkerAdmission,
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -32,6 +39,7 @@ import type {
   OpenClawStateWorkerOperationOptions as OperationOptions,
 } from "./openclaw-state-worker-contract.js";
 import {
+  assertOpenClawStateWorkerActorPath,
   captureOpenClawStateWorkerOpeningGuard,
   runWithCapturedWorkerContext,
 } from "./openclaw-state-worker-operation.js";
@@ -202,6 +210,22 @@ function createSharedStateWorkerOwner() {
     };
     arm(SHARED_STATE_WORKER_IDLE_INSPECT_MS, true);
   };
+  const retireAfterFailure = async (
+    entry: Entry,
+    error: unknown,
+    stage: "admission" | "binding",
+  ): Promise<never> => {
+    try {
+      await retire(entry);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Shared-state worker ${stage} and cleanup failed`,
+        { cause: cleanupError },
+      );
+    }
+    throw error;
+  };
   const retainOperation = (store: Store) => {
     const entry = [...stores].find((candidate) => candidate.store === store);
     if (!entry) {
@@ -303,6 +327,66 @@ function createSharedStateWorkerOwner() {
     }
     await attempt.pending;
   };
+  const inspectInvalidEntry = (
+    entry: Entry,
+  ): { kind: "actor" | "client"; error: unknown } | undefined => {
+    const actor = entry.actor;
+    let kind: "actor" | "client" = "actor";
+    try {
+      if (entry.bound && actor) {
+        assertOpenClawStateWorkerActorPath(actor);
+        if (entry.store && isSqliteWorkerStoreAvailable(entry.store)) {
+          kind = "client";
+        }
+      }
+      entry.databaseAdmission.assertCurrent();
+    } catch (error) {
+      if (!isStateDatabaseReadAdmissionInvalidatedError(error)) {
+        throw error;
+      }
+      // An intact path's invalidation affects the actor's whole physical generation.
+      if (
+        kind === "client" &&
+        openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity(
+          entry.context.admission.databasePath,
+        )?.key === actor?.key
+      ) {
+        kind = "actor";
+      }
+      return { kind, error };
+    }
+    return undefined;
+  };
+  const retireInvalidEntry = (entry: Entry): { pending: Promise<void> | undefined } | undefined => {
+    const invalid = inspectInvalidEntry(entry);
+    if (!invalid) {
+      return undefined;
+    }
+    if (invalid.kind === "actor") {
+      if (hasActiveActorOperations(entry)) {
+        throw invalid.error;
+      }
+      return {
+        pending: entry.opening.then(
+          () => {
+            if (hasActiveActorOperations(entry)) {
+              throw invalid.error;
+            }
+            return entry.actor
+              ? retireActor(entry.actor, entry.context.admission.identity)
+              : retire(entry);
+          },
+          () => retire(entry),
+        ),
+      };
+    }
+    if (!stores.has(entry)) {
+      return undefined;
+    }
+    const closing = retire(entry);
+    // The retirement owner joins this client after its callback can finish using healthy peers.
+    return { pending: entry.activeOperations === 0 ? closing : undefined };
+  };
   async function close(identity?: DatabasePathIdentity): Promise<void> {
     for (const entry of stores.values()) {
       if (matches(entry, identity)) {
@@ -357,11 +441,62 @@ function createSharedStateWorkerOwner() {
     close,
     retainOperation,
     // Source and bundled callers must share the owner's backend URL.
-    openCleanup(databasePath: string, context: SqliteWorkerStateContext, assertOwned: () => void) {
+    async openCleanup(
+      databasePath: string,
+      context: SqliteWorkerStateContext,
+      assertOwned: () => void,
+      identity: DatabasePathIdentity,
+    ) {
+      const expectedIdentity = { ...identity };
+      assertOwned();
+      if (!expectedIdentity.key.startsWith("file:")) {
+        return undefined;
+      }
+      const assertCurrent = () => {
+        assertOwned();
+        assertExistingDatabaseIdentity(
+          databasePath,
+          expectedIdentity.key,
+          expectedIdentity.birthtime,
+        );
+        for (const entry of activeEntries) {
+          if (
+            matches(entry, expectedIdentity) &&
+            entry.store &&
+            !isSqliteWorkerStoreAvailable(entry.store)
+          ) {
+            // A retained callback may itself need cleanup before it can settle.
+            throw new SqliteWorkerError(
+              "Shared-state cleanup is waiting for accepted operations to settle",
+              "unavailable",
+            );
+          }
+        }
+      };
+      assertCurrent();
+      for (const attempt of retiringActors.values()) {
+        if (attempt.identity.key === expectedIdentity.key) {
+          assertCurrent();
+          await joinActorRetirement(attempt);
+          assertCurrent();
+        }
+      }
+      for (const entry of new Set([...stores, ...retiring.keys()])) {
+        if (
+          (stores.has(entry) || retiring.has(entry)) &&
+          matches(entry, expectedIdentity) &&
+          entry.store &&
+          !isSqliteWorkerStoreAvailable(entry.store)
+        ) {
+          assertCurrent();
+          await (entry.actor ? retireActor(entry.actor, expectedIdentity) : retire(entry));
+          assertCurrent();
+        }
+      }
       return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
         { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
         context,
-        assertOwned,
+        assertCurrent,
       );
     },
     async open(
@@ -382,9 +517,19 @@ function createSharedStateWorkerOwner() {
       }
       let entry: Entry | undefined;
       for (;;) {
-        for (const candidate of stores) {
+        for (const candidate of new Set([...stores, ...retiring.keys()])) {
+          if (!matches(candidate, admission.identity)) {
+            continue;
+          }
+          const retirement = retireInvalidEntry(candidate);
+          if (retirement) {
+            if (retirement.pending) {
+              await retirement.pending;
+            }
+            return this.open(context, options);
+          }
           if (
-            matches(candidate, admission.identity) &&
+            stores.has(candidate) &&
             (candidate.context.existingSchemaPath !== context.existingSchemaPath ||
               candidate.source.moduleUrl.href !== source.moduleUrl.href)
           ) {
@@ -403,6 +548,9 @@ function createSharedStateWorkerOwner() {
             matches(retiringEntry, admission.identity) &&
             retiringEntry.context.maintenanceScope === context.maintenanceScope
           ) {
+            if (inspectInvalidEntry(retiringEntry)?.kind === "client") {
+              continue;
+            }
             if (!attempt.pending) {
               // Another retained owner may have completed the failed admission's cleanup.
               if (!hasPendingCleanup(retiringEntry)) {
@@ -450,6 +598,11 @@ function createSharedStateWorkerOwner() {
         }
       }
       if (!entry) {
+        assertAdmission();
+        // Retain the database generation separately from the caller's lexical
+        // schema scope, which may end while this actor remains reusable.
+        const databaseAdmission = captureOpenClawStateDatabaseReadAdmission(admission.databasePath);
+        assertAdmission();
         const openingGuard = captureOpenClawStateWorkerOpeningGuard(context, assertCurrent);
         const open = async () => {
           try {
@@ -476,6 +629,7 @@ function createSharedStateWorkerOwner() {
         const admitted: Entry = {
           source,
           context,
+          databaseAdmission,
           openingAdmission: openingGuard.admission,
           existingOnly,
           activeOperations: 0,
@@ -493,6 +647,7 @@ function createSharedStateWorkerOwner() {
             stores.delete(admitted);
             refreshPressureSubscription();
           }
+          admitted.openingAdmission.assertCurrent = undefined;
           return store;
         });
         stores.add(entry);
@@ -500,6 +655,7 @@ function createSharedStateWorkerOwner() {
         context.maintenanceScope?.own(entry, "shared-resources", () => retire(admitted));
         void entry.opening.catch(() => {
           stores.delete(admitted);
+          admitted.openingAdmission.assertCurrent = undefined;
           if (hasPendingCleanup(admitted) && !retiring.has(admitted)) {
             retiring.set(admitted, {});
           }
@@ -510,16 +666,7 @@ function createSharedStateWorkerOwner() {
       try {
         admission.assertCurrent();
       } catch (error) {
-        try {
-          await retire(entry);
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "Shared-state worker admission and cleanup failed",
-            { cause: cleanupError },
-          );
-        }
-        throw error;
+        return retireAfterFailure(entry, error, "admission");
       }
       assertCurrent?.();
       if (!store) {
@@ -549,16 +696,14 @@ function createSharedStateWorkerOwner() {
           entry.bound = true;
         }
       } catch (error) {
-        try {
-          await retire(entry);
-        } catch (cleanupError) {
-          throw new AggregateError(
-            [error, cleanupError],
-            "Shared-state worker binding and cleanup failed",
-            { cause: cleanupError },
-          );
+        return retireAfterFailure(entry, error, "binding");
+      }
+      const retirement = retireInvalidEntry(entry);
+      if (retirement) {
+        if (retirement.pending) {
+          await retirement.pending;
         }
-        throw error;
+        return this.open(context, options);
       }
       stores.delete(entry);
       stores.add(entry);

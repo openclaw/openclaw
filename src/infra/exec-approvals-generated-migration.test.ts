@@ -8,8 +8,11 @@ import {
   countObsoleteGeneratedExecApprovals,
   repairObsoleteGeneratedExecApprovals,
 } from "./exec-approvals-generated-migration.js";
-import { loadExecApprovalsReadOnly, saveExecApprovals } from "./exec-approvals-store.js";
-import { testing as execApprovalsStoreTesting } from "./exec-approvals-store.test-support.js";
+import { loadExecApprovalsReadOnly } from "./exec-approvals-store.js";
+import {
+  saveExecApprovals,
+  testing as execApprovalsStoreTesting,
+} from "./exec-approvals-store.test-support.js";
 import { buildCwdBoundHashedArgPattern } from "./exec-command-resolution.js";
 
 describe("generated exec approval migration", () => {

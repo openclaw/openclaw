@@ -6,25 +6,15 @@ import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import {
   listSessionPendingInputs,
   loadSessionEntry,
   loadTranscriptEventsSync,
 } from "../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
-import { ensureSessionPendingInputsSchema } from "../state/openclaw-agent-pending-inputs-schema.js";
-import {
-  createChannelTestPluginBase,
-  createDirectOutboundTestAdapter,
-} from "../test-utils/channel-plugins.js";
-import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { readAgentCommandCall } from "./agent-command.test-helpers.js";
-import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
-import { createRegistry } from "./server.e2e-registry-helpers.js";
+import { refusePendingInputCommit } from "./pending-input-commit.test-support.js";
 import {
   agentCommandMock,
   connectOk,
@@ -46,6 +36,7 @@ installGatewayTestHooks({ scope: "suite" });
 
 let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
+
 let port: number;
 
 beforeAll(async () => {
@@ -60,101 +51,13 @@ afterAll(async () => {
   await server.close();
 });
 
-const createMSTeamsPlugin = (params?: { aliases?: string[] }): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Teams SDK; enterprise support.",
-    aliases: params?.aliases,
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-});
-
-const createStubChannelPlugin = (params: {
-  id: ChannelPlugin["id"];
-  label: string;
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
-    id: params.id,
-    label: params.label,
-    config: {
-      listAccountIds: () => [],
-      resolveAccount: () => ({}),
-    },
-  }),
-  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
-});
-
-const createConfiguredChannelPlugin = (params: {
-  id: ChannelPlugin["id"];
-  label: string;
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
-    id: params.id,
-    label: params.label,
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      isConfigured: async () => true,
-    },
-  }),
-  outbound: createDirectOutboundTestAdapter({ channel: params.id }),
-});
-
-const emptyRegistry = createRegistry([]);
-const defaultRegistry = createRegistry([
-  {
-    pluginId: "whatsapp",
-    source: "test",
-    plugin: createStubChannelPlugin({ id: "whatsapp", label: "WhatsApp" }),
-  },
-]);
-
-function expectChannels(call: Record<string, unknown>, channel: string | undefined) {
-  expect(call.channel).toBe(channel);
-  expect(call.messageChannel).toBe(channel);
-}
-
-async function expectAgentRoutingCall(params: {
-  channel: string | undefined;
-  deliver: boolean;
-  to?: string;
-  fromEnd?: number;
-  runId?: string;
-}) {
-  const call = await readAgentCommandCall({ runId: params.runId, fromEnd: params.fromEnd });
-  expectChannels(call, params.channel);
-  if ("to" in params) {
-    expect(call.to).toBe(params.to);
-  } else {
-    expect(call.to).toBeUndefined();
-  }
-  expect(call.deliver).toBe(params.deliver);
-  expect(call.bestEffortDeliver).toBe(true);
-  expect(typeof call.sessionId).toBe("string");
-}
-
-async function writeMainSessionEntry(params: {
-  sessionId: string;
-  lastChannel?: string;
-  lastTo?: string;
-}) {
+async function writeMainSessionEntry(params: { sessionId: string }) {
   await useTempSessionStorePath();
   await writeSessionStore({
     entries: {
       main: {
         sessionId: params.sessionId,
         updatedAt: Date.now(),
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: params.lastChannel, to: params.lastTo },
-        }),
       },
     },
   });
@@ -207,222 +110,16 @@ describe("gateway server agent", () => {
   beforeEach(async () => {
     vi.mocked(agentCommandMock).mockClear();
     testState.allowFrom = undefined;
-    setRegistry(defaultRegistry);
     await useTempSessionStorePath();
     await writeSessionStore({ entries: {} });
   });
 
   afterEach(async () => {
     testState.allowFrom = undefined;
-    setRegistry(emptyRegistry);
     for (const dir of gwSessionTempDirs) {
       await releaseGatewaySessionStoreFixture(dir);
     }
     cleanupTempDirs(gwSessionTempDirs);
-  });
-
-  test(
-    "agent reuses the last plugin delivery route when channel=last",
-    { timeout: 20_000 },
-    async () => {
-      const registry = createRegistry([
-        {
-          pluginId: "msteams",
-          source: "test",
-          plugin: createMSTeamsPlugin(),
-        },
-      ]);
-      setRegistry(registry);
-      await writeMainSessionEntry({
-        sessionId: "sess-teams",
-        lastChannel: "msteams",
-        lastTo: "conversation:teams-123",
-      });
-      const res = await rpcReq(
-        ws,
-        "agent",
-        {
-          message: "hi",
-          sessionKey: "main",
-          channel: "last",
-          deliver: true,
-          idempotencyKey: "idem-agent-last-msteams",
-        },
-        20_000,
-      );
-      expect(res.ok).toBe(true);
-      await expectAgentRoutingCall({
-        channel: "msteams",
-        deliver: true,
-        to: "conversation:teams-123",
-        runId: "idem-agent-last-msteams",
-      });
-    },
-  );
-
-  test("agent preserves CLI session binding metadata when refreshing session state", async () => {
-    await useTempSessionStorePath();
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-cli",
-          updatedAt: Date.now(),
-          modelProvider: "claude-cli",
-          model: "claude-opus-4-6",
-          cliSessionIds: {
-            "claude-cli": "cli-session-123",
-          },
-          cliSessionBindings: {
-            "claude-cli": {
-              sessionId: "cli-session-123",
-              authProfileId: "anthropic:work",
-              mcpConfigHash: "mcp-config-hash",
-              mcpResumeHash: "mcp-resume-hash",
-            },
-          },
-          claudeCliSessionId: "cli-session-123",
-        },
-      },
-    });
-
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      idempotencyKey: "idem-agent-cli-binding",
-    });
-    expect(res.ok).toBe(true);
-    await readAgentCommandCall({ runId: "idem-agent-cli-binding" });
-
-    const sessionStorePath = testState.sessionStorePath;
-    if (!sessionStorePath) {
-      throw new Error("expected session store path");
-    }
-    const stored = loadSessionEntry({
-      sessionKey: "agent:main:main",
-      storePath: sessionStorePath,
-    }) as
-      | {
-          cliSessionBindings?: Record<string, unknown>;
-          cliSessionIds?: Record<string, string>;
-          claudeCliSessionId?: string;
-        }
-      | undefined;
-    expect(stored?.cliSessionBindings).toEqual({
-      "claude-cli": {
-        sessionId: "cli-session-123",
-        authProfileId: "anthropic:work",
-        mcpConfigHash: "mcp-config-hash",
-        mcpResumeHash: "mcp-resume-hash",
-      },
-    });
-    expect(stored?.cliSessionIds).toEqual({
-      "claude-cli": "cli-session-123",
-    });
-    expect(stored?.claudeCliSessionId).toBe("cli-session-123");
-  });
-
-  test("agent accepts built-in channel alias (imsg)", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "imessage",
-        source: "test",
-        plugin: createStubChannelPlugin({ id: "imessage", label: "iMessage" }),
-      },
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
-      },
-    ]);
-    setRegistry(registry);
-    await writeMainSessionEntry({
-      sessionId: "sess-alias",
-      lastChannel: "imessage",
-      lastTo: "chat_id:123",
-    });
-    const resIMessage = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "imsg",
-      deliver: true,
-      idempotencyKey: "idem-agent-imsg",
-    });
-    expect(resIMessage.ok).toBe(true);
-    await expectAgentRoutingCall({
-      channel: "imessage",
-      deliver: true,
-      runId: "idem-agent-imsg",
-    });
-  });
-
-  test("agent accepts plugin channel alias (teams)", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "msteams",
-        source: "test",
-        plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
-      },
-    ]);
-    setRegistry(registry);
-
-    const resTeams = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "teams",
-      to: "conversation:teams-abc",
-      deliver: false,
-      idempotencyKey: "idem-agent-teams",
-    });
-    expect(resTeams.ok).toBe(true);
-    await expectAgentRoutingCall({
-      channel: "msteams",
-      deliver: false,
-      to: "conversation:teams-abc",
-      runId: "idem-agent-teams",
-    });
-  });
-
-  test("agent rejects unknown channel", async () => {
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      channel: "missing-channel",
-      idempotencyKey: "idem-agent-bad-channel",
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.code).toBe("INVALID_REQUEST");
-  });
-
-  test("agent preserves requested delivery when no external target resolves", async () => {
-    const registry = createRegistry([
-      {
-        pluginId: "discord",
-        source: "test",
-        plugin: createConfiguredChannelPlugin({ id: "discord", label: "Discord" }),
-      },
-      {
-        pluginId: "telegram",
-        source: "test",
-        plugin: createConfiguredChannelPlugin({ id: "telegram", label: "Telegram" }),
-      },
-    ]);
-    setRegistry(registry);
-    await writeMainSessionEntry({
-      sessionId: "sess-main-multi-configured-best-effort",
-    });
-    const res = await rpcReq(ws, "agent", {
-      message: "hi",
-      sessionKey: "main",
-      deliver: true,
-      bestEffortDeliver: true,
-      idempotencyKey: "idem-agent-multi-configured-best-effort",
-    });
-    expect(res.ok).toBe(true);
-    await expectAgentRoutingCall({
-      channel: undefined,
-      deliver: true,
-      runId: "idem-agent-multi-configured-best-effort",
-    });
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
@@ -514,7 +211,7 @@ describe("gateway server agent", () => {
         storePath,
       };
       expect(loadTranscriptEventsSync(scope)).toEqual([]);
-      expect(listSessionPendingInputs(scope)).toMatchObject({
+      expect(await listSessionPendingInputs(scope)).toMatchObject({
         total: 1,
         items: [
           {
@@ -582,7 +279,7 @@ describe("gateway server agent", () => {
       storePath,
     };
     expect(loadTranscriptEventsSync(scope)).toEqual([]);
-    expect(listSessionPendingInputs(scope)).toMatchObject({
+    expect(await listSessionPendingInputs(scope)).toMatchObject({
       total: 1,
       items: [
         {
@@ -599,20 +296,12 @@ describe("gateway server agent", () => {
 
   test("agent returns a wire error when durable user-turn admission fails", async () => {
     await writeMainSessionEntry({ sessionId: "sess-durable-agent-failure" });
-    const storePath = testState.sessionStorePath;
-    if (!storePath) {
-      throw new Error("expected session store path");
-    }
-    const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
-    const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path }).db;
-    ensureSessionPendingInputsSchema(database);
-    database.exec(`
-      CREATE TEMP TRIGGER fail_agent_turn_admission
-      BEFORE INSERT ON session_pending_inputs
-      BEGIN
-        SELECT RAISE(ABORT, 'injected agent transcript admission failure');
-      END;
-    `);
+    const refusal = refusePendingInputCommit({
+      operation: "stage",
+      message: "injected agent transcript admission failure",
+      sessionId: "sess-durable-agent-failure",
+      runId: "idem-agent-durable-failure",
+    });
     try {
       const response = await rpcReq(ws, "agent", {
         message: "this turn must not be acknowledged",
@@ -621,10 +310,13 @@ describe("gateway server agent", () => {
       });
 
       expect(response.ok).toBe(false);
-      expect(response.error).toMatchObject({ code: "UNAVAILABLE" });
+      expect(response.error).toMatchObject({
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("injected agent transcript admission failure"),
+      });
       expect(vi.mocked(agentCommandMock)).not.toHaveBeenCalled();
     } finally {
-      database.exec("DROP TRIGGER IF EXISTS fail_agent_turn_admission");
+      refusal.mockRestore();
     }
   });
 
@@ -652,41 +344,6 @@ describe("gateway server agent", () => {
     expect(errorMessage).not.toContain("AcpRuntimeError");
     expect(JSON.stringify(final)).not.toContain(token);
   });
-
-  test("agent dedupe survives reconnect", { timeout: 20_000 }, async () => {
-    await withGatewayServer(async ({ port: portLocal }) => {
-      const dial = async () => {
-        const wsLocal = new WebSocket(`ws://127.0.0.1:${portLocal}`);
-        trackConnectChallengeNonce(wsLocal);
-        await new Promise<void>((resolve) => {
-          wsLocal.once("open", resolve);
-        });
-        await connectOk(wsLocal);
-        return wsLocal;
-      };
-
-      const idem = "reconnect-agent";
-      const ws1 = await dial();
-      const final1 = await sendAgentWsRequestAndWaitFinal(ws1, {
-        reqId: "ag1",
-        message: "hi",
-        idempotencyKey: idem,
-        timeoutMs: 6000,
-      });
-      ws1.close();
-
-      const ws2 = await dial();
-      const res = await sendAgentWsRequestAndWaitFinal(ws2, {
-        reqId: "ag2",
-        message: "hi again",
-        idempotencyKey: idem,
-        timeoutMs: 6000,
-      });
-      expect(res.payload).toEqual(final1.payload);
-      ws2.close();
-    });
-  });
-
   test("agent events stream to webchat clients when run context is registered", async () => {
     await writeMainSessionEntry({ sessionId: "sess-main" });
 

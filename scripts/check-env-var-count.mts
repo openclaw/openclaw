@@ -8,7 +8,6 @@ import {
   loadRatchetSnapshot,
   loadRatchetSources,
   parseRatchetScalar,
-  reportRatchetSuccess,
 } from "./lib/shrink-ratchet.mts";
 
 const BUDGET_PATH = "config/env-var-count-budget.txt";
@@ -161,7 +160,7 @@ export function main(
     throw new Error(messages.join("\n"));
   }
   if (messages.length === 0 && growth.length === 0) {
-    reportRatchetSuccess(`OPENCLAW_* count ${names.length}/${budget}`);
+    console.log(`OPENCLAW_* count ${names.length}/${budget}`);
   }
   return names.length;
 }

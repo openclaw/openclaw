@@ -31,6 +31,10 @@ openclaw plugins uninstall <ids...> --force
 
 `uninstall` removes plugin settings from `plugins.entries`, the persisted plugin index, plugin allow/deny list entries, and any `plugins.load.paths` entry that exactly resolves to the recorded install path. It leaves only an exact `enabled: false` entry for each removed plugin id. This marker records the explicit uninstall choice so remaining model, provider, or channel selections do not automatically reinstall the package during startup repair. Reinstalling does not silently re-enable it; enabling the plugin again replaces the marker. For a package with multiple child entries, any child id resolves to the package owner; uninstall removes every sibling's policy and slot/channel references, the one package install record, and the managed directory once. Linked path installs also remove an exact entry for their recorded source path. Parent directories, child paths, prefix matches, and unrelated load paths are preserved. Unless `--keep-files` is set, uninstall also removes the tracked managed install directory, but only when it resolves inside OpenClaw's plugin extensions root. If the plugin currently owns the `memory` or `contextEngine` slot, that slot resets to its default (`memory-core` for memory, `legacy` for context engine).
 
+Plugin entry and allow/deny cleanup uses case-insensitive policy IDs. A mixed-case
+manifest ID leaves one canonical lowercase disable marker, not conflicting entries
+with different spellings. Package install records retain their exact owner ID.
+
 Matching load-path references are removed before package files so symlink aliases cannot leave invalid config. With a running Gateway, runtime drain also precedes removal of the install record, including with `--keep-files` or a linked install. If runtime drain or file removal fails, the plugin stays disabled and tracked so you can retry uninstall.
 
 If a matching load-path reference is added again while the runtime drains, uninstall keeps the files and asks you to remove that reference before retrying. Config writes through OpenClaw wait until file cleanup settles, including writes to shared config includes. Cleanup rechecks its authority before each deletion and stops if the operation is revoked.
@@ -73,6 +77,20 @@ conflicting selections fail before updates start, including with `--dry-run`.
 The existing bulk updater processes plugin packages and then hook packs, retains
 successful updates when another package fails, and applies saved changes to the
 running Gateway with one final refresh.
+
+Before activating a replacement, plugin updates apply its Doctor config repairs
+through the normal backed-up config writer. This preserves settings such as a
+previously configured webhook endpoint. Retrying an already-current package also
+finishes pending config-only repairs. Replacement installs (`plugins install
+--force`) use the same repair owner. If a required Doctor artifact cannot load or
+a recorded data migration still needs maintenance, the command fails before
+activation and names the repair to complete. Follow the reported repair guidance
+before retrying; data migrations require `openclaw doctor --fix`. Disabled plugins
+keep their pending inputs without running state migrations; unrelated pending
+migrations remain preserved.
+
+Recovery keeps the published package generation when config rollback is not
+confirmed. The command reports the failure without claiming runtime activation.
 
 If update finalization fails, the error reports the original cause first and retains any rollback failures as additional diagnostic context. A failed rollback remains retryable; a successfully committed or rolled-back install is not applied again during cleanup.
 
@@ -171,11 +189,13 @@ The receipt can also include cleanup warnings. Modules and native libraries may
 remain loaded after their registrations are removed.
 
 Bundled plugins can reload while preserving their enabled or disabled policy.
-Compiled bundled plugins reuse their process-loaded code when their registrations
-reload. If the plugin's files changed while its original module remains loaded,
+Bundled plugins, including TypeScript source entries, reuse their process-loaded
+code when their registrations reload. If the plugin's files changed while its
+original module remains loaded,
 the result reports `restartRequired: true` with a warning, and CLI and tool
 output explain that a Gateway restart is needed to load edited code. Reload does
-not rebuild compiled bundled code; source installations also need a build.
+not rebuild bundled code. Rebuild before restarting when the installation loads
+compiled output.
 External captured sources return `restartRequired: false` after replacement.
 Reloading unchanged bundled files also returns `restartRequired: false`; channel
 and service registrations can be replaced without restarting the Gateway.

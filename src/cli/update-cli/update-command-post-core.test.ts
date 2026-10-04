@@ -1,9 +1,9 @@
-// Post-core install-records handoff reader: missing vs malformed JSON.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { acquireDistArtifactOwnership } from "../../../scripts/lib/dist-artifact-lock.mts";
+import { installPrivateUpdateHandoffStore } from "../../../test/helpers/private-update-handoff-store.js";
 import {
   createPluginInstallRecordMap,
   getPluginInstallRecordMapEntry,
@@ -12,6 +12,7 @@ import {
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../../test-utils/process-tree.js";
+import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
@@ -40,6 +41,7 @@ const pluginUpdate: PostCorePluginUpdateResult = {
 };
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     tempDirs.splice(0).map(async (dir) => {
       await fs.rm(dir, { recursive: true, force: true });
@@ -58,6 +60,9 @@ describe("continuePostCoreUpdateInFreshProcess", () => {
     "releases artifact ownership only for a target without the prepared-fact consumer (modern=%s)",
     async (modern) => {
       const root = await withTempDir();
+      const control = path.join(root, "control");
+      await fs.mkdir(control, { mode: 0o700 });
+      installPrivateUpdateHandoffStore(control);
       const observation = path.join(root, "ownership.txt");
       await fs.mkdir(path.join(root, "dist"));
       await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ version: "9999.0.0" }));
@@ -89,19 +94,23 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       );
       const sourceArtifactLock = await acquireDistArtifactOwnership(root);
       try {
-        const result = await continuePostCoreUpdateInFreshProcess({
-          root,
-          sourceRuntimePrepared: true,
-          channel: "dev",
-          requestedChannel: null,
-          opts: {
-            json: true,
-            run: { runId: "fixture-source-lock", env: {}, sourceArtifactLock },
-          },
-          pluginInstallRecords: {},
-          updateStartedAtMs: Date.now(),
-          timeoutMs: 5000,
-          nodeRunner: process.execPath,
+        const runId = "fixture-source-lock";
+        const result = await withUpdateCommandExecutor(runId, async (executor) => {
+          const executorFence = await executor.enter(root);
+          return await continuePostCoreUpdateInFreshProcess({
+            root,
+            sourceRuntimePrepared: true,
+            channel: "dev",
+            requestedChannel: null,
+            opts: {
+              json: true,
+              run: { runId, env: {}, sourceArtifactLock, executorFence },
+            },
+            pluginInstallRecords: {},
+            updateStartedAtMs: Date.now(),
+            timeoutMs: 5000,
+            nodeRunner: process.execPath,
+          });
         });
         expect(result).toEqual({ resumed: true, pluginUpdate });
         expect(await fs.readFile(observation, "utf8")).toBe(
@@ -245,48 +254,37 @@ describe("post-core result publication", () => {
 });
 
 describe("readPostCorePluginInstallRecordsFile", () => {
-  it("returns undefined when the path is omitted", async () => {
-    await expect(readPostCorePluginInstallRecordsFile(undefined)).resolves.toBeUndefined();
-  });
-
-  it("returns undefined when the handoff file is missing", async () => {
+  it.each([
+    { kind: "omitted", raw: undefined, reason: undefined },
+    { kind: "missing", raw: undefined, reason: undefined },
+    {
+      kind: "invalid",
+      raw: '{"demo":{"source":"bogus"}}\n',
+      reason: "Invalid plugin install records in handoff file",
+    },
+    {
+      kind: "malformed",
+      raw: "{invalid json",
+      reason: "Malformed JSON in plugin install records file",
+    },
+  ])("distinguishes $kind handoffs from valid install records", async ({ kind, raw, reason }) => {
     const dir = await withTempDir();
-    const missing = path.join(dir, "missing-plugin-install-records.json");
-    await expect(readPostCorePluginInstallRecordsFile(missing)).resolves.toBeUndefined();
-  });
-
-  it("loads a prototype-safe install-records handoff with legal special ids", async () => {
-    const dir = await withTempDir();
-    const filePath = path.join(dir, "plugin-install-records.json");
-    await fs.writeFile(
-      filePath,
-      '{"demo":{"source":"npm","spec":"@openclaw/demo@1.0.0","installPath":"/tmp/demo-plugin","futureMetadata":{"retained":true}},"constructor":{"source":"path"},"toString":{"source":"git"},"__proto__":{"source":"archive"}}\n',
-      "utf-8",
-    );
-
-    const records = await readPostCorePluginInstallRecordsFile(filePath);
-    if (!records) {
-      throw new Error("Expected plugin install records handoff");
+    if (!raw) {
+      await expect(
+        readPostCorePluginInstallRecordsFile(
+          kind === "omitted" ? undefined : path.join(dir, "plugin-install-records.json"),
+        ),
+      ).resolves.toBeUndefined();
+      return;
     }
-    expect(Object.getPrototypeOf(records)).toBeNull();
-    expect(getPluginInstallRecordMapEntry(records, "demo")).toEqual({
-      source: "npm",
-      spec: "@openclaw/demo@1.0.0",
-      installPath: "/tmp/demo-plugin",
-      futureMetadata: { retained: true },
-    });
-    expect(getPluginInstallRecordMapEntry(records, "constructor")).toEqual({ source: "path" });
-    expect(getPluginInstallRecordMapEntry(records, "toString")).toEqual({ source: "git" });
-    expect(getPluginInstallRecordMapEntry(records, "__proto__")).toEqual({ source: "archive" });
-  });
-
-  it("fails closed on structurally invalid handoff records", async () => {
-    const dir = await withTempDir();
     const filePath = path.join(dir, "plugin-install-records.json");
-    await fs.writeFile(filePath, '{"demo":{"source":"bogus"}}\n', "utf-8");
+    await fs.writeFile(filePath, raw, "utf-8");
 
     await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
-      `Invalid plugin install records in handoff file: ${filePath}`,
+      `${reason}: ${filePath}`,
+    );
+    await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
+      "Run openclaw doctor to inspect and repair plugin installation state.",
     );
   });
 
@@ -298,6 +296,8 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     setPluginInstallRecordMapEntry(records, "__proto__", { source: "archive" });
     setPluginInstallRecordMapEntry(records, "2", {
       source: "npm",
+      spec: "@openclaw/demo@1.0.0",
+      installPath: "/tmp/demo-plugin",
       futureMetadata: { retained: true },
     } as PluginInstallRecord);
     setPluginInstallRecordMapEntry(records, "toString", { source: "git" });
@@ -308,7 +308,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     await writePostCorePluginInstallRecordsFile(filePath, records);
 
     expect(await fs.readFile(filePath, "utf-8")).toBe(
-      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","futureMetadata":{"retained":true}},"__proto__":{"source":"archive"},"constructor":{"source":"path"},"toString":{"source":"git"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}\n',
+      '{"1":{"source":"archive"},"10":{"source":"path"},"2":{"source":"npm","spec":"@openclaw/demo@1.0.0","installPath":"/tmp/demo-plugin","futureMetadata":{"retained":true}},"__proto__":{"source":"archive"},"constructor":{"source":"path"},"toString":{"source":"git"},"\uE000":{"source":"path"},"\u{10000}":{"source":"git"}}\n',
     );
     const loaded = await readPostCorePluginInstallRecordsFile(filePath);
     if (!loaded) {
@@ -317,22 +317,13 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     expect(Object.getPrototypeOf(loaded)).toBeNull();
     expect(getPluginInstallRecordMapEntry(loaded, "2")).toEqual({
       source: "npm",
+      spec: "@openclaw/demo@1.0.0",
+      installPath: "/tmp/demo-plugin",
       futureMetadata: { retained: true },
     });
     expect(getPluginInstallRecordMapEntry(loaded, "__proto__")).toEqual({ source: "archive" });
-  });
-
-  it("fails closed on malformed handoff JSON with a path-labelled error", async () => {
-    const dir = await withTempDir();
-    const filePath = path.join(dir, "plugin-install-records.json");
-    await fs.writeFile(filePath, "{invalid json", "utf-8");
-
-    await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
-      `Malformed JSON in plugin install records file: ${filePath}`,
-    );
-    await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
-      "Run openclaw doctor to inspect and repair plugin installation state.",
-    );
+    expect(getPluginInstallRecordMapEntry(loaded, "constructor")).toEqual({ source: "path" });
+    expect(getPluginInstallRecordMapEntry(loaded, "toString")).toEqual({ source: "git" });
   });
 });
 
@@ -383,60 +374,45 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
     durationMs: 1,
   };
 
-  it("uses the fresh CLI after an install-kind switch with unchanged git metadata", () => {
-    expect(
-      shouldResumePostCoreUpdateInFreshProcess({
-        result: unchangedGitResult,
-        downgradeRisk: false,
-        installKindChanged: true,
-      }),
-    ).toBe(true);
-  });
-
-  it("does not resume a skipped git update with unchanged metadata", () => {
-    expect(
-      shouldResumePostCoreUpdateInFreshProcess({
-        result: { ...unchangedGitResult, status: "skipped" },
-        downgradeRisk: false,
-        installKindChanged: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("does not resume after a failed install-kind switch", () => {
-    expect(
-      shouldResumePostCoreUpdateInFreshProcess({
-        result: { ...unchangedGitResult, status: "error" },
-        downgradeRisk: false,
-        installKindChanged: true,
-      }),
-    ).toBe(false);
-  });
-
   it.each([
-    { version: "2026.4.28", fresh: false },
-    { version: "2026.4.29-beta.1", fresh: false },
-    { version: "2026.4.29", fresh: true },
-    { version: "2026.9.1", fresh: true },
-    { version: "unknown", fresh: false },
-    { version: undefined, fresh: false },
-  ])("selects the downgrade config writer for $version", ({ version, fresh }) => {
-    expect(
-      shouldResumePostCoreUpdateInFreshProcess({
-        result: {
-          ...unchangedGitResult,
-          mode: "npm",
-          before: { version: "2026.9.3-beta.1" },
-          after: { version },
-        },
-        downgradeRisk: true,
-      }),
-    ).toBe(fresh);
-  });
+    ["ok", true, false, "1.2.3", true],
+    ["skipped", false, false, "1.2.3", false],
+    ["error", true, false, "1.2.3", false],
+    ["ok", undefined, true, "2026.4.28", false],
+    ["ok", undefined, true, "2026.4.29-beta.1", false],
+    ["ok", undefined, true, "2026.4.29", true],
+    ["ok", undefined, true, "unknown", false],
+    ["ok", undefined, true, undefined, false],
+  ] as const)(
+    "selects the fresh writer for status=%s, install change=%s, downgrade=%s, version=%s",
+    (status, installKindChanged, downgradeRisk, version, fresh) => {
+      expect(
+        shouldResumePostCoreUpdateInFreshProcess({
+          result: {
+            ...unchangedGitResult,
+            status,
+            ...(downgradeRisk
+              ? { mode: "npm", before: { version: "2026.9.3-beta.1" }, after: { version } }
+              : {}),
+          },
+          downgradeRisk,
+          installKindChanged,
+        }),
+      ).toBe(fresh);
+    },
+  );
 });
 
 describe("post-core operator deadline provenance", () => {
-  it.each([
+  const cases: {
+    name: string;
+    value?: unknown;
+    expected?: string;
+    timeout?: string;
+    owner?: "child";
+    missing?: boolean;
+    malformed?: boolean;
+  }[] = [
     {
       name: "omitted operator deadline",
       value: { version: 1, serialized: "2700", operator: null },
@@ -469,40 +445,36 @@ describe("post-core operator deadline provenance", () => {
       expected: "2700",
     },
     { name: "malformed metadata", value: "default", expected: "2700" },
-  ])("preserves intent for $name", async ({ value, expected }) => {
+    { name: "missing handoff", timeout: "3", expected: "3", missing: true },
+    {
+      name: "child-owned completion",
+      timeout: "3",
+      expected: "3",
+      owner: "child",
+      value: { version: 1, serialized: "3", operator: null },
+    },
+    { name: "malformed handoff", timeout: "3", malformed: true },
+  ];
+  it.each(cases)("preserves intent for $name", async (entry) => {
     const root = await withTempDir();
     const resultPath = path.join(root, "plugins.json");
-    await fs.writeFile(
-      path.join(root, "handoff.json"),
-      JSON.stringify({ completionOwner: "parent", timeout: value }),
-    );
-    const opts = { json: true, timeout: "2700" };
-    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
-      opts: { ...opts, timeout: expected },
-      parentOwnsCompletion: true,
-    });
-  });
-
-  it("retains an explicit deadline without private parent ownership", async () => {
-    const root = await withTempDir();
-    const resultPath = path.join(root, "plugins.json");
-    const opts = { timeout: "3" };
-    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
-      opts,
-      parentOwnsCompletion: false,
-    });
-    await fs.writeFile(
-      path.join(root, "handoff.json"),
-      JSON.stringify({
-        completionOwner: "child",
-        timeout: { version: 1, serialized: "3", operator: null },
-      }),
-    );
-    expect(await resolvePostCoreUpdateHandoff({ opts, resultPath })).toEqual({
-      opts,
-      parentOwnsCompletion: false,
-    });
-    await fs.writeFile(path.join(root, "handoff.json"), "{");
-    await expect(resolvePostCoreUpdateHandoff({ opts, resultPath })).rejects.toThrow();
+    if (!entry.missing) {
+      await fs.writeFile(
+        path.join(root, "handoff.json"),
+        entry.malformed
+          ? "{"
+          : JSON.stringify({ completionOwner: entry.owner ?? "parent", timeout: entry.value }),
+      );
+    }
+    const opts = entry.timeout ? { timeout: entry.timeout } : { json: true, timeout: "2700" };
+    const result = resolvePostCoreUpdateHandoff({ opts, resultPath });
+    if (entry.malformed) {
+      await expect(result).rejects.toThrow();
+    } else {
+      expect(await result).toEqual({
+        opts: { ...opts, timeout: entry.expected },
+        parentOwnsCompletion: !entry.missing && entry.owner !== "child",
+      });
+    }
   });
 });

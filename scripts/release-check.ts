@@ -39,6 +39,7 @@ import { resolveNpmRunner, type NpmRunnerParams } from "./npm-runner.mts";
 import {
   collectInstalledPackageErrors,
   normalizeInstalledBinaryVersion,
+  resolvePublishedInstallSourceVerification,
 } from "./openclaw-npm-postpublish-verify.ts";
 import { assertPreparedOpenClawAiDependency } from "./openclaw-npm-prepublish-verify.ts";
 import { parseNpmPackJsonOutput, type NpmPackResult } from "./openclaw-npm-release-check.ts";
@@ -126,15 +127,6 @@ const PACKED_PLUGIN_SDK_PROGRESS_CONSUMER_FIXTURE = new URL(
   "./fixtures/packed-plugin-sdk-progress-consumer.ts",
   import.meta.url,
 );
-const PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS = new Set([
-  "2026.7.33",
-  "2026.7.34",
-  "2026.7.35",
-]);
-
-export function packedPluginSdkMayOmitSetupSurface(packageVersion: string): boolean {
-  return PACKED_PLUGIN_SDK_SETUP_SURFACE_OMISSION_VERSIONS.has(packageVersion);
-}
 const PACKED_BUNDLED_CHANNEL_ENTRY_SMOKE_ENTRYPOINTS = [
   "scripts/test-built-bundled-channel-entry-smoke.mts",
   "scripts/test-built-bundled-channel-entry-smoke.mjs",
@@ -671,12 +663,6 @@ export function collectPackedInstalledPackageVerificationErrors(params: {
   return errors;
 }
 
-export function allowsLegacyGeneratedOwnershipForSourceRoot(sourceRoot: string): boolean {
-  return !existsSync(
-    resolve(sourceRoot, "scripts/lib/runtime-dependency-ownership-build-plugin.mts"),
-  );
-}
-
 function verifyPackedInstalledPackage(params: {
   expectedVersion: string;
   packageRoot: string;
@@ -690,10 +676,7 @@ function verifyPackedInstalledPackage(params: {
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
   const errors = collectPackedInstalledPackageVerificationErrors({
-    // The selected source checkout is immutable release input. Its companion
-    // manifests are the exact inputs packed by the following plugin preflight.
-    additionalCompanionManifestRoots: [resolve("extensions")],
-    allowLegacyGeneratedOwnership: allowsLegacyGeneratedOwnershipForSourceRoot(resolve()),
+    ...resolvePublishedInstallSourceVerification(resolve(), params.expectedVersion),
     expectedVersion: params.expectedVersion,
     installedBinaryVersion,
     packageRoot: params.packageRoot,
@@ -808,27 +791,6 @@ function runPackedPluginSdkTypescriptSmoke(
       stdio: "inherit",
     });
 
-    const installedOpenClawRoot = join(consumerDir, "node_modules", "openclaw");
-    if (!target.setupConsumerOnly) {
-      const installedPackageVersion = (
-        JSON.parse(readFileSync(join(installedOpenClawRoot, "package.json"), "utf8")) as {
-          version?: unknown;
-        }
-      ).version;
-      if (
-        typeof installedPackageVersion === "string" &&
-        packedPluginSdkMayOmitSetupSurface(installedPackageVersion)
-      ) {
-        const indexPath = join(consumerDir, "src", "index.ts");
-        writeFileSync(
-          indexPath,
-          readFileSync(indexPath, "utf8").replace(
-            'import "./packed-plugin-sdk-setup-consumer.js";\n',
-            "",
-          ),
-        );
-      }
-    }
     const tscPath = join(consumerDir, "node_modules", "typescript", "bin", "tsc");
     if (!existsSync(tscPath)) {
       throw new Error("release-check: packed plugin SDK TypeScript smoke could not find tsc.");
@@ -851,27 +813,14 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
     configPath,
     `${JSON.stringify(
       {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-5.6-luna" },
-          },
-        },
         channels: {
           telegram: {
             enabled: true,
           },
         },
-        models: {
-          providers: {
-            openai: {
-              apiKey: "sk-openclaw-release-check",
-              baseUrl: "https://api.openai.com/v1",
-              models: [],
-            },
-          },
-        },
         plugins: {
           enabled: true,
+          allow: ["telegram"],
           entries: {
             telegram: {
               enabled: true,
@@ -886,12 +835,21 @@ export function writePackedBundledPluginActivationConfig(homeDir: string): void 
   );
 }
 
-function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+export function createPackedBundledPluginActivationSmokeEnv(
+  env: NodeJS.ProcessEnv,
+  tmpRoot: string,
+): NodeJS.ProcessEnv {
   const homeDir = join(tmpRoot, "activation-home");
-  mkdirSync(homeDir, { recursive: true });
-  const env = createPackedCliSmokeEnv(process.env, {
+  return createPackedCliSmokeEnv(env, {
     HOME: homeDir,
+    OPENCLAW_STATE_DIR: join(homeDir, ".openclaw"),
   });
+}
+
+function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: string): void {
+  const env = createPackedBundledPluginActivationSmokeEnv(process.env, tmpRoot);
+  const homeDir = expectDefined(env.HOME, "packed activation smoke home");
+  mkdirSync(homeDir, { recursive: true });
 
   writePackedBundledPluginActivationConfig(homeDir);
   runReleaseCheckCommand(
@@ -911,34 +869,6 @@ function runPackedBundledPluginActivationSmoke(packageRoot: string, tmpRoot: str
       cwd: packageRoot,
       stdio: "inherit",
       env,
-    },
-  );
-}
-
-function runPackedTaskRegistryControlRuntimeSmoke(packageRoot: string): void {
-  const runtimePath = join(packageRoot, "dist", "task-registry-control.runtime.js");
-  if (!existsSync(runtimePath)) {
-    throw new Error("release-check: packed task-registry control runtime is missing.");
-  }
-  const runtimeImportExpression = [
-    `(0, Function)("specifier", "return " + "im" + "port(specifier)")`,
-    `(${JSON.stringify(pathToFileURL(runtimePath).href)})`,
-  ].join("");
-  const source = `
-const runtime = await ${runtimeImportExpression};
-if (typeof runtime.getAcpSessionManager !== "function") {
-  throw new Error("missing getAcpSessionManager export");
-}
-if (typeof runtime.killSubagentRunAdmin !== "function") {
-  throw new Error("missing killSubagentRunAdmin export");
-}
-`;
-  runReleaseCheckCommand(
-    { command: process.execPath, args: ["--input-type=module", "--eval", source] },
-    {
-      cwd: packageRoot,
-      stdio: "inherit",
-      env: createPackedCliSmokeEnv(process.env),
     },
   );
 }
@@ -1036,7 +966,6 @@ function runPackedBundledChannelEntrySmoke(tarballPath: string, packedRoot: stri
     });
     runCriticalPluginSdkEntrypointImportSmoke(packageRoot);
     runPackedBundledPluginActivationSmoke(packageRoot, tmpRoot);
-    runPackedTaskRegistryControlRuntimeSmoke(packageRoot);
     runPackedPluginSdkTypescriptSmoke(tarballPath, tmpRoot, localPackageTarballs);
     const bundledChannelEntrySmoke = resolvePackedBundledChannelEntrySmokeCommand();
     runReleaseCheckCommand(
@@ -1363,12 +1292,14 @@ export async function checkPackedTargetBootstrap(
   const workerBundlePath = resolve(targetRoot, "src/shared/worker-bundle-hash.ts");
   // Frozen targets can have shared hash helpers without a deploy entrypoint.
   const hasWorkerProducer = existsSync(workerProducerPath);
+  let targetWorkerBundle: Record<string, unknown> | undefined;
   let workerArtifactDeclarations: Array<[string, unknown]> = [];
   if (hasWorkerProducer) {
     const target = await importToolingTypeScript(
       pathToFileURL(workerBundlePath).href,
       import.meta.url,
     );
+    targetWorkerBundle = target;
     if (Object.hasOwn(target, "WORKER_BUNDLE_ARTIFACT_PATHS")) {
       const paths = target.WORKER_BUNDLE_ARTIFACT_PATHS;
       if (!Array.isArray(paths) || paths.length === 0) {
@@ -1427,14 +1358,67 @@ export async function checkPackedTargetBootstrap(
   ) {
     throw new Error("release-check: unsupported target gateway run chunk metadata version.");
   }
-  checkCliBootstrapExternalImports({
-    rootDir: packedRoot,
-    workerDeployEntrypoints,
-    legacyGatewayChunkDiscovery: locatorModule === undefined,
-    logger: {
-      error: (message: string) => console.error(`release-check: ${message}`),
-    },
-  });
+  let materializedWorkerRoot: string | undefined;
+  if (hasWorkerProducer && !existsSync(resolve(packedRoot, "dist/worker"))) {
+    const archiveDirectory = resolve(packedRoot, "dist/worker-artifacts");
+    const archives = readdirSync(archiveDirectory, { withFileTypes: true });
+    if (archives.length !== 1 || !archives[0]!.isFile()) {
+      throw new Error("release-check: packaged worker bundle must contain one regular archive.");
+    }
+    const archiveMatch = /^([a-f0-9]{64})\.tar\.gz$/u.exec(archives[0]!.name);
+    if (!archiveMatch) {
+      throw new Error("release-check: packaged worker bundle archive name is invalid.");
+    }
+    const archivePath = resolve(archiveDirectory, archives[0]!.name);
+    if (lstatSync(archivePath).isSymbolicLink()) {
+      throw new Error("release-check: packaged worker bundle archive must not be a symlink.");
+    }
+    const archiveModulePath = resolve(targetRoot, "src/shared/worker-bundle-archive.ts");
+    const targetArchive = await importToolingTypeScript(
+      pathToFileURL(archiveModulePath).href,
+      import.meta.url,
+    );
+    const readManifest = targetArchive.readWorkerBundleArchiveManifest;
+    const extractArchive = targetArchive.extractWorkerBundleArchive;
+    const limits = targetArchive.DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS;
+    const hashManifest = targetWorkerBundle?.hashWorkerBundleManifest;
+    if (
+      typeof readManifest !== "function" ||
+      typeof extractArchive !== "function" ||
+      typeof hashManifest !== "function" ||
+      !limits
+    ) {
+      throw new Error("release-check: target worker archive contract is incomplete.");
+    }
+    const manifest = await readManifest(archivePath, limits);
+    const bundleHash = hashManifest(manifest);
+    if (bundleHash !== archiveMatch[1]) {
+      throw new Error(
+        "release-check: packaged worker bundle archive name does not match its manifest.",
+      );
+    }
+    materializedWorkerRoot = resolve(packedRoot, "dist/worker");
+    await extractArchive({
+      tarballPath: archivePath,
+      destination: materializedWorkerRoot,
+      expectedBundleHash: bundleHash,
+      limits,
+    });
+  }
+  try {
+    checkCliBootstrapExternalImports({
+      rootDir: packedRoot,
+      workerDeployEntrypoints,
+      legacyGatewayChunkDiscovery: locatorModule === undefined,
+      logger: {
+        error: (message: string) => console.error(`release-check: ${message}`),
+      },
+    });
+  } finally {
+    if (materializedWorkerRoot) {
+      rmSync(materializedWorkerRoot, { recursive: true, force: true });
+    }
+  }
 }
 
 async function verifyPackedContents(

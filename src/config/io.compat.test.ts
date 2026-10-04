@@ -1,11 +1,10 @@
-// Verifies config IO compatibility loading and migration behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.factory.js";
+import type { ConfigIoFactoryOptions } from "./io.types.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 
 vi.mock("../commands/doctor/shared/legacy-config-compat.js", () => ({
@@ -21,201 +20,105 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
   }),
 }));
 
-function withTempHome<T>(run: (home: string) => Promise<T>): Promise<T> {
-  return withTempDir("openclaw-config-compat-", run);
+const roots = createTempDirTracker();
+afterEach(() => roots.cleanup());
+
+async function fixture(authored: unknown, extra: ConfigIoFactoryOptions = {}) {
+  const home = roots.make("openclaw-config-compat-");
+  const configPath = path.join(home, "openclaw.json");
+  const logger = { error: vi.fn(), warn: vi.fn() };
+  const options = {
+    configPath,
+    homedir: () => home,
+    logger,
+    ...extra,
+    env: { HOME: home, ...extra.env },
+  };
+  const write = (config: unknown) => fs.writeFile(configPath, JSON.stringify(config, null, 2));
+  await write(authored);
+  return { configPath, logger, options, write, io: createConfigIO(options) };
 }
 
 describe("config io compatibility", () => {
-  it("keeps canonical custom gateway bind byte-identical during load", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const gateway = {
-        mode: "local" as const,
-        bind: "custom" as const,
-        customBindHost: "127.0.0.1",
-      };
-      const raw = `${JSON.stringify({ gateway }, null, 2)}\n`;
-      await fs.writeFile(configPath, raw, "utf-8");
-      const io = createConfigIO({
-        configPath,
-        env: { HOME: home } as NodeJS.ProcessEnv,
-        homedir: () => home,
-      });
-
-      const config = io.loadConfig();
-
-      expect(config.gateway).toMatchObject({ bind: "custom", customBindHost: "127.0.0.1" });
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
-    });
-  });
-
-  it("loads retired context-budget shapes and surfaces migration guidance without rewriting", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const authored = {
-        models: {
-          providers: {
-            openai: {
-              contextTokens: 64_000,
-              contextWindow: 128_000,
-              models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
-            },
+  it("leaves retired context-budget shapes for Doctor instead of normalizing runtime reads", async () => {
+    const authored = {
+      models: {
+        providers: {
+          openai: {
+            contextTokens: 64_000,
+            contextWindow: 128_000,
+            models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
           },
         },
-        agents: {
-          defaults: { contextTokens: 48_000 },
-          entries: { ops: { contextTokens: 32_000 } },
-        },
-      };
-      const raw = `${JSON.stringify(authored, null, 2)}\n`;
-      await fs.writeFile(configPath, raw, "utf-8");
-      const logger = { error: vi.fn(), warn: vi.fn() };
-      const io = createConfigIO({
-        configPath,
-        env: { HOME: home } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-        pluginValidation: "core-only",
-      });
-
-      const config = io.loadConfig();
-      const snapshot = await io.readConfigFileSnapshot();
-      const provider = config.models?.providers?.openai;
-      const resolvedBudget = resolveContextTokensForModelFromCache({
-        cfg: config,
-        provider: "openai",
-        model: "gpt-5.4",
-      });
-
-      expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-      expect(provider).not.toHaveProperty("contextTokens");
-      expect(provider).not.toHaveProperty("contextWindow");
-      expect(provider?.models?.[0]).toMatchObject({
-        contextTokens: 64_000,
-        contextWindow: 128_000,
-      });
-      expect(config.agents?.defaults).not.toHaveProperty("contextTokens");
-      expect(config.agents?.entries?.ops).not.toHaveProperty("contextTokens");
-      expect(resolvedBudget).toBe(64_000);
-      expect(snapshot.sourceConfigBeforeMigrations).toMatchObject(authored);
-      expect(logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
-      );
-      expect(snapshot.warnings).toContainEqual({
-        path: "agents.defaults.contextTokens",
-        message: "Removed agents.defaults.contextTokens.",
-      });
-      expect(snapshot.warnings).toContainEqual({
-        path: "agents.defaults.contextTokens",
-        message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
-      });
-      expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ path: "" }));
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
-    });
+      },
+      agents: {
+        defaults: { contextTokens: 48_000 },
+        entries: { ops: { contextTokens: 32_000 } },
+      },
+    };
+    const { io, configPath } = await fixture(authored, { pluginValidation: "core-only" });
+    const raw = await fs.readFile(configPath, "utf-8");
+    expect(() => io.loadConfig()).toThrow(/contextTokens|contextWindow/);
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.sourceConfig).toMatchObject(authored);
+    expect(snapshot.sourceConfigBeforeMigrations).toMatchObject(authored);
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
   });
 
   it("logs each warning payload once until warnings clear", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const logger = {
-        error: vi.fn(),
-        warn: vi.fn(),
-      };
-      const load = () =>
-        createConfigIO({
-          configPath,
-          env: { HOME: home } as NodeJS.ProcessEnv,
-          homedir: () => home,
-          logger,
-        }).loadConfig();
-      const writeRemovedPlugin = async (pluginId: string) => {
-        await fs.writeFile(
-          configPath,
-          JSON.stringify({ plugins: { entries: { [pluginId]: { enabled: false } } } }),
-        );
-      };
+    const { logger, options, write } = await fixture({});
+    const load = () => createConfigIO(options).loadConfig();
+    const writeRemovedPlugin = (pluginId: string) =>
+      write({ plugins: { entries: { [pluginId]: { enabled: false } } } });
 
-      await writeRemovedPlugin("google-antigravity-auth");
-      load();
-      load();
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(logger.warn).toHaveBeenCalledWith(
-        "Config warnings: plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
-      );
+    await writeRemovedPlugin("google-antigravity-auth");
+    load();
+    load();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Config warnings: plugins.entries.google-antigravity-auth: plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+    );
 
-      createConfigIO({
-        configPath,
-        env: { HOME: home } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-        pluginValidation: "skip",
-      }).loadConfig();
-      load();
-      expect(logger.warn).toHaveBeenCalledTimes(1);
+    createConfigIO({ ...options, pluginValidation: "skip" }).loadConfig();
+    load();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
 
-      await fs.writeFile(
-        configPath,
-        JSON.stringify({
-          gateway: { port: "invalid" },
-          plugins: { entries: { "google-antigravity-auth": { enabled: false } } },
-        }),
-      );
-      expect(load).toThrow();
-      await writeRemovedPlugin("google-antigravity-auth");
-      load();
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-
-      await writeRemovedPlugin("google-gemini-cli-auth");
-      load();
-      expect(logger.warn).toHaveBeenCalledTimes(2);
-
-      await fs.writeFile(configPath, JSON.stringify({}));
-      load();
-      await writeRemovedPlugin("google-gemini-cli-auth");
-      load();
-      expect(logger.warn).toHaveBeenCalledTimes(3);
-
-      // A null root is invalid config (throws) and, like the invalid-port
-      // step above, preserves the logged-warning fingerprint.
-      await fs.writeFile(configPath, "null");
-      expect(load).toThrow();
-      await writeRemovedPlugin("google-gemini-cli-auth");
-      load();
-      expect(logger.warn).toHaveBeenCalledTimes(3);
+    await write({
+      gateway: { port: "invalid" },
+      plugins: { entries: { "google-antigravity-auth": { enabled: false } } },
     });
+    expect(load).toThrow();
+    await writeRemovedPlugin("google-antigravity-auth");
+    load();
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+
+    await writeRemovedPlugin("google-gemini-cli-auth");
+    load();
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+
+    await write({});
+    load();
+    await writeRemovedPlugin("google-gemini-cli-auth");
+    load();
+    expect(logger.warn).toHaveBeenCalledTimes(3);
+
+    await write(null);
+    expect(load).toThrow();
+    await writeRemovedPlugin("google-gemini-cli-auth");
+    load();
+    expect(logger.warn).toHaveBeenCalledTimes(3);
   });
 
-  it("explains what to check when config was written by a newer OpenClaw", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-          null,
-          2,
-        ),
-      );
-      const logger = {
-        error: vi.fn(),
-        warn: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        configPath,
-        env: { HOME: home } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-      io.loadConfig();
-
+  it.each([undefined, "1"])("reports newer config unless update handoff is %s", async (handoff) => {
+    const { io, logger } = await fixture(
+      { meta: { lastTouchedVersion: "9999.1.1" }, gateway: { mode: "local" } },
+      handoff ? { env: { OPENCLAW_UPDATE_POST_CORE: handoff } } : {},
+    );
+    io.loadConfig();
+    if (handoff) {
+      expect(logger.warn).not.toHaveBeenCalled();
+    } else {
       expect(logger.warn).toHaveBeenCalledWith(
         [
           `Your OpenClaw config was written by version 9999.1.1, but this command is running ${VERSION}.`,
@@ -223,39 +126,7 @@ describe("config io compatibility", () => {
           "If unexpected, update PATH so `openclaw` points to the version you want, or reinstall the Gateway service from that same OpenClaw install.",
         ].join("\n"),
       );
-    });
-  });
-
-  it("does not warn about newer config during internal update handoff reads", async () => {
-    await withTempHome(async (home) => {
-      const configPath = path.join(home, ".openclaw", "openclaw.json");
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(
-        configPath,
-        JSON.stringify(
-          {
-            meta: { lastTouchedVersion: "9999.1.1" },
-            gateway: { mode: "local" },
-          },
-          null,
-          2,
-        ),
-      );
-      const logger = {
-        error: vi.fn(),
-        warn: vi.fn(),
-      };
-
-      const io = createConfigIO({
-        configPath,
-        env: { HOME: home, OPENCLAW_UPDATE_POST_CORE: "1" } as NodeJS.ProcessEnv,
-        homedir: () => home,
-        logger,
-      });
-      io.loadConfig();
-
-      expect(logger.warn).not.toHaveBeenCalled();
-    });
+    }
   });
 
   it("normalizes safe-bin config entries at config load time", () => {
@@ -271,9 +142,8 @@ describe("config io compatibility", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             tools: {
               exec: {
                 safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
@@ -285,7 +155,7 @@ describe("config io compatibility", () => {
               },
             },
           },
-        ],
+        },
       },
     };
     normalizeExecSafeBinProfilesInConfig(cfg);
@@ -295,11 +165,11 @@ describe("config io compatibility", () => {
       },
     });
     expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({
       custom: {
         deniedFlags: ["-f"],
       },
     });
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
   });
 });

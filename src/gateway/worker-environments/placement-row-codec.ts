@@ -73,8 +73,7 @@ export function fromRow(row: PlacementRow): WorkerSessionPlacementRecord {
   const state = parseWorkerSessionPlacementState(row.state);
   const executionMode = normalizeWorkerPlacementExecutionMode(row.execution_mode);
   const parsed = {
-    environmentId:
-      row.environment_id === null ? null : required(row.environment_id, "environment id"),
+    environmentId: nullableRequired(row.environment_id, "environment id"),
     activeOwnerEpoch:
       row.active_owner_epoch === null
         ? null
@@ -147,14 +146,7 @@ export function readWorkerPlacementChangeSnapshotInDatabase(
         "worker_environments.environment_id",
         "worker_session_placements.environment_id",
       )
-      .where(
-        "worker_session_placements.environment_id",
-        "in",
-        query(db)
-          .selectFrom("worker_environments")
-          .select("environment_id")
-          .where("profile_id", "in", profileIds),
-      )
+      .where("worker_environments.profile_id", "in", profileIds)
       // Match the instance correlation used by readWorkerPlacementIdentity, including
       // terminal provenance and pre-epoch dispatch states.
       .where((eb) =>
@@ -195,20 +187,18 @@ export function getRequired(db: DatabaseSync, sessionId: string): WorkerSessionP
   return record;
 }
 
-function assertIdentity(
-  record: WorkerSessionPlacementRecord,
-  identity: WorkerSessionPlacementIdentity,
-): void {
-  if (record.agentId !== identity.agentId || record.sessionKey !== identity.sessionKey) {
-    throw new Error(`Worker session placement identity changed for ${identity.sessionId}`);
-  }
-}
-
-function insertLocal(
+export function ensureLocal(
   db: DatabaseSync,
   identity: WorkerSessionPlacementIdentity,
   nowMs: number,
 ): WorkerSessionPlacementRecord {
+  const current = find(db, identity.sessionId);
+  if (current) {
+    if (current.agentId !== identity.agentId || current.sessionKey !== identity.sessionKey) {
+      throw new Error(`Worker session placement identity changed for ${identity.sessionId}`);
+    }
+    return current;
+  }
   executeSqliteQuerySync(
     db,
     query(db).insertInto("worker_session_placements").values({
@@ -243,39 +233,24 @@ function insertLocal(
   return record;
 }
 
-export function ensureLocal(
-  db: DatabaseSync,
-  identity: WorkerSessionPlacementIdentity,
-  nowMs: number,
-): WorkerSessionPlacementRecord {
-  const current = find(db, identity.sessionId);
-  if (current) {
-    assertIdentity(current, identity);
-    return current;
-  }
-  return insertLocal(db, identity, nowMs);
-}
-
 export function transitionValues(
   current: WorkerSessionPlacementRecord,
   to: WorkerSessionPlacementRecord["state"],
   patch: WorkerSessionPlacementTransitionPatch,
   nowMs: number,
 ): PlacementRow {
-  const environmentId =
-    to === "local" || to === "requested"
+  const clearsWorkerMetadata = to === "local" || to === "requested";
+  const text = (value: string | null | undefined, previous: string | null, field: string) =>
+    clearsWorkerMetadata ? null : value === undefined ? previous : nullableRequired(value, field);
+  const cursor = (value: number | null | undefined, previous: number | null, field: string) =>
+    clearsWorkerMetadata
       ? null
-      : patch.environmentId === undefined
-        ? current.environmentId
-        : patch.environmentId === null
-          ? null
-          : required(patch.environmentId, "environment id");
+      : value === undefined
+        ? previous
+        : normalizeNonNegativeInteger(value, field);
+  const environmentId = text(patch.environmentId, current.environmentId, "environment id");
   const activeOwnerEpoch =
-    to === "local" ||
-    to === "requested" ||
-    to === "provisioning" ||
-    to === "syncing" ||
-    to === "starting"
+    clearsWorkerMetadata || to === "provisioning" || to === "syncing" || to === "starting"
       ? null
       : patch.activeOwnerEpoch === undefined
         ? current.activeOwnerEpoch
@@ -283,7 +258,6 @@ export function transitionValues(
           ? null
           : normalizeEpoch(patch.activeOwnerEpoch, "active owner epoch");
   const generation = nextGeneration(current.generation);
-  const clearsWorkerMetadata = to === "local" || to === "requested";
   const values: PlacementRow = {
     session_id: current.sessionId,
     agent_id: current.agentId,
@@ -293,36 +267,32 @@ export function transitionValues(
     environment_id: environmentId,
     transition_generation: generation,
     active_owner_epoch: activeOwnerEpoch,
-    workspace_base_manifest_ref: clearsWorkerMetadata
-      ? null
-      : patch.workspaceBaseManifestRef === undefined
-        ? current.workspaceBaseManifestRef
-        : nullableRequired(patch.workspaceBaseManifestRef, "workspace base manifest ref"),
-    remote_workspace_dir: clearsWorkerMetadata
-      ? null
-      : patch.remoteWorkspaceDir === undefined
-        ? current.remoteWorkspaceDir
-        : nullableRequired(patch.remoteWorkspaceDir, "remote workspace directory"),
-    worker_bundle_hash: clearsWorkerMetadata
-      ? null
-      : patch.workerBundleHash === undefined
-        ? current.workerBundleHash
-        : nullableRequired(patch.workerBundleHash, "worker bundle hash"),
-    last_transcript_ack_cursor: clearsWorkerMetadata
-      ? null
-      : patch.lastTranscriptAckCursor === undefined
-        ? current.lastTranscriptAckCursor
-        : normalizeNonNegativeInteger(patch.lastTranscriptAckCursor, "transcript ACK cursor"),
-    last_live_event_ack_cursor: clearsWorkerMetadata
-      ? null
-      : patch.lastLiveEventAckCursor === undefined
-        ? current.lastLiveEventAckCursor
-        : normalizeNonNegativeInteger(patch.lastLiveEventAckCursor, "live ACK cursor"),
-    recovery_error: clearsWorkerMetadata
-      ? null
-      : patch.recoveryError === undefined
-        ? current.recoveryError
-        : nullableRequired(patch.recoveryError, "recovery error"),
+    workspace_base_manifest_ref: text(
+      patch.workspaceBaseManifestRef,
+      current.workspaceBaseManifestRef,
+      "workspace base manifest ref",
+    ),
+    remote_workspace_dir: text(
+      patch.remoteWorkspaceDir,
+      current.remoteWorkspaceDir,
+      "remote workspace directory",
+    ),
+    worker_bundle_hash: text(
+      patch.workerBundleHash,
+      current.workerBundleHash,
+      "worker bundle hash",
+    ),
+    last_transcript_ack_cursor: cursor(
+      patch.lastTranscriptAckCursor,
+      current.lastTranscriptAckCursor,
+      "transcript ACK cursor",
+    ),
+    last_live_event_ack_cursor: cursor(
+      patch.lastLiveEventAckCursor,
+      current.lastLiveEventAckCursor,
+      "live ACK cursor",
+    ),
+    recovery_error: text(patch.recoveryError, current.recoveryError, "recovery error"),
     terminal_reason:
       to === "failed"
         ? patch.terminalReason === undefined
@@ -363,6 +333,7 @@ export function updateTransition(
   to: WorkerSessionPlacementState,
   patch: WorkerSessionPlacementTransitionPatch,
   nowMs: number,
+  onEnvironmentActivated?: (environmentId: string, lastActivatedAtMs: number) => void,
 ): WorkerSessionPlacementRecord {
   const values = transitionValues(current, to, patch, nowMs);
   const result = executeSqliteQuerySync(
@@ -401,14 +372,16 @@ export function updateTransition(
         .where("attached_session_ids_json", "=", JSON.stringify([updated.sessionId]))
         .returning("last_activated_at_ms"),
     );
-    if (activated.rows.length !== 1) {
+    const lastActivatedAtMs = activated.rows[0]?.last_activated_at_ms;
+    if (activated.rows.length !== 1 || lastActivatedAtMs == null) {
       throw new Error(
         `Worker session placement ${current.sessionId} lost its attached environment`,
       );
     }
     publishWorkerEnvironmentNativeMutation(db, updated.environmentId!, {
-      lastActivatedAtMs: activated.rows[0]!.last_activated_at_ms,
+      lastActivatedAtMs,
     });
+    onEnvironmentActivated?.(updated.environmentId!, lastActivatedAtMs);
   }
   publishPlacementTurnClaimState(db, updated);
   return updated;

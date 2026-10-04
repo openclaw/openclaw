@@ -8,8 +8,8 @@ import {
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
-import type { CapturedSessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import type { CapturedSessionEntryReadSource } from "../config/sessions/session-entry-read-source.types.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -26,12 +26,11 @@ import {
 } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import type { GatewaySessionStoreDiscoveryCache } from "./session-utils-store-candidates.js";
 import {
   prepareGatewaySessionStoreTargetsReadOnly,
-  resolveGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTargetWithStore,
   type GatewaySessionStoreCache,
-  type GatewaySessionStoreDiscoveryCache,
 } from "./session-utils-store-lookup.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 
@@ -116,17 +115,6 @@ export function resolveSessionSharingTarget(params: {
   return toSessionSharingTarget(target);
 }
 
-/** Fresh metadata for one synchronous batch; no authorization decisions are retained. */
-export function resolveSessionSharingTargets(params: {
-  cfg: OpenClawConfig;
-  targets: readonly { sessionKey: string; agentId?: string }[];
-}): Array<SessionSharingTarget | null> {
-  return resolveGatewaySessionStoreTargetsReadOnly({
-    cfg: params.cfg,
-    targets: params.targets.map(({ sessionKey, agentId }) => ({ key: sessionKey, agentId })),
-  }).map(toSessionSharingTarget);
-}
-
 function toSessionSharingTarget(
   target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>,
 ): SessionSharingTarget | null {
@@ -169,7 +157,6 @@ export type SessionSharingRoleParams = {
   cfg?: OpenClawConfig;
   client: GatewayClient | null;
   target: SessionSharingTarget;
-  includeMembership?: boolean;
   isMember?: boolean;
 };
 
@@ -221,15 +208,14 @@ export function resolveSessionSharingRole(
   }
   const member =
     params.isMember ??
-    (params.includeMembership !== false &&
-      isSessionMember(
-        {
-          agentId: params.target.agentId,
-          sessionKey: params.target.storeKey,
-          storePath: params.target.storePath,
-        },
-        identity.id,
-      ));
+    isSessionMember(
+      {
+        agentId: params.target.agentId,
+        sessionKey: params.target.storeKey,
+        storePath: params.target.storePath,
+      },
+      identity.id,
+    );
   return member ? "member" : "viewer";
 }
 
@@ -442,7 +428,7 @@ export function authorizeSessionAgentRun(
 }
 
 export function authorizeSessionSharingTarget(
-  params: SessionSharingRoleParams,
+  params: SessionSharingRoleParams & { requireOwner?: boolean },
   prepared?: { value: ReturnType<typeof operatorSessionCap>; role: SessionSharingRole },
 ): ErrorShape | null {
   const visibility = resolveSessionVisibility(params.target.entry);
@@ -452,6 +438,12 @@ export function authorizeSessionSharingTarget(
   const role = prepared?.role ?? resolveSessionSharingRole(params, { value: sessionCap });
   if (sessionCap === "none" && role !== "owner" && role !== "admin") {
     return hiddenSessionNotFound(params.target.canonicalKey);
+  }
+  if (params.requireOwner && !canManageSessionSharing(role)) {
+    return errorShape(
+      ErrorCodes.FORBIDDEN,
+      "Only the session creator or an admin can archive or restore this session.",
+    );
   }
   const capped = sessionCap === "view" || sessionCap === "suggest";
   // Draft membership is inactive, while an explicit role caps even shared visibility.

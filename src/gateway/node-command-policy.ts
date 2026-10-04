@@ -1,6 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeUniqueStringEntries,
+  normalizeUniqueTrimmedStringList,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
@@ -113,7 +115,7 @@ export const DEFAULT_DANGEROUS_NODE_COMMANDS = [
   ...HEALTH_DANGEROUS_COMMANDS,
 ];
 
-export const PLATFORM_DEFAULTS: Record<string, string[]> = {
+export const PLATFORM_DEFAULTS: Record<PlatformId, string[]> = {
   ios: [
     ...CAMERA_COMMANDS,
     ...MOBILE_NODE_COMMANDS.location,
@@ -169,101 +171,58 @@ export const PLATFORM_DEFAULTS: Record<string, string[]> = {
 };
 type PlatformId = "ios" | "watchos" | "android" | "macos" | "windows" | "linux" | "unknown";
 
-const CANONICAL_PLATFORM_IDS = new Set<Exclude<PlatformId, "unknown">>([
-  "ios",
-  "watchos",
-  "android",
-  "macos",
-  "windows",
-  "linux",
-]);
-
-const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
+const PLATFORM_RULES: ReadonlyArray<{
   id: Exclude<PlatformId, "unknown">;
   tokens: readonly string[];
+  nativeLabel?: RegExp;
+  allowEmptyFamily?: boolean;
 }> = [
-  { id: "ios", tokens: ["iphone", "ipad", "ios"] },
-  { id: "watchos", tokens: ["apple watch", "watchos"] },
-  { id: "android", tokens: ["android"] },
-  { id: "macos", tokens: ["mac"] },
+  {
+    id: "ios",
+    tokens: ["iphone", "ipad", "ios"],
+    nativeLabel: /^(?:ios|ipados) \d+(?:\.\d+){0,2}$/,
+    allowEmptyFamily: true,
+  },
+  {
+    id: "watchos",
+    tokens: ["apple watch", "watchos"],
+    nativeLabel: /^watchos \d+(?:\.\d+){0,2}$/,
+  },
+  {
+    id: "android",
+    tokens: ["android"],
+    nativeLabel: /^android \d+(?: \(sdk \d+\))?$/,
+    allowEmptyFamily: true,
+  },
+  {
+    id: "macos",
+    tokens: ["mac"],
+    nativeLabel: /^macos \d+(?:\.\d+){0,2}$/,
+  },
   { id: "windows", tokens: ["windows"] },
   { id: "linux", tokens: ["linux"] },
-] as const;
-
-function resolvePlatformIdByExactMatch(value: string): Exclude<PlatformId, "unknown"> | undefined {
-  if (CANONICAL_PLATFORM_IDS.has(value as Exclude<PlatformId, "unknown">)) {
-    return value as Exclude<PlatformId, "unknown">;
-  }
-  return undefined;
-}
-
-function platformMatchesDeviceFamily(
-  platformId: Exclude<PlatformId, "unknown">,
-  family: string,
-): boolean {
-  switch (platformId) {
-    case "ios":
-      return family === "" || /^(?:iphone|ipad|ios)$/.test(family);
-    case "watchos":
-      return family === "apple watch" || family === "watchos";
-    case "android":
-      return family === "" || family === "android";
-    case "macos":
-      return family === "mac";
-    case "windows":
-      return family === "windows";
-    case "linux":
-      return family === "linux";
-  }
-  return false;
-}
-
-function resolvePlatformIdByNativeLabel(
-  platform: string,
-  deviceFamily: string,
-): Exclude<PlatformId, "unknown"> | undefined {
-  if (/^(?:ios|ipados) \d+(?:\.\d+){0,2}$/.test(platform)) {
-    return /^(?:iphone|ipad|ios)$/.test(deviceFamily) ? "ios" : undefined;
-  }
-  if (/^watchos \d+(?:\.\d+){0,2}$/.test(platform)) {
-    return /^(?:apple watch|watchos)$/.test(deviceFamily) ? "watchos" : undefined;
-  }
-  if (/^macos \d+(?:\.\d+){0,2}$/.test(platform)) {
-    return deviceFamily === "mac" ? "macos" : undefined;
-  }
-  if (/^android \d+(?: \(sdk \d+\))?$/.test(platform)) {
-    return deviceFamily === "android" ? "android" : undefined;
-  }
-  return undefined;
-}
-
-function resolvePlatformIdByDeviceFamily(
-  value: string,
-): Exclude<PlatformId, "unknown"> | undefined {
-  for (const rule of DEVICE_FAMILY_TOKEN_RULES) {
-    if (rule.tokens.some((token) => value.includes(token))) {
-      return rule.id;
-    }
-  }
-  return undefined;
-}
+];
 
 function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
   const raw = normalizeDeviceMetadataForPolicy(platform);
   const family = normalizeDeviceMetadataForPolicy(deviceFamily);
-  const byPlatform = resolvePlatformIdByExactMatch(raw);
-  if (byPlatform) {
-    return platformMatchesDeviceFamily(byPlatform, family) ? byPlatform : "unknown";
-  }
-  const byNativeLabel = resolvePlatformIdByNativeLabel(raw, family);
-  if (byNativeLabel) {
-    return byNativeLabel;
-  }
   if (raw) {
-    return "unknown";
+    const rule = PLATFORM_RULES.find((candidate) => candidate.id === raw);
+    if (rule) {
+      return rule.tokens.includes(family) || (family === "" && rule.allowEmptyFamily)
+        ? rule.id
+        : "unknown";
+    }
+    return (
+      PLATFORM_RULES.find(
+        (candidate) => candidate.nativeLabel?.test(raw) && candidate.tokens.includes(family),
+      )?.id ?? "unknown"
+    );
   }
-  const byFamily = resolvePlatformIdByDeviceFamily(family);
-  return byFamily ?? "unknown";
+  return (
+    PLATFORM_RULES.find((rule) => rule.tokens.some((token) => family.includes(token)))?.id ??
+    "unknown"
+  );
 }
 
 export function listDangerousPluginNodeCommands(): string[] {
@@ -271,18 +230,14 @@ export function listDangerousPluginNodeCommands(): string[] {
   if (!registry) {
     return [];
   }
-  const commands: string[] = [];
-  registry.nodeHostCommands.forEach(({ command }) => {
-    if (command.dangerous === true) {
-      commands.push(command.command);
-    }
-  });
-  registry.nodeInvokePolicies.forEach(({ policy }) => {
-    if (policy.dangerous === true) {
-      policy.commands.forEach((command) => commands.push(command));
-    }
-  });
-  return normalizeUniqueStringEntries(commands);
+  return normalizeUniqueStringEntries([
+    ...registry.nodeHostCommands.flatMap(({ command }) =>
+      command.dangerous === true ? [command.command] : [],
+    ),
+    ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
+      policy.dangerous === true ? policy.commands : [],
+    ),
+  ]);
 }
 
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
@@ -295,27 +250,22 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const commands: string[] = [];
-  registry.nodeInvokePolicies.forEach(({ policy }) => {
-    if (policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)) {
-      policy.commands.forEach((command) => commands.push(command));
-    }
-  });
-  registry.nodeHostCommands.forEach(({ command: { dangerous, agentTool, command } }) => {
-    if (dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId)) {
-      commands.push(command);
-    }
-  });
-  return normalizeUniqueStringEntries(commands);
+  return normalizeUniqueStringEntries([
+    ...registry.nodeInvokePolicies.flatMap(({ policy }) =>
+      policy.dangerous !== true && policy.defaultPlatforms?.includes(platformId)
+        ? policy.commands
+        : [],
+    ),
+    ...registry.nodeHostCommands.flatMap(({ command: { dangerous, agentTool, command } }) =>
+      dangerous !== true && agentTool?.defaultPlatforms?.includes(platformId) ? [command] : [],
+    ),
+  ]);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
   const registry = getActivePluginGatewayNodePolicyRegistry();
-  if (!registry) {
-    return false;
-  }
   const normalized = command.trim();
-  if (!normalized) {
+  if (!registry || !normalized) {
     return false;
   }
   return registry.nodeInvokePolicies.some(
@@ -334,33 +284,6 @@ type NodeCommandPolicyNode = {
   approvedCommands?: readonly string[];
 };
 
-function isDesktopPlatformId(platformId: PlatformId): boolean {
-  return platformId === "macos" || platformId === "windows" || platformId === "linux";
-}
-
-function filterDesktopHostCommandDefaults(params: {
-  platformId: PlatformId;
-  commands: readonly string[];
-  includeDesktopHostCommands?: boolean;
-}): string[] {
-  if (params.includeDesktopHostCommands === true || !isDesktopPlatformId(params.platformId)) {
-    return [...params.commands];
-  }
-  return params.commands.filter((command) => !DESKTOP_HOST_COMMANDS.has(command));
-}
-
-function filterApprovedRuntimeCommands(params: {
-  platformId: PlatformId;
-  commands: readonly string[];
-}): string[] {
-  if (!isDesktopPlatformId(params.platformId)) {
-    return [];
-  }
-  // Desktop host commands are not default-enabled for normal node sessions.
-  // A live node can still expose approved commands from its runtime handshake.
-  return params.commands.filter((command) => DESKTOP_HOST_COMMANDS.has(command.trim()));
-}
-
 function isLiveNodeSession(node: NodeCommandPolicyNode | undefined): boolean {
   return (
     typeof node?.nodeId === "string" &&
@@ -371,14 +294,11 @@ function isLiveNodeSession(node: NodeCommandPolicyNode | undefined): boolean {
 }
 
 function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
-  if (!node) {
-    return false;
-  }
   return (
-    (node.caps ?? []).some(
+    (node?.caps ?? []).some(
       (capability) => normalizeOptionalLowercaseString(capability) === "talk",
     ) ||
-    (node.commands ?? []).some((command) =>
+    (node?.commands ?? []).some((command) =>
       normalizeOptionalLowercaseString(command)?.startsWith("talk."),
     )
   );
@@ -387,27 +307,25 @@ function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
 function resolveNodeCommandAllowlistInternal(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
-  options?: { includeDesktopHostCommands?: boolean; includeDangerousDefaults?: boolean },
+  pairing = false,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
-  const base = filterDesktopHostCommandDefaults({
-    platformId,
-    commands: expectDefined(
-      PLATFORM_DEFAULTS[platformId],
-      "platform defaults entry at platform id",
-    ),
-    includeDesktopHostCommands: options?.includeDesktopHostCommands,
-  });
+  const desktop = platformId === "macos" || platformId === "windows" || platformId === "linux";
+  const base = PLATFORM_DEFAULTS[platformId].filter(
+    (command) => pairing || !desktop || !DESKTOP_HOST_COMMANDS.has(command),
+  );
   const watchRelayCommands =
     platformId === "ios" && normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
       ? IOS_WATCH_RELAY_COMMANDS
       : [];
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
-  const approved = filterApprovedRuntimeCommands({
-    platformId,
-    commands: node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : []),
-  });
+  // Desktop host commands need pairing approval instead of ordinary session defaults.
+  const approved = desktop
+    ? (node?.approvedCommands ?? (isLiveNodeSession(node) ? (node?.commands ?? []) : [])).filter(
+        (command) => DESKTOP_HOST_COMMANDS.has(command.trim()),
+      )
+    : [];
   const extra = cfg.gateway?.nodes?.commands?.allow ?? [];
   const deny = new Set(cfg.gateway?.nodes?.commands?.deny ?? []);
   // A plugin `dangerous` flag governs the surface that plugin contributes
@@ -422,17 +340,17 @@ function resolveNodeCommandAllowlistInternal(
   );
   // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
   // at pairing but do not enter the runtime allowlist by default.
-  const dangerousBuiltinCommands =
-    options?.includeDangerousDefaults === true
-      ? new Set<string>()
-      : new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
+  const dangerousBuiltinCommands = new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
   // gateway.nodes.commands.allow below can still opt them in for operators.
   const allow = new Set(
     [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
       .filter(
-        (cmd) => cmd && !dangerousPluginCommands.has(cmd) && !dangerousBuiltinCommands.has(cmd),
+        (cmd) =>
+          cmd &&
+          !dangerousPluginCommands.has(cmd) &&
+          (pairing || !dangerousBuiltinCommands.has(cmd)),
       ),
   );
   for (const cmd of extra) {
@@ -447,13 +365,9 @@ function resolveNodeCommandAllowlistInternal(
   // In pairing mode, denylisted dangerous defaults stay declarable so an
   // explicit persistent allow can authorize them without another pairing.
   // Invoke-time policy still honors deny in full.
-  const denyExemptDeclarable =
-    options?.includeDangerousDefaults === true
-      ? new Set(DEFAULT_DANGEROUS_NODE_COMMANDS)
-      : new Set<string>();
   for (const blocked of deny) {
     const trimmed = blocked.trim();
-    if (trimmed && !denyExemptDeclarable.has(trimmed)) {
+    if (trimmed && (!pairing || !dangerousBuiltinCommands.has(trimmed))) {
       allow.delete(trimmed);
     }
   }
@@ -474,35 +388,15 @@ export function resolveNodePairingCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
 ): Set<string> {
-  return resolveNodeCommandAllowlistInternal(cfg, node, {
-    includeDesktopHostCommands: true,
-    includeDangerousDefaults: true,
-  });
-}
-
-function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
-  if (!Array.isArray(commands)) {
-    return [];
-  }
-  const seen = new Set<string>();
-  const normalized: string[] = [];
-  for (const value of commands) {
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed) || isPrivateNodeInvokeCommand(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    normalized.push(trimmed);
-  }
-  return normalized;
+  return resolveNodeCommandAllowlistInternal(cfg, node, true);
 }
 
 export function normalizeDeclaredNodeCommands(params: {
   declaredCommands?: readonly string[];
   allowlist: Set<string>;
 }): string[] {
-  return normalizeDeclaredCommands(params.declaredCommands).filter((command) =>
-    params.allowlist.has(command),
+  return normalizeUniqueTrimmedStringList(params.declaredCommands).filter(
+    (command) => !isPrivateNodeInvokeCommand(command) && params.allowlist.has(command),
   );
 }
 
@@ -542,10 +436,7 @@ export function isNodeCommandAllowed(params: {
   if (!command) {
     return { ok: false, reason: "command required" };
   }
-  if (isPrivateNodeInvokeCommand(command)) {
-    return { ok: false, reason: "command not allowlisted" };
-  }
-  if (!params.allowlist.has(command)) {
+  if (isPrivateNodeInvokeCommand(command) || !params.allowlist.has(command)) {
     return { ok: false, reason: "command not allowlisted" };
   }
   if (Array.isArray(params.declaredCommands) && params.declaredCommands.length > 0) {
@@ -558,16 +449,40 @@ export function isNodeCommandAllowed(params: {
   return { ok: true };
 }
 
-export type RequiredNodeCommandAuthority = {
-  command: string;
-  state: "invocable" | "pending-approval" | "undeclared" | "unauthorized";
-};
+type UnavailableNodeCommandState = "pending-approval" | "undeclared" | "unauthorized";
+export type RequiredNodeCommandAuthority = { command: string } & (
+  | { state: "invocable" }
+  | { state: UnavailableNodeCommandState; message: string }
+);
+
+/** Present the failed authority layer without suggesting that another layer can grant it. */
+function formatRequiredNodeCommandUnavailable(
+  command: string,
+  state: UnavailableNodeCommandState,
+  nodeId: string,
+): string {
+  const prefix = `paired-device command ${command}`;
+  if (state === "undeclared") {
+    const pluginId = getActivePluginGatewayNodePolicyRegistry()?.nodeHostCommands.find(
+      (entry) => entry.command.command === command,
+    )?.pluginId;
+    const enable = pluginId
+      ? `${pluginId === "codex" ? "install the codex plugin on that node if missing (openclaw plugins install @openclaw/codex), then " : ""}enable the ${pluginId} plugin on that node (openclaw plugins enable ${pluginId})`
+      : "enable the plugin or node capability that provides this command on that node";
+    return `${prefix} is not advertised by node ${nodeId}; ${enable}, then restart the node (openclaw node restart) and approve its updated command surface`;
+  }
+  if (state === "pending-approval") {
+    return `${prefix} is awaiting pairing approval for node ${nodeId}; find its updated command surface request with openclaw nodes pending, then run openclaw nodes approve <requestId>`;
+  }
+  return `${prefix} is blocked by Gateway policy for node ${nodeId}; allow it in gateway.nodes.commands.allow and remove any matching gateway.nodes.commands.deny entry`;
+}
 
 /**
  * Resolves declaration, pairing, and runtime policy once at their Gateway owner.
  * Clients receive one closed state instead of rebuilding authority from partial lists.
  */
 export function resolveRequiredNodeCommandAuthority(params: {
+  nodeId: string;
   requiredCommands: readonly string[];
   declaredCommands: readonly string[];
   effectiveCommands: readonly string[];
@@ -578,28 +493,31 @@ export function resolveRequiredNodeCommandAuthority(params: {
   const effectiveCommands = new Set(params.effectiveCommands);
   // A denial anywhere in the required set takes precedence over pairing approval.
   const denied = params.requiredCommands.find((cmd) => params.withheldCommands.includes(cmd));
-  if (denied) {
-    return { command: denied, state: "unauthorized" };
+  const command =
+    denied ||
+    params.requiredCommands.find(
+      (cmd) =>
+        !effectiveCommands.has(cmd) ||
+        !isNodeCommandAllowed({
+          command: cmd,
+          declaredCommands: params.effectiveCommands,
+          allowlist: params.allowlist,
+        }).ok,
+    );
+  if (command === undefined) {
+    const first = params.requiredCommands[0];
+    return first ? { command: first, state: "invocable" } : undefined;
   }
-  for (const command of params.requiredCommands) {
-    if (
-      effectiveCommands.has(command) &&
-      isNodeCommandAllowed({
-        command,
-        declaredCommands: params.effectiveCommands,
-        allowlist: params.allowlist,
-      }).ok
-    ) {
-      continue;
-    }
-    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
-      return { command, state: "pending-approval" };
-    }
-    if (declaredCommands.has(command)) {
-      return { command, state: "unauthorized" };
-    }
-    return { command, state: "undeclared" };
-  }
-  const command = params.requiredCommands[0];
-  return command ? { command, state: "invocable" } : undefined;
+  const state: UnavailableNodeCommandState = denied
+    ? "unauthorized"
+    : !declaredCommands.has(command)
+      ? "undeclared"
+      : effectiveCommands.has(command)
+        ? "unauthorized"
+        : "pending-approval";
+  return {
+    command,
+    state,
+    message: formatRequiredNodeCommandUnavailable(command, state, params.nodeId),
+  };
 }

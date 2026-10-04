@@ -9,7 +9,7 @@ import { runReclamationWorkerPort } from "./session-accessor.sqlite-mutation-wor
 import type {
   SqliteReclamationWorkerCloseRequest,
   SqliteReclamationWorkerRequest,
-} from "./session-accessor.sqlite-reclamation-worker.js";
+} from "./session-accessor.sqlite-reclamation-worker.types.js";
 
 const gc = vi.hoisted(() => ({
   pending: undefined as (() => void) | undefined,
@@ -31,6 +31,12 @@ vi.mock("../../state/openclaw-agent-canonical-validation-receipt.js", () => ({})
 vi.mock("../../state/openclaw-agent-db-readonly-open.js", () => ({}));
 vi.mock("../../state/openclaw-state-db-cache.js", () => ({}));
 vi.mock("../../state/openclaw-agent-db-identity.js", () => ({
+  readOpenClawAgentDatabaseIdentity: () => ({
+    identity: "1:2",
+    birthtime: "1",
+    incarnation: "fixture-incarnation",
+    filename: "/fixture/agent.sqlite",
+  }),
   createOpenClawAgentDatabaseClaim: () => ({ assertCurrent() {}, release() {} }),
 }));
 vi.mock("../../state/openclaw-agent-db-lease.js", () => ({
@@ -67,10 +73,10 @@ vi.mock("./session-accessor.sqlite-worker-coordination.js", () => ({
   ) => run(options),
 }));
 vi.mock("./session-accessor.sqlite-reclamation.js", () => ({
-  reclaimSqliteSessionInTransaction: () => ({ kind: "maintenance-statistics", value: true }),
-}));
-vi.mock("./session-accessor.sqlite-reclamation-commit.js", () => ({
-  markSqliteReclamationSettled: () => {},
+  reclaimSqliteSessionInTransaction: () => ({
+    kind: "maintenance-finalize",
+    value: { archivedTranscripts: [], changedEntries: [], committedEntries: [] },
+  }),
 }));
 
 it("keeps idle collection after buffered admission replies and cancels it for the next request", async () => {
@@ -102,7 +108,13 @@ it("keeps idle collection after buffered admission replies and cancels it for th
         type: "reclaim",
         operationId: ++operationId,
         commitGate: new SharedArrayBuffer(4),
-        plan: { kind: "maintenance-statistics", databaseOptions, materializedPlans: [] },
+        plan: {
+          kind: "maintenance-finalize",
+          agentId: databaseOptions.agentId,
+          databaseOptions,
+          entries: [],
+          materializedPlans: [],
+        },
         coordination,
       } satisfies SqliteReclamationWorkerRequest,
       [],

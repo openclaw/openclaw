@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
+import {
+  InvalidSummaryOutputError,
+  SummaryOutputBudgetError,
+  type SessionTreeEntry,
+} from "../types.js";
 import {
   calculateContextTokens,
   compact,
@@ -657,6 +661,47 @@ describe("prepareCompaction when the last entry is a compaction record", () => {
   );
 });
 
+describe("generateSummary progress updates", () => {
+  it("asks to keep completed checks distinct from unresolved blockers", async () => {
+    const completeSimple = vi.fn(async () => createAssistant("summary", createUsage(1), 4));
+    const result = await generateSummary(
+      [
+        { role: "user", content: "Check whether the release is approved.", timestamp: 1 },
+        {
+          ...createAssistant("", createUsage(0), 2),
+          content: [{ type: "toolCall", id: "check", name: "verify", arguments: {} }],
+          stopReason: "toolUse",
+        },
+        {
+          role: "toolResult",
+          toolCallId: "check",
+          toolName: "verify",
+          content: [{ type: "text", text: "Verification FAILED: missing release approval." }],
+          isError: true,
+          timestamp: 3,
+        },
+      ],
+      createSummaryModel(),
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "Release approval check: pending.",
+      undefined,
+      undefined,
+      { completeSimple },
+    );
+
+    expect(result.ok).toBe(true);
+    const request = JSON.stringify(completeSimple.mock.calls);
+    expect(request).toContain("Release approval check: pending.");
+    expect(request).toContain("Verification FAILED: missing release approval.");
+    expect(request).toContain("Record checks that ran and their results as completed");
+    expect(request).toContain("keep unresolved blockers separate");
+  });
+});
+
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
     const model = createSummaryModel();
@@ -787,10 +832,52 @@ describe("generateSummary thinking options", () => {
     if (result.ok) {
       throw new Error("expected empty compaction output to fail");
     }
+    expect(result.error).toBeInstanceOf(InvalidSummaryOutputError);
     expect(result.error).toMatchObject({
       name: "CompactionError",
       code: "summarization_failed",
       message: "Summarization failed: model returned no summary text",
+    });
+  });
+
+  it("identifies a length-stopped reasoning-only summary as an exhausted output budget", async () => {
+    const model = createSummaryModel(true);
+    const streamFn = vi.fn<StreamFn>(() => {
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "length",
+        message: {
+          ...createAssistant("", createUsage(800), 1),
+          content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+          stopReason: "length",
+        },
+      });
+      stream.end();
+      return stream;
+    });
+
+    const result = await generateSummary(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      model,
+      1_000,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "high",
+      streamFn,
+    );
+
+    expect(streamFn).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ error: expect.any(SummaryOutputBudgetError) });
+    expect(result).toMatchObject({
+      ok: false,
+      error: {
+        code: "summarization_failed",
+        message: expect.stringContaining("output budget (800 tokens) was exhausted"),
+      },
     });
   });
 });
@@ -802,7 +889,7 @@ describe("split-turn compaction", () => {
     customType: "openclaw.runtime-context",
     content: "PRIVATE_RUNTIME_CONTEXT",
     display: false,
-    details: { runtimeContextCarrier: true },
+    details: { source: "openclaw-runtime-context", runtimeContextCarrier: true },
     timestamp: 1,
   };
   it.each([

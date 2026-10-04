@@ -1,5 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { DEEPSEEK_DSML_MARKERS, DEEPSEEK_DSML_MARKER_PATTERN } from "./deepseek-dsml-grammar.js";
+import {
+  DEEPSEEK_DSML_MARKERS,
+  DEEPSEEK_DSML_MARKER_PATTERN,
+  findEarliestDsmlToken,
+  longestDsmlTokenPrefixSuffixLength,
+} from "./deepseek-dsml-grammar.js";
 import { measureUtf8AppendBytes } from "./openai-transport-shared.js";
 
 export type RecoveredDeepSeekDsmlToolCall = {
@@ -59,7 +64,7 @@ export function createDsmlRecoverer() {
     while (buffer) {
       const open = activeOpenToken
         ? { index: 0, token: activeOpenToken }
-        : findEarliestStringToken(buffer, DEEPSEEK_DSML_TOOL_OPEN_TOKENS);
+        : findEarliestDsmlToken(buffer, DEEPSEEK_DSML_TOOL_OPEN_TOKENS);
       if (!open) {
         resetBlockScan();
         if (final) {
@@ -69,7 +74,11 @@ export function createDsmlRecoverer() {
           bufferEndsWithHighSurrogate = false;
           return output;
         }
-        const keep = longestDeepSeekDsmlToolOpenPrefixSuffixLength(buffer);
+        const keep = longestDsmlTokenPrefixSuffixLength(
+          buffer,
+          DEEPSEEK_DSML_TOOL_OPEN_TOKENS,
+          DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN,
+        );
         const emitLength = buffer.length - keep;
         if (emitLength > 0) {
           const emitted = buffer.slice(0, emitLength);
@@ -211,9 +220,21 @@ function parseDeepSeekDsmlInvokeArguments(body: string): Record<string, unknown>
     }
     const rawValue = parameterMatch[3] ?? "";
     if (rawValue.length === 0) {
-      continue;
+      const stringAttribute = Array.from(
+        (parameterMatch[2] ?? "").matchAll(
+          /(?:^|\s)([^\s=]+)=(?:"([^"]*)"|'([^']*)'|([^\s"']+))(?=\s|$)/g,
+        ),
+      ).find((attribute) => attribute[1] === "string");
+      if ((stringAttribute?.[2] ?? stringAttribute?.[3] ?? stringAttribute?.[4]) !== "true") {
+        continue;
+      }
     }
-    args[name] = decodeDeepSeekDsmlText(rawValue);
+    Object.defineProperty(args, name, {
+      value: decodeDeepSeekDsmlText(rawValue),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   if (Object.keys(args).length > 0) {
     return args;
@@ -247,17 +268,6 @@ function decodeDeepSeekDsmlText(value: string): string {
     .replaceAll("&lt;", "<")
     .replaceAll("&gt;", ">")
     .replaceAll("&amp;", "&");
-}
-
-function findEarliestStringToken(text: string, tokens: readonly string[], fromIndex = 0) {
-  let best: { index: number; token: string } | null = null;
-  for (const token of tokens) {
-    const index = text.indexOf(token, fromIndex);
-    if (index !== -1 && (!best || index < best.index)) {
-      best = { index, token };
-    }
-  }
-  return best;
 }
 
 function scanDeepSeekDsmlToolBlock(
@@ -306,9 +316,9 @@ function scanDeepSeekDsmlToolBlock(
       continue;
     }
 
-    const toolOpen = findEarliestStringToken(text, DEEPSEEK_DSML_TOOL_OPEN_TOKENS, state.offset);
+    const toolOpen = findEarliestDsmlToken(text, DEEPSEEK_DSML_TOOL_OPEN_TOKENS, state.offset);
     const toolCloseIndex = text.indexOf(closeToken, state.offset);
-    const invokeOpen = findEarliestStringToken(
+    const invokeOpen = findEarliestDsmlToken(
       text,
       DEEPSEEK_DSML_INVOKE_OPEN_PREFIXES,
       state.offset,
@@ -337,15 +347,4 @@ function scanDeepSeekDsmlToolBlock(
     return next;
   }
   return { kind: "incomplete" };
-}
-
-function longestDeepSeekDsmlToolOpenPrefixSuffixLength(text: string) {
-  const maxLength = Math.min(text.length, DEEPSEEK_DSML_TOOL_MAX_OPEN_TOKEN_LEN - 1);
-  for (let length = maxLength; length > 0; length -= 1) {
-    const suffix = text.slice(text.length - length);
-    if (DEEPSEEK_DSML_TOOL_OPEN_TOKENS.some((token) => token.startsWith(suffix))) {
-      return length;
-    }
-  }
-  return 0;
 }

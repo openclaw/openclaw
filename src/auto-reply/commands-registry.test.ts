@@ -5,11 +5,9 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createCommandTurnContext } from "./command-turn-context.js";
 import {
-  buildCommandText,
   buildCommandTextFromArgs,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
-  getCommandDetection,
   isActiveRunSafeCommandTurn,
   listChatCommands,
   listChatCommandsForConfig,
@@ -183,9 +181,40 @@ function requireCommandArgMenu(
 }
 
 describe("commands registry", () => {
+  it("keeps builtin command keys and native/text aliases unique and valid", () => {
+    const commands = listChatCommands();
+    const keys = commands.map((command) => command.key);
+    const nativeNames = commands.flatMap((command) =>
+      command.nativeName ? [command.nativeName, ...(command.nativeAliases ?? [])] : [],
+    );
+    const textAliases = commands.flatMap((command) => command.textAliases);
+    for (const names of [keys, nativeNames, textAliases]) {
+      expect(new Set(names.map((name) => name.toLowerCase())).size).toBe(names.length);
+      expect(names.every((name) => name.length > 0 && name === name.trim())).toBe(true);
+    }
+    expect(textAliases.every((alias) => alias.startsWith("/"))).toBe(true);
+    for (const command of commands) {
+      if (command.scope === "text") {
+        expect(command.nativeName).toBeUndefined();
+        expect(command.nativeAliases ?? []).toHaveLength(0);
+        expect(command.textAliases.length).toBeGreaterThan(0);
+      } else {
+        expect(command.nativeName).toBeTruthy();
+      }
+      if (command.scope === "native") {
+        expect(command.textAliases).toHaveLength(0);
+      }
+      expect(
+        command.nativeProviders?.every((id) => id.length > 0 && id === id.trim()) ?? true,
+      ).toBe(true);
+    }
+  });
+
   it("builds command text with args", () => {
-    expect(buildCommandText("status")).toBe("/status");
-    expect(buildCommandText("model", "gpt-5")).toBe("/model gpt-5");
+    expect(buildCommandTextFromArgs(requireChatCommand("status"))).toBe("/status");
+    expect(buildCommandTextFromArgs(requireChatCommand("model"), { raw: "gpt-5" })).toBe(
+      "/model gpt-5",
+    );
   });
 
   it("registers /login natively for Discord, Slack, and Telegram", () => {
@@ -512,6 +541,7 @@ describe("commands registry", () => {
     expect(fast.textAliases).toEqual(["/fast"]);
     expect(fast.category).toBe("options");
     const modeArg = requireCommandArg(fast, "mode");
+    expect(modeArg.description).toContain("ultrafast");
     expect(typeof modeArg.choices).toBe("function");
     const menu = requireCommandArgMenu({
       command: fast,
@@ -541,23 +571,21 @@ describe("commands registry", () => {
   });
 
   it("detects known text commands", () => {
-    const detection = getCommandDetection();
     for (const command of listChatCommands()) {
       for (const alias of command.textAliases) {
-        expect(detection.exact.has(alias.toLowerCase())).toBe(true);
-        expect(detection.regex.test(alias)).toBe(true);
-        expect(detection.regex.test(`${alias}:`)).toBe(true);
+        expect(resolveTextCommand(alias)?.command.key).toBe(command.key);
+        expect(resolveTextCommand(`${alias}:`)?.command.key).toBe(command.key);
 
         if (command.acceptsArgs) {
-          expect(detection.regex.test(`${alias} list`)).toBe(true);
-          expect(detection.regex.test(`${alias}: list`)).toBe(true);
+          expect(resolveTextCommand(`${alias} list`)?.command.key).toBe(command.key);
+          expect(resolveTextCommand(`${alias}: list`)?.command.key).toBe(command.key);
         } else {
-          expect(detection.regex.test(`${alias} list`)).toBe(false);
-          expect(detection.regex.test(`${alias}: list`)).toBe(false);
+          expect(resolveTextCommand(`${alias} list`)).toBeNull();
+          expect(resolveTextCommand(`${alias}: list`)).toBeNull();
         }
       }
     }
-    expect(detection.regex.test("try /status")).toBe(false);
+    expect(resolveTextCommand("try /status")).toBeNull();
   });
 
   it("respects text command gating", () => {

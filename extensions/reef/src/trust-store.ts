@@ -19,9 +19,9 @@ import type { ReefDeliveryRejection, ReefRejectionNoticeState, RelayFriend } fro
 export const REEF_TRUST_STORE_MAX_ENTRIES = 4_096;
 export const REEF_TRUST_STORE_NAMESPACE = "peer-state";
 const REEF_OUTBOUND_DELIVERY_STORE_NAMESPACE = "outbound-deliveries";
-export const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
+const REEF_OUTBOUND_DELIVERY_MAX_ENTRIES = 32_768;
 const REEF_RELAY_RETENTION_MS = 30 * 24 * 60 * 60 * 1_000;
-export const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
+const REEF_OUTBOUND_DELIVERY_TTL_MS = REEF_RELAY_RETENTION_MS * 2 + 24 * 60 * 60 * 1_000;
 const REEF_PAIRING_APPROVAL_PREFIX = "reef-approval-v1:";
 const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/;
 const MESSAGE_ID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;

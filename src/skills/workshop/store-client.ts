@@ -1,8 +1,8 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "../../infra/sqlite-worker-store.js";
-import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease-store.js";
-import { runWithOpenClawStateLeasesWorker } from "../../state/openclaw-state-lease-worker-storage.js";
+import { runWithOpenClawStateLeasesWorker } from "../../state/openclaw-state-lease-worker-operation.js";
+import type { OpenClawStateLeaseIdentity } from "../../state/openclaw-state-lease.types.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { resolveSkillWorkshopStateDir } from "./proposal-generation.js";
@@ -23,6 +23,7 @@ export function executeSkillWorkshopOperation<Key extends keyof SkillWorkshopExe
   type: Key,
   value: SkillWorkshopExecutionOperations[Key]["input"]["value"],
   options: SkillWorkshopStoreOptions = {},
+  assertCommitAllowed?: () => void,
 ): Promise<SkillWorkshopExecutionOperations[Key]["output"]> {
   const captured = structuredClone(value);
   const store = captureSkillWorkshopStoreOptions(options);
@@ -43,9 +44,15 @@ export function executeSkillWorkshopOperation<Key extends keyof SkillWorkshopExe
     });
   };
   if (leases.length > 0) {
-    return runWithOpenClawStateLeasesWorker(leases, context, execute);
+    return runWithOpenClawStateLeasesWorker(
+      leases,
+      context,
+      execute,
+      assertCommitAllowed ? { assertCurrent: assertCommitAllowed } : undefined,
+    );
   }
   const assertCurrent = () => {
+    assertCommitAllowed?.();
     context.admission.assertCurrent();
     context.maintenanceScope?.assertAdmission();
   };

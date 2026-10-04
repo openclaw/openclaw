@@ -6,7 +6,10 @@ import { createRuntimePathLookup } from "../infra/update-runtime-path-index.js";
 import { collectBundledPluginPublicSurfaceArtifacts } from "./bundled-plugin-scan.js";
 import { isPluginControlUiAssetPath } from "./control-ui-assets.js";
 import { loadPluginManifest } from "./manifest.js";
-import { listBuiltRuntimeEntryCandidates } from "./package-entrypoints.js";
+import {
+  listBuiltRuntimeEntryCandidates,
+  PUBLIC_SURFACE_SOURCE_EXTENSIONS,
+} from "./package-entrypoints.js";
 import { DEFAULT_PLUGIN_ENTRY_CANDIDATES } from "./package-manifest.js";
 import {
   parsePluginCacheJson,
@@ -20,7 +23,6 @@ import {
   PLUGIN_TOOL_ACTIVITY_ICON_DIR,
   PORTABLE_PLUGIN_ICON_PATH,
 } from "./portable-icon-paths.js";
-import { PUBLIC_SURFACE_SOURCE_EXTENSIONS } from "./public-surface-runtime.js";
 
 /** These files must keep independent inodes for the existing plugin safety checks. */
 export function collectPluginSafetyInspectedFiles(
@@ -124,6 +126,8 @@ export function collectPluginSafetyInspectedFiles(
     const activity = activityScope(entry.path);
     const browser = browserScope(entry.path);
     if (
+      // Peer repair reads ordinary dependency manifests with the same strict inode guard.
+      path.basename(entry.path) === "package.json" ||
       (activity &&
         path.dirname(entry.path) === activity &&
         entry.path.endsWith(".svg") &&

@@ -1,4 +1,3 @@
-/** Builds doctor reports for session SQLite migration recovery mode. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -21,12 +20,12 @@ import {
   moveSqliteFilesAside,
 } from "../infra/sqlite-recovery-files.js";
 import { getCanonicalSqliteNamedIndexContracts } from "../infra/sqlite-schema-contract.js";
+import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
+import { migrateOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import {
   clearOpenClawAgentDatabaseOpenFailure,
-  migrateOpenClawAgentDatabaseForMaintenance,
   resolveOpenClawAgentSqlitePath,
   type OpenClawAgentDatabaseOptions,
-  withAgentDatabaseMaintenanceLease,
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
@@ -63,9 +62,13 @@ export async function recoverDoctorSessionSqliteTargets(params: {
   targets: readonly SessionStoreTarget[];
   historicalArchiveStores?: ReadonlySet<string>;
   recoveryInventory?: ReturnType<typeof collectRecoveryInventory>;
+  prepareTarget?: (target: SessionSqliteMigrationTargetInput) => Promise<{ repaired: number }>;
   validateTarget: SessionSqliteRecoverTargetValidator;
 }): Promise<DoctorSessionSqliteReport> {
-  const trustedTargets = resolveRecoverTargets(params.targets, params.env);
+  const trustedTargets = params.targets.map((target) => ({
+    ...target,
+    sqlitePath: resolveTargetSqlitePath(target, params.env),
+  }));
   const failedRun = findLatestFailedSessionSqliteMigrationManifest(params.env, trustedTargets);
   if (!failedRun) {
     const recoveredCorruptTargets = await withAgentDatabaseMaintenanceLease(
@@ -74,10 +77,17 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     );
     const retainedReports: DoctorSessionSqliteTargetReport[] = [...recoveredCorruptTargets];
     for (const target of trustedTargets) {
-      if (recoveredCorruptTargets.some((report) => report.sqlitePath === target.sqlitePath)) {
+      const recovered = recoveredCorruptTargets.find(
+        (report) => report.sqlitePath === target.sqlitePath,
+      );
+      if (recovered && recovered.issues.length > 0) {
         continue;
       }
       try {
+        const preparation = await params.prepareTarget?.(target);
+        if (recovered) {
+          continue;
+        }
         if (
           hasDeferredPluginSessionImport({
             target,
@@ -88,6 +98,8 @@ export async function recoverDoctorSessionSqliteTargets(params: {
           params.historicalArchiveStores?.has(target.storePath)
         ) {
           retainedReports.push(await params.validateTarget(target));
+        } else if (preparation?.repaired) {
+          retainedReports.push(createEmptyRecoverTargetReport(target, target.sqlitePath));
         }
       } catch (error) {
         retainedReports.push(
@@ -103,9 +115,9 @@ export async function recoverDoctorSessionSqliteTargets(params: {
             artifact.outcome === "blocked" || artifact.reason === "unsupported-target-ownership",
         ))
     ) {
-      return summarizeRecoverReport(retainedReports);
+      return summarizeDoctorSessionSqliteReport("recover", retainedReports);
     }
-    return summarizeRecoverReport([
+    return summarizeDoctorSessionSqliteReport("recover", [
       createSyntheticRecoverTargetReport(
         params.env,
         "No failed session SQLite migration manifest found.",
@@ -125,13 +137,24 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       ) || params.historicalArchiveStores?.has(target.storePath),
   );
   for (const manifestTarget of recoveryTargets) {
-    targetReports.push(
-      await params.validateTarget({
-        agentId: manifestTarget.agentId,
-        sqlitePath: manifestTarget.sqlitePath,
-        storePath: manifestTarget.storePath,
-      }),
-    );
+    try {
+      await params.prepareTarget?.(manifestTarget);
+      targetReports.push(
+        await params.validateTarget({
+          agentId: manifestTarget.agentId,
+          sqlitePath: manifestTarget.sqlitePath,
+          storePath: manifestTarget.storePath,
+        }),
+      );
+    } catch (error) {
+      targetReports.push(
+        createRecoverInspectionFailureTargetReport(
+          manifestTarget,
+          manifestTarget.sqlitePath,
+          error,
+        ),
+      );
+    }
   }
   const reportTarget =
     targetReports[0] ?? createSyntheticRecoverTargetReport(params.env, failedRun.manifestPath);
@@ -142,7 +165,10 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       message: `${conflict.sourcePath}: ${conflict.reason}`,
     })),
   );
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
+  const report = summarizeDoctorSessionSqliteReport(
+    "recover",
+    targetReports.length > 0 ? targetReports : [reportTarget],
+  );
   if (report.totals.issues === 0) {
     report.migrationRun = {
       manifestPath: failedRun.manifestPath,
@@ -354,16 +380,6 @@ function isCanonicalAgentIndexCorruptionError(error: unknown): boolean {
   return CANONICAL_AGENT_INDEX_NAMES.some((indexName) => error.message.includes(indexName));
 }
 
-function resolveRecoverTargets(
-  targets: readonly SessionStoreTarget[],
-  env: NodeJS.ProcessEnv,
-): SessionSqliteMigrationTargetInput[] {
-  return targets.map((target) => ({
-    ...target,
-    sqlitePath: resolveTargetSqlitePath(target, env),
-  }));
-}
-
 function createSyntheticRecoverTargetReport(
   env: NodeJS.ProcessEnv,
   message: string,
@@ -385,13 +401,4 @@ function createEmptyRecoverTargetReport(
     sqlitePath,
     storePath: target.storePath,
   });
-}
-
-function summarizeRecoverReport(
-  targets: DoctorSessionSqliteTargetReport[],
-): DoctorSessionSqliteReport {
-  const report = summarizeDoctorSessionSqliteReport("recover", targets);
-  delete report.totals.archivedLegacyStoreFiles;
-  delete report.totals.reclaimedBytes;
-  return report;
 }

@@ -1,4 +1,5 @@
 import type { UsageSummary as SharedProviderUsageSummary } from "../../../../src/infra/provider-usage.types.js";
+import type { CostUsageSummary } from "../../../../src/infra/session-cost-usage.types.js";
 import type { SessionUsageTimePoint as SharedSessionUsageTimePoint } from "../../../../src/shared/session-usage-timeseries-types.js";
 import type { SessionsUsageResult as SharedSessionsUsageResult } from "../../../../src/shared/usage-types.js";
 
@@ -7,14 +8,8 @@ export type SessionsUsageTotals = SharedSessionsUsageResult["totals"];
 export type SessionsUsageResult = SharedSessionsUsageResult;
 export type ProviderUsageSummary = SharedProviderUsageSummary;
 
-export type CostUsageDailyEntry = SessionsUsageTotals & { date: string };
+export type CostUsageDailyEntry = CostUsageSummary["daily"][number];
 
-export type CostUsageSummary = {
-  updatedAt: number;
-  days: number;
-  daily: CostUsageDailyEntry[];
-  totals: SessionsUsageTotals;
-  cacheStatus?: SharedSessionsUsageResult["cacheStatus"];
-};
+export type { CostUsageSummary } from "../../../../src/infra/session-cost-usage.types.js";
 
 export type SessionUsageTimePoint = SharedSessionUsageTimePoint;

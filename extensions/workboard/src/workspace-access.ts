@@ -25,7 +25,14 @@ type ResolveSandboxWorkspaceAuthority =
 type PrepareSandboxWorkspaceAuthority =
   OpenClawPluginApi["runtime"]["sandbox"]["prepareWorkspaceAuthority"];
 
-export const WORKBOARD_TOOL_NAMES = [
+export const WORKBOARD_SESSIONS_BOARD_TOOL_NAMES = [
+  "workboard_sessions_board_read",
+  "workboard_sessions_board_update",
+  "workboard_sessions_board_move",
+] as const;
+
+/** Card tools stay optional; sessions-board tools register separately as default-on. */
+export const WORKBOARD_CARD_TOOL_NAMES = [
   "workboard_list",
   "workboard_create",
   "workboard_link",
@@ -61,6 +68,11 @@ export const WORKBOARD_TOOL_NAMES = [
   "workboard_protocol_violation",
   "workboard_unblock",
   "workboard_move",
+] as const;
+
+const WORKBOARD_TOOL_NAMES = [
+  ...WORKBOARD_CARD_TOOL_NAMES,
+  ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
 ] as const;
 
 export const WORKBOARD_REQUIRED_WORKER_TOOLS = [
@@ -289,18 +301,13 @@ async function assertPathAllowed(
 async function assertWorkspaceAllowed(
   value: unknown,
   access: WorkboardWorkspaceAccess,
-  options?: { sourceOnly?: boolean },
-): Promise<string | undefined> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const workspace = value as Record<string, unknown>;
-  if (options?.sourceOnly) {
-    return await assertPathAllowed(workspace.sourcePath ?? workspace.path, access);
+): Promise<void> {
+  const workspace = asOptionalRecord(value);
+  if (!workspace) {
+    return;
   }
   await assertPathAllowed(workspace.path, access);
   await assertPathAllowed(workspace.sourcePath, access);
-  return undefined;
 }
 
 export function containsWorkboardWorkspaceMutation(value: unknown): boolean {
@@ -383,7 +390,8 @@ export async function assertWorkboardWorkspaceSourceAccess(
   workspace: WorkboardWorkspace | undefined,
   access: WorkboardWorkspaceAccess,
 ): Promise<string | undefined> {
-  return await assertWorkspaceAllowed(workspace, access, { sourceOnly: true });
+  const record = asOptionalRecord(workspace);
+  return await assertPathAllowed(record?.sourcePath ?? record?.path, access);
 }
 
 export function guardWorkboardToolsForWorkspaceAccess(

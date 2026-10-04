@@ -223,12 +223,14 @@ describe("webchat admission to plugin node duplex authority", () => {
           if (request.source.kind !== "local") {
             throw new Error("expected a local workspace source");
           }
-          request.source.journal.commit(MANIFEST_REF);
+          await request.source.journal.commit(MANIFEST_REF);
           return {
             manifestRef: MANIFEST_REF,
             changed: false,
             verifyStable: async () => {},
             verifyLocalStable: async () => {},
+            publishStagedResult: async () => {},
+            discardPreparedStagedResult: async () => {},
           };
         },
         stop: async () => {},
@@ -338,7 +340,7 @@ describe("webchat admission to plugin node duplex authority", () => {
                     if (claimed?.type !== "return") {
                       throw new Error("expected an admitted placement claim");
                     }
-                    placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
+                    await placements.cancelWorkspaceResultAndReleaseTurn(await claimed.value, {
                       reason: "node-disconnect",
                     });
                     break;

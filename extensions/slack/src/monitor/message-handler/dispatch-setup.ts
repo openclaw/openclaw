@@ -18,15 +18,15 @@ import { resolveStorePath, updateLastRoute } from "openclaw/plugin-sdk/session-s
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { reactSlackMessage, removeSlackReaction } from "../../actions.js";
 import { formatSlackError } from "../../errors.js";
+import { hasSlackMessageIdentity } from "../../post-message-identity.js";
 import { resolveSlackStreamingConfig } from "../../stream-mode.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import { normalizeSlackAllowOwnerEntry } from "../allow-list.js";
 import { createSlackReplyDeliveryPlan, sanitizeSlackMonitorReplyPayload } from "../replies.js";
 import {
   isSlackStreamingEnabled,
-  resolveSlackDisableBlockStreaming,
   resolveSlackNativeProgressTaskCards,
-  shouldUseStreaming,
+  resolveSlackProgressStyle,
 } from "./dispatch-helpers.js";
 import type { PreparedSlackMessage } from "./types.js";
 
@@ -175,8 +175,16 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     isThreadReply: Boolean(forcedReplyThreadTs) || isThreadReply,
   });
 
+  const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
+  const streamThreadHint = forcedReplyThreadTs ?? replyPlan.peekThreadTs();
+  const slackProgressStyle = resolveSlackProgressStyle(account.config, Boolean(streamThreadHint));
+  const quietProgress = slackStreaming.mode === "progress" && slackProgressStyle === "none";
+
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
-  const typingReaction = ctx.typingReaction;
+  const typingReaction =
+    quietProgress && account.config.typingReaction === undefined
+      ? "hourglass_flowing_sand"
+      : ctx.typingReaction;
   // Session status is a state write, not a typing keepalive. Start it once
   // before visible output; the dispatcher owns the delivered/preview gate.
   const threadStatusGate = { hasVisibleOutput: () => false };
@@ -264,8 +272,6 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     },
   });
 
-  const slackStreaming = resolveSlackStreamingConfig({ streaming: account.config.streaming });
-  const streamThreadHint = forcedReplyThreadTs ?? replyPlan.peekThreadTs();
   const hookRunner = getGlobalHookRunner();
   const modifyingHooksRegistered =
     (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
@@ -275,10 +281,11 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
   const allowPreHookProviderStreaming =
     !prepared.ctxPayload.GroupThread && !modifyingHooksRegistered;
   const previewStreamingEnabled =
-    allowPreHookProviderStreaming && !sourceRepliesAreToolOnly && slackStreaming.mode !== "off";
-  const hasSlackCustomIdentity = Boolean(
-    slackIdentity?.username || slackIdentity?.iconUrl || slackIdentity?.iconEmoji,
-  );
+    allowPreHookProviderStreaming &&
+    !sourceRepliesAreToolOnly &&
+    !quietProgress &&
+    slackStreaming.mode !== "off";
+  const hasSlackCustomIdentity = hasSlackMessageIdentity(slackIdentity);
   const streamingEnabled =
     !prepared.ctxPayload.GroupThread &&
     !sourceRepliesAreToolOnly &&
@@ -286,21 +293,23 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     isSlackStreamingEnabled({
       mode: slackStreaming.mode,
       nativeStreaming: slackStreaming.nativeStreaming,
-      nativeProgressTaskCards: resolveSlackNativeProgressTaskCards(account.config),
+      nativeProgressTaskCards: resolveSlackNativeProgressTaskCards(
+        account.config,
+        slackProgressStyle,
+      ),
     });
-  const useStreaming = shouldUseStreaming({
-    streamingEnabled,
-    threadTs: streamThreadHint,
-  });
+  const useStreaming = streamingEnabled && Boolean(streamThreadHint);
+  if (streamingEnabled && !streamThreadHint) {
+    logVerbose("slack-stream: streaming disabled — no reply thread target available");
+  }
   const shouldUseDraftStream = previewStreamingEnabled && !useStreaming;
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
-  const disableBlockStreaming = sourceRepliesAreToolOnly
-    ? true
-    : resolveSlackDisableBlockStreaming({
-        useStreaming,
-        shouldUseDraftStream,
-        blockStreamingEnabled,
-      });
+  const disableBlockStreaming =
+    sourceRepliesAreToolOnly || quietProgress || useStreaming || shouldUseDraftStream
+      ? true
+      : typeof blockStreamingEnabled === "boolean"
+        ? !blockStreamingEnabled
+        : undefined;
 
   return {
     prepared,
@@ -332,6 +341,8 @@ export async function createSlackDispatchSetup(prepared: PreparedSlackMessage) {
     onModelSelected,
     replyPipeline,
     slackStreaming,
+    slackProgressStyle,
+    quietProgress,
     streamThreadHint,
     previewStreamingEnabled,
     hasSlackCustomIdentity,

@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -11,7 +12,12 @@ import {
   type UsersMentionableResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  updateSessionProfileInvolvement,
+  updateSessionProfileInvolvementAsync,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
@@ -20,15 +26,17 @@ import {
   resolveCurrentUserProfileDisplay,
   type CurrentUserProfileDisplay,
 } from "./current-user-profile-display.js";
+import type { MentionCommittedInput } from "./mention-inbox.types.js";
 import {
   authorizeGatewaySessionCreation,
   resolveOperatorRolePolicyForProfile,
 } from "./operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE } from "./operator-scopes.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
-import { resolveOperatorSessionCreation } from "./server-methods/session-creation-provenance.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import {
   createProfileSessionEntryFilter,
   isSessionVisibilityAllowed,
@@ -107,12 +115,7 @@ export function createHumanMentionPolicy(params: {
     let profile = displays.get(profileId);
     if (!profile) {
       profile = resolveCurrentUserProfileDisplay(profileId);
-      if (displays.size >= MAX_DIRECTORY_PROFILES) {
-        const oldest = displays.keys().next().value;
-        if (oldest !== undefined) {
-          displays.delete(oldest);
-        }
-      }
+      pruneMapToMaxSize(displays, MAX_DIRECTORY_PROFILES - 1);
       displays.set(profileId, profile);
     }
     return profile.kind === "resolved" ? profile : undefined;
@@ -256,7 +259,103 @@ export function createHumanMentionPolicy(params: {
     });
   }
 
+  function involvedProfiles(
+    input: MentionCommittedInput,
+    target: {
+      agentId: string;
+      canonicalKey: string;
+      entry: Pick<SessionEntry, "sessionId" | "createdActor" | "visibility" | "incognito">;
+    } | null,
+    cfg: OpenClawConfig,
+  ): string[] {
+    if (
+      target?.entry.sessionId === input.sessionId &&
+      target.entry.incognito !== true &&
+      !isIncognitoSessionKey(target.canonicalKey)
+    ) {
+      const sender = readProfile(input.senderProfileId);
+      return input.recipientProfileIds.flatMap((id) => {
+        const recipient = recipientProfile(
+          id,
+          {
+            agentId: target.agentId,
+            sessionKey: target.canonicalKey,
+            entry: target.entry,
+          },
+          cfg,
+        );
+        return sender && recipient && sender.profileId !== recipient.profileId
+          ? [recipient.profileId]
+          : [];
+      });
+    }
+    return [];
+  }
+
   return {
+    recordCommittedInvolvement(input: MentionCommittedInput): void {
+      const cfg = params.getRuntimeConfig();
+      const target = resolveSessionSharingTarget({
+        cfg,
+        sessionKey: input.sessionKey,
+        agentId: input.agentId,
+      });
+      const profileIds = involvedProfiles(input, target, cfg);
+      if (target && profileIds.length) {
+        updateSessionProfileInvolvement(
+          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+          {
+            expectedSessionId: input.sessionId,
+            profileIds,
+            change: { kind: "mention", source: input.committedSource },
+          },
+        );
+      }
+    },
+    async recordCommittedInvolvementAsync(input: MentionCommittedInput): Promise<void> {
+      const cfg = params.getRuntimeConfig();
+      const agent = resolveRequestedSessionAgentId(cfg, input.sessionKey, input.agentId);
+      if (!agent.ok || isIncognitoSessionKey(input.sessionKey)) {
+        return;
+      }
+      const facts = await prepareSessionMutationFacts({
+        cfg,
+        sessionKey: input.sessionKey,
+        agentId: agent.agentId,
+        allowMissing: true,
+      });
+      try {
+        const target = facts.readCurrent(params.getRuntimeConfig()).target;
+        const profileIds = involvedProfiles(input, target, params.getRuntimeConfig());
+        if (!target || !profileIds.length) {
+          return;
+        }
+        const accepted = await updateSessionProfileInvolvementAsync(
+          { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },
+          {
+            expectedSessionId: input.sessionId,
+            expectedEntry: target.entry,
+            profileIds,
+            change: { kind: "mention", source: input.committedSource },
+            assertCurrent() {
+              const currentCfg = params.getRuntimeConfig();
+              const current = facts.readCurrent(currentCfg).target;
+              if (
+                !active ||
+                !isDeepStrictEqual(involvedProfiles(input, current, currentCfg), profileIds)
+              ) {
+                throw new Error("Committed mention authority changed before involvement commit");
+              }
+            },
+          },
+        );
+        if (!accepted) {
+          throw new Error("Committed mention involvement was refused for a changed session");
+        }
+      } finally {
+        facts.release();
+      }
+    },
     identify,
     prepareDirectory,
     needsDirectoryPreparation,

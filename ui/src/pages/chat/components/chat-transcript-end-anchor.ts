@@ -1,19 +1,15 @@
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../scroll.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
-import type { createTranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 /** Geometric end anchoring; the pane still owns permission to follow. */
 export class TranscriptEndAnchor {
   private offset: number | null = null;
-  private followingBeforeCommit = false;
-  private offsetBeforeUpdate: number | null = null;
   private frame: number | null = null;
 
-  isResizingCommit(element: HTMLDivElement | null): boolean {
+  isResizeAnchor(element: HTMLDivElement | null): boolean {
     const max = maxTranscriptScrollOffset(element);
     return (
-      this.followingBeforeCommit &&
       this.offset !== null &&
       max !== null &&
       element !== null &&
@@ -22,55 +18,12 @@ export class TranscriptEndAnchor {
     );
   }
 
-  prepareUpdate(
-    element: HTMLDivElement | null,
-    canFollow: boolean,
-    state: ReturnType<typeof createTranscriptOffsetState>,
-  ): void {
-    // A prior commit may still await its frame when native scrolling starts.
-    // Only offsets recorded inside that commit can extend its end ownership.
-    if (element && this.offset !== null && Math.abs(element.scrollTop - this.offset) > 1) {
+  recordLayoutCorrection(before: number, after: number): void {
+    if (this.offset !== null && Math.abs(this.offset - before) <= 1) {
+      this.offset = after;
+    } else {
       this.clear();
     }
-    if (
-      !this.followingBeforeCommit &&
-      element &&
-      canFollow &&
-      this.offset !== null &&
-      Math.abs(this.offset - element.scrollTop) <= 1 &&
-      !state.pendingScrollOffset &&
-      (!state.scrollCommand || state.scrollCommand.target === "end") &&
-      !state.pendingInteractionAnchor &&
-      !state.touching &&
-      !state.touchScrolling &&
-      this.recordViewport(element)
-    ) {
-      // Only extend an observed end anchor. Physical end geometry alone can
-      // come from a native clamp or persist just after reader input cancelled follow.
-      // Nested footer commits can temporarily enlarge the viewport and clamp
-      // its offset before the final dock and measured rows reach the DOM.
-      this.followingBeforeCommit = true;
-    }
-    this.offsetBeforeUpdate = this.followingBeforeCommit ? (element?.scrollTop ?? null) : null;
-  }
-
-  commitUpdate(element: HTMLDivElement | null): void {
-    // Lit's synchronous pre/post-update hooks bracket the DOM commit. An offset
-    // changed within those hooks is its layout clamp, not a later reader task.
-    if (
-      this.followingBeforeCommit &&
-      element &&
-      this.offsetBeforeUpdate !== null &&
-      element.scrollTop !== this.offsetBeforeUpdate
-    ) {
-      this.offset = element.scrollTop;
-    }
-    this.offsetBeforeUpdate = null;
-  }
-
-  releaseCommit(): void {
-    this.followingBeforeCommit = false;
-    this.offsetBeforeUpdate = null;
   }
 
   scheduleReconcile(reconcile: () => void): void {
@@ -81,7 +34,6 @@ export class TranscriptEndAnchor {
     // Coalesce end-follow after those commits using the current reader's anchor.
     this.frame = requestAnimationFrame(() => {
       this.frame = null;
-      this.releaseCommit();
       reconcile();
     });
   }
@@ -95,7 +47,6 @@ export class TranscriptEndAnchor {
 
   disconnect(): void {
     this.cancelComposerResize();
-    this.releaseCommit();
     this.cancelReconcile();
   }
 
@@ -164,6 +115,11 @@ export class TranscriptEndAnchor {
     if (previousMax !== max || correction.before !== correction.after) {
       publishTranscriptScroll(element, {
         type: "resize",
+        viewport: {
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          scrollTop: correction.after,
+        },
         ...(correction.before !== correction.after
           ? { scrollCorrection: { before: correction.before, after: correction.after } }
           : {}),
@@ -195,8 +151,6 @@ export class TranscriptEndAnchor {
   clear(): void {
     this.cancelComposerResize();
     this.offset = null;
-    this.followingBeforeCommit = false;
-    this.offsetBeforeUpdate = null;
   }
 
   capture(element: HTMLDivElement | null): void {
@@ -221,11 +175,11 @@ export class TranscriptEndAnchor {
     if (!element || this.maxOffset === null) {
       return;
     }
-    if (atEnd) {
-      this.offset = this.maxOffset;
+    if (this.offset === null) {
       return;
     }
-    if (this.offset === null) {
+    if (atEnd) {
+      this.offset = this.maxOffset;
       return;
     }
     if (Math.abs(element.scrollTop - this.offset) > 1) {

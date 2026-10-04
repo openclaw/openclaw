@@ -1,9 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-// Channel selection chooses a deliverable message channel from explicit input,
-// tool context fallback, or configured plugin accounts.
 import { resolveChannelAccount } from "../../channels/account-resolution.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { formatUnknownChannelMessage } from "../../cli/error-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -38,15 +35,8 @@ function resolveAvailableChannel(params: {
   if (!normalized) {
     return undefined;
   }
-  // Pass `allowBootstrap: true` so the in-agent message tool path can resolve
-  // outbound channels in processes where external channel adapters have not
-  // been eagerly loaded (e.g. `openclaw agent --local`). Already-loaded and
-  // bundled plugins still resolve through side-effect-free fast paths first.
-  // Without the bootstrap fallback, official external channels can surface as
-  // the recurring "Channel is unavailable" error on `--local`-routed
-  // dispatches that the CLI send-path could deliver to.
-  // Adjacent to #77254 (cron-announce / final-reply paths); this closes the
-  // remaining in-agent caller in the same family.
+  // Local agent processes may have only setup metadata for external channels;
+  // explicit activation lets their message tools use the same send path as the CLI.
   const plugin = resolveOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
@@ -58,22 +48,15 @@ function resolveAvailableChannel(params: {
 
 /** Checks whether a channel has a non-disabled config entry. */
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
-    return false;
-  }
-  const entry = (channels as Record<string, unknown>)[channelId];
-  if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-    return false;
-  }
-  return (entry as { enabled?: unknown }).enabled !== false;
+  const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
+  return entry !== undefined && entry.enabled !== false;
 }
 
 function listConfiguredOfficialExternalRepairHints(
   cfg: OpenClawConfig,
 ): OfficialExternalPluginRepairHint[] {
-  const channels = cfg.channels;
-  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+  const channels = asOptionalRecord(cfg.channels);
+  if (!channels) {
     return [];
   }
   return resolveMissingOfficialExternalChannelPluginRepairHints({
@@ -85,38 +68,19 @@ function listConfiguredOfficialExternalRepairHints(
 function formatMissingOfficialExternalChannelsMessage(
   hints: readonly OfficialExternalPluginRepairHint[],
 ): string {
-  if (hints.length === 1) {
-    const hint = hints[0];
-    if (!hint) {
-      return "";
-    }
-    return `Configured official external channel ${hint.label} is missing its plugin. ${hint.repairHint}`;
+  const [onlyHint] = hints;
+  if (hints.length === 1 && onlyHint) {
+    return `Configured official external channel ${onlyHint.label} is missing its plugin. ${onlyHint.repairHint}`;
   }
   const labels = hints.map((hint) => hint.label).join(", ");
   const installCommands = hints.map((hint) => hint.installCommand).join("; ");
   return `Configured official external channels ${labels} are missing their plugins. Run: openclaw doctor --fix, or install individually: ${installCommands}.`;
 }
 
-function formatNoConfiguredChannelsMessage(): string {
-  return [
-    "Channel is required (no configured channels detected).",
-    "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel.",
-    "Use openclaw channels list --all to see available channel ids.",
-  ].join(" ");
-}
-
-function formatMultipleConfiguredChannelsMessage(configured: readonly string[]): string {
-  return [
-    `Channel is required when multiple channels are configured: ${configured.join(", ")}.`,
-    "Pass --channel <channel> to choose one.",
-  ].join(" ");
-}
-
-const CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT = 1024;
 // Bound process-lifetime warning state; evicted plugin/account failures may log again.
 const loggedChannelSelectionErrors = createDedupeCache({
   ttlMs: 0,
-  maxSize: CHANNEL_SELECTION_ERROR_DEDUPE_LIMIT,
+  maxSize: 1024,
 });
 
 function logChannelSelectionError(params: {
@@ -247,8 +211,7 @@ export async function resolveMessageChannelSelection(params: {
   });
   if (fallback) {
     return {
-      channel: fallback.channel,
-      plugin: fallback.plugin,
+      ...fallback,
       configured: [],
       source: "tool-context-fallback",
     };
@@ -275,8 +238,8 @@ export async function resolveMessageChannelSelection(params: {
     params.accountResolution,
   );
   const configured = configuredPlugins.map((plugin) => plugin.id);
-  if (configuredPlugins.length === 1) {
-    const plugin = expectDefined(configuredPlugins[0], "configured plugin at 0");
+  const [plugin] = configuredPlugins;
+  if (configuredPlugins.length === 1 && plugin) {
     return {
       channel: plugin.id,
       plugin,
@@ -291,7 +254,13 @@ export async function resolveMessageChannelSelection(params: {
         `Channel is required (no available channels detected). ${formatMissingOfficialExternalChannelsMessage(repairHints)}`,
       );
     }
-    throw new Error(formatNoConfiguredChannelsMessage());
+    throw new Error(
+      "Channel is required (no configured channels detected). " +
+        "Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel. " +
+        "Use openclaw channels list --all to see available channel ids.",
+    );
   }
-  throw new Error(formatMultipleConfiguredChannelsMessage(configured));
+  throw new Error(
+    `Channel is required when multiple channels are configured: ${configured.join(", ")}. Pass --channel <channel> to choose one.`,
+  );
 }

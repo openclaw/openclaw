@@ -1,7 +1,6 @@
 // Update gateway methods run self-update flows, report status, write restart
 // sentinels, and hand off managed-service restarts when needed.
 import { randomUUID } from "node:crypto";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
@@ -23,7 +22,6 @@ import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import {
-  type RestartSentinelPayload,
   writeRestartSentinel,
   formatDoctorNonInteractiveHint,
 } from "../../infra/restart-sentinel.js";
@@ -57,7 +55,7 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
+import { renderUpdateRunNotice } from "../../infra/update-run-notice.js";
 import { resolveUnmanagedUpdateInstallReason } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
@@ -82,7 +80,9 @@ import {
   createUnexpectedUpdateFailureResult,
   recordHandoffFailure,
   resolveGatewayUpdateAdmission,
+  reportImmutableGatewayUpdateRefusal,
 } from "./update-admission.js";
+import { recordGatewayUpdateOutcome } from "./update-outcome-observation.js";
 import { updateReportHandler } from "./update-report.js";
 import { updateStatusHandlers } from "./update-status.js";
 
@@ -221,6 +221,9 @@ export const updateHandlers: GatewayRequestHandlers = {
     let ownsUpdateOutcome = false;
     const updateLifecycle = currentUpdateCheckLifecycle();
     let adoptedCampaignId: string | undefined;
+    const ownsAdoptedCampaign = () =>
+      adoptedCampaignId === undefined ||
+      updateLifecycle.campaign?.getState()?.id === adoptedCampaignId;
     const refuseUnauthorizedChatUpdate = () => {
       // Chat update authority is revocable; internal or channel-less requesters
       // retain the operator authority established at admission.
@@ -293,33 +296,25 @@ export const updateHandlers: GatewayRequestHandlers = {
         steps: [],
         durationMs: 0,
       });
+      if (installSurface.kind === "immutable") {
+        reportImmutableGatewayUpdateRefusal(runId, installSurface, respond);
+        return;
+      }
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
         installKind: status.installKind,
         git: status.git,
       }).channel;
-      const requestedTarget = params.target;
-      const explicitDevTarget =
-        isRecord(requestedTarget) &&
-        requestedTarget.kind === "git" &&
-        typeof requestedTarget.upstreamRef === "string" &&
-        /^[^\s\p{Cc}]+$/u.test(requestedTarget.upstreamRef) &&
-        typeof requestedTarget.upstreamSha === "string" &&
-        /^[a-f\d]{40}$/iu.test(requestedTarget.upstreamSha)
-          ? devUpdateTargetFromGitTarget({
-              upstreamRef: requestedTarget.upstreamRef,
-              upstreamSha: requestedTarget.upstreamSha,
-            })
-          : undefined;
+      const explicitDevTarget = params.target
+        ? devUpdateTargetFromGitTarget(params.target)
+        : undefined;
       let targetFailureReason =
-        requestedTarget !== undefined && !explicitDevTarget
-          ? "invalid-update-target"
-          : explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
-            ? "unsupported-update-target"
-            : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
-              ? "update-target-upstream-mismatch"
-              : undefined;
+        explicitDevTarget && (installSurface.kind !== "git" || effectiveChannel !== "dev")
+          ? "unsupported-update-target"
+          : explicitDevTarget && explicitDevTarget.upstreamRef !== status.git?.upstream
+            ? "update-target-upstream-mismatch"
+            : undefined;
       const adoption = targetFailureReason
         ? undefined
         : updateLifecycle.campaign?.adopt(explicitDevTarget);
@@ -637,10 +632,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     }
 
     // Rejected requests and retired campaigns cannot replace another update's outcome.
-    if (ownsUpdateOutcome && adoptedCampaignId !== undefined) {
-      ownsUpdateOutcome = updateLifecycle.campaign?.getState()?.id === adoptedCampaignId;
-    }
-    const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
+    ownsUpdateOutcome &&= ownsAdoptedCampaign();
+    const payload = buildUpdateRestartSentinelPayload({
       result,
       meta: sentinelMeta,
     });
@@ -649,9 +642,15 @@ export const updateHandlers: GatewayRequestHandlers = {
     let sentinelFailure: { error: unknown } | undefined;
     if (ownsUpdateOutcome) {
       try {
-        await writeRestartSentinel(payload);
+        await writeRestartSentinel(payload, undefined, () => {
+          if (!ownsAdoptedCampaign()) {
+            throw new Error("Update campaign retired before restart sentinel persistence");
+          }
+        });
         sentinelPersisted = true;
-        recordLatestUpdateRestartSentinel(payload);
+        if (ownsAdoptedCampaign()) {
+          recordLatestUpdateRestartSentinel(payload);
+        }
       } catch (error) {
         sentinelFailure = { error };
       }
@@ -691,7 +690,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       ownsUpdateOutcome &&
       handoff?.status !== "started" &&
       adoptedCampaignId !== undefined &&
-      updateLifecycle.campaign?.getState()?.id === adoptedCampaignId
+      ownsAdoptedCampaign()
     ) {
       updateLifecycle.campaign?.clear();
       context?.logGateway?.info("update.run failed; adopted campaign cleared", {
@@ -702,9 +701,7 @@ export const updateHandlers: GatewayRequestHandlers = {
     if ((ackDelivered || ackQueued) && handoff?.status !== "started") {
       await notify(outcomeRun, "finished");
     }
-    context?.logGateway?.info(
-      `update.run completed ${formatControlPlaneActor(actor)} changedPaths=<n/a> restartReason=update.run status=${result.status}`,
-    );
+    recordGatewayUpdateOutcome(result, actor, context?.logGateway);
     respond(
       true,
       {

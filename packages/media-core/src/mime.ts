@@ -108,6 +108,8 @@ const AMBIGUOUS_VIDEO_MIME_BY_AUDIO_MIME: Readonly<Record<string, string>> = {
   "audio/webm": "video/webm",
 };
 
+const IMAGE_FORMATS = new Set(["avif", "jpg", "jpeg", "heic", "heif", "png", "webp", "gif"]);
+
 // file-type can return generic ZIP when package metadata is outside its sniff window.
 // Only ZIP-backed MIME families may refine that result; arbitrary headers cannot.
 const ZIP_CONTAINER_MIMES = new Set([
@@ -210,21 +212,17 @@ export function getFileExtension(filePath?: string | null): string | undefined {
   if (!filePath) {
     return undefined;
   }
-  try {
-    if (/^https?:\/\//i.test(filePath)) {
-      const url = new URL(filePath);
-      let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
-      try {
-        // Decode only the URL filename while keeping encoded separators literal.
-        const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
-        filename = decodeURIComponent(decodable);
-      } catch {
-        // Preserve the raw filename when its own percent encoding is malformed.
-      }
-      return path.posix.extname(filename).toLowerCase() || undefined;
+  const url = /^https?:\/\//i.test(filePath) ? URL.parse(filePath) : null;
+  if (url) {
+    let filename = url.pathname.slice(url.pathname.lastIndexOf("/") + 1);
+    try {
+      // Decode only the URL filename while keeping encoded separators literal.
+      const decodable = filename.replace(/%2f/gi, "%252F").replace(/%5c/gi, "%255C");
+      filename = decodeURIComponent(decodable);
+    } catch {
+      // Preserve the raw filename when its own percent encoding is malformed.
     }
-  } catch {
-    // fall back to plain path parsing
+    return path.posix.extname(filename).toLowerCase() || undefined;
   }
   const ext = extnameFromAnyPath(filePath).toLowerCase();
   return ext || undefined;
@@ -314,25 +312,8 @@ export function imageMimeFromFormat(format?: string | null): string | undefined 
   if (!format) {
     return undefined;
   }
-  switch (format.toLowerCase()) {
-    case "avif":
-      return "image/avif";
-    case "jpg":
-    case "jpeg":
-      return "image/jpeg";
-    case "heic":
-      return "image/heic";
-    case "heif":
-      return "image/heif";
-    case "png":
-      return "image/png";
-    case "webp":
-      return "image/webp";
-    case "gif":
-      return "image/gif";
-    default:
-      return undefined;
-  }
+  const normalized = format.toLowerCase();
+  return IMAGE_FORMATS.has(normalized) ? MIME_BY_EXT[`.${normalized}`] : undefined;
 }
 
 /** Normalizes a MIME string before classifying it into a media family. */

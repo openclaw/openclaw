@@ -8,9 +8,7 @@ import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import type { AuthProfileStore } from "./types.js";
 
 /** Deduplicates profile ids while preserving first-seen order. */
-export function dedupeProfileIds(profileIds: string[]): string[] {
-  return uniqueStrings(profileIds);
-}
+export const dedupeProfileIds: (profileIds: string[]) => string[] = uniqueStrings;
 
 /** Lists auth profile ids whose credential provider matches the requested provider. */
 export function listProfilesForProvider(store: AuthProfileStore, provider: string): string[] {

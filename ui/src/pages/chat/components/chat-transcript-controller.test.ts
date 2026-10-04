@@ -55,7 +55,7 @@ function mcpRangeRows(appContent: unknown): TestContentRow[] {
   return Array.from({ length: 24 }, (_, index) => ({
     kind: "content" as const,
     key: `row:${index}`,
-    content: index === 17 ? appContent : html`<div>row ${index}</div>`,
+    content: index === 23 ? appContent : html`<div>row ${index}</div>`,
   }));
 }
 
@@ -64,8 +64,12 @@ describe("chat transcript controller", () => {
   afterEach(resetTranscriptTestDom);
 
   it("keeps every re-stamped row observed after moving containers", async () => {
-    const transcript = createTestTranscript();
     const props = threadProps("pane-measure");
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const transcript = createTestTranscript(props.paneId);
     const chatFace = document.body.appendChild(document.createElement("div"));
     render(renderChatThread(props, transcript), chatFace);
     transcript.hostConnected();
@@ -111,6 +115,11 @@ describe("chat transcript controller", () => {
     transcript.hostConnected();
     transcript.hostUpdated();
     await flushDeferredRowPrune();
+    for (const observer of resizeObservers) {
+      for (const row of transcriptRows(container)) {
+        observer.emitTarget(row, 800, 100);
+      }
+    }
     render(renderChatThread(props, transcript), container);
 
     expect(transcriptSize(container)).toBe(200);
@@ -134,6 +143,13 @@ describe("chat transcript controller", () => {
       { kind: "content" as const, key: "group:next", content: html`<div>next</div>` },
     ];
     const { container, renderRows } = await mountTestTranscript("pane-mcp-rows", initialRows);
+    for (const observer of resizeObservers) {
+      for (const row of transcriptRows(container)) {
+        observer.emitTarget(row, 800, 180);
+      }
+    }
+    renderRows(initialRows);
+    expect(transcriptSize(container)).toBe(540);
     stubMcpAppLifecycle(container, () => teardownPending.promise);
 
     renderRows(regroupedRows);
@@ -163,6 +179,15 @@ describe("chat transcript controller", () => {
       "group:reply",
       "group:next",
     ]);
+    // New rows receive their first sizes; the retained reply must keep its own.
+    for (const observer of resizeObservers) {
+      for (const row of committedRows) {
+        if (row.dataset.virtualRowKey !== "group:reply") {
+          observer.emitTarget(row, 800, 180);
+        }
+      }
+    }
+    renderRows(regroupedRows);
     // The old tool's 40px delivery must not resize the retained reply key.
     expect(transcriptSize(container)).toBe(540);
   });
@@ -291,7 +316,7 @@ describe("chat transcript controller", () => {
     const { container, renderRows } = await mountTestTranscript("pane-mcp-range", initialRows);
     const { app, teardown } = stubMcpAppLifecycle(container);
 
-    renderRows([initialRows[17]!, ...initialRows.slice(0, 17), ...initialRows.slice(18)]);
+    renderRows([initialRows.at(-1)!, ...initialRows.slice(0, -1)]);
 
     expect(teardown).toHaveBeenCalledOnce();
     expect(app.isConnected).toBe(true);
@@ -313,7 +338,7 @@ describe("chat transcript controller", () => {
     const button = expectDefined(container.querySelector("button"), "MCP app focus target");
     button.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
 
-    renderRows([initialRows[17]!, ...initialRows.slice(0, 17), ...initialRows.slice(18)]);
+    renderRows([initialRows.at(-1)!, ...initialRows.slice(0, -1)]);
 
     expect(teardown).not.toHaveBeenCalled();
     expect(app.isConnected).toBe(true);

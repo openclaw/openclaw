@@ -29,10 +29,10 @@ import { createSubsystemLogger } from "../../src/logging/subsystem.js";
 import { sessionChanges } from "../../src/sessions/session-row-changes.js";
 import { trackAsyncWork } from "../../src/shared/async-work-scope.js";
 import {
-  ensureProfileForEmail,
   setUserProfileRole,
   syncGitHubIdentity,
-} from "../../src/state/user-profiles.js";
+} from "../../src/state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../src/state/user-profiles.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { createDeferred, withTestTimeout } from "../helpers/promise.js";
 
@@ -341,38 +341,36 @@ describe("Reports HTTP disclosure with production cookie auth and sessions.list"
       });
     },
   );
-  it("does not disclose prepared session rows after the viewer role narrows before HTTP delivery", async () => {
-    await withReports(true, async ({ read, blockViewerAfterDiscovery }) => {
-      blockViewerAfterDiscovery();
-      const response = await read("/reports/people/owner/");
-      expect(response.body).not.toContain("REPORT-PROOF-shared");
-      expect(response.status).toBe(401);
-    });
-  });
-
-  it.each(["expiry", "generation"] as const)(
-    "does not disclose after cookie %s during delayed discovery",
+  it.each(["role", "expiry", "generation"] as const)(
+    "does not disclose when %s authority changes before HTTP delivery",
     async (invalidation) => {
-      await withReports(false, async ({ read, blockDiscovery, expire, rotate }) => {
-        const gate = blockDiscovery();
-        const pending = read("/reports/people/owner/");
+      await withReports(invalidation === "role", async (fixture) => {
+        if (invalidation === "role") {
+          fixture.blockViewerAfterDiscovery();
+        }
+        const gate = invalidation === "role" ? undefined : fixture.blockDiscovery();
+        const pending = fixture.read("/reports/people/owner/");
         try {
-          await withTestTimeout(
-            gate.entered,
-            10_000,
-            "sessions.list did not enter delayed discovery",
-          );
-          if (invalidation === "expiry") {
-            expire();
-          } else {
-            rotate();
+          if (gate) {
+            await withTestTimeout(
+              gate.entered,
+              10_000,
+              "sessions.list did not enter delayed discovery",
+            );
+            if (invalidation === "expiry") {
+              fixture.expire();
+            } else {
+              fixture.rotate();
+            }
+            gate.release();
           }
-          gate.release();
           const response = await pending;
-          expect(response.body).not.toContain("REPORT-PROOF-");
+          expect(response.body).not.toContain(
+            invalidation === "role" ? "REPORT-PROOF-shared" : "REPORT-PROOF-",
+          );
           expect(response.status).toBe(401);
         } finally {
-          gate.release();
+          gate?.release();
           await pending;
         }
       });

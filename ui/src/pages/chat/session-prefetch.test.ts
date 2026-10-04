@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-
 import type { ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -28,8 +27,10 @@ import {
   type SessionPrefetchUpdate,
 } from "./session-prefetch.test-support.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
+const cacheKey = (sessionKey: string) => resolveChatSnapshotKey(snapshotHost, { sessionKey });
 function historySnapshot(message: string, sessionId = `session-${message}`): ChatSessionSnapshot {
   return {
     messages: [{ role: "assistant", content: message }],
@@ -108,7 +109,7 @@ describe("recent session prefetch", () => {
     await settlePromises();
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
     await store.flush();
-    expect(await store.read(key)).toBeNull();
+    expect(await store.read(cacheKey(key))).toBeNull();
   });
 
   it("keeps unchanged history warm while a queued session becomes active", async () => {
@@ -139,7 +140,7 @@ describe("recent session prefetch", () => {
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: queuedKey })).toBeNull();
     await store.flush();
-    expect((await store.read(key))?.messages).toEqual(historyResult(key).messages);
+    expect((await store.read(cacheKey(key)))?.messages).toEqual(historyResult(key).messages);
     await advancePrefetch(31_000);
     expect(request).toHaveBeenCalledOnce();
   });
@@ -175,7 +176,7 @@ describe("recent session prefetch", () => {
     await settlePromises();
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toBeNull();
     await store.flush();
-    expect(await store.read(key)).toBeNull();
+    expect(await store.read(cacheKey(key))).toBeNull();
   });
 
   it.each([
@@ -206,7 +207,7 @@ describe("recent session prefetch", () => {
         readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })?.messages ?? null,
       ).toEqual(keepOriginal ? historyResult(key).messages : null);
       await store.flush();
-      expect((await store.read(key))?.messages ?? null).toEqual(
+      expect((await store.read(cacheKey(key)))?.messages ?? null).toEqual(
         keepOriginal ? historyResult(key).messages : null,
       );
     },
@@ -245,7 +246,7 @@ describe("recent session prefetch", () => {
     await settlePromises();
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey: key })).toEqual(expected);
     await store.flush();
-    expect(await store.read(key)).toEqual(expected);
+    expect(await store.read(cacheKey(key))).toEqual(expected);
   });
 
   it.each([false, true])(
@@ -284,12 +285,12 @@ describe("recent session prefetch", () => {
         clearDuringReread ? null : historyResult(key).messages,
       );
       await store.flush();
-      expect(await store.read(key)).toEqual(snapshot);
+      expect(await store.read(cacheKey(key))).toEqual(snapshot);
     },
   );
 
   it("bounds idle warming to two small tails without reopening fresh or active history", async () => {
-    store.write("agent:main:fresh", historySnapshot("fresh"));
+    store.write(cacheKey("agent:main:fresh"), historySnapshot("fresh"));
     await store.flush();
     const open = vi.spyOn(indexedDB, "open");
     const pending: Array<{
@@ -408,7 +409,7 @@ describe("recent session prefetch", () => {
   it("rechecks readiness after the persisted snapshot read before requesting history", async () => {
     const sessionKey = "agent:main:stored";
     const stored = historySnapshot("stored", "session-stored");
-    store.write(sessionKey, stored);
+    store.write(cacheKey(sessionKey), stored);
     await store.flush();
     cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();
@@ -421,7 +422,7 @@ describe("recent session prefetch", () => {
     );
     updatePrefetch(state);
     await advancePrefetch(300);
-    expect(readSpy).toHaveBeenCalledWith(sessionKey);
+    expect(readSpy).toHaveBeenCalledWith(cacheKey(sessionKey));
     expect(request).not.toHaveBeenCalled();
 
     // The presented pane starts loading while IndexedDB is still answering.
@@ -479,13 +480,13 @@ describe("recent session prefetch", () => {
     expect(
       readChatSessionSnapshot(cache, snapshotHost, { sessionKey: presentedSessionKey }),
     ).toEqual(historySnapshot("presented"));
-    expect(store.readSavedAt(presentedSessionKey)).not.toBeNull();
+    expect(store.readSavedAt(cacheKey(presentedSessionKey))).not.toBeNull();
 
     updatePrefetch({ client, listRevision: 11, openSessionKeys: [presentedSessionKey], rows });
     await advancePrefetch(31_000);
     await store.flush();
     expect(request).toHaveBeenCalledTimes(MAX_CACHED_CHAT_SESSIONS - 1);
-    expect(store.readSavedAt("agent:main:background-0")).not.toBeNull();
+    expect(store.readSavedAt(cacheKey("agent:main:background-0"))).not.toBeNull();
   });
 
   it("coalesces a newer list revision until the per-session cooldown expires", async () => {
@@ -519,6 +520,118 @@ describe("recent session prefetch", () => {
     expect(request).toHaveBeenCalledTimes(2);
   });
 
+  it.each(["intent", "list revision"])(
+    "brings a cooldown-deferred cycle forward for a new %s",
+    async (trigger) => {
+      const warm = "agent:main:warm";
+      const intended = "agent:main:intended";
+      const request = historyRequest();
+      const state = prefetchState(request, [row(warm, NOW - 1)]);
+      updatePrefetch(state);
+      await advancePrefetch(300);
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm]);
+      await advancePrefetch(4_700);
+
+      const changed = { ...state, listRevision: 2, rows: [row(warm, Date.now())] };
+      updatePrefetch(changed);
+      await advancePrefetch(1_000);
+      expect(request).toHaveBeenCalledOnce();
+
+      updatePrefetch({
+        ...changed,
+        listRevision: trigger === "intent" ? 2 : 3,
+        rows: [...changed.rows, row(intended, NOW - 2)],
+      });
+      if (trigger === "intent") {
+        const target = document.createElement("a");
+        target.dataset.sessionKey = intended;
+        fixture.shell.append(target);
+        target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+      }
+      const delay = trigger === "intent" ? 75 : 250;
+      await advancePrefetch(delay - 1);
+      expect(request).toHaveBeenCalledOnce();
+      await advancePrefetch(2);
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended]);
+
+      // Pulling the cycle forward must not bypass the first key's cooldown.
+      await advancePrefetch(20_000);
+      expect(request).toHaveBeenCalledTimes(2);
+      await advancePrefetch(5_000);
+      expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([warm, intended, warm]);
+    },
+  );
+
+  it("keeps the original 250 ms automatic deadline across later list revisions, then waits for idle", async () => {
+    const idle = vi.fn<(callback: IdleRequestCallback) => number>().mockReturnValue(1);
+    vi.stubGlobal("requestIdleCallback", idle);
+    const request = historyRequest();
+    const state = prefetchState(request, [row("agent:main:recent", NOW - 1)]);
+    updatePrefetch(state);
+    await advancePrefetch(100);
+    updatePrefetch({ ...state, listRevision: 2 });
+    await advancePrefetch(149);
+    expect(idle).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+    await advancePrefetch(1);
+    expect(idle).toHaveBeenCalledOnce();
+    expect(request).not.toHaveBeenCalled();
+    idle.mock.calls[0]?.[0]({ didTimeout: false, timeRemaining: () => 50 });
+    await settlePromises();
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:recent"]);
+  });
+
+  it("runs the latest pointer intent without waiting for a pending idle callback", async () => {
+    vi.stubGlobal("requestIdleCallback", vi.fn().mockReturnValue(1));
+    const request = historyRequest();
+    updatePrefetch(
+      prefetchState(request, [row("agent:main:swept", NOW), row("agent:main:intended", NOW - 1)], {
+        hiddenConversationSessionKeys: ["agent:main:foreground"],
+      }),
+    );
+    await advancePrefetch(300);
+    const target = document.createElement("a");
+    fixture.shell.append(target);
+    target.dataset.sessionKey = "agent:main:swept";
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await advancePrefetch(30);
+    target.dataset.sessionKey = "agent:main:intended";
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await advancePrefetch(44);
+    expect(request).not.toHaveBeenCalled();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
+  });
+
+  it("coalesces intent behind the running request without losing its short non-idle schedule", async () => {
+    const first = "agent:main:first";
+    const intended = "agent:main:intended";
+    const response = createDeferred<ReturnType<typeof historyResult>>();
+    const request = vi.fn(async (_method: string, params: unknown) =>
+      (params as { sessionKey: string }).sessionKey === first
+        ? response.promise
+        : historyResult(intended),
+    );
+    const rows = [row(first, NOW - 1)];
+    const state = prefetchState(request, rows);
+    updatePrefetch(state);
+    await advancePrefetch(300);
+    vi.stubGlobal("requestIdleCallback", vi.fn().mockReturnValue(1));
+    updatePrefetch({ ...state, listRevision: 2, rows: [...rows, row(intended, NOW - 2)] });
+    const target = document.createElement("a");
+    fixture.shell.append(target);
+    target.dataset.sessionKey = intended;
+    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
+    await advancePrefetch(100);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first]);
+    response.resolve(historyResult(first));
+    await settlePromises();
+    await advancePrefetch(74);
+    expect(request).toHaveBeenCalledOnce();
+    await advancePrefetch(1);
+    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first, intended]);
+  });
+
   it("rewarms complete stored history after an interleaved append miss", async () => {
     const sessionKey = "agent:main:delta";
     const priorMessages = Array.from({ length: 5 }, (_, index) => ({
@@ -538,7 +651,7 @@ describe("recent session prefetch", () => {
       },
     );
     await store.flush();
-    const previousSavedAt = store.readSavedAt(sessionKey);
+    const previousSavedAt = store.readSavedAt(cacheKey(sessionKey));
     cache.clear();
     const liveMessage = {
       role: "user",
@@ -580,7 +693,7 @@ describe("recent session prefetch", () => {
     expect(request).toHaveBeenCalledWith(
       "chat.history",
       expect.objectContaining({ cursor: "cursor-1", sessionKey }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(readChatSessionSnapshot(cache, snapshotHost, { sessionKey })).toEqual({
       deltaCursor: "cursor-2",
@@ -588,9 +701,9 @@ describe("recent session prefetch", () => {
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "session-delta",
     });
-    expect(store.readSavedAt(sessionKey)).toBeGreaterThan(previousSavedAt ?? 0);
+    expect(store.readSavedAt(cacheKey(sessionKey))).toBeGreaterThan(previousSavedAt ?? 0);
     await store.flush();
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual({
+    expect(await new SessionSnapshotStore().read(cacheKey(sessionKey))).toEqual({
       deltaCursor: "cursor-2",
       messages: [...priorMessages, liveMessage, preparedDeltaMessage],
       pagination: { hasMore: false, completeSnapshot: true },

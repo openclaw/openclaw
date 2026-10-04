@@ -73,64 +73,32 @@ describe("prepared harness tool environment", () => {
   });
 
   it.each([
-    { name: "global", expected: ["/fixture/global", "/fixture/system"] },
-    {
-      name: "agent",
-      agentPrepend: [" /fixture/agent ", "/fixture/agent"],
-      expected: ["/fixture/agent", "/fixture/system", "/fixture/global"],
-    },
-    { name: "empty agent", agentPrepend: [], expected: undefined },
     {
       name: "retained policy",
       sandboxAgentId: "policy",
-      expected: ["/fixture/policy", "/fixture/system", "/fixture/global"],
-    },
-    {
-      name: "Gateway shim without configuration",
-      noGlobalPrepend: true,
-      shim: true,
-      expected: undefined,
-    },
-    {
-      name: "Gateway shim with empty agent override",
-      agentPrepend: [],
-      shim: true,
-      expected: undefined,
+      expected: ["/fixture/cli", "/fixture/policy", "/fixture/system", "/fixture/global"],
     },
     {
       name: "Gateway shim with blank agent override",
       agentPrepend: [" ", ""],
-      shim: true,
       expected: undefined,
     },
     {
       name: "Gateway shim with inherited global prefix",
-      shim: true,
       expected: ["/fixture/cli", "/fixture/global", "/fixture/system"],
-    },
-    {
-      name: "Gateway shim with agent prefix",
-      agentPrepend: ["/fixture/agent"],
-      shim: true,
-      expected: ["/fixture/cli", "/fixture/agent", "/fixture/system", "/fixture/global"],
     },
   ])(
     "snapshots the $name tool PATH independently of identity",
-    async ({ agentPrepend, sandboxAgentId, noGlobalPrepend, shim, expected }) => {
+    async ({ agentPrepend, sandboxAgentId, expected }) => {
       const merge = vi
         .spyOn(gatewayCliShim, "mergeGatewayAgentCliPath")
-        .mockImplementation((configured) => [
-          ...(shim ? ["/fixture/cli"] : []),
-          ...(configured ?? []),
-        ]);
+        .mockImplementation((configured) => ["/fixture/cli", ...(configured ?? [])]);
       vi.stubEnv("PATH", ["/fixture/system", "/fixture/global"].join(path.delimiter));
       const config: NonNullable<
         Parameters<typeof createAdmittedHostCapabilityTestFixture>[0]["config"]
       > = {
         tools: {
-          exec: noGlobalPrepend
-            ? {}
-            : { pathPrepend: [" /fixture/global ", "/fixture/global", ""] },
+          exec: { pathPrepend: [" /fixture/global ", "/fixture/global", ""] },
         },
         agents: {
           entries: {

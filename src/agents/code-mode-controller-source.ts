@@ -34,10 +34,15 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   // Keep rejection ownership in the snapshot so a handler attached after wait
   // can clear it; an unawaited failure must not become a successful cell.
   const unhandledRejections = new Set();
+  const bridgeErrors = new WeakSet();
+  // Guest prototype changes must not replace the operations that own error provenance.
+  const rememberBridgeError = bridgeErrors.add.bind(bridgeErrors);
+  const isBridgeError = bridgeErrors.has.bind(bridgeErrors);
   let nextTimerId = 0;
   const GuestPromise = Promise;
   const GuestError = Error;
   const GuestTypeError = TypeError;
+  const GuestRangeError = RangeError;
   const stringifyJson = JSON.stringify;
   function emitOutput(entry) {
     const count = output.push(entry);
@@ -213,6 +218,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
         error.code = parsed.code;
         error.effectStatus = "unknown";
       }
+      rememberBridgeError(error);
       entry.reject(error);
     }
     return true;
@@ -243,7 +249,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   });
 
   const skills = Object.freeze({
-    list: () => request("skillsList", []),
+    list: (offset = 0) => request("skillsList", [offset]),
+    search: (query, limit) => request("skillsSearch", limit === undefined ? [query] : [query, limit]),
     read: (name) => request("skillsRead", [name]),
   });
 
@@ -252,6 +259,26 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     load: (id) => request("resultLoad", [id]),
     delete: (id) => request("resultDelete", [id]),
   });
+
+  // Session operations use the existing result bridge; buffers stay with the host cell.
+  async function sessionResult(method, key, value) {
+    if (typeof key !== "string") throw new GuestTypeError("Code Mode store key must be a string.");
+    try {
+      const result = await request(method, method === "resultSave"
+        ? [value, "session", key]
+        : [key, "session"]);
+      return method === "resultLoad" ? result.value : undefined;
+    } catch (error) {
+      if (!(error instanceof GuestError)) throw error;
+      const Constructor = error.code === "store_range" ? GuestRangeError
+        : error.code === "store_type" ? GuestTypeError : undefined;
+      if (!Constructor) throw error;
+      const typed = new Constructor(error.message);
+      typed.stack = error.stack;
+      rememberBridgeError(typed);
+      throw typed;
+    }
+  }
 
   if (globalThis.__openclawSwarmEnabled === true) {
     Object.defineProperties(globalThis, {
@@ -472,6 +499,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     namespaces: { value: Object.freeze(namespaceGlobals), enumerable: true },
     skills: { value: skills, enumerable: true },
     results: { value: results, enumerable: true },
+    store: { value: (key, value) => sessionResult(value === undefined ? "resultDelete" : "resultSave", key, value), enumerable: true },
+    load: { value: (key) => sessionResult("resultLoad", key), enumerable: true },
     setTimeout: { value: (callback, delay, ...args) => scheduleTimer(callback, delay, args), enumerable: true },
     clearTimeout: { value: cancelTimer, enumerable: true },
     console: { value: guestConsole, enumerable: true },
@@ -479,6 +508,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawIsBridgeError: { value: isBridgeError },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },
     // Final getters must run before the worker drains output and settles host work.

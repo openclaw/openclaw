@@ -1,4 +1,3 @@
-// watchOS direct-node transport.
 // Apple Watch cannot use generic WebSockets on-device, so node events use bounded HTTPS polls.
 import { randomBytes, randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -35,7 +34,6 @@ import {
   requestNodePairing,
   recordPairedNodeConnection,
   recordPairedNodeDisconnection,
-  type RequestNodePairingResult,
 } from "../infra/device-pairing-node.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import {
@@ -44,6 +42,7 @@ import {
   resolveNodePairingState,
 } from "../infra/device-pairing.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   isNodePairingSetupBootstrapProfile,
   isVoiceNodePairingSetupBootstrapProfile,
@@ -109,7 +108,6 @@ const MAX_QUEUED_BYTES = 512 * 1024;
 const MAX_QUEUED_EVENTS = 32;
 const MAX_PENDING_CHALLENGES = 4_096;
 const MAX_PENDING_CHALLENGES_PER_CLIENT = 8;
-const WATCH_CAPS = new Set<string>();
 const WATCH_COMMANDS = new Set(["device.info", "device.status", "system.notify"]);
 const WATCH_PERMISSIONS = new Set(["notifications"]);
 
@@ -203,10 +201,7 @@ function resolveWatchClientAddress(
 function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   let aborted = false;
   let settled = false;
-  let resolveCompleted: (completed: boolean) => void = () => undefined;
-  const completed = new Promise<boolean>((resolve) => {
-    resolveCompleted = resolve;
-  });
+  const completion = createDeferredCore<boolean>();
   const settle = (value: boolean) => {
     if (settled) {
       return;
@@ -214,7 +209,7 @@ function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
     settled = true;
     res.off("finish", onFinish);
     res.off("close", onClose);
-    resolveCompleted(value);
+    completion.resolve(value);
   };
   const onFinish = () => settle(true);
   const onClose = () => {
@@ -223,24 +218,13 @@ function trackResponseLifecycle(res: ServerResponse): ResponseLifecycle {
   };
   res.once("finish", onFinish);
   res.once("close", onClose);
-  return { completed, isAborted: () => aborted };
-}
-
-function hasOnlyBoundedWatchSurface(connect: ConnectParams): boolean {
-  const caps = Array.isArray(connect.caps) ? connect.caps : [];
-  const commands = Array.isArray(connect.commands) ? connect.commands : [];
-  const permissionEntries = Object.entries(connect.permissions ?? {});
-  return (
-    caps.every((cap) => WATCH_CAPS.has(cap)) &&
-    commands.length > 0 &&
-    commands.every((command) => WATCH_COMMANDS.has(command)) &&
-    permissionEntries.every(([permission]) => WATCH_PERMISSIONS.has(permission))
-  );
+  return { completed: completion.promise, isAborted: () => aborted };
 }
 
 function isCanonicalWatchNode(connect: ConnectParams): boolean {
   const platform = connect.client.platform.trim().toLowerCase();
   const family = connect.client.deviceFamily?.trim().toLowerCase();
+  const commands = connect.commands ?? [];
   return (
     connect.minProtocol <= PROTOCOL_VERSION &&
     connect.maxProtocol >= PROTOCOL_VERSION &&
@@ -250,7 +234,10 @@ function isCanonicalWatchNode(connect: ConnectParams): boolean {
     connect.client.mode === GATEWAY_CLIENT_MODES.NODE &&
     platform.startsWith("watchos") &&
     family === "apple watch" &&
-    hasOnlyBoundedWatchSurface(connect)
+    (connect.caps?.length ?? 0) === 0 &&
+    commands.length > 0 &&
+    commands.every((command) => WATCH_COMMANDS.has(command)) &&
+    Object.keys(connect.permissions ?? {}).every((permission) => WATCH_PERMISSIONS.has(permission))
   );
 }
 
@@ -294,25 +281,6 @@ function createChallengeStore() {
   };
 }
 
-function broadcastPairingSuperseded(
-  broadcast: GatewayBroadcastFn,
-  result: RequestNodePairingResult,
-  now: number,
-) {
-  for (const superseded of result.created ? (result.superseded ?? []) : []) {
-    broadcast(
-      "node.pair.resolved",
-      {
-        requestId: superseded.requestId,
-        nodeId: superseded.nodeId,
-        decision: "rejected",
-        ts: now,
-      },
-      { dropIfSlow: true },
-    );
-  }
-}
-
 /** Create the first-party watchOS node HTTP transport for one Gateway process. */
 export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions): {
   handleRequest: (req: IncomingMessage, res: ServerResponse) => Promise<boolean>;
@@ -328,6 +296,17 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
   const sessionsByToken = new Map<string, WatchNodeSession>();
   const sessionsByNodeId = new Map<string, WatchNodeSession>();
   let closed = false;
+  const broadcastPairingResolved = (
+    requestId: string,
+    nodeId: string,
+    decision: "approved" | "rejected",
+    ts: number,
+  ) =>
+    options.broadcast(
+      "node.pair.resolved",
+      { requestId, nodeId, decision, ts },
+      { dropIfSlow: true },
+    );
 
   const closeSession = (session: WatchNodeSession, reason: string) => {
     if (sessionsByToken.get(session.token) !== session) {
@@ -779,30 +758,23 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
         }
         throw error;
       }
-      if (reconciliation.pendingPairing) {
-        broadcastPairingSuperseded(options.broadcast, reconciliation.pendingPairing, current);
+      if (reconciliation.pendingPairing?.created) {
+        for (const superseded of reconciliation.pendingPairing.superseded ?? []) {
+          broadcastPairingResolved(superseded.requestId, superseded.nodeId, "rejected", current);
+        }
       }
-      if (
-        setupBootstrapAccepted &&
-        !nodeSnapshot.pairedNode &&
-        reconciliation.pendingPairing &&
-        hasOnlyBoundedWatchSurface(connect)
-      ) {
+      if (setupBootstrapAccepted && !nodeSnapshot.pairedNode && reconciliation.pendingPairing) {
         const approved = await approveNodePairing(
           reconciliation.pendingPairing.request.requestId,
           { callerScopes: [ADMIN_SCOPE, PAIRING_SCOPE, WRITE_SCOPE] },
           options.pairingBaseDir,
         );
         if (approved && "node" in approved) {
-          options.broadcast(
-            "node.pair.resolved",
-            {
-              requestId: reconciliation.pendingPairing.request.requestId,
-              nodeId: derivedDeviceId,
-              decision: "approved",
-              ts: current,
-            },
-            { dropIfSlow: true },
+          broadcastPairingResolved(
+            reconciliation.pendingPairing.request.requestId,
+            derivedDeviceId,
+            "approved",
+            current,
           );
           reconciliation = {
             ...reconciliation,
@@ -1031,16 +1003,7 @@ export function createWatchNodeHttpRuntime(options: WatchNodeHttpRuntimeOptions)
               : await finalizeNodePairingCleanupClaim(claim);
             const resolvedAt = now();
             for (const resolved of resolvedPairings) {
-              options.broadcast(
-                "node.pair.resolved",
-                {
-                  requestId: resolved.requestId,
-                  nodeId: resolved.nodeId,
-                  decision: "rejected",
-                  ts: resolvedAt,
-                },
-                { dropIfSlow: true },
-              );
+              broadcastPairingResolved(resolved.requestId, resolved.nodeId, "rejected", resolvedAt);
             }
           } catch (error) {
             options.onError?.("watch node pending-pairing cleanup failed", error);

@@ -8,11 +8,11 @@ import { requireWorktreeDiskSpace } from "./capacity.js";
 import type { WorktreeGitPolicy } from "./checkout-git-config.js";
 import { removeUnusedEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, worktreePathExists, commandError, listGitWorktrees, runGit } from "./git.js";
-import { snapshotProvisionedFiles } from "./provisioned-files.js";
+import { createProvisionedSnapshotWriter } from "./provisioned-snapshot-store.js";
 import {
   deleteRegistryWorktree,
   assertRegistrySnapshotRetirement,
-  assertWorktreeRemovalClaim,
+  createWorktreeRemovalClaimsGuard,
   getRegistryWorktree,
 } from "./registry.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
@@ -36,6 +36,10 @@ export async function captureManagedWorktreeSnapshot(params: {
   assertCurrent?: () => void;
 }) {
   const { record, env, provisionedPaths } = params;
+  const writeProvisioned = createProvisionedSnapshotWriter(env, record.id, () => {
+    params.signal?.throwIfAborted();
+    params.assertCurrent?.();
+  });
   const exactState =
     params.exactState && params.retirementName
       ? {
@@ -84,14 +88,13 @@ export async function captureManagedWorktreeSnapshot(params: {
               true,
             );
             return undefined;
-          case "worktree.snapshot-provisioned":
-            return await snapshotProvisionedFiles(env, record.id, record.path, provisionedPaths, {
-              signal,
-              assertCurrent,
-              expected: effect.input.expected,
-            });
+          case "worktree.snapshot-provisioned-reset":
+          case "worktree.snapshot-provisioned-chunk":
+            return await writeProvisioned(effect, assertCurrent);
+          case "worktree.eviction-fence":
+          case "worktree.eviction-admit":
+            throw new Error("Snapshot capture cannot authorize worktree eviction");
         }
-        return undefined;
       },
     },
   );
@@ -161,7 +164,7 @@ export function assertExactSnapshotRecordCurrent(
   }
 }
 
-/** Local CLI retirement shares the same allocation owner as removal and GC. */
+/** Explicit retirement shares the same allocation owner as removal and GC. */
 export async function retireManagedWorktreeSnapshotById(
   params: RetireManagedWorktreeSnapshotParams,
   env: NodeJS.ProcessEnv = process.env,
@@ -351,13 +354,16 @@ export async function retireManagedWorktreeSnapshot(params: {
   }
   const exactRecord = record.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-");
   const expirationToken = exactRecord ? randomUUID() : undefined;
+  const assertClaim = expirationToken
+    ? createWorktreeRemovalClaimsGuard(env, [record.id], expirationToken)
+    : undefined;
   let claimed = false;
   const assertCurrent = () => {
     params.assertCurrent();
     if (exactRecord) {
       assertExactSnapshotRecordCurrent(env, record);
       if (claimed && expirationToken) {
-        assertWorktreeRemovalClaim(env, record.id, expirationToken);
+        assertClaim?.();
       }
     }
   };

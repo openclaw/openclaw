@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { FsSafeError, root, type Root } from "../../infra/fs-safe.js";
+import { retainMutationAuthority } from "../../infra/mutation-authority.js";
 import { logWarn } from "../../logger.js";
 import { normalizeSkillIndexName } from "../discovery/skill-index.js";
 import {
@@ -245,6 +246,7 @@ export async function readSkillProposalRecord(
 }
 
 export async function writeSkillProposal(request: {
+  assertCommitAllowed?: () => void;
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
@@ -255,16 +257,13 @@ export async function writeSkillProposal(request: {
 }): Promise<SkillProposalEvent> {
   assertProposalId(request.record.id);
   assertSkillProposalContentSize(request.content);
+  const { assertCommitAllowed, store, ...input } = request;
   const params = {
-    ...structuredClone({
-      record: request.record,
-      content: request.content,
-      supportFiles: request.supportFiles,
-      ownerAgentId: request.ownerAgentId,
-      maxPending: request.maxPending,
-      event: request.event,
-    }),
-    store: captureSkillWorkshopStoreOptions(request.store ?? {}),
+    assertCommitAllowed: assertCommitAllowed
+      ? retainMutationAuthority(assertCommitAllowed)
+      : undefined,
+    ...structuredClone(input),
+    store: captureSkillWorkshopStoreOptions(store ?? {}),
   };
   await ensureSkillWorkshopStore(params.store);
   await stageSkillProposalGeneration(params);
@@ -279,6 +278,7 @@ export async function writeSkillProposal(request: {
         event: params.event,
       },
       params.store,
+      params.assertCommitAllowed,
     );
   } catch (error) {
     const committed = await readCommittedSkillProposalTransition({
@@ -301,6 +301,7 @@ export async function writeSkillProposal(request: {
 }
 
 export async function replaceSkillProposalDraft(request: {
+  assertCommitAllowed?: () => void;
   expected: SkillProposalRecord;
   record: SkillProposalRecord;
   content: string;
@@ -310,15 +311,13 @@ export async function replaceSkillProposalDraft(request: {
 }): Promise<SkillProposalEvent> {
   assertProposalId(request.record.id);
   assertSkillProposalContentSize(request.content);
+  const { assertCommitAllowed, store, ...input } = request;
   const params = {
-    ...structuredClone({
-      expected: request.expected,
-      record: request.record,
-      content: request.content,
-      supportFiles: request.supportFiles,
-      event: request.event,
-    }),
-    store: captureSkillWorkshopStoreOptions(request.store ?? {}),
+    assertCommitAllowed: assertCommitAllowed
+      ? retainMutationAuthority(assertCommitAllowed)
+      : undefined,
+    ...structuredClone(input),
+    store: captureSkillWorkshopStoreOptions(store ?? {}),
   };
   await cleanupSkillProposalGenerations(params.expected, params.store).catch((error: unknown) => {
     logWarn(`skill-workshop: failed to clean unowned proposal generations: ${String(error)}`);
@@ -332,6 +331,7 @@ export async function replaceSkillProposalDraft(request: {
       record: params.record,
       event: params.event,
       store: params.store,
+      assertCommitAllowed: params.assertCommitAllowed,
       operationLabel: "skill-workshop.revision.commit",
       invalidateRollback: true,
     });
@@ -371,16 +371,8 @@ export async function updateSkillProposalRecord(params: {
   event?: NewSkillProposalEvent;
 }): Promise<SkillProposalEvent | undefined> {
   assertProposalId(params.record.id);
-  return executeSkillWorkshopOperation(
-    "workshop.proposal.update",
-    {
-      record: params.record,
-      ownerAgentId: params.ownerAgentId,
-      invalidateRollback: params.invalidateRollback,
-      event: params.event,
-    },
-    params.store,
-  );
+  const { store, ...input } = params;
+  return executeSkillWorkshopOperation("workshop.proposal.update", input, store);
 }
 
 export async function readSkillProposalManifest(

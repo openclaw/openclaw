@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
@@ -17,7 +18,7 @@ import {
   hasWebCredsSync,
   isWhatsAppBaileysAuthFileName,
   readWebCredsJsonRaw,
-  readWebCredsJsonRawSync,
+  readWebCredsJsonRawSync as readCredsJsonRaw,
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
   statWebCredsFileSync,
@@ -29,7 +30,7 @@ import {
 } from "./creds-persistence.js";
 import { resolveComparableIdentity, type WhatsAppSelfIdentity } from "./identity.js";
 import type { WebChannel } from "./targets-runtime.js";
-export { hasWebCredsSync, resolveWebCredsBackupPath, resolveWebCredsPath };
+export { hasWebCredsSync, readCredsJsonRaw, resolveWebCredsBackupPath, resolveWebCredsPath };
 
 export const WHATSAPP_AUTH_UNSTABLE_CODE = "whatsapp-auth-unstable";
 
@@ -51,10 +52,6 @@ export function resolveDefaultWebAuthDir(): string {
 }
 
 export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
-
-export function readCredsJsonRaw(filePath: string): string | null {
-  return readWebCredsJsonRawSync(filePath);
-}
 
 async function waitForWebAuthBarrier(
   authDir: string,
@@ -139,13 +136,12 @@ export async function webAuthExists(authDir: string = resolveDefaultWebAuthDir()
 async function readWebAuthStateCore(
   authDir: string,
   context: string,
-): Promise<{ authDir: string; linked: boolean; state: WhatsAppWebAuthState }> {
+): Promise<{ authDir: string; state: WhatsAppWebAuthState }> {
   const resolvedAuthDir = resolveUserPath(authDir);
   const barrierResult = await waitForWebAuthBarrier(resolvedAuthDir, context);
   const linked = await webAuthExists(resolvedAuthDir);
   return {
     authDir: resolvedAuthDir,
-    linked,
     state: barrierResult === "timed_out" ? "unstable" : linked ? "linked" : "not-linked",
   };
 }
@@ -254,12 +250,7 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
     const backupStats = await fs.lstat(resolveWebCredsBackupPath(authDir)).catch(() => null);
     return backupStats?.isFile() === true;
   } catch (error) {
-    const codeValue =
-      error && typeof error === "object" && "code" in error
-        ? (error as { code?: unknown }).code
-        : undefined;
-    const code = typeof codeValue === "string" ? codeValue : "";
-    return code !== "ENOENT";
+    return extractErrorCode(error) !== "ENOENT";
   }
 }
 

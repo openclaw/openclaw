@@ -2,13 +2,17 @@ import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
+import { settlesWithin } from "../../../shared/settle-within.js";
 import type { StreamFn } from "../../runtime/index.js";
 import {
   createModelLifecycle,
   type ModelCallDiagnosticContext,
   type ModelCallLifecycle,
 } from "./attempt.model-diagnostic-lifecycle.js";
-import { createModelObserver } from "./attempt.model-diagnostic-observation.js";
+import {
+  createModelObserver,
+  createModelPromptStats,
+} from "./attempt.model-diagnostic-observation.js";
 
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
 function asyncIteratorFactory(value: unknown): (() => AsyncIterator<unknown>) | undefined {
@@ -31,22 +35,12 @@ async function safeReturnIterator(
   trackCleanup: ReturnType<typeof captureAsyncWorkTracker>,
 ): Promise<void> {
   const returnResult = trackCleanup(() => iterator.return?.());
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  try {
-    // Early consumer return should not hang diagnostic completion forever; give
-    // provider cleanup a short chance, then emit completion for the observed call.
-    await Promise.race([
-      Promise.resolve(returnResult).catch(() => undefined),
-      new Promise<void>((resolve) => {
-        timeout = setTimeout(resolve, MODEL_CALL_STREAM_RETURN_TIMEOUT_MS);
-        timeout.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  }
+  // Early consumer return should not hang diagnostic completion forever; give
+  // provider cleanup a short chance, then emit completion for the observed call.
+  await settlesWithin(
+    Promise.resolve(returnResult).catch(() => undefined),
+    MODEL_CALL_STREAM_RETURN_TIMEOUT_MS,
+  );
 }
 
 function observeModelCallIterator<T>(
@@ -210,15 +204,11 @@ function observeModelCallResult(result: unknown, lifecycle: ModelCallLifecycle):
   return result;
 }
 
-/**
- * Wraps a model stream function with diagnostic model-call lifecycle events,
- * traceparent propagation, request/response byte accounting, optional captured
- * model content, progress heartbeats, and plugin hook dispatch.
- */
 export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,
 ): StreamFn {
+  const measurePromptStats = createModelPromptStats();
   return ((model, streamContext, options) => {
     const requestTimeoutMs = clampPositiveTimerTimeoutMs(
       (isRecord(model) ? model.requestTimeoutMs : undefined) ?? ctx.requestTimeoutMs,
@@ -234,6 +224,7 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
           contentCapture: ctx.contentCapture,
           suppressPluginHooks: ctx.suppressPluginHooks,
           capturePromptStats,
+          measurePromptStats,
         }),
     });
 

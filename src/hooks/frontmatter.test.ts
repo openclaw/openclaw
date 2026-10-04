@@ -1,25 +1,13 @@
 // Hook frontmatter tests cover hook metadata parsing from hook files.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
-import {
-  parseHookFrontmatter,
-  resolveHookManifestMetadata,
-  resolveHookInvocationPolicy,
-} from "./frontmatter.js";
-import type { OpenClawHookMetadata } from "./types.js";
+import { parseHookFrontmatter, resolveHookManifestMetadata } from "./frontmatter.js";
 
 function requireString(value: string | undefined, label: string): string {
   if (typeof value !== "string") {
     throw new Error(`expected ${label}`);
   }
   return value;
-}
-
-function requireOpenClawMetadata(metadata: OpenClawHookMetadata | undefined): OpenClawHookMetadata {
-  if (!metadata) {
-    throw new Error("expected openclaw metadata");
-  }
-  return metadata;
 }
 
 describe("parseHookFrontmatter", () => {
@@ -55,7 +43,7 @@ describe("resolveHookManifestMetadata", () => {
     };
 
     const result = resolveHookManifestMetadata(frontmatter);
-    const openclaw = requireOpenClawMetadata(result);
+    const openclaw = expectDefined(result, "hook metadata");
     expect(openclaw.emoji).toBe("🔥");
     expect(openclaw.events).toEqual(["command:new", "command:reset"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
@@ -135,7 +123,7 @@ metadata:
       '"command:reset"',
     );
 
-    const openclaw = requireOpenClawMetadata(resolveHookManifestMetadata(frontmatter));
+    const openclaw = expectDefined(resolveHookManifestMetadata(frontmatter), "hook metadata");
     expect(openclaw.emoji).toBe("💾");
     expect(openclaw.events).toEqual(["command:new", "command:reset", "session:auto-reset"]);
     expect(openclaw.requires?.config).toEqual(["workspace.dir"]);
@@ -158,16 +146,5 @@ metadata:
     const openclaw = resolveHookManifestMetadata(frontmatter);
     expect(openclaw?.emoji).toBe("disk");
     expect(openclaw?.events).toEqual(["command:new"]);
-  });
-});
-
-describe("resolveHookInvocationPolicy", () => {
-  it("defaults to enabled when missing", () => {
-    expect(resolveHookInvocationPolicy({}).enabled).toBe(true);
-  });
-
-  it("parses enabled flag", () => {
-    expect(resolveHookInvocationPolicy({ enabled: "no" }).enabled).toBe(false);
-    expect(resolveHookInvocationPolicy({ enabled: "on" }).enabled).toBe(true);
   });
 });

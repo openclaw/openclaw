@@ -42,6 +42,11 @@ on:
         required: false
         default: false
         type: boolean
+      skip_defender_exclusions:
+        description: "Leave Windows Defender policy unchanged"
+        required: false
+        default: false
+        type: boolean
       windows_ci_replay:
         description: "Exact diagnostic JSON: nodeVersion, packageManager, vitestVersion, maxWorkers, files, projects"
         required: false
@@ -65,7 +70,7 @@ on:
       startup_node_version:
         description: "Exact Node version for installed package probes"
         required: false
-        default: "26.8.2"
+        default: "26.9.0"
         type: string
       installed_startup_cpu_diagnostic:
         description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
@@ -507,7 +512,7 @@ jobs:
 
       - &windows_defender
         name: Try to exclude workspace from Windows Defender (best-effort)
-        if: ${{ inputs.run_windows_ci || inputs.windows_ci_replay != '' }}
+        if: ${{ !inputs.skip_defender_exclusions && (inputs.run_windows_ci || inputs.windows_ci_replay != '') }}
         shell: pwsh
         run: |
           $cmd = Get-Command Add-MpPreference -ErrorAction SilentlyContinue
@@ -628,8 +633,27 @@ jobs:
             $armRoot = if ($paired) { Join-Path $env:RUNNER_TEMP "startup-comparison/$arm" } else { $env:RUNNER_TEMP }
             $candidateDir = Join-Path $armRoot "startup-package-resolved"
             $artifactDir = Join-Path $env:RUNNER_TEMP $(if ($arm -eq "candidate") { "startup-package-comparison-input" } else { "startup-package-input" })
-            node --import ./scripts/tsx.mjs scripts/resolve-openclaw-package-candidate.mts --source artifact --artifact-dir $artifactDir --package-sha256 $binding.packageSha256 --output-dir $candidateDir --metadata (Join-Path $candidateDir "package-candidate.json")
-            if ($LASTEXITCODE -ne 0) { throw "Canonical package resolution failed." }
+            $validationRoot = Join-Path $env:GITHUB_WORKSPACE ".tmp/package-validation-$arm"
+            if (Test-Path -LiteralPath $validationRoot) { throw "Package validation scratch must be fresh." }
+            New-Item -ItemType Directory -Path $validationRoot | Out-Null
+            $previousTemps = @{}
+            $resolverExitCode = $null
+            try {
+              foreach ($name in @("TEMP", "TMP", "TMPDIR")) {
+                $previousTemps[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+                [Environment]::SetEnvironmentVariable($name, $validationRoot, "Process")
+              }
+              $observedTemp = (node -p 'require("node:os").tmpdir()').Trim()
+              if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($observedTemp) -ine [IO.Path]::GetFullPath($validationRoot)) { throw "Package validation scratch was not selected." }
+              @{ temporaryRoot = $observedTemp; previous = $previousTemps; scope = "canonical package validation only" } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "${prefix}package-validation-temp.json")
+              node --import ./scripts/tsx.mjs scripts/resolve-openclaw-package-candidate.mts --source artifact --artifact-dir $artifactDir --package-sha256 $binding.packageSha256 --output-dir $candidateDir --metadata (Join-Path $candidateDir "package-candidate.json")
+              $resolverExitCode = $LASTEXITCODE
+            } finally {
+              foreach ($name in $previousTemps.Keys) {
+                [Environment]::SetEnvironmentVariable($name, $previousTemps[$name], "Process")
+              }
+            }
+            if ($resolverExitCode -ne 0) { throw "Canonical package resolution failed." }
             $candidate = Get-Content -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Raw | ConvertFrom-Json
             if ($candidate.packageSourceSha -cne $binding.sourceSha -or $candidate.sha256 -cne $binding.packageSha256) { throw "Resolved source or package bytes differ." }
             Copy-Item -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Destination (Join-Path $evidence "${prefix}package-candidate.json")
@@ -1122,6 +1146,7 @@ jobs:
             }
             if ($records.Count -eq 0) { Write-Host "No installed task mutation was admitted."; exit 0 }
             $seen = @{}
+            $startupEntries = @()
             # Validate the entire finite authority set before performing any cleanup.
             foreach ($record in $records) {
               $index = [array]::IndexOf(@("fresh", "2026.9.3", "2026.9.4"), [string]$record.cell)
@@ -1141,7 +1166,24 @@ jobs:
               }
               if ($discovery -and [IO.Path]::GetFullPath($record.scriptPath) -ine [IO.Path]::GetFullPath((Join-Path $expectedRoot "$($record.role).cmd"))) { throw "Discovery launcher path differs from its fixture." }
               if ($record.role -cin @("direct", "extra") -and $record.cleanupNeedle -cne $expectedProfile) { throw "Diagnostic task cleanup token differs from its exact profile." }
+              if ($record.PSObject.Properties.Name -ccontains "startupEntryPaths") {
+                $entryCount = @($record.startupEntryPaths).Count
+                if ($record.role -cnotin @("selected", "peer") -or ($record.cell -ceq "fresh" -and $record.role -cne "selected") -or $record.startupEntriesInitiallyAbsent -ne $true -or $entryCount -notin @(2, 3) -or ($entryCount -eq 3 -and $record.role -cne "selected" -and -not ($record.cell -ceq "2026.9.4" -and $record.role -ceq "peer"))) { throw "Startup paths lack their exact installed fixture admission." }
+                $startupRoot = Join-Path $expectedRoot "appdata/Microsoft/Windows/Start Menu/Programs/Startup"
+                $extensions = @("cmd", "vbs", "sibling.vbs")
+                foreach ($entryIndex in 0..($entryCount - 1)) {
+                  $expectedEntry = Join-Path $startupRoot "$expectedTask.$($extensions[$entryIndex])"
+                  if ([IO.Path]::GetFullPath($record.startupEntryPaths[$entryIndex]) -ine [IO.Path]::GetFullPath($expectedEntry)) { throw "Startup cleanup path differs from its exact fixture." }
+                  $startupEntries += $expectedEntry
+                }
+              }
               $seen[$expectedTask] = $true
+            }
+            foreach ($startupEntry in $startupEntries) {
+              try {
+                if (Test-Path -LiteralPath $startupEntry -ErrorAction Stop) { Remove-Item -LiteralPath $startupEntry -Force -ErrorAction Stop }
+                if (Test-Path -LiteralPath $startupEntry -ErrorAction Stop) { throw "Startup entry remains: $startupEntry" }
+              } catch { $cleanupErrors += "Startup entry absence is unverified: $startupEntry" }
             }
             foreach ($record in $records) { schtasks.exe /End /TN $record.taskName 2>$null }
             foreach ($record in $records) {
@@ -1247,6 +1289,15 @@ jobs:
             throw ($cleanupErrors -join " ")
           }
           exit 0
+
+      - name: Diagnose PowerShell context after settled fresh failure
+        if: ${{ always() && !cancelled() && inputs.installed_startup_package != '' && steps.native_schtasks_fresh.outcome == 'failure' && steps.native_cleanup_fresh.outcome == 'success' && steps.native_cleanup_fresh.outputs.owned_package_cleanup == 'true' }}
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$NODE_BIN:$PATH"
+          node --import ./scripts/tsx.mjs src/daemon/schtasks.installed-powershell-context.test-support.mts .artifacts/windows-schtasks/installed-input.json
 
       - name: Retain installed cell proof fresh
         id: native_cell_proof_fresh
@@ -1362,8 +1413,8 @@ jobs:
       - name: Run installed Scheduled Task cell 2026.9.4
         id: native_schtasks_9_4
         if: ${{ inputs.run_windows_ci && inputs.installed_startup_package != '' && steps.native_prepare_9_4.outcome == 'success' }}
-        # 18-minute installed body, three-minute teardown hook, one-minute runner margin.
-        timeout-minutes: 22
+        # 24-minute installed body, three-minute teardown hook, one-minute runner margin.
+        timeout-minutes: 28
         shell: bash
         env:
           OPENCLAW_VITEST_WORKER_CACHE: "1"
@@ -1485,6 +1536,7 @@ jobs:
           name: windows-schtasks-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             .artifacts/windows-schtasks/proof.json
+            .artifacts/windows-schtasks/powershell-context.json
             .artifacts/windows-schtasks/package-handoff.json
             .artifacts/windows-schtasks/installed-input.json*
             .artifacts/windows-schtasks/cells/*/*.json*

@@ -13,7 +13,7 @@ import {
   createProviderErrorTextRedactor,
   readProviderJsonResponse,
 } from "./provider-http-errors.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
+import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.types.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-transport-fetch.js";
 
 type MinimaxBaseResp = {
@@ -39,13 +39,11 @@ export function isMinimaxVlmModel(provider: string, modelId: string): boolean {
   return isMinimaxVlmProvider(provider) && modelId.trim() === "MiniMax-VL-01";
 }
 
-function isMinimaxCnProvider(provider: string | undefined): boolean {
-  const normalized = provider?.trim().toLowerCase();
-  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
-}
-
 function resolveDefaultApiHost(provider: string | undefined): string {
-  return isMinimaxCnProvider(provider) ? "https://api.minimaxi.com" : "https://api.minimax.io";
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "minimax-cn" || normalized === "minimax-portal-cn"
+    ? "https://api.minimaxi.com"
+    : "https://api.minimax.io";
 }
 
 function coerceApiHost(params: {
@@ -62,29 +60,16 @@ function coerceApiHost(params: {
     params.modelBaseUrl?.trim() ||
     defaultHost;
 
-  try {
-    const url = new URL(raw);
+  const url = URL.parse(raw);
+  if (url) {
     return url.origin;
-  } catch {
-    // Bare hosts are retried with https:// below; malformed absolute URLs fall
-    // back to provider defaults instead of sending requests to invalid endpoints.
   }
-
+  // Retry bare hosts only; malformed absolute URLs use the provider default.
   if (/^[a-z][a-z\d+.-]*:\/\//i.test(raw)) {
     return defaultHost;
   }
 
-  try {
-    const url = new URL(`https://${raw}`);
-    return url.origin;
-  } catch {
-    return defaultHost;
-  }
-}
-
-function pickString(rec: Record<string, unknown>, key: string): string {
-  const v = rec[key];
-  return typeof v === "string" ? v : "";
+  return URL.parse(`https://${raw}`)?.origin ?? defaultHost;
 }
 
 export async function minimaxUnderstandImage(params: {
@@ -206,7 +191,7 @@ export async function minimaxUnderstandImage(params: {
       throw new Error(`MiniMax VLM API error (${code})${msg ? `: ${msg}` : ""}.${trace}`);
     }
 
-    const content = pickString(json, "content").trim();
+    const content = typeof json.content === "string" ? json.content.trim() : "";
     if (!content) {
       const trace = traceId ? ` Trace-Id: ${traceId}` : "";
       throw new Error(`MiniMax VLM returned no content.${trace}`);

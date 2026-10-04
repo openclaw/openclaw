@@ -25,7 +25,6 @@ describe("transcribeFirstAudio", () => {
   it("runs audio preflight in auto mode when audio config is absent", async () => {
     runAudioTranscriptionMock.mockResolvedValueOnce({
       transcript: "voice note transcript",
-      attachments: [],
     });
 
     const ctx: MsgContext = {
@@ -47,7 +46,6 @@ describe("transcribeFirstAudio", () => {
   it("transcribes AIFF voice notes without an explicit content type", async () => {
     runAudioTranscriptionMock.mockResolvedValueOnce({
       transcript: "AIFF voice note transcript",
-      attachments: [],
     });
 
     const ctx: MsgContext = {
@@ -65,7 +63,6 @@ describe("transcribeFirstAudio", () => {
   it("transcribes an opaque audio source identified by separate filename metadata", async () => {
     runAudioTranscriptionMock.mockResolvedValueOnce({
       transcript: "voice note transcript",
-      attachments: [],
     });
     const ctx: MsgContext = {
       Body: "<media:audio>",
@@ -108,7 +105,6 @@ describe("transcribeFirstAudio", () => {
   it("echoes the preflight transcript when echoTranscript is enabled", async () => {
     runAudioTranscriptionMock.mockResolvedValueOnce({
       transcript: "hello from dm audio",
-      attachments: [],
     });
 
     const ctx = {

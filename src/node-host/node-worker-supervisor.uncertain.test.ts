@@ -2,19 +2,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import type {
   SqliteWorkerCommand,
   SqliteWorkerReply,
   SqliteWorkerRequest,
 } from "../infra/sqlite-worker-contract.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
+import { useStateDatabaseTempDirs } from "../test-utils/state-database-temp-dirs.js";
 import { NodeWorkerJournalWorker } from "./node-worker-journal-worker.js";
 import { createNodeWorkerSupervisorFixture } from "./node-worker-supervisor.fixture.test-support.js";
 import {
@@ -23,21 +19,11 @@ import {
   testWorkerLaunchInput,
 } from "./node-worker-supervisor.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
-
-afterEach(() => {
-  vi.restoreAllMocks();
-});
+const tempDirs = useStateDatabaseTempDirs();
 
 it.skipIf(process.platform === "win32")(
   "keeps physical capacity reserved after a committed turn reply becomes unknown",
-  async () => {
+  async ({ signal }) => {
     const capacities: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = createNodeWorkerSupervisorFixture(
       tempDirs.make("node-worker-unknown-turn-"),
@@ -88,9 +74,10 @@ it.skipIf(process.platform === "win32")(
     const reader = new NodeWorkerJournalWorker({ env });
     try {
       await supervisor.launch(input, TEST_WORKER_ENDPOINT);
-      expect(
-        await withTestTimeout(committed.promise, 5_000, "The turn write did not commit"),
-      ).toMatchObject({ launchId: input.launchId, state: "completed" });
+      expect(await withinTest(committed.promise, signal)).toMatchObject({
+        launchId: input.launchId,
+        state: "completed",
+      });
 
       await expect(supervisor.close()).rejects.toThrow();
       await expect(supervisor.status(input.launchId)).rejects.toMatchObject({

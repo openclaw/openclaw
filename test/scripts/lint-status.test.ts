@@ -6,7 +6,8 @@ import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { toErrorObject } from "../../scripts/lib/error-format.mts";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
-import { isProcessAlive, waitForFixtureFile } from "../helpers/process-wait.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
+import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import * as nodeScript from "../helpers/run-node-script.js";
 import { formatShimResult } from "./direct-run-entrypoints.test-support.js";
@@ -47,18 +48,23 @@ export function waitForFile(file) {
   for (const file of [
     ...entries,
     "run-oxlint.mts",
+    "generate-kysely-types.mts",
     "run-stylelint.mts",
     "tsx.mjs",
     "windows-cmd-helpers.mjs",
     "lib/tsx-cli-shim.mjs",
     "lib/local-check-runtime.mts",
     "lib/check-limits.mts",
+    "lib/oxlint-changed-scope.mts",
+    "lib/ci-static-check-evidence.mjs",
     "lib/direct-run.mjs",
     "lib/dist-artifact-ownership.mts",
     "lib/dist-artifact-lock.mts",
     "lib/record-shared.mjs",
     "lib/failed-trailer.mts",
     "lib/managed-child-process.mts",
+    "lib/managed-memory.mts",
+    "lib/managed-memory-entrypoint.mts",
     "lib/vitest-resource-ownership.mts",
     "lib/windows-taskkill.mjs",
     "lib/repo-root.mjs",
@@ -145,7 +151,7 @@ const shard = process.argv.includes("scripts") ? "scripts" : process.argv.includ
 const name = step === "oxlint" ? shard : step;
 const lock = ".artifacts/dist-artifacts.lock";
 fs.appendFileSync("steps.jsonl", JSON.stringify({ step, shard, args: process.argv.slice(2), pid: process.pid, owned: fs.existsSync(lock + "/owner.json"), claims: fs.existsSync(lock) ? fs.readdirSync(lock).filter(name => name.startsWith("child-")) : [] }) + "\\n");
-process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
+if (mode !== "wait") process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
 process.stderr.write("diagnostic:" + name + "\\n");
 if (mode === "throw") throw new Error("fixture preparation failure");
 if (mode === "unjoined") throw Object.assign(new Error("fixture cleanup unverified"), { processTreeState: "indeterminate" });
@@ -160,6 +166,7 @@ else if (mode === "wait") {
   });
   fs.writeFileSync(name + ".pid.tmp", String(process.pid));
   fs.renameSync(name + ".pid.tmp", name + ".pid");
+  process.stdout.write(JSON.stringify({ step, shard }) + "\\n");
 } else process.exitCode = mode === "nonzero" ? 7 : 0;
 `;
   for (const name of ["oxlint", "stylelint"]) {
@@ -277,26 +284,41 @@ async function runLintFixture(
         OPENCLAW_OXLINT_SHARD_HEARTBEAT_MS: "0",
         OPENCLAW_OXLINT_SHARD_TIMEOUT_MS: timeout ? "1500" : "0",
       },
-      10_000,
+      undefined,
       {
         cwd: root,
         signal,
         requireProcessTreeExit: true,
-        onReady(child) {
+        onReady(child, readOutput) {
           if (forwarded) {
+            const ready = createDeferred();
+            const line = JSON.stringify({ step: phase, shard: "extensions" }) + "\n";
+            // Wait-mode tools emit their one stdout row only after installing
+            // signal handlers. The managed command joins this same output pipe.
+            child.stdout?.on("data", () => {
+              if (readOutput().stdout.includes(line)) {
+                ready.resolve();
+              }
+            });
             // The lifetime schedules this after command is initialized and joins it during cleanup.
             readiness = fixture.run(async () => {
-              const ready = path.join(root, phase === "oxlint" ? "extensions.pid" : `${phase}.pid`);
-              await waitForFixtureFile(
-                ready,
-                command.then((result) => {
-                  if (result.error !== undefined) {
-                    throw toErrorObject(
-                      result.error,
-                      "Lint command failed before signal readiness",
-                    );
-                  }
-                }),
+              const file = path.join(root, phase === "oxlint" ? "extensions.pid" : `${phase}.pid`);
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  ready.promise,
+                  command.then((result) => {
+                    if (result.error !== undefined) {
+                      throw new Error(`Child failed before writing ${file}`, {
+                        cause: toErrorObject(
+                          result.error,
+                          "Lint command failed before signal readiness",
+                        ),
+                      });
+                    }
+                  }),
+                  `Child exited before writing ${file}`,
+                ),
+                signal,
               );
               child.kill(forwarded);
             });

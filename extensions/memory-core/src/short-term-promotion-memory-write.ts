@@ -200,7 +200,6 @@ export async function commitMemoryContent(
       fileSystem: {
         promises: {
           mkdir: fs.mkdir,
-          chmod: fs.chmod,
           writeFile: fs.writeFile,
           rename: async (from, to) => {
             publication.state = "uncertain";

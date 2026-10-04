@@ -204,7 +204,7 @@ function buildSearchEnvRef(config: OpenClawConfig, provider: SearchProvider): Se
   return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id: resolvedEnvVar };
 }
 
-export function applySearchKey(
+function applySearchKey(
   config: OpenClawConfig,
   provider: SearchProvider,
   key: SecretInput,
@@ -243,7 +243,7 @@ function applySearchProviderSelectionConfig(
   return next;
 }
 
-export function applySearchProviderSelection(
+function applySearchProviderSelection(
   config: OpenClawConfig,
   provider: SearchProvider,
 ): OpenClawConfig {
@@ -601,25 +601,16 @@ export async function runSearchSetupFlow(
     await prompter.note(entry.credentialNote, entry.label);
   }
 
-  if (oauthAuthProfileAvailable && authProviderId) {
-    const authProviderLabel = formatAuthProviderLabel(authProviderId);
-    await prompter.note(
-      [
-        `${entry.label} can use your existing ${authProviderLabel} OAuth sign-in for web_search.`,
-        "No separate API key is required; API-key auth remains available as a fallback.",
-        `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
-      ].join("\n"),
-      "Web search",
-    );
-    return await finalizeSelection(applySearchProviderSelection(config, choice));
-  }
-
   if (providerAuthProfileAvailable && authProviderId) {
     const authProviderLabel = formatAuthProviderLabel(authProviderId);
     await prompter.note(
       [
-        `${entry.label} can use your existing ${authProviderLabel} auth profile for web_search.`,
-        "No separate web-search key is required; API-key auth remains available as a fallback.",
+        oauthAuthProfileAvailable
+          ? `${entry.label} can use your existing ${authProviderLabel} OAuth sign-in for web_search.`
+          : `${entry.label} can use your existing ${authProviderLabel} auth profile for web_search.`,
+        oauthAuthProfileAvailable
+          ? "No separate API key is required; API-key auth remains available as a fallback."
+          : "No separate web-search key is required; API-key auth remains available as a fallback.",
         `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
       ].join("\n"),
       "Web search",

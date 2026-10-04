@@ -13,9 +13,7 @@ type PathPatternToken =
 /** Registry entry with compiled path/ref pattern tokens. */
 export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
   pathTokens: PathPatternToken[];
-  pathDynamicTokenCount: number;
   refPathTokens?: PathPatternToken[];
-  refPathDynamicTokenCount: number;
 };
 
 /** Concrete config value matched by expanding a path pattern. */
@@ -70,9 +68,7 @@ export function compileTargetRegistryEntry(
   return {
     ...entry,
     pathTokens,
-    pathDynamicTokenCount,
     refPathTokens,
-    refPathDynamicTokenCount,
   };
 }
 
@@ -206,14 +202,6 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
         ? node.entries()
         : Object.entries(node);
       for (const [key, value] of entries) {
-        if (isLeaf) {
-          out.push({
-            segments: [...segments, key],
-            captures: [...captures, key],
-            value,
-          });
-          continue;
-        }
         walk(value, tokenIndex + 1, [...segments, key], [...captures, key]);
       }
       return;
@@ -227,16 +215,7 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
       return;
     }
     for (let index = 0; index < items.length; index += 1) {
-      const item = items[index];
-      if (isLeaf) {
-        out.push({
-          segments: [...segments, token.field, index],
-          captures: [...captures, index],
-          value: item,
-        });
-        continue;
-      }
-      walk(item, tokenIndex + 1, [...segments, token.field, index], [...captures, index]);
+      walk(items[index], tokenIndex + 1, [...segments, token.field, index], [...captures, index]);
     }
   };
   walk(root, 0, [], []);

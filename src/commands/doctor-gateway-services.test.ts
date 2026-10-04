@@ -5,7 +5,6 @@ import { err, ok, type Result } from "@openclaw/normalization-core/result";
 // Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ServiceConfigAudit } from "../daemon/service-audit.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
@@ -19,7 +18,6 @@ import {
   callArg,
   expectCallConfigGatewayAuthToken,
   expectCallField,
-  expectGatewayAuthToken,
   requireRecord,
 } from "./doctor-gateway-services.assertions.test-support.js";
 import {
@@ -33,6 +31,7 @@ import {
   expectNoteContaining,
   expectNoNoteContaining,
 } from "./doctor-gateway-services.native.test-support.js";
+import { registerDoctorGatewayTokenRepairTests } from "./doctor-gateway-services.tokens.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import { formatServiceRepairDeferredNote } from "./doctor-service-repair-policy.js";
 
@@ -104,6 +103,7 @@ function createGatewayInstallPlanFixture(): Awaited<
   ReturnType<typeof import("./daemon-install-helpers.js").buildGatewayInstallPlan>
 > {
   return {
+    runtime: "node",
     programArguments: gatewayProgramArguments,
     workingDirectory: "/tmp",
     environment: {},
@@ -576,78 +576,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(Object.hasOwn(environment, "HTTPS_PROXY")).toBe(false);
   });
 
-  it("uses OPENCLAW_GATEWAY_TOKEN when config token is missing", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
-      setupGatewayTokenRepairScenario();
-
-      const cfg: OpenClawConfig = {
-        gateway: {},
-      };
-
-      await runRepair(cfg);
-
-      expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", "env-token");
-      expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "env-token");
-      expectGatewayAuthToken(callArg(mocks.writeConfig, 0, "Doctor writer callback"), "env-token");
-      expect(mocks.writeConfig.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.install.mock.invocationCallOrder[0]!,
-      );
-      expect(mocks.stage).not.toHaveBeenCalled();
-      expect(mocks.install).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("uses the persisted writer result when planning service installation", async () => {
-    await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
-      setupGatewayTokenRepairScenario();
-      mocks.writeConfig.mockImplementationOnce(async (nextConfig) => ({
-        ...nextConfig,
-        gateway: { ...nextConfig.gateway, auth: { mode: "token", token: "persisted-token" } },
-      }));
-      await runRepair({ gateway: {} });
-      expectGatewayAuthToken(callArg(mocks.writeConfig, 0, "Doctor writer callback"), "env-token");
-      expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "persisted-token");
-      expect(mocks.writeConfig.mock.invocationCallOrder[0]).toBeLessThan(
-        mocks.install.mock.invocationCallOrder[0]!,
-      );
-      expect(mocks.install).toHaveBeenCalledOnce();
-    });
-  });
-
-  it.each(["ordinary", "post-commit"] as const)(
-    "stops service repair after a %s token persistence error",
-    async (kind) => {
-      await withEnvAsync({ OPENCLAW_GATEWAY_TOKEN: "env-token" }, async () => {
-        setupGatewayTokenRepairScenario();
-        const cfg: OpenClawConfig = { gateway: {} };
-        const runtime = makeDoctorIo();
-        const cause = new Error("token persistence failed");
-        const failure =
-          kind === "post-commit"
-            ? new ConfigWritePostCommitError({
-                configPath: "/tmp/openclaw.json",
-                rollbackStatus: "not-restored",
-                cause,
-              })
-            : cause;
-        mocks.writeConfig.mockRejectedValueOnce(failure);
-
-        const repair = maybeRepairGatewayServiceConfig(cfg, "local", runtime, makeDoctorPrompts(), {
-          writeConfig: mocks.writeConfig,
-        });
-        if (kind === "post-commit") {
-          await expect(repair).rejects.toBe(failure);
-        } else {
-          await expect(repair).resolves.toBe(cfg);
-          expect(runtime.error).toHaveBeenCalledWith(
-            expect.stringContaining("Failed to persist gateway.auth.token before service repair:"),
-          );
-        }
-        expect(mocks.stage).not.toHaveBeenCalled();
-        expect(mocks.install).not.toHaveBeenCalled();
-      });
-    },
-  );
+  registerDoctorGatewayTokenRepairTests({ runRepair, setupGatewayTokenRepairScenario });
 
   it("does not flag entrypoint mismatch when symlink and realpath match", async () => {
     setupGatewayEntrypointRepairScenario({
@@ -1147,14 +1076,24 @@ describe("maybeRepairGatewayServiceConfig", () => {
         await runRepair(cfg);
 
         expectCallField(mocks.auditGatewayServiceConfig, "expectedGatewayToken", undefined);
-        expectGatewayAuthToken(
-          callArg(mocks.writeConfig, 0, "Doctor writer callback"),
-          "stale-token",
-        );
+        expect(mocks.writeConfig).toHaveBeenCalledWith({
+          gateway: {
+            auth: {
+              mode: "token",
+              token: {
+                source: "store",
+                provider: "default",
+                id: "SAVED_GATEWAY_TOKEN",
+              },
+            },
+          },
+        });
         expect(mocks.writeConfig.mock.invocationCallOrder[0]).toBeLessThan(
           mocks.install.mock.invocationCallOrder[0]!,
         );
-        expectCallConfigGatewayAuthToken(mocks.buildGatewayInstallPlan, "stale-token");
+        expect(mocks.buildGatewayInstallPlan).toHaveBeenLastCalledWith(
+          expect.objectContaining({ config: mocks.writeConfig.mock.calls[0]?.[0] }),
+        );
         expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).toHaveBeenCalledTimes(1);
       },

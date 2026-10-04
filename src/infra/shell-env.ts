@@ -1,4 +1,3 @@
-// Loads shell-derived environment variables for provider and command runtimes.
 import {
   type ExecFileSyncOptionsWithBufferEncoding,
   execFileSync,
@@ -15,7 +14,7 @@ import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";
 import { sanitizeHostExecEnv } from "./host-env-security.js";
-import { pruneMapToMaxSize } from "./map-size.js";
+import { LruCache } from "./lru-cache.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -25,9 +24,9 @@ let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
 let nextExecCacheId = 1;
-const loginShellEnvProbeCache = new Map<string, Array<[string, string]>>();
-const pendingShellPathProbes = new Map<string, Promise<string | null>>();
 const LOGIN_SHELL_ENV_CACHE_LIMIT = 64;
+const loginShellEnvProbeCache = new LruCache<Array<[string, string]>>(LOGIN_SHELL_ENV_CACHE_LIMIT);
+const pendingShellPathProbes = new Map<string, Promise<string | null>>();
 const execCacheIds = new WeakMap<object, number>();
 type LoginShellEnvProbePurpose = "environment-import" | "path";
 
@@ -207,19 +206,11 @@ function parseShellEnv(stdout: Buffer): Map<string, string> {
     .toString("utf8")
     .split("\0");
   for (const part of parts) {
-    if (!part) {
-      continue;
-    }
     const eq = part.indexOf("=");
     if (eq <= 0) {
       continue;
     }
-    const key = part.slice(0, eq);
-    const value = part.slice(eq + 1);
-    if (!key) {
-      continue;
-    }
-    shellEnv.set(key, value);
+    shellEnv.set(part.slice(0, eq), part.slice(eq + 1));
   }
   return shellEnv;
 }
@@ -228,12 +219,11 @@ function resolveExecCacheId(exec: typeof execFileSync | undefined): string {
   if (!exec) {
     return "default";
   }
-  const key = exec as object;
-  let id = execCacheIds.get(key);
+  let id = execCacheIds.get(exec);
   if (!id) {
     id = nextExecCacheId;
     nextExecCacheId += 1;
-    execCacheIds.set(key, id);
+    execCacheIds.set(exec, id);
   }
   return `exec:${id}`;
 }
@@ -301,10 +291,6 @@ function probeLoginShellEnv(params: {
   });
   const cached = loginShellEnvProbeCache.get(cacheKey);
   if (cached) {
-    // Login-shell probes can consume the full timeout; keep active configurations ahead of
-    // colder entries when the shared insertion-order pruning helper enforces the bound.
-    loginShellEnvProbeCache.delete(cacheKey);
-    loginShellEnvProbeCache.set(cacheKey, cached);
     return { ok: true, shellEnv: new Map(cached) };
   }
 
@@ -319,7 +305,6 @@ function probeLoginShellEnv(params: {
     const shellEnv = parseShellEnv(stdout);
     // Failed startup can recover on the next lookup; retain only successful probes.
     loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
-    pruneMapToMaxSize(loginShellEnvProbeCache, LOGIN_SHELL_ENV_CACHE_LIMIT);
     return { ok: true, shellEnv };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
@@ -341,10 +326,6 @@ type ShellEnvFallbackOptions = {
   platform?: NodeJS.Platform;
 };
 
-function hasExplicitEnvBinding(env: NodeJS.ProcessEnv, key: string): boolean {
-  return Object.hasOwn(env, key);
-}
-
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
 
@@ -353,9 +334,7 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "disabled" };
   }
 
-  const missingExpectedKeys = opts.expectedKeys.filter(
-    (key) => !hasExplicitEnvBinding(opts.env, key),
-  );
+  const missingExpectedKeys = opts.expectedKeys.filter((key) => !Object.hasOwn(opts.env, key));
   if (missingExpectedKeys.length === 0) {
     lastAppliedKeys = [];
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
@@ -435,7 +414,7 @@ export function getShellPathFromLoginShell(opts: {
   }
 
   const shellPath = probe.shellEnv.get("PATH")?.trim();
-  cachedShellPath = shellPath && shellPath.length > 0 ? shellPath : null;
+  cachedShellPath = shellPath || null;
   return cachedShellPath;
 }
 
@@ -465,7 +444,7 @@ export function prepareShellPathFromLoginShell(opts: {
   if (pending) {
     return pending;
   }
-  const cached = loginShellEnvProbeCache.get(cacheKey);
+  const cached = loginShellEnvProbeCache.peek(cacheKey);
   const probe = cached
     ? Promise.resolve(new Map(cached))
     : execLoginShellEnvZeroAsync({ shell, env: execEnv, timeoutMs, purpose: "path" }).then(
@@ -473,9 +452,7 @@ export function prepareShellPathFromLoginShell(opts: {
       );
   const result = probe
     .then((shellEnv) => {
-      loginShellEnvProbeCache.delete(cacheKey);
       loginShellEnvProbeCache.set(cacheKey, [...shellEnv.entries()]);
-      pruneMapToMaxSize(loginShellEnvProbeCache, LOGIN_SHELL_ENV_CACHE_LIMIT);
       // A synchronous cold caller may have completed while this probe was in flight.
       if (cachedShellPath === undefined) {
         cachedShellPath = shellEnv.get("PATH")?.trim() || null;

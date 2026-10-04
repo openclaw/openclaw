@@ -9,8 +9,9 @@ import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/sessio
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
+import { drainCronReceiptAuthority } from "../cron/store/receipt-authority-owner.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closePluginStateDatabaseAsync } from "../plugin-state/plugin-state-store.js";
@@ -73,10 +74,9 @@ async function shutdownStep(
   name: string,
   fn: () => Promise<void> | void,
   warnings: string[],
-): Promise<boolean> {
+): Promise<void> {
   try {
     await fn();
-    return true;
   } catch (err: unknown) {
     if (hasRetainedPluginRuntimeCloseError(err)) {
       throw err;
@@ -84,7 +84,6 @@ async function shutdownStep(
     const detail = err instanceof Error ? err.message : String(err);
     shutdownLog.warn(`${name}: ${detail}`);
     recordShutdownWarning(warnings, name);
-    return false;
   }
 }
 
@@ -133,7 +132,6 @@ async function disposeRuntimeWithShutdownGrace(params: {
 
 export async function runGatewayClosePrelude(params: {
   stopDiagnostics?: () => void;
-  clearSkillsRefreshTimer?: () => void;
   skillsChangeUnsub?: () => void | Promise<void>;
   disposeAuthRateLimiter?: () => void;
   disposeBrowserAuthRateLimiter: () => void;
@@ -142,22 +140,12 @@ export async function runGatewayClosePrelude(params: {
   closeMcpServer?: () => Promise<void>;
 }): Promise<void> {
   params.stopDiagnostics?.();
-  params.clearSkillsRefreshTimer?.();
   await params.skillsChangeUnsub?.();
   params.disposeAuthRateLimiter?.();
   params.disposeBrowserAuthRateLimiter();
   await params.stopChannelHealthMonitor?.();
   params.stopReadinessEventLoopHealth?.();
   await params.closeMcpServer?.().catch(() => {});
-}
-
-function isServerNotRunningError(err: unknown): boolean {
-  return Boolean(
-    err &&
-    typeof err === "object" &&
-    "code" in err &&
-    (err as { code?: unknown }).code === "ERR_SERVER_NOT_RUNNING",
-  );
 }
 
 async function waitForHttpClose(params: {
@@ -183,7 +171,7 @@ async function closeHttpListener(params: {
   server.closeIdleConnections?.();
   const closePromise = new Promise<void>((resolve, reject) => {
     server.close((err) => {
-      if (!err || isServerNotRunningError(err)) {
+      if (!err || hasErrnoCode(err, "ERR_SERVER_NOT_RUNNING")) {
         resolve();
         return;
       }
@@ -228,30 +216,27 @@ export type GatewayCloseParams = {
   channelIds?: readonly ChannelId[];
   stopChannel: (name: ChannelId, accountId?: string) => Promise<void>;
   pluginServices: PluginServicesHandle | null;
-  disposeSessionMcpRuntimes?: () => Promise<void>;
-  disposeBundleLspRuntimes?: () => Promise<void>;
   disposeAllBundleLspRuntimes: () => Promise<void>;
   drainRetainedOpenAiEmbeddingProviders: () => Promise<void>;
   stopGmailWatcher: () => Promise<void>;
   disposeAllCodeModeRuns: () => Promise<void> | void;
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
+  stopCronMaintenance?: () => Promise<void>;
   heartbeatRunner: HeartbeatRunner;
-  stopTaskRegistryMaintenance?: (() => Promise<void> | void) | null;
-  nodePresenceTimers: Map<string, ReturnType<typeof setInterval>>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
   heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
-  taskUnsub: (() => void) | null;
   clients: Set<{
     connectionKind?: "gateway" | "worker";
     socket: { close: (code: number, reason: string) => void };
   }>;
   finishRequestEntries?: () => Promise<void>;
   drainSdkWork?: () => Promise<void>;
+  stopScheduler: () => Promise<void>;
   closeSdkResources?: () => Promise<void>;
   wss?: WebSocketServer;
   httpServer?: HttpServer;
@@ -459,14 +444,14 @@ async function closeGatewayResources(
         disposeRuntimeWithShutdownGrace({
           cleanupWork,
           label: "bundle-mcp",
-          dispose: params.disposeSessionMcpRuntimes ?? disposeAllSessionMcpRuntimes,
+          dispose: disposeAllSessionMcpRuntimes,
           graceMs: MCP_RUNTIME_CLOSE_GRACE_MS,
           warnings,
         }),
         disposeRuntimeWithShutdownGrace({
           cleanupWork,
           label: "bundle-lsp",
-          dispose: params.disposeBundleLspRuntimes ?? params.disposeAllBundleLspRuntimes,
+          dispose: params.disposeAllBundleLspRuntimes,
           graceMs: LSP_RUNTIME_CLOSE_GRACE_MS,
           warnings,
         }),
@@ -500,15 +485,8 @@ async function closeGatewayResources(
       () => (params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop()),
       warnings,
     );
-    await shutdownStep(
-      "task-registry-maintenance",
-      () => params.stopTaskRegistryMaintenance?.(),
-      warnings,
-    );
-    for (const timer of params.nodePresenceTimers.values()) {
-      clearInterval(timer);
-    }
-    params.nodePresenceTimers.clear();
+    await shutdownStep("cron-maintenance", () => params.stopCronMaintenance?.(), warnings);
+    await shutdownStep("cron-receipt-authority", () => drainCronReceiptAuthority(), warnings);
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!(), warnings);
     }
@@ -520,9 +498,6 @@ async function closeGatewayResources(
     }
     if (params.lifecycleUnsub) {
       await shutdownStep("lifecycle-unsub", () => params.lifecycleUnsub!(), warnings);
-    }
-    if (params.taskUnsub) {
-      await shutdownStep("task-unsub", () => params.taskUnsub!(), warnings);
     }
     params.chatRunState.clear();
     let clientCloseFailures = 0;
@@ -627,6 +602,8 @@ async function closeGatewayResources(
     if (swarmOwner) {
       await closeSwarmScheduler(swarmOwner).catch(recordResourceCleanupFailure);
     }
+    // Owner cleanup releases scheduled work; join it before retiring shared dependencies.
+    await params.stopScheduler();
     // A sibling Gateway retains metadata before its registry exists. Only the
     // final owner may retire shared state and process-wide plugin caches.
     try {

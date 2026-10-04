@@ -37,23 +37,25 @@ import {
   mediaUrlValue,
   resolveBlockDownload,
   resolveMessageRunId,
-  resolveMessageTaskId,
   toArtifactSummary,
 } from "./server-methods/artifacts-content.js";
-import type { SessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type {
+  SessionTranscriptPageReader,
+  SessionTranscriptVisitor,
+} from "./session-transcript-read.types.js";
 import {
   parseTranscriptImageArtifactId,
+  projectTranscriptImageArtifacts,
   resolveTranscriptImageArtifactBlock,
 } from "./transcript-image-artifacts.js";
 
 const IMAGE_PAGE_MESSAGES = 32;
-const IMAGE_PAGE_BYTES = 256 * 1024;
+const IMAGE_PAGE_BYTES = 1024 * 1024;
+const IMAGE_INLINE_PREVIEW_MAX_BYTES = 256 * 1024;
 
-type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "taskId" | "messageRole">;
-type ArtifactReaders = Pick<
-  SessionTranscriptReader,
-  "visitSessionMessagesAsync" | "readSessionMessagesPageWithStatsAsync"
->;
+type SessionArtifactFilters = Pick<ArtifactsListParams, "runId" | "messageRole">;
+type ArtifactReaders = SessionTranscriptVisitor &
+  Pick<SessionTranscriptPageReader, "readSessionMessagesPageWithStatsAsync">;
 
 export type SessionArtifactReadQuery = SessionArtifactFilters &
   (
@@ -107,19 +109,18 @@ export type SessionArtifactReadResult =
     }
   | { kind: "download-response"; response?: ArtifactDownloadResponse };
 
-function normalizeArtifactType(value: string): string {
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "image" || normalized === "input_image" || normalized === "image_url") {
-    return "image";
-  }
-  if (normalized === "audio" || normalized === "input_audio") {
-    return "audio";
-  }
-  if (normalized === "video" || normalized === "input_video") {
-    return "video";
-  }
-  return "file";
-}
+const artifactTypes = new Map([
+  ["image", "image"],
+  ["input_image", "image"],
+  ["image_url", "image"],
+  ["audio", "audio"],
+  ["input_audio", "audio"],
+  ["video", "video"],
+  ["input_video", "video"],
+  ["file", "file"],
+  ["attachment", "file"],
+  ["input_file", "file"],
+]);
 
 /** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
@@ -146,49 +147,34 @@ function resolveMessageSeq(message: Record<string, unknown>, fallback: number): 
 
 function isArtifactBlock(block: Record<string, unknown>): boolean {
   const type = asNonEmptyString(block.type)?.toLowerCase();
-  if (
-    type === "image" ||
-    type === "audio" ||
-    type === "video" ||
-    type === "file" ||
-    type === "attachment" ||
-    type === "input_image" ||
-    type === "input_audio" ||
-    type === "input_video" ||
-    type === "input_file" ||
-    type === "image_url"
-  ) {
-    return true;
-  }
   return (
+    (type !== undefined && artifactTypes.has(type)) ||
     typeof block.data === "string" ||
     Boolean(block.url || block.openUrl || block.source || block.image_url || block.audio_url)
   );
 }
 
-function collectArtifactsFromMessage(params: {
-  message: unknown;
-  messageFallbackSeq: number;
-  collection: { artifacts: ArtifactRecord[]; count: number };
-  sessionKey: string;
-  runId?: string;
-  taskId?: string;
-  messageRole?: ArtifactsListParams["messageRole"];
-  includeDownloadData?: boolean;
-  downloadArtifactIds?: Set<string>;
-  imagesOnly?: boolean;
-}): void {
+function collectArtifactsFromMessage(
+  params: {
+    message: unknown;
+    messageFallbackSeq: number;
+    sessionKey: string;
+    runId?: string;
+    messageRole?: ArtifactsListParams["messageRole"];
+    includeDownloadData?: boolean;
+    downloadArtifactIds?: Set<string>;
+  } & (
+    | { imagesOnly: true; collection: { artifacts: (ArtifactRecord | undefined)[]; count: number } }
+    | { imagesOnly?: false; collection: { artifacts: ArtifactRecord[]; count: number } }
+  ),
+): void {
   const msg = asOptionalRecord(params.message);
   if (!msg) {
     return;
   }
   const messageSeq = resolveMessageSeq(msg, params.messageFallbackSeq);
   const messageRunId = resolveMessageRunId(msg);
-  const messageTaskId = resolveMessageTaskId(msg);
   if (params.runId && messageRunId !== params.runId) {
-    return;
-  }
-  if (params.taskId && messageTaskId !== params.taskId) {
     return;
   }
   const content = readAssistantDisplayContent(msg);
@@ -232,7 +218,7 @@ function collectArtifactsFromMessage(params: {
     const type =
       params.imagesOnly && attachment?.kind === "image"
         ? "image"
-        : normalizeArtifactType(asNonEmptyString(block.type) ?? "file");
+        : (artifactTypes.get(asNonEmptyString(block.type)?.toLowerCase() ?? "file") ?? "file");
     if (params.imagesOnly && type !== "image") {
       continue;
     }
@@ -245,8 +231,12 @@ function collectArtifactsFromMessage(params: {
       `${type} ${params.collection.count}`;
     const declaredArtifactId =
       asNonEmptyString(block.artifactId) ?? asNonEmptyString(attachment?.artifactId);
+    const transcriptImage =
+      params.imagesOnly && declaredArtifactId
+        ? parseTranscriptImageArtifactId(declaredArtifactId)
+        : undefined;
     const id =
-      declaredArtifactId && parseManagedOutgoingArtifactId(declaredArtifactId)
+      declaredArtifactId && (parseManagedOutgoingArtifactId(declaredArtifactId) || transcriptImage)
         ? declaredArtifactId
         : artifactId({
             sessionKey: params.sessionKey,
@@ -259,11 +249,29 @@ function collectArtifactsFromMessage(params: {
     if (params.downloadArtifactIds && !params.downloadArtifactIds.delete(id)) {
       continue;
     }
-    const includeData = params.includeDownloadData !== false;
-    const download = resolveBlockDownload(attachment ?? block, { includeData });
+    // Size inline payloads before materializing them so discovery never decodes large screenshots.
+    const sized = params.imagesOnly
+      ? resolveBlockDownload(attachment ?? block, { includeData: false })
+      : undefined;
+    const previewable =
+      !sized ||
+      sized.mode !== "bytes" ||
+      (sized.payloadSizeBytes ?? 0) <= IMAGE_INLINE_PREVIEW_MAX_BYTES;
+    if (params.imagesOnly && !previewable && !transcriptImage) {
+      // Preserve omitted slots so notices follow the cursor's actual scan window.
+      params.collection.artifacts.push(undefined);
+      continue;
+    }
+    const download =
+      sized && (!previewable || sized.mode !== "bytes")
+        ? sized
+        : resolveBlockDownload(attachment ?? block, {
+            includeData: params.imagesOnly || params.includeDownloadData !== false,
+          });
     const source = asOptionalRecord(block.source);
-    const previewOnly = params.imagesOnly && !parseManagedOutgoingArtifactId(id);
-    const imageUrl = params.imagesOnly
+    const previewOnly =
+      params.imagesOnly && !transcriptImage && !parseManagedOutgoingArtifactId(id);
+    let imageUrl = params.imagesOnly
       ? download.data !== undefined
         ? `data:${download.mimeType ?? "image/png"};base64,${download.data}`
         : (asNonEmptyString(attachment?.url) ??
@@ -271,6 +279,22 @@ function collectArtifactsFromMessage(params: {
           asNonEmptyString(source?.url) ??
           mediaUrlValue(block.image_url))
       : undefined;
+    if (params.imagesOnly && (transcriptImage ? download.mode !== "bytes" : !imageUrl)) {
+      continue;
+    }
+    if (
+      params.imagesOnly &&
+      imageUrl &&
+      /^data:/i.test(imageUrl) &&
+      Buffer.byteLength(imageUrl) > IMAGE_INLINE_PREVIEW_MAX_BYTES
+    ) {
+      if (transcriptImage) {
+        imageUrl = undefined;
+      } else {
+        params.collection.artifacts.push(undefined);
+        continue;
+      }
+    }
     const summary: ArtifactRecord = {
       id: previewOnly ? `preview_${id}` : id,
       type,
@@ -279,7 +303,6 @@ function collectArtifactsFromMessage(params: {
       ...(download.sizeBytes !== undefined ? { sizeBytes: download.sizeBytes } : {}),
       sessionKey: params.sessionKey,
       ...(messageRunId ? { runId: messageRunId } : {}),
-      ...(messageTaskId ? { taskId: messageTaskId } : {}),
       messageSeq,
       source: previewOnly ? "session-transcript-preview" : "session-transcript",
       download: { mode: previewOnly ? "unsupported" : download.mode },
@@ -304,7 +327,6 @@ function createArtifactListCollector(query: Extract<SessionArtifactReadQuery, { 
       collection,
       sessionKey: query.sessionKey,
       runId: query.runId,
-      taskId: query.taskId,
       messageRole: query.messageRole,
       includeDownloadData: query.includeDownloadData,
       downloadArtifactIds,
@@ -335,7 +357,6 @@ export function readArtifactSummariesFromProjection(
     projection.resolved.sessionId,
     query.sessionKey,
     query.runId,
-    query.taskId,
     query.messageRole,
   ]);
   const revision = JSON.stringify([
@@ -390,7 +411,6 @@ export async function selectSessionArtifacts(
     const selection = {
       sessionKey: query.sessionKey,
       runId: query.runId,
-      taskId: query.taskId,
       messageRole: query.messageRole,
     };
     const artifact = parseTranscriptImageArtifactId(query.artifactId)
@@ -441,6 +461,7 @@ export async function selectSessionArtifacts(
       beforeSeq: query.beforeSeq,
       maxMessages: IMAGE_PAGE_MESSAGES,
       maxBytes: IMAGE_PAGE_BYTES,
+      allowOversizedFirst: true,
       readOnly: true,
       captureReadWindow: true,
       expectedReadWindow: query.readWindow,
@@ -450,33 +471,34 @@ export async function selectSessionArtifacts(
       throw new SessionTranscriptProjectionUnavailableError(scope.sessionId, "window-changed");
     }
     const artifacts: ArtifactSummary[] = [];
+    let omittedOversized = false;
     let next: { beforeSeq: number; imageOffset: number } | undefined;
     for (const message of page.messages.toReversed()) {
       const seq = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.seq;
       if (typeof seq !== "number") {
         continue;
       }
-      const collected: ArtifactRecord[] = [];
+      const collected: (ArtifactRecord | undefined)[] = [];
       collectArtifactsFromMessage({
-        message,
+        message: projectTranscriptImageArtifacts(message),
         messageFallbackSeq: 1,
         collection: { artifacts: collected, count: 0 },
         sessionKey: query.sessionKey,
         runId: query.runId,
-        taskId: query.taskId,
         messageRole: query.messageRole,
         imagesOnly: true,
       });
       const images = collected
-        .filter((artifact) => artifact.image)
-        .map(toArtifactSummary)
+        .map((artifact) => artifact && toArtifactSummary(artifact))
         .toReversed();
       const start = query.beforeSeq === seq + 1 ? (query.imageOffset ?? 0) : 0;
       for (let index = start; index < images.length; index++) {
         const image = images[index];
-        if (image) {
-          artifacts.push(image);
+        if (!image) {
+          omittedOversized = true;
+          continue;
         }
+        artifacts.push(image);
         if (artifacts.length === query.limit) {
           next =
             index + 1 < images.length
@@ -498,10 +520,10 @@ export async function selectSessionArtifacts(
     return {
       kind: "image-page",
       artifacts,
+      ...(omittedOversized ? { omittedOversized: true } : {}),
       ...(next && next.beforeSeq > 1 && page.readWindow
         ? { next: { ...next, readWindow: page.readWindow } }
         : {}),
-      ...(page.omittedOversized ? { omittedOversized: true } : {}),
     };
   }
   const artifact = await readTranscriptImageArtifact(scope, query, readers);
@@ -522,6 +544,7 @@ async function readTranscriptImageArtifact(
     beforeSeq: reference.messageSeq + 1,
     maxMessages: 1,
     maxBytes: MAX_PAYLOAD_BYTES - 4096,
+    allowOversizedFirst: true,
   });
   const message = asOptionalRecord(page.messages[0]);
   const block = resolveTranscriptImageArtifactBlock(message, query.artifactId);
@@ -529,8 +552,7 @@ async function readTranscriptImageArtifact(
     !message ||
     !block ||
     (query.messageRole && message.role !== query.messageRole) ||
-    (query.runId && resolveMessageRunId(message) !== query.runId) ||
-    (query.taskId && resolveMessageTaskId(message) !== query.taskId)
+    (query.runId && resolveMessageRunId(message) !== query.runId)
   ) {
     return undefined;
   }

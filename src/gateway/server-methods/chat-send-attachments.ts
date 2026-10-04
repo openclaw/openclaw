@@ -11,6 +11,8 @@ import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import { parseInboundMediaUri } from "../../media/media-reference.js";
+import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import type { SkillSnapshot } from "../../skills/types.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import {
   discardPreparedInboundMedia,
@@ -21,7 +23,10 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
+import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveGatewayModelSupportsImages } from "../session-utils.js";
+import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import {
   explicitOriginTargetsAcpSession,
   explicitOriginTargetsPluginBinding,
@@ -61,6 +66,8 @@ async function prestageMediaPathOffloads(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
+  skillLibrarySelections?: SkillSnapshot["librarySelections"];
+  existingSkillsSnapshot?: SkillSnapshot;
   abortSignal: AbortSignal;
   assertWorkAdmissionCurrent: () => void;
 }): Promise<MediaFact[]> {
@@ -97,12 +104,30 @@ async function prestageMediaPathOffloads(params: {
     if (getAgentWorkspaceAccess(workspaceDir, "prepareTurnAttachments")?.prepareTurnAttachments) {
       return refsByManagedPath(mediaPathRefs);
     }
+    const skillsSnapshot = params.skillLibrarySelections?.length
+      ? (
+          await (
+            await import("../../skills/runtime/session-snapshot.js")
+          ).resolveReusableWorkspaceSkillSnapshot({
+            workspaceDir,
+            config: params.cfg,
+            agentId: params.agentId,
+            existingSnapshot: params.existingSkillsSnapshot,
+            librarySelections: params.skillLibrarySelections,
+            assertCurrent: params.assertWorkAdmissionCurrent,
+          })
+        ).snapshot
+      : undefined;
+    params.abortSignal.throwIfAborted();
+    params.assertWorkAdmissionCurrent();
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir,
+      skillsSnapshot,
     });
+    params.assertWorkAdmissionCurrent();
     if (!sandbox) {
       return refsByManagedPath(mediaPathRefs);
     }
@@ -134,6 +159,7 @@ async function prestageMediaPathOffloads(params: {
         agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
+        skillsSnapshot,
         abortSignal: params.abortSignal,
       });
     } catch (stageErr) {
@@ -172,6 +198,7 @@ async function prestageMediaPathOffloads(params: {
       const resolved = resolvedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType };
       return {
         path: resolved.path,
+        url: ref.mediaRef,
         contentType: resolved.mimeType,
         fileName: ref.label,
         workspaceDir: sandbox.workspaceDir,
@@ -180,6 +207,7 @@ async function prestageMediaPathOffloads(params: {
   } catch (err) {
     if (
       (params.abortSignal.aborted && Object.is(err, params.abortSignal.reason)) ||
+      err instanceof SessionMutationAuthorizationChangedError ||
       err instanceof MediaOffloadError ||
       err instanceof UnsupportedAttachmentError
     ) {
@@ -199,8 +227,9 @@ export async function prepareChatSendAttachments(params: {
   admission: AdmittedChatSend;
   respond: GatewayRequestHandlerOptions["respond"];
   context: GatewayRequestHandlerOptions["context"];
+  client?: GatewayRequestHandlerOptions["client"];
 }) {
-  const { request, session, admission, respond, context } = params;
+  const { request, session, admission, respond, context, client } = params;
   const { inboundMessage, normalizedAttachments, explicitOrigin } = request;
   const { cfg, sessionKey, agentId, resolvedSessionModel, clientRunId } = session;
   const {
@@ -210,6 +239,11 @@ export async function prepareChatSendAttachments(params: {
     finishAbortedChatSend,
     lifecycleGeneration,
   } = admission;
+  const assertInputCurrent = () => {
+    activeRunAbort.controller.signal.throwIfAborted();
+    admission.assertWorkAdmissionCurrent();
+    admission.assertClientUploadAllowed?.();
+  };
   let parsedMessage = inboundMessage;
   let parsedImages: Awaited<ReturnType<typeof parseMessageWithAttachments>>["images"] = [];
   let imageOrder: Awaited<ReturnType<typeof parseMessageWithAttachments>>["imageOrder"] = [];
@@ -246,7 +280,7 @@ export async function prepareChatSendAttachments(params: {
             supportsImages: imageSupport.value ?? resolveSupportsImages,
             acceptNonImage: true,
             signal: activeRunAbort.controller.signal,
-            assertCurrent: admission.assertWorkAdmissionCurrent,
+            assertCurrent: assertInputCurrent,
           });
           // The parser owns MIME classification. An unresolved capability means no image was seen,
           // so post-processing must not trigger catalog discovery for a non-image attachment.
@@ -257,14 +291,30 @@ export async function prepareChatSendAttachments(params: {
           parsedImages = parsed.images;
           imageOrder = parsed.imageOrder;
           offloadedRefs = parsed.offloadedRefs;
+          const stagingEntry =
+            admission.initialSessionEntry ?? admission.admittedSessionEntry ?? session.entry;
+          const selectedSkills = stagingEntry
+            ? (stagingEntry.skillLibrarySelections ??
+              stagingEntry.skillsSnapshot?.librarySelections)
+            : request.systemInputProvenance
+              ? undefined
+              : (
+                  await prepareSkillLibrarySessionCreation(
+                    client,
+                    context.getRuntimeConfig ?? cfg,
+                    resolveOperatorSessionCreation(client),
+                  )
+                ).skillLibrarySelections;
           mediaPathOffloads = await prestageMediaPathOffloads({
             offloadedRefs,
             includeImageRefs: !parsedSupportsImages,
             cfg,
             sessionKey,
             agentId,
+            skillLibrarySelections: selectedSkills,
+            existingSkillsSnapshot: stagingEntry?.skillsSnapshot,
             abortSignal: activeRunAbort.controller.signal,
-            assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
+            assertWorkAdmissionCurrent: assertInputCurrent,
           });
         },
         {
@@ -276,6 +326,7 @@ export async function prepareChatSendAttachments(params: {
           },
         },
       );
+      assertInputCurrent();
       // Pass-through media still needs awaited cleanup when preparation was cancelled.
       activeRunAbort.controller.signal.throwIfAborted();
       prepareAttachmentsMs = roundedChatSendTimingMs(
@@ -302,10 +353,14 @@ export async function prepareChatSendAttachments(params: {
       respond(
         false,
         undefined,
-        errorShape(
-          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-          String(err),
-        ),
+        err instanceof SessionMutationAuthorizationChangedError
+          ? err.error
+          : errorShape(
+              err instanceof MediaOffloadError
+                ? ErrorCodes.UNAVAILABLE
+                : ErrorCodes.INVALID_REQUEST,
+              String(err),
+            ),
       );
       return { ok: false as const };
     }
@@ -328,3 +383,20 @@ export type PreparedChatSendAttachments = Extract<
   Awaited<ReturnType<typeof prepareChatSendAttachments>>,
   { ok: true }
 >["value"];
+
+/** Preparation owns cleanup until a transcript or pending input takes custody of its media. */
+export function bindChatSendPreparedMediaCustody(params: {
+  admission: Pick<AdmittedChatSend, "setDiscardAbandonedPreparedMedia">;
+  attachments: Pick<PreparedChatSendAttachments, "offloadedRefs">;
+}): (recorder: UserTurnTranscriptRecorder) => void {
+  let recorder: UserTurnTranscriptRecorder | undefined;
+  // Dispatch owns persistence after the ACK disarms this cleanup.
+  params.admission.setDiscardAbandonedPreparedMedia(() => {
+    if (!recorder?.hasPersisted() && !recorder?.getPendingInputMessage?.()) {
+      void discardPreparedInboundMedia(params.attachments.offloadedRefs);
+    }
+  });
+  return (inputRecorder) => {
+    recorder = inputRecorder;
+  };
+}

@@ -23,9 +23,17 @@ const CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS = new Set([
   "unread",
 ]);
 
-function hasOtherMutation(patch: { unread?: boolean }): boolean {
-  return Object.entries(patch).some(
-    ([key, value]) => value !== undefined && !CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS.has(key),
+/**
+ * A patch that carries nothing but the read acknowledgement itself (plus its
+ * compare-and-swap preconditions). Shared with the patch projection owner, which
+ * must not age the session row for a read.
+ */
+export function isSessionUnreadAckOnlyPatch(patch: { unread?: boolean }): boolean {
+  return (
+    patch.unread === false &&
+    Object.entries(patch).every(
+      ([key, value]) => value === undefined || CONDITIONAL_UNREAD_ACK_ALLOWED_KEYS.has(key),
+    )
   );
 }
 
@@ -36,7 +44,7 @@ export function validateSessionUnreadAck(
   if (target.expectedMarkedUnreadAt === undefined) {
     return undefined;
   }
-  if (patch.unread === false && !hasOtherMutation(patch)) {
+  if (isSessionUnreadAckOnlyPatch(patch)) {
     return undefined;
   }
   return "expectedMarkedUnreadAt requires unread=false as the only mutation.";
@@ -47,7 +55,7 @@ export function resolveSessionUnreadAck(
   patch: Pick<SessionsPatchParams, "expectedMarkedUnreadAt" | "unread">,
 ): { kind: "apply" | "missing" } | { kind: "stale"; entry: SessionEntry } {
   const { expectedMarkedUnreadAt } = patch;
-  if (patch.unread !== false || hasOtherMutation(patch) || expectedMarkedUnreadAt === undefined) {
+  if (!isSessionUnreadAckOnlyPatch(patch) || expectedMarkedUnreadAt === undefined) {
     return { kind: "apply" };
   }
   if (!entry) {

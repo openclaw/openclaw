@@ -2,6 +2,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -13,8 +14,8 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "./manifest.js";
 import {
-  resolveTrustedSourceLinkedOfficialClawHubSpec,
-  resolveTrustedSourceLinkedOfficialNpmSpec,
+  resolveTrustedSourceLinkedOfficialClawHubInstall,
+  resolveTrustedSourceLinkedOfficialNpmInstall,
 } from "./official-external-install-records.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
 import {
@@ -77,10 +78,10 @@ export async function collectMissingPluginInstallPayloads(params: {
       continue;
     }
     const officialNpmSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId, record })
+      ? resolveTrustedSourceLinkedOfficialNpmInstall({ pluginId, record })?.npmSpec
       : undefined;
     const officialClawHubSpec = params.syncOfficialPluginInstalls
-      ? resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId, record })
+      ? resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record })?.clawhubSpec
       : undefined;
     if (normalizedPluginConfig && params.config) {
       const enableState = resolveEffectiveEnableState({
@@ -111,7 +112,6 @@ export async function collectMissingPluginInstallPayloads(params: {
       const bundleFailure = validateBundleInstallRecordPayload({
         pluginId,
         installPath,
-        record,
         bundleFormat: bundlePayload.bundleFormat,
       });
       if (bundleFailure) {
@@ -126,18 +126,7 @@ export async function collectMissingPluginInstallPayloads(params: {
   return missing;
 }
 
-/**
- * Verify that each tracked plugin install record on disk is structurally
- * loadable: code packages contain a parseable `package.json` and declared
- * package entry files, while bundle packages satisfy their bundle manifest
- * contract.
- *
- * IMPORTANT: this is intentionally a *static* check. We do NOT execute the
- * plugin's code, so post-update side effects (network calls, filesystem
- * writes, registry registration) cannot fire while the gateway is still
- * stopped. The goal is to catch obvious payload corruption — missing files,
- * unparseable manifests — before we hand control back to the restart path.
- */
+/** Check package entries and bundle manifests without executing plugins before Gateway restart. */
 export async function runPluginPayloadSmokeCheck(params: {
   records: Record<string, PluginInstallRecord>;
   env: NodeJS.ProcessEnv;
@@ -152,9 +141,9 @@ export async function runPluginPayloadSmokeCheck(params: {
     if (!record || typeof record !== "object" || !TRACKED_SOURCES.has(record.source)) {
       continue;
     }
-    const rawInstallPath = typeof record.installPath === "string" ? record.installPath.trim() : "";
+    const rawInstallPath = normalizeOptionalString(record.installPath);
+    checked.push(pluginId);
     if (!rawInstallPath) {
-      checked.push(pluginId);
       failures.push({
         pluginId,
         reason: "missing-install-path",
@@ -163,7 +152,6 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
     const installPath = resolveUserPath(rawInstallPath, params.env);
-    checked.push(pluginId);
 
     const dirStat = await safeStat(installPath);
     if (!dirStat?.isDirectory()) {
@@ -201,7 +189,6 @@ export async function runPluginPayloadSmokeCheck(params: {
     const bundleFailure = validateBundleInstallRecordPayload({
       pluginId,
       installPath,
-      record,
       bundleFormat: bundlePayload.bundleFormat,
     });
     if (bundleFailure) {
@@ -235,7 +222,7 @@ export async function runPluginPayloadSmokeCheckForManifestRecords(params: {
   });
 }
 
-type PackagePayloadManifest = PackageManifest & { main?: unknown; exports?: unknown };
+type PackagePayloadManifest = PackageManifest & { main?: unknown };
 
 type PackagePayloadManifestReadResult =
   | { status: "missing" }
@@ -258,10 +245,13 @@ async function readPackagePayloadManifest(
     return { status: "unreadable", error: err instanceof Error ? err.message : String(err) };
   }
   try {
+    const manifest: unknown = JSON.parse(packageJson);
+    if (!isRecord(manifest)) {
+      return { status: "invalid", error: "package.json must be an object" };
+    }
     return {
       status: "present",
-      // SAFETY: Package manifest consumers below validate every field they read from parsed JSON.
-      manifest: JSON.parse(packageJson) as PackagePayloadManifest,
+      manifest,
     };
   } catch (err) {
     return { status: "invalid", error: err instanceof Error ? err.message : String(err) };
@@ -354,7 +344,8 @@ async function validatePackagePayload(params: {
       }`,
     });
     return failures;
-  } else if (extensionResolution.status === "ok") {
+  }
+  if (extensionResolution.status === "ok") {
     const extensionValidation = await validatePackageExtensionEntriesForInstall({
       packageDir: params.installPath,
       extensions: extensionResolution.entries,
@@ -418,18 +409,9 @@ function resolveBundleInstallRecordPayload(params: {
 function validateBundleInstallRecordPayload(params: {
   pluginId: string;
   installPath: string;
-  record: PluginInstallRecord;
-  bundleFormat?: PluginBundleFormat | null;
+  bundleFormat: PluginBundleFormat | null;
 }): PluginPayloadSmokeFailure | null {
-  const hasBundleRecordMetadata = isBundleInstallRecord(params.record);
-  const bundleFormat =
-    params.bundleFormat === undefined
-      ? detectBundleManifestFormat(params.installPath)
-      : params.bundleFormat;
-  if (!hasBundleRecordMetadata && !bundleFormat) {
-    return null;
-  }
-  if (!bundleFormat) {
+  if (!params.bundleFormat) {
     return {
       pluginId: params.pluginId,
       installPath: params.installPath,
@@ -439,7 +421,7 @@ function validateBundleInstallRecordPayload(params: {
   }
   const bundleManifest = loadBundleManifest({
     rootDir: params.installPath,
-    bundleFormat,
+    bundleFormat: params.bundleFormat,
   });
   if (bundleManifest.ok) {
     return null;
@@ -455,9 +437,5 @@ function validateBundleInstallRecordPayload(params: {
 }
 
 async function safeStat(target: string): Promise<import("node:fs").Stats | null> {
-  try {
-    return await fs.stat(target);
-  } catch {
-    return null;
-  }
+  return await fs.stat(target).catch(() => null);
 }

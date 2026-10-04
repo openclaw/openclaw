@@ -4,6 +4,7 @@ import { closedObject } from "./closed-object.js";
 import { ChatAccountSelectionSchema, ModelAuthProfileIdSchema } from "./model-account-selection.js";
 import {
   GatewayAgentRuntimeSchema,
+  GatewayCompletionRouteSchema,
   GatewayContextWindowOptionSchema,
   GatewayThinkingLevelOptionSchema,
 } from "./model-runtime-options.js";
@@ -68,7 +69,11 @@ const ModelRuntimeProperties = {
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevels: Type.Optional(Type.Array(GatewayThinkingLevelOptionSchema)),
   thinkingDefault: Type.Optional(NonEmptyString),
-  effectiveFastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto")])),
+  effectiveFastMode: Type.Optional(
+    Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Literal("ultrafast")]),
+  ),
+  /** Account-scoped service tiers advertised for this selected runtime. Missing means unknown. */
+  serviceTiers: Type.Optional(Type.Array(NonEmptyString)),
   /** Local selected-request applicability, not preference or upstream fulfillment. */
   supportsFastMode: Type.Optional(Type.Boolean()),
   supportsTools: Type.Optional(Type.Boolean()),
@@ -171,6 +176,8 @@ export const ModelsListResultSchema = closedObject({
     closedObject({
       /** Auto preview from agents.defaults.model, even when utility routing is explicit or disabled. */
       automaticUtilityModel: Type.Union([NonEmptyString, Type.Null()]),
+      /** Route the utility model in effect (automatic or explicit) runs on; absent when disabled. */
+      utilityRuntime: Type.Optional(GatewayCompletionRouteSchema),
     }),
   ),
   refreshFailed: Type.Optional(Type.Boolean()),

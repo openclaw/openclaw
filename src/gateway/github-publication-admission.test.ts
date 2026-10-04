@@ -85,6 +85,22 @@ describe("GitHub publication selection admission", () => {
   installGitHubPublicationTestHarness();
   afterEach(() => vi.unstubAllGlobals());
 
+  it("rejects publisher revocation during the final worktree read before claim admission", async () => {
+    const fixture = await sharedAdmission("claim");
+    const identity = await mocks.prepareIdentity();
+    const findWorktree = mocks.findWorktree.getMockImplementation()!;
+    mocks.prepareIdentity.mockImplementationOnce(async () => {
+      mocks.findWorktree.mockImplementationOnce((...args) => {
+        mocks.matchesIdentity.mockReturnValue(false);
+        return findWorktree(...args);
+      });
+      return identity;
+    });
+    await expect(fixture.request(publisher)).rejects.toThrow("GitHub publication identity changed");
+    expect(fixture.read()).toBeUndefined();
+    expect(commands).toEqual([]);
+  });
+
   it.each([
     ...[
       { sessionKey: "agent:main:main", agentId: "research" },
@@ -336,7 +352,12 @@ describe("GitHub publication selection admission", () => {
     });
     expect(row).toMatchObject({ status: "requested", execution_id: null });
     expect(
-      fixture.coordinator.personalStatus(fixture.action, fixture.action, row!.request_id),
+      fixture.coordinator.personalStatus(
+        fixture.action,
+        fixture.action,
+        row!.request_id,
+        undefined,
+      ),
     ).toMatchObject({
       result: { status: "failed", code: "identity_changed" },
       confirmation: null,

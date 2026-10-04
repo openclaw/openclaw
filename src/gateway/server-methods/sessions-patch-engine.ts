@@ -14,6 +14,7 @@ import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lif
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { recordSessionStatusModelPatchOutcome } from "../session-model-patch-origin.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
@@ -24,7 +25,6 @@ import {
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
-import { resolveOperatorSessionCreation } from "./session-creation-provenance.js";
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
@@ -57,7 +57,11 @@ import type {
   PreparedPatchTarget,
 } from "./sessions-patch-types.js";
 import { resolveSessionWorkerPlacementPatchError } from "./sessions-shared.js";
-import type { GatewayClient, GatewayRequestContext } from "./types.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  SessionMutationAuthorization,
+} from "./types.js";
 import { preparePersonalModelSelection } from "./users-model-account-access.js";
 
 type PatchTargetIdentity = sessionUnreadAck.SessionPatchTargetIdentity;
@@ -70,6 +74,7 @@ export async function executeSessionPatchMutations(params: {
   context: GatewayRequestContext;
   diagnostics?: SessionPatchDiagnostics;
   operatorAuthority?: Promise<{ authority: AdmittedRunOperatorAuthority } | undefined>;
+  onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
 }): Promise<MutationCoreResult> {
@@ -205,9 +210,6 @@ export async function executeSessionPatchMutations(params: {
       outcomes[index] = invalidSessionRequest(initialPlacementPatchError);
       continue;
     }
-    const lifecycleIdentities = Array.from(
-      new Set([key, canonicalKey, ...candidateKeys, initialEntry?.sessionId]),
-    );
     const preparedTarget: PreparedPatchTarget = {
       archiveActor,
       canonicalKey,
@@ -216,7 +218,7 @@ export async function executeSessionPatchMutations(params: {
       ...(initialEntry ? { initialEntry } : {}),
       initialStoreKeys: [...candidateKeys],
       key,
-      lifecycleIdentities,
+      lifecycleIdentities: [key, canonicalKey, ...candidateKeys, initialEntry?.sessionId],
       ...(requestedAgentId ? { requestedAgentId } : {}),
       storePath: resolved.storePath,
       targetAgentId: resolved.agentId,
@@ -286,7 +288,9 @@ export async function executeSessionPatchMutations(params: {
           }),
       );
       timing?.mark("lifecycleAdmission");
-      await runExclusiveSessionLifecycleMutation({
+      const archived = params.patch.archived;
+      const operation = archived === undefined ? "patch" : archived ? "archive" : "restore";
+      await runExclusiveSessionLifecycleMutation(operation, {
         targets: activePrepared.map((target) => ({
           scope: target.storePath,
           identities: target.lifecycleIdentities,
@@ -324,6 +328,9 @@ export async function executeSessionPatchMutations(params: {
                     ...target.initialStoreKeys,
                   ]);
                   const archiveTransitions = new Map<number, ArchiveTransition>();
+                  const createdSessions: Parameters<
+                    NonNullable<SessionMutationAuthorization["recordCreatedSession"]>
+                  >[0][] = [];
                   const commitGuards = new Set<() => ErrorShape | undefined>();
                   const originalGuards = group.map(({ index }) =>
                     expectDefined(originalCommitGuards[index], "original patch guard"),
@@ -342,6 +349,7 @@ export async function executeSessionPatchMutations(params: {
                     admission: "admitted" | "detached",
                     catalogPreparation?: SessionPatchCatalogResult,
                   ): Promise<GroupMutationOperation> => {
+                    createdSessions.length = 0;
                     const workingStore = Object.fromEntries(
                       entries.flatMap(({ entry, sessionKey }) =>
                         isInternalSessionEffectsKey(sessionKey)
@@ -586,6 +594,15 @@ export async function executeSessionPatchMutations(params: {
                         });
                         if (replacement.replacement) {
                           replacements.push(replacement.replacement);
+                          if (!existingEntry && params.onCreatedSessionCommitted) {
+                            createdSessions.push({
+                              agentId: target.targetAgentId,
+                              sessionKey: primaryKey,
+                              storePath: target.storePath,
+                              sessionId: replacement.outcome.entry.sessionId,
+                              lifecycleRevision: replacement.outcome.entry.lifecycleRevision,
+                            });
+                          }
                         }
                         projectedOutcomes.push(replacement.outcome);
                       } catch (error) {
@@ -602,6 +619,11 @@ export async function executeSessionPatchMutations(params: {
                   };
                   const groupStore = {
                     ...(storage ? { env: storage.env, retainedExecution: storage.execution } : {}),
+                    onLifecycleCommitted: () => {
+                      for (const created of createdSessions) {
+                        params.onCreatedSessionCommitted?.(created);
+                      }
+                    },
                     afterCommitted: patchEffects.createSessionPatchCategoryRegistration(params),
                     assertCommitAllowed,
                     agentId: first.targetAgentId,

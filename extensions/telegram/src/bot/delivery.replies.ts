@@ -83,10 +83,6 @@ type TelegramReplyChannelData = {
 
 type ChunkTextFn = (text: string) => TelegramTextDeliveryPage[];
 
-function markDelivered(progress: DeliveryProgress): void {
-  progress.deliveredCount += 1;
-}
-
 function resolveReplyToForSend(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
@@ -189,7 +185,7 @@ async function deliverTextReply(params: TextReplyParams): Promise<number | undef
             params.progress,
             suppressReply && first ? params.replyToId : replyToMessageId,
           );
-          markDelivered(params.progress);
+          params.progress.deliveredCount += 1;
         },
       };
     },
@@ -265,7 +261,7 @@ async function deliverMediaReply(
       message,
       ...(plainText ? { text: plainText } : {}),
     });
-    markDelivered(params.progress);
+    params.progress.deliveredCount += 1;
   };
   const deliverAcceptedMedia = async (options: {
     sender: TelegramOutboundMediaSender;
@@ -431,7 +427,7 @@ async function deliverMediaReply(
           firstDeliveredMessageId ??= fallbackMessageId;
           visibleFallbackText = fallbackText;
           markReplyApplied(params.progress, voiceFallbackReplyTo);
-          markDelivered(params.progress);
+          params.progress.deliveredCount += 1;
           return;
         }
         if (isTelegramCaptionTooLongError(voiceErr)) {
@@ -519,7 +515,6 @@ async function maybePinFirstDeliveredMessage(params: {
   pin: ReplyPayloadDelivery["pin"];
   bot: Bot;
   chatId: string;
-  runtime: RuntimeEnv;
   firstDeliveredMessageId?: number;
 }): Promise<void> {
   const shouldPin = params.pin === true || (typeof params.pin === "object" && params.pin.enabled);
@@ -620,16 +615,11 @@ async function deliverReplyPlan(
     deliveredCount: 0,
     ...(params.promptContextSequence ? { promptContext: params.promptContextSequence } : {}),
   };
-  const recordMessageId = async (messageId: number) => {
-    if (params.accountId || params.ownerAgentId) {
-      await recordSentMessage(params.chatId, messageId, params.cfg, {
-        accountId: params.accountId,
-        agentId: params.ownerAgentId,
-      });
-      return;
-    }
-    await recordSentMessage(params.chatId, messageId, params.cfg);
-  };
+  const recordMessageId = (messageId: number) =>
+    recordSentMessage(params.chatId, messageId, params.cfg, {
+      accountId: params.accountId,
+      agentId: params.ownerAgentId,
+    });
   const mediaLoader = params.mediaLoader ?? loadWebMedia;
   const transcriptMirror = params.transcriptMirror;
   const deliveredContents: Array<{ text: string; mediaUrls: string[] }> = [];
@@ -780,6 +770,13 @@ async function deliverReplyPlan(
 
     let contentForSentHook =
       reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
+    const sentHookContext = {
+      sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+      chatId: params.chatId,
+      accountId: params.accountId,
+      isGroup: params.mirrorIsGroup,
+      groupId: params.mirrorGroupId,
+    };
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -803,7 +800,7 @@ async function deliverReplyPlan(
           verbose: false,
         });
         if (reactionResult.ok) {
-          markDelivered(progress);
+          progress.deliveredCount += 1;
         } else {
           params.runtime.error?.(danger(reactionResult.warning));
           continue;
@@ -854,7 +851,6 @@ async function deliverReplyPlan(
         pin: reply.delivery?.pin,
         bot: params.bot,
         chatId: params.chatId,
-        runtime: params.runtime,
         firstDeliveredMessageId,
       });
 
@@ -863,25 +859,17 @@ async function deliverReplyPlan(
       }
 
       emitTelegramMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        chatId: params.chatId,
-        accountId: params.accountId,
+        ...sentHookContext,
         content: contentForSentHook,
         success: progress.deliveredCount > deliveredCountBeforeReply,
         messageId: firstDeliveredMessageId,
-        isGroup: params.mirrorIsGroup,
-        groupId: params.mirrorGroupId,
       });
     } catch (error) {
       emitTelegramMessageSentHooks({
-        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
-        chatId: params.chatId,
-        accountId: params.accountId,
+        ...sentHookContext,
         content: contentForSentHook,
         success: false,
         error: formatErrorMessage(error),
-        isGroup: params.mirrorIsGroup,
-        groupId: params.mirrorGroupId,
       });
       sender.fail(
         error,

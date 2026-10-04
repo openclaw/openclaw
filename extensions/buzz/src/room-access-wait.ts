@@ -1,4 +1,5 @@
-import type { Event, Relay } from "nostr-tools";
+import type { Event } from "nostr-tools";
+import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
 import { openBuzzRelaySubscription } from "./relay-subscription.js";
 import { discoverBuzzRoomsOnRelay, type BuzzDiscoveredRoom } from "./room-discovery.js";
@@ -25,29 +26,14 @@ async function sleepWithSignal(delayMs: number, signal: AbortSignal): Promise<vo
     signal.throwIfAborted();
     return;
   }
-  await new Promise<void>((resolve, reject) => {
-    const finish = (error?: unknown) => {
-      clearTimeout(timer);
-      signal.removeEventListener("abort", onAbort);
-      if (error !== undefined) {
-        reject(
-          error instanceof Error
-            ? error
-            : new Error("Buzz room access wait failed", { cause: error }),
-        );
-      } else {
-        resolve();
-      }
-    };
-    const onAbort = () => {
-      finish(signal.reason ?? new Error("Buzz room access wait aborted"));
-    };
-    const timer = setTimeout(() => finish(), delayMs);
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
-    }
-  });
+  try {
+    await sleepWithAbort(delayMs, signal);
+  } catch {
+    const error = signal.reason ?? new Error("Buzz room access wait aborted");
+    throw error instanceof Error
+      ? error
+      : new Error("Buzz room access wait failed", { cause: error });
+  }
 }
 
 export async function waitForBuzzRoomAccess(params: {
@@ -73,7 +59,6 @@ export async function waitForBuzzRoomAccess(params: {
       let settled = false;
       let checking = false;
       let queuedRetry = false;
-      const subscriptionRef: { current?: ReturnType<Relay["prepareSubscription"]> } = {};
       let pollTimer: ReturnType<typeof setInterval> | undefined;
       const seenEvents = new Set<string>();
 
@@ -143,7 +128,7 @@ export async function waitForBuzzRoomAccess(params: {
       };
 
       signal.addEventListener("abort", onAbort, { once: true });
-      subscriptionRef.current = openBuzzRelaySubscription(
+      openBuzzRelaySubscription(
         relay,
         [
           {

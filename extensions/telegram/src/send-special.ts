@@ -171,7 +171,6 @@ export async function sendPollTelegram(
         })
       : undefined;
     let registeredEntry: Awaited<ReturnType<typeof recordTelegramPollRegistryEntry>> | null = null;
-    let pollAnswerRouting: TelegramPollSendResult["pollAnswerRouting"];
     let warning: string | undefined;
     try {
       const finalized = await finalizeTelegramOutbound({
@@ -184,7 +183,6 @@ export async function sendPollTelegram(
       // the central send boundary so every caller gets the same inbound route.
       // The poll already exists, so surface storage failure instead of retrying and duplicating it.
       if (pollId && opts.isAnonymous !== false) {
-        pollAnswerRouting = "unavailable";
         warning =
           "Poll sent anonymously, so Telegram does not identify voters and answers cannot reach the agent. Send a public poll to route votes into this conversation.";
       } else if (pollId) {
@@ -192,7 +190,6 @@ export async function sendPollTelegram(
         const botUserId = resolveTelegramBotUserIdFromToken(opts.token || context.account.token);
         let canVerifyVoters = result.chat.type === "private";
         if (result.chat.type === "channel") {
-          pollAnswerRouting = "unavailable";
           warning =
             "Poll sent, but public poll answer routing is not supported for Telegram channels. Send the poll in a direct chat or group, or ask subscribers to reply in text.";
         } else if (isGroup) {
@@ -213,11 +210,9 @@ export async function sendPollTelegram(
               topicConfig,
             }) === "disabled";
           if (groupIngressDisabled) {
-            pollAnswerRouting = "unavailable";
             warning =
               "Poll sent, but answers cannot reach the agent because inbound messages are disabled for this group or topic. Enable inbound messages for this target and send a new poll, or ask participants to reply in text.";
           } else if (botUserId == null) {
-            pollAnswerRouting = "unavailable";
             warning =
               "Poll sent, but answers cannot reach the agent because the bot account could not be verified. Check the bot token and send a new poll, or ask the user to reply in text.";
           } else {
@@ -226,12 +221,10 @@ export async function sendPollTelegram(
               canVerifyVoters =
                 botMember.status === "creator" || botMember.status === "administrator";
               if (!canVerifyVoters) {
-                pollAnswerRouting = "unavailable";
                 warning =
                   "Poll sent, but answers cannot reach the agent because the bot is not an administrator in this group. Make the bot an administrator and send a new poll, or ask the user to reply in text.";
               }
             } catch (err) {
-              pollAnswerRouting = "unavailable";
               warning =
                 "Poll sent, but answers cannot reach the agent because group membership verification failed. Make the bot an administrator and send a new poll, or ask the user to reply in text.";
               logVerbose(
@@ -248,9 +241,7 @@ export async function sendPollTelegram(
               accountId: context.account.accountId,
               ...provisionalEntry,
             });
-            pollAnswerRouting = "enabled";
           } catch (err) {
-            pollAnswerRouting = "unavailable";
             warning =
               "Poll sent, but answers cannot reach the agent because routing state could not be saved. Ask the user to reply in text.";
             logVerbose(
@@ -264,7 +255,11 @@ export async function sendPollTelegram(
       return {
         ...finalized,
         pollId,
-        ...(pollAnswerRouting ? { pollAnswerRouting } : {}),
+        ...(warning
+          ? { pollAnswerRouting: "unavailable" as const }
+          : registeredEntry
+            ? { pollAnswerRouting: "enabled" as const }
+            : {}),
         ...(warning ? { warning } : {}),
       };
     } finally {

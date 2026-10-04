@@ -11,14 +11,6 @@ interface ImageBytes {
   mimeType: string;
 }
 
-interface ResizedImage extends ImageBytes {
-  originalWidth: number;
-  originalHeight: number;
-  width: number;
-  height: number;
-  wasResized: boolean;
-}
-
 type ProcessImageResult =
   | { ok: true; image: ImageContent; hints: string[] }
   | { ok: false; message: string };
@@ -74,11 +66,10 @@ export async function processImage(
         message: "[Image omitted: could not be resized below the inline image size limit.]",
       };
     }
-    const dimensionNote = formatDimensionNote(resized);
-    if (dimensionNote) {
-      hints.push(dimensionNote);
+    if (resized.hint) {
+      hints.push(resized.hint);
     }
-    prepared = resized;
+    prepared = resized.image;
   }
   return {
     ok: true,
@@ -99,20 +90,8 @@ function orientedDimensions(probe: ImageProbe): { width: number; height: number 
     : { width: probe.width, height: probe.height };
 }
 
-/**
- * Resize an image to fit within the inline dimensions and base64 payload limit.
- * Returns null if Rastermill cannot produce output within those limits.
- *
- * Uses Rastermill for image processing. If no Rastermill backend is available,
- * returns null.
- *
- * Strategy for staying under the inline limits:
- * 1. First resize to the maximum dimensions
- * 2. Let Rastermill choose JPEG or PNG for the image transparency profile
- * 3. If still too large, search decreasing quality/compression settings
- * 4. If still too large, progressively reduce dimensions
- */
-async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
+/** Returns null when the image processor cannot meet the inline dimensions and payload limit. */
+async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?: string } | null> {
   const inputBuffer = img.data;
   const inputBase64Size = 4 * Math.ceil(inputBuffer.byteLength / 3);
   const processor = createImageProcessor();
@@ -124,21 +103,12 @@ async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
     }
     const { width: originalWidth, height: originalHeight } = orientedDimensions(probe);
 
-    // Check if already within all limits (dimensions AND encoded size)
     if (
       originalWidth <= MAX_IMAGE_WIDTH &&
       originalHeight <= MAX_IMAGE_HEIGHT &&
       inputBase64Size <= MAX_IMAGE_BASE64_BYTES
     ) {
-      return {
-        data: img.data,
-        mimeType: img.mimeType,
-        originalWidth,
-        originalHeight,
-        width: originalWidth,
-        height: originalHeight,
-        wasResized: false,
-      };
+      return { image: img };
     }
 
     const qualitySteps = [JPEG_QUALITY, 85, 70, 55, 40, 35];
@@ -161,28 +131,12 @@ async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
     }
 
     return {
-      data: output.data,
-      mimeType: output.mimeType,
-      originalWidth,
-      originalHeight,
-      width: output.width,
-      height: output.height,
-      wasResized: output.resized,
+      image: output,
+      hint: output.resized
+        ? `[Image: original ${originalWidth}x${originalHeight}, displayed at ${output.width}x${output.height}. Multiply coordinates by ${(originalWidth / output.width).toFixed(2)} to map to original image.]`
+        : undefined,
     };
   } catch {
     return null;
   }
-}
-
-/**
- * Format a dimension note for resized images.
- * This helps the model understand the coordinate mapping.
- */
-function formatDimensionNote(result: ResizedImage): string | undefined {
-  if (!result.wasResized) {
-    return undefined;
-  }
-
-  const scale = result.originalWidth / result.width;
-  return `[Image: original ${result.originalWidth}x${result.originalHeight}, displayed at ${result.width}x${result.height}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`;
 }

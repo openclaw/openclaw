@@ -186,7 +186,7 @@ describe("local onboarding state", () => {
       await state.writeConfig({
         agents: {
           defaults: { workspace: state.workspaceDir },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
       });
@@ -223,7 +223,7 @@ describe("local onboarding state", () => {
       await state.writeConfig({
         agents: {
           defaults: { workspace: state.workspaceDir },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
       });
@@ -281,7 +281,7 @@ describe("local onboarding state", () => {
       await state.writeConfig({
         agents: {
           defaults: { workspace: state.workspaceDir },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
         wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
       });

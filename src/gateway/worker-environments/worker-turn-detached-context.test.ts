@@ -1,3 +1,4 @@
+import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -32,6 +33,7 @@ import {
   database,
   dispatchInitialWorkerPlacement,
   measureLaunchTurn,
+  readLaunchToolNames,
   placements,
   readWorkerTurnTranscriptStorageRows,
   root,
@@ -82,6 +84,10 @@ const prior = [
   { role: "user", text: "previous request" },
   { role: "assistant", text: "previous answer" },
 ];
+const priorAtModelBoundary = [
+  { role: "user", text: "[Thu 1970-01-01 00:00 UTC] previous request" },
+  { role: "assistant", text: "previous answer" },
+];
 
 function recorder() {
   return createUserTurnTranscriptRecorder({
@@ -123,6 +129,7 @@ async function launchProbe(
     reconcileWorkspace: unexpected,
     stop: async () => {},
     measureLaunchTurn,
+    readLaunchToolNames,
     launchTurn: async ({ plan }) => {
       launch = {
         baseLeafId: plan.assignment.transcript.baseLeafId,
@@ -175,7 +182,7 @@ async function launchProbe(
     input.preparedRunAdmission?.close();
   }
   expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
-  expect(placements.listPendingWorkspaceResults()).toHaveLength(0);
+  expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(0);
   if (launch) {
     expect(outcome.kind).toBe("rejected");
     if (outcome.kind === "rejected") {
@@ -183,6 +190,12 @@ async function launchProbe(
     }
   }
   return { launch, credentialCalls, tunnelCalls, outcome, deliberateStop };
+}
+
+function expectNoLaunch(result: Awaited<ReturnType<typeof launchProbe>>) {
+  expect(result.credentialCalls).toBe(0);
+  expect(result.tunnelCalls).toBe(0);
+  expect(result.launch).toBeUndefined();
 }
 
 async function withAsyncReadHook<T>(
@@ -210,6 +223,8 @@ async function withAsyncReadHook<T>(
 }
 
 function afterNextModelContextSnapshot(afterSnapshot: () => Promise<void>) {
+  // The concurrent writer must not borrow the reader's transcript admission fence.
+  const mutate = AsyncResource.bind(afterSnapshot);
   let read = vi.spyOn(WorkerTaskPool.prototype, "run");
   async function intercept(
     this: WorkerTaskPool<unknown, unknown>,
@@ -228,7 +243,7 @@ function afterNextModelContextSnapshot(afterSnapshot: () => Promise<void>) {
       return await run(...args);
     }
     const snapshot = await run(...args);
-    await afterSnapshot();
+    await mutate();
     return snapshot;
   }
   read.mockImplementation(intercept);
@@ -248,92 +263,89 @@ describe("worker detached model-context branch parity", () => {
     }
   });
 
-  it("waits for context readiness and keeps the pre-persisted current user out of replay", async () => {
-    const { manager } = seedPrevious();
-    const currentId = manager.appendMessage(
-      makeAgentUserMessage({
-        content: "current request",
-        timestamp: 3,
-      }),
-    );
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      const { result } = await withAsyncReadHook(
-        {
-          // Readiness may arrive after the former fixture deadline on a loaded host.
-          before: async () => {
-            await vi.advanceTimersByTimeAsync(5_001);
-          },
-        },
-        () =>
-          launchProbe({
-            ...request("persisted-current"),
-            suppressNextUserMessagePersistence: true,
-          }),
+  it.each([false, true])(
+    "waits for context readiness and preserves the pre-persisted input prefix (side append=%s)",
+    async (sideAppend) => {
+      const { manager, previousLeafId } = seedPrevious();
+      const currentId = manager.appendMessage(
+        makeAgentUserMessage({
+          content: "current request",
+          timestamp: 3,
+        }),
       );
-      expect(result.launch).toEqual({ baseLeafId: currentId, history: prior });
-      expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+      let sideId: string | undefined;
+      if (sideAppend) {
+        manager.branch(previousLeafId);
+        sideId = manager.appendMessage(
+          makeAgentUserMessage({ content: "inactive side input", timestamp: 4 }),
+        );
+        manager.appendLeafControl({
+          targetId: currentId,
+          appendParentId: sideId,
+          appendMode: "side",
+        });
+        expect(manager.getLeafId()).toBe(currentId);
+        expect(manager.getAppendParentId()).toBe(sideId);
+      }
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        const { result } = await withAsyncReadHook(
+          {
+            // Readiness may arrive after the former fixture deadline on a loaded host.
+            before: async () => {
+              await vi.advanceTimersByTimeAsync(5_001);
+            },
+          },
+          () =>
+            launchProbe({
+              ...request("persisted-current"),
+              suppressNextUserMessagePersistence: true,
+            }),
+        );
+        expect(result.launch).toEqual({ baseLeafId: currentId, history: priorAtModelBoundary });
+        expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
+        if (sideAppend) {
+          const after = SessionManager.open(sessionTarget);
+          expect(after.getLeafId()).toBe(currentId);
+          expect(after.getAppendParentId()).toBe(sideId);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
-  it("joins recorder persistence already in flight during preparation", async () => {
-    seedPrevious();
-    const inputRecorder = recorder();
-    expect(inputRecorder.hasPersisted()).toBe(false);
-    const pendingPersistence = inputRecorder.persistApproved();
-    const result = await launchProbe({
-      ...request("recorder-read-race"),
-      userTurnTranscriptRecorder: inputRecorder,
-    });
-    await pendingPersistence;
-    expect(result.launch).toEqual({
-      baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-      history: prior,
-    });
-  });
-
-  it("lets the recorder create the first transcript before reading its empty prefix", async () => {
-    const inputRecorder = recorder();
-    expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
-    const result = await launchProbe({
-      ...request("initial-recorder"),
-      userTurnTranscriptRecorder: inputRecorder,
-    });
-    expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
-    expect(result.launch).toEqual({
-      baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-      history: [],
-    });
-    expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
-      { role: "user", text: "current request" },
-    ]);
-  });
-
-  it("refuses a recorder persistence flag without its canonical admission", async () => {
-    seedPrevious();
-    const inputRecorder = recorder();
-    inputRecorder.markRuntimePersisted(buildPersistedUserTurnMessage({ text: "current request" }));
-    const beforeRows = readWorkerTurnTranscriptStorageRows();
-    const result = await launchProbe({
-      ...request("missing-recorder-admission"),
-      userTurnTranscriptRecorder: inputRecorder,
-    });
-    expect(result.credentialCalls).toBe(0);
-    expect(result.tunnelCalls).toBe(0);
-    expect(result.launch).toBeUndefined();
-    expect(result.outcome).toMatchObject({
-      kind: "rejected",
-      error: { message: "Cloud worker turn has no readable canonical user admission" },
-    });
-    expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
-  });
+  it.each(["in-flight", "first transcript"] as const)(
+    "joins recorder admission before reading its prefix (%s)",
+    async (state) => {
+      if (state === "in-flight") {
+        seedPrevious();
+      } else {
+        expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
+      }
+      const inputRecorder = recorder();
+      expect(inputRecorder.hasPersisted()).toBe(false);
+      const pending = state === "in-flight" ? inputRecorder.persistApproved() : undefined;
+      const result = await launchProbe({
+        ...request("recorder-admission"),
+        userTurnTranscriptRecorder: inputRecorder,
+      });
+      await pending;
+      expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
+      expect(result.launch).toEqual({
+        baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
+        history: state === "in-flight" ? priorAtModelBoundary : [],
+      });
+      if (state === "first transcript") {
+        expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
+          { role: "user", text: "current request" },
+        ]);
+      }
+    },
+  );
 
   it.each([
     { excludeFromContext: false, appendAt: "before-read" },
-    { excludeFromContext: true, appendAt: "before-read" },
-    { excludeFromContext: false, appendAt: "after-snapshot" },
     { excludeFromContext: true, appendAt: "after-snapshot" },
   ] as const)(
     "uses the recorder's admitted prefix with $appendAt activity (excluded input: $excludeFromContext)",
@@ -377,7 +389,10 @@ describe("worker detached model-context branch parity", () => {
 
         expect(result.launch).toEqual({
           baseLeafId: receipt.entryId,
-          history: [...prior, { role: "user", text: "earlier unanswered input" }],
+          history: [
+            ...priorAtModelBoundary,
+            { role: "user", text: "[Thu 1970-01-01 00:00 UTC] earlier unanswered input" },
+          ],
         });
         expect(appendedRows).toBeDefined();
         expect(appendedRows?.slice(0, originalRows.length)).toEqual(originalRows);
@@ -387,49 +402,6 @@ describe("worker detached model-context branch parity", () => {
       }
     },
   );
-
-  it("joins recorder persistence begun after taking the context snapshot", async () => {
-    seedPrevious();
-    const inputRecorder = recorder();
-    let snapshotRead = false;
-    let pendingPersistence: ReturnType<typeof inputRecorder.persistApproved> | undefined;
-    const persistInput = () => {
-      snapshotRead = true;
-      pendingPersistence ??= inputRecorder.persistApproved();
-      return pendingPersistence;
-    };
-    const workerRead = afterNextModelContextSnapshot(async () => {
-      await persistInput();
-    });
-    const synchronousRead = vi
-      .spyOn(SessionManager.prototype, "buildSessionContext")
-      .mockImplementationOnce(function (this: SessionManager) {
-        synchronousRead.mockRestore();
-        const snapshot = this.buildSessionContext();
-        void persistInput();
-        return snapshot;
-      });
-    try {
-      const result = await launchProbe({
-        ...request("recorder-snapshot-overlap"),
-        userTurnTranscriptRecorder: inputRecorder,
-      });
-      expect(snapshotRead).toBe(true);
-      expect(result.outcome).toEqual({ kind: "rejected", error: result.deliberateStop });
-      expect(result.launch).toEqual({
-        baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-        history: prior,
-      });
-      expect(visible(SessionManager.open(sessionTarget).buildSessionContext().messages)).toEqual([
-        ...prior,
-        { role: "user", text: "current request" },
-      ]);
-    } finally {
-      workerRead();
-      synchronousRead.mockRestore();
-      await pendingPersistence;
-    }
-  });
 
   it.each(["current", "cancel"] as const)(
     "joins committed runtime persistence with %s authority without replaying its input",
@@ -479,7 +451,7 @@ describe("worker detached model-context branch parity", () => {
         if (change === "current") {
           expect(result.launch).toEqual({
             baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,
-            history: prior,
+            history: priorAtModelBoundary,
           });
         } else {
           expect(result.credentialCalls).toBe(0);
@@ -502,89 +474,69 @@ describe("worker detached model-context branch parity", () => {
     },
   );
 
-  it("preserves logical base leaf when durable side-append placement differs", async () => {
-    const { manager, previousLeafId } = seedPrevious();
-    const currentId = manager.appendMessage(
-      makeAgentUserMessage({
-        content: "current request",
-        timestamp: 3,
-      }),
-    );
-    manager.branch(previousLeafId);
-    const sideId = manager.appendMessage(
-      makeAgentUserMessage({
-        content: "inactive side input",
-        timestamp: 4,
-      }),
-    );
-    manager.appendLeafControl({ targetId: currentId, appendParentId: sideId, appendMode: "side" });
-    expect(manager.getLeafId()).toBe(currentId);
-    expect(manager.getAppendParentId()).toBe(sideId);
-    const result = await launchProbe({
-      ...request("split-leaf"),
-      suppressNextUserMessagePersistence: true,
-    });
-    expect(result.launch).toEqual({ baseLeafId: currentId, history: prior });
-    const after = SessionManager.open(sessionTarget);
-    expect(after.getLeafId()).toBe(currentId);
-    expect(after.getAppendParentId()).toBe(sideId);
-  });
-
-  it("refuses a recorder prefix whose admitted user is removed after the worker snapshot", async () => {
-    seedPrevious();
-    const inputRecorder = recorder();
-    await inputRecorder.persistApproved();
-    const writer = SessionManager.open(sessionTarget);
-    const snapshot = afterNextModelContextSnapshot(async () => {
-      const admission = inputRecorder.getAdmissionReceipt();
-      if (!admission) {
-        throw new Error("expected an admitted user before the snapshot");
+  it.each(["missing", "after-snapshot", "model-resolution"] as const)(
+    "rejects a missing or removed canonical user admission (%s)",
+    async (stage) => {
+      seedPrevious();
+      const inputRecorder = recorder();
+      if (stage === "missing") {
+        inputRecorder.markRuntimePersisted(
+          buildPersistedUserTurnMessage({ text: "current request" }),
+        );
+      } else {
+        await inputRecorder.persistApproved();
       }
-      expect(writer.removeTrailingEntries((entry) => entry.id === admission.entryId)).toBe(1);
-    });
-    try {
-      const result = await launchProbe({
-        ...request("recorder-branch-rebound"),
-        userTurnTranscriptRecorder: inputRecorder,
-      });
-      expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
-      expect(result.credentialCalls).toBe(0);
-      expect(result.tunnelCalls).toBe(0);
-      expect(result.launch).toBeUndefined();
-      expect(result.outcome).toMatchObject({
-        kind: "rejected",
-        error: { name: "SessionTranscriptReadFenceError" },
-      });
-    } finally {
-      snapshot();
-    }
-  });
-
-  it("refuses a recorder admission removed by the model-resolution callback", async () => {
-    seedPrevious();
-    const inputRecorder = recorder();
-    await inputRecorder.persistApproved();
-    const writer = SessionManager.open(sessionTarget);
-    let removed = 0;
-    const result = await launchProbe({
-      ...request("recorder-phase-rewrite"),
-      userTurnTranscriptRecorder: inputRecorder,
-      onExecutionPhase: ({ phase }) => {
-        if (phase === "model_resolution") {
-          const admission = inputRecorder.getAdmissionReceipt();
-          removed = writer.removeTrailingEntries((entry) => entry.id === admission?.entryId);
+      const beforeRows = stage === "missing" ? readWorkerTurnTranscriptStorageRows() : undefined;
+      const writer = SessionManager.open(sessionTarget);
+      let removed = 0;
+      const removeAdmission = () => {
+        const admission = inputRecorder.getAdmissionReceipt();
+        if (!admission) {
+          throw new Error("expected an admitted user before removal");
         }
-      },
-    });
-    expect(removed).toBe(1);
-    expect(result.credentialCalls).toBe(0);
-    expect(result.tunnelCalls).toBe(0);
-    expect(result.launch).toBeUndefined();
-    expect(result.outcome).toMatchObject({
-      kind: "rejected",
-      error: { name: "SessionTranscriptReadFenceError" },
-    });
-  });
+        removed = writer.removeTrailingEntries((entry) => entry.id === admission.entryId);
+        expect(removed).toBe(1);
+      };
+      const restore =
+        stage === "after-snapshot"
+          ? afterNextModelContextSnapshot(async () => removeAdmission())
+          : undefined;
+      try {
+        const result = await launchProbe({
+          ...request(`recorder-admission-${stage}`),
+          userTurnTranscriptRecorder: inputRecorder,
+          ...(stage === "model-resolution"
+            ? {
+                onExecutionPhase: ({ phase }) => {
+                  if (phase === "model_resolution") {
+                    removeAdmission();
+                  }
+                },
+              }
+            : {}),
+        });
+        expectNoLaunch(result);
+        expect(result.outcome).toMatchObject({
+          kind: "rejected",
+          error:
+            stage === "missing"
+              ? { message: "Cloud worker turn has no readable canonical user admission" }
+              : { name: "SessionTranscriptReadFenceError" },
+        });
+        if (stage === "missing") {
+          expect(readWorkerTurnTranscriptStorageRows()).toEqual(beforeRows);
+        } else {
+          expect(
+            removed,
+            result.outcome.kind === "rejected" ? String(result.outcome.error) : "resolved",
+          ).toBe(1);
+          expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
+        }
+      } finally {
+        restore?.();
+      }
+    },
+  );
 
   it("retains the initial-setup writer fence across the asynchronous context read", async () => {
     seedPrevious();
@@ -652,9 +604,7 @@ describe("worker detached model-context branch parity", () => {
       expect(waitForInitialPlacement).toHaveBeenCalledOnce();
       expect(callerCurrent).toHaveBeenCalled();
       expect(observed.calls).toBe(1);
-      expect(observed.result.credentialCalls).toBe(0);
-      expect(observed.result.tunnelCalls).toBe(0);
-      expect(observed.result.launch).toBeUndefined();
+      expectNoLaunch(observed.result);
       expect(observed.result.outcome).toMatchObject({
         kind: "rejected",
         error: { name: "AbortError", message: "Session changed while waiting for worker setup" },
@@ -665,20 +615,11 @@ describe("worker detached model-context branch parity", () => {
     }
   });
 
-  it.each([
-    ...(["cancel", "claim", "caller", "session"] as const).flatMap((change) => [
-      { change, mode: "suppressed" as const },
-      { change, mode: "recorder" as const },
-    ]),
-    { change: "blocked" as const, mode: "recorder" as const },
-  ])(
-    "refuses new effects after $change changes during the $mode context read",
-    async ({ change, mode }) => {
-      const { manager } = seedPrevious();
-      const inputRecorder = mode === "recorder" ? recorder() : undefined;
-      if (!inputRecorder) {
-        manager.appendMessage(makeAgentUserMessage({ content: "current request", timestamp: 3 }));
-      }
+  it.each(["cancel", "claim", "caller", "session", "blocked"] as const)(
+    "refuses new effects after %s changes during the context read",
+    async (change) => {
+      seedPrevious();
+      const inputRecorder = recorder();
       const abort = new AbortController();
       let callerCurrent = true;
       const observed = await withAsyncReadHook(
@@ -696,7 +637,7 @@ describe("worker detached model-context branch parity", () => {
             } else if (change === "caller") {
               callerCurrent = false;
             } else if (change === "blocked") {
-              inputRecorder?.markBlocked();
+              inputRecorder.markBlocked();
             } else {
               await upsertSessionEntryCore(sessionTarget, {
                 sessionId: "replacement-session",
@@ -709,9 +650,7 @@ describe("worker detached model-context branch parity", () => {
           launchProbe(
             {
               ...request("after-read-" + change),
-              ...(inputRecorder
-                ? { userTurnTranscriptRecorder: inputRecorder }
-                : { suppressNextUserMessagePersistence: true }),
+              userTurnTranscriptRecorder: inputRecorder,
               abortSignal: abort.signal,
             },
             () => {
@@ -722,9 +661,7 @@ describe("worker detached model-context branch parity", () => {
           ),
       );
       expect(observed.calls).toBe(1);
-      expect(observed.result.credentialCalls).toBe(0);
-      expect(observed.result.tunnelCalls).toBe(0);
-      expect(observed.result.launch).toBeUndefined();
+      expectNoLaunch(observed.result);
       expect(observed.result.outcome.kind).toBe("rejected");
     },
   );

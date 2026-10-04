@@ -15,6 +15,7 @@ import { makeZeroUsageSnapshot } from "../agents/usage.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import { resolveSessionStorePathCore } from "../config/sessions.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
+import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Message, ImageContent } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -42,6 +43,7 @@ import {
   trimSessionCompanionExchanges,
   type SessionCompanionThread,
 } from "./session-companion-state.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import type { SessionObserverCompanionSnapshot } from "./session-observer-contract.js";
 import { sessionObserverScopeKey } from "./session-observer-model.js";
 
@@ -64,6 +66,7 @@ type SessionCompanionRunParams = {
   images?: ImageContent[];
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertSourceCurrent?: () => void;
+  assertInputCurrent?: () => void;
   signal: AbortSignal;
 };
 
@@ -79,8 +82,6 @@ export type SessionCompanionAskDeps = {
   contextReader: SessionCompanionContextReader;
   run?: (params: SessionCompanionRunParams) => Promise<string>;
   now?: () => number;
-  setTimeoutFn?: typeof setTimeout;
-  clearTimeoutFn?: typeof clearTimeout;
 };
 
 type SessionCompanionAskRuntimeParams = SessionCompanionAskDeps & {
@@ -124,6 +125,7 @@ function toRunnerHistoryMessage(
 
 async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
   params.assertSourceCurrent?.();
+  params.assertInputCurrent?.();
   const selectedModel = resolveSessionCompanionModel({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -208,7 +210,7 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
     );
     params.signal.throwIfAborted();
     params.assertSourceCurrent?.();
-    await withSessionManagerWrite(sessionManager, () => {
+    const assertSeedCurrent = () => {
       abortSignal.throwIfAborted();
       params.assertSourceCurrent?.();
       const currentEntry = loadExactSessionEntry(target)?.entry;
@@ -220,11 +222,18 @@ async function defaultRun(params: SessionCompanionRunParams): Promise<string> {
       ) {
         throw new Error("Session companion identity changed before history persistence");
       }
-      for (const message of params.messages.slice(0, -1)) {
-        sessionManager.appendMessage(toRunnerHistoryMessage(message, selectedModel));
-      }
-    });
+    };
+    await withSessionTranscriptWriteAssertion(target, assertSeedCurrent, () =>
+      withSessionManagerWrite(sessionManager, async () => {
+        assertSeedCurrent();
+        for (const message of params.messages.slice(0, -1)) {
+          assertSeedCurrent();
+          await sessionManager.appendMessageAsync(toRunnerHistoryMessage(message, selectedModel));
+        }
+      }),
+    );
     abortSignal.throwIfAborted();
+    params.assertInputCurrent?.();
     executionStarted = true;
     const result = await runEmbeddedAgent({
       preparedRunAdmission,
@@ -361,8 +370,6 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
   const resolveUtilityModelRef = params.resolveUtilityModelRef ?? resolveUtilityModelRefForAgent;
   const contextReader = params.contextReader;
   const run = params.run ?? defaultRun;
-  const setTimeoutFn = params.setTimeoutFn ?? setTimeout;
-  const clearTimeoutFn = params.clearTimeoutFn ?? clearTimeout;
   const activeAsks = new Map<string, SessionCompanionActiveAsk>();
   const admissions: Array<{ connId: string; admittedAt: number }> = [];
 
@@ -433,10 +440,12 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     agentId: string;
     sessionKey: string;
     question: string;
+    selectionContext?: string;
     attachments?: ChatAttachment[];
     connId: string;
     operatorAuthority?: AdmittedRunOperatorAuthority;
     assertSourceCurrent?: () => void;
+    assertInputCurrent?: () => void;
     signal?: AbortSignal;
   }): Promise<{ answer: string; ts: number }> => {
     const sessionKey = request.sessionKey.trim();
@@ -514,7 +523,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     } else {
       requestSignal?.addEventListener("abort", abortRequest, { once: true });
     }
-    const timeout = setTimeoutFn(() => abort("timeout"), ASK_TIMEOUT_MS);
+    const timeout = setTimeout(() => abort("timeout"), ASK_TIMEOUT_MS);
     const aborted = createDeferredCore<never>();
     const onAbort = () =>
       aborted.reject(new Error("session companion ask timed out or was cancelled"));
@@ -569,6 +578,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
       const messages = composePromptMessages({
         thread,
         question,
+        selectionContext: request.selectionContext,
         referenceContext,
         now: admittedAt,
       });
@@ -576,9 +586,15 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         maxBytes: resolveChatAttachmentMaxBytes(cfg),
         acceptNonImage: false,
         imageStorage: "inline",
+        signal: controller.signal,
+        assertCurrent: () => {
+          assertSourceCurrent?.();
+          request.assertInputCurrent?.();
+        },
       });
       controller.signal.throwIfAborted();
       assertSourceCurrent?.();
+      request.assertInputCurrent?.();
       const rawAnswer = await run({
         cfg,
         agentId,
@@ -590,6 +606,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
         ...(input.images.length ? { images: input.images } : {}),
         ...(request.operatorAuthority ? { operatorAuthority: request.operatorAuthority } : {}),
         assertSourceCurrent,
+        ...(request.assertInputCurrent ? { assertInputCurrent: request.assertInputCurrent } : {}),
         signal: controller.signal,
       });
       if (activeAsk.cancellation || params.isDisposed()) {
@@ -621,7 +638,10 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
     try {
       return await Promise.race([execute(), aborted.promise]);
     } catch (error) {
-      if (error instanceof SessionCompanionAskError) {
+      if (
+        error instanceof SessionCompanionAskError ||
+        error instanceof SessionMutationAuthorizationChangedError
+      ) {
         throw error;
       }
       if (activeAsk.cancellation === "backing-session-revoked") {
@@ -641,7 +661,7 @@ export function createSessionCompanionAskRuntime(params: SessionCompanionAskRunt
             : "Side chat could not answer right now.",
       );
     } finally {
-      clearTimeoutFn(timeout);
+      clearTimeout(timeout);
       controller.signal.removeEventListener("abort", onAbort);
       requestSignal?.removeEventListener("abort", abortRequest);
       if (activeAsks.get(threadKey) === activeAsk) {

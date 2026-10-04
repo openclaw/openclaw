@@ -9,17 +9,13 @@ import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plug
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
 
-type StagedIMessageAttachment = ChannelInboundMediaInput;
-
 type StagedIMessageAttachments = {
-  attachments: StagedIMessageAttachment[];
+  attachments: ChannelInboundMediaInput[];
   unavailableCount: number;
 };
 
-type SaveMediaBufferImpl = typeof saveMediaBuffer;
-
 type StageIMessageAttachmentsDeps = {
-  saveMediaBuffer?: SaveMediaBufferImpl;
+  saveMediaBuffer?: typeof saveMediaBuffer;
   convertHeicToJpeg?: (sourcePath: string, maxBytes: number) => Promise<Buffer>;
   openLocalFileSafely?: typeof openLocalFileSafely;
   logVerbose?: (message: string) => void;
@@ -27,7 +23,7 @@ type StageIMessageAttachmentsDeps = {
 
 function createTypeOnlyIMessageAttachment(
   attachment: IMessageAttachment,
-): StagedIMessageAttachment {
+): ChannelInboundMediaInput {
   const contentType = attachment.mime_type?.trim() || undefined;
   return { contentType, kind: kindFromMime(contentType) ?? "unknown" };
 }
@@ -153,7 +149,7 @@ export async function stageIMessageAttachments(
 ): Promise<StagedIMessageAttachments> {
   const deps = params.deps ?? {};
   const save = deps.saveMediaBuffer ?? saveMediaBuffer;
-  const staged: StagedIMessageAttachment[] = [];
+  const staged: ChannelInboundMediaInput[] = [];
   let unavailableCount = 0;
 
   for (const attachment of attachments) {

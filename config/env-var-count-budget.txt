@@ -3,4 +3,10 @@
 # Worker bundle installation no longer injects OPENCLAW_STATE_DIR into a remote npm process.
 # The internal Node-version check no longer contributes a false OPENCLAW_* name.
 # The next-turn runtime-context preface constant no longer exists as an OPENCLAW_* name.
-483
+# OPENCLAW_PACKAGE_BUN_LAUNCHER (#159431) is the updater-to-preinstall handoff for Bun-only installs.
+# fs-safe 0.23 moves five existing native/Python environment names into OpenClaw's compatibility owner.
+# OPENCLAW_PROMPT_CACHE_ASSERT (#163379) is the owner-approved prompt-cache assertion switch; the operator system-update
+# custom-type constant no longer counts as an OPENCLAW_* name.
+# Cleanup since the last restore (OAuth sidecar retirement #163186, browser deslop #163709) removed names net of additions.
+# OPENCLAW_NODE_EXEC_FALLBACK was removed by the core subsystem cleanup (#164153).
+473

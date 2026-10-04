@@ -1,5 +1,5 @@
 import { performance } from "node:perf_hooks";
-import { setTimeout as sleep } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -16,7 +16,6 @@ import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { createGatewayUpdateCheck } from "../infra/update-startup.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
 import type { createHookRunner } from "../plugins/hooks.js";
-import type { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
@@ -87,31 +86,17 @@ const loadAgentModelSelectionModule = createLazyRuntimeModule(
 
 const loadInternalHooksModule = createLazyRuntimeModule(() => import("../hooks/internal-hooks.js"));
 
-function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boolean {
-  return !env.VITEST && env.NODE_ENV !== "test";
-}
-
-function hasGatewayStartHooks(pluginRegistry: ReturnType<typeof loadOpenClawPlugins>): boolean {
-  return pluginRegistry.typedHooks.some((hook) => hook.hookName === "gateway_start");
-}
-
 async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
   const { hasInternalHookListeners } = await loadInternalHooksModule();
   return hasInternalHookListeners("gateway", "startup");
 }
 
-async function waitForAcpRuntimeBackendReady(params: {
-  backendId?: string;
-  timeoutMs?: number;
-  pollMs?: number;
-}): Promise<boolean> {
+async function waitForAcpRuntimeBackendReady(backendId?: string): Promise<boolean> {
   const { getAcpRuntimeBackend } = await import("../acp/runtime/registry.js");
-  const timeoutMs = params.timeoutMs ?? ACP_BACKEND_READY_TIMEOUT_MS;
-  const pollMs = params.pollMs ?? ACP_BACKEND_READY_POLL_MS;
-  const deadline = performance.now() + timeoutMs;
+  const deadline = performance.now() + ACP_BACKEND_READY_TIMEOUT_MS;
 
   do {
-    const backend = getAcpRuntimeBackend(params.backendId);
+    const backend = getAcpRuntimeBackend(backendId);
     if (backend) {
       try {
         if (!backend.healthy || backend.healthy()) {
@@ -121,7 +106,7 @@ async function waitForAcpRuntimeBackendReady(params: {
         // Treat transient backend health probe errors like "not ready yet".
       }
     }
-    await sleep(pollMs, undefined, { ref: false });
+    await sleep(ACP_BACKEND_READY_POLL_MS, undefined, { ref: false });
   } while (performance.now() < deadline);
 
   return false;
@@ -134,7 +119,7 @@ export async function startGatewaySidecars(params: {
   cfg: OpenClawConfig;
   getModelRuntimeConfig?: () => OpenClawConfig;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+  pluginRegistry: PluginRegistry;
   defaultWorkspaceDir: string;
   deps: CliDeps;
   startChannels: () => Promise<void>;
@@ -324,16 +309,11 @@ export async function startGatewaySidecars(params: {
             },
             Math.max(0, deadlineAtMs - Date.now()),
           );
-          void stopPromise.then(
-            (result) => {
-              clearTimeout(timer);
-              resolve(result);
-            },
-            (error: unknown) => {
-              clearTimeout(timer);
+          void stopPromise
+            .finally(() => clearTimeout(timer))
+            .then(resolve, (error: unknown) => {
               reject(error instanceof Error ? error : new Error(String(error)));
-            },
-          );
+            });
         });
       },
     };
@@ -353,6 +333,7 @@ export async function startGatewaySidecars(params: {
           return;
         }
         await startPluginServices({
+          scheduler: params.scheduler,
           registry: params.pluginRegistry,
           config: params.cfg,
           workspaceDir: params.defaultWorkspaceDir,
@@ -420,7 +401,7 @@ export async function startGatewaySidecars(params: {
         return;
       }
       const ready = await measureStartup(params.startupTrace, "sidecars.acp.runtime-ready", () =>
-        waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend }),
+        waitForAcpRuntimeBackendReady(params.cfg.acp?.backend),
       );
       params.startupTrace?.detail("sidecars.acp.runtime-ready", [
         ["readyCount", ready ? 1 : 0],
@@ -462,7 +443,7 @@ export async function startGatewaySidecars(params: {
       waitForPostReadyWork: params.waitForPostReadyWork,
       shouldRun: params.shouldCreatePostReadySidecars,
       run: async (isStopped) => {
-        if (!shouldCheckRestartSentinel() || isStopped()) {
+        if (process.env.VITEST || process.env.NODE_ENV === "test" || isStopped()) {
           return;
         }
         if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
@@ -597,7 +578,7 @@ type GatewayPostAttachRuntimeDeps = {
   startGatewaySidecars: typeof startGatewaySidecars;
   warmSystemCa: typeof warmMacOSSystemCaOffMainThread;
   loadSubagentRegistryActivation: () => Awaitable<
-    (resolveGatewayContext: GatewayContextResolver) => void
+    (resolveGatewayContext: GatewayContextResolver) => Awaitable<void>
   >;
 };
 
@@ -623,10 +604,7 @@ export async function startGatewayPostAttachRuntime(
     updateCanary?: boolean;
     cfgAtStart: OpenClawConfig;
     getConfig: () => OpenClawConfig;
-    bindHost: string;
-    bindHosts: string[];
     port: number;
-    tlsEnabled: boolean;
     log: {
       info: (msg: string) => void;
       warn: (msg: string) => void;
@@ -636,14 +614,13 @@ export async function startGatewayPostAttachRuntime(
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
     getClientConnIds: (filter?: (client: GatewayClient) => boolean) => ReadonlySet<string>;
     broadcastPluginEvent?: import("./server-broadcast-types.js").GatewayPluginEventBroadcastFn;
-    controlUiBasePath: string;
     controlUiRootLifecycle?: GatewayControlUiRootLifecycle;
     gatewayPluginConfigAtStart: OpenClawConfig;
     activationSourceConfig: OpenClawConfig;
     pluginManifestRecords: readonly PluginManifestRecord[];
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-    pluginRegistry: ReturnType<typeof loadOpenClawPlugins>;
+    pluginRegistry: PluginRegistry;
     defaultWorkspaceDir: string;
     deps: CliDeps;
     startChannels: () => Promise<void>;
@@ -728,6 +705,8 @@ export async function startGatewayPostAttachRuntime(
       return;
     }
     params.onStartupPluginsLoading?.();
+    // Capture retirement before starting work that can finish after shutdown begins.
+    const { disposePluginRegistryInstances } = await import("../plugins/runtime.js");
     const loaded = await measureStartup(params.startupTrace, "plugins.runtime-post-bind", () =>
       params.loadStartupPlugins!(),
     );
@@ -736,7 +715,6 @@ export async function startGatewayPostAttachRuntime(
       const current = params.getCurrentPluginRegistry?.() ?? pluginRegistry;
       if (loaded.pluginRegistry !== current) {
         loaded.retireGatewayRuntimeBindings?.();
-        const { disposePluginRegistryInstances } = await import("../plugins/runtime.js");
         await disposePluginRegistryInstances(loaded.pluginRegistry, current);
       }
       pluginRegistry = current;
@@ -805,10 +783,6 @@ export async function startGatewayPostAttachRuntime(
             ? params.pluginManifestRecords
             : (params.getCurrentPluginMetadataSnapshot?.()?.plugins ?? []),
           ...(params.ambientEnvTriggers ? { ambientEnvTriggers: params.ambientEnvTriggers } : {}),
-          bindHost: params.bindHost,
-          bindHosts: params.bindHosts,
-          port: params.port,
-          tlsEnabled: params.tlsEnabled,
           loadedPluginIds: startupPluginRegistry.plugins
             .filter((plugin) => plugin.status === "loaded")
             .map((plugin) => plugin.id),
@@ -846,15 +820,10 @@ export async function startGatewayPostAttachRuntime(
     }
     params.onPluginServices?.(pluginServices);
   };
-  const waitForSidecarStartTurn = () =>
-    new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-
   const startSidecars = () =>
     params.minimalTestGateway
       ? startStartupLog().then(() => pluginRegistry)
-      : waitForSidecarStartTurn().then(async () => {
+      : nextTurn().then(async () => {
           if (params.isClosing?.()) {
             skipStartupLog();
             return pluginRegistry;
@@ -882,7 +851,9 @@ export async function startGatewayPostAttachRuntime(
           }
           const startupOutcomes = createGatewayStartupOutcomeRecorder({
             cfg: params.gatewayPluginConfigAtStart,
-            gatewayStartHooks: hasGatewayStartHooks(pluginRegistry),
+            gatewayStartHooks: pluginRegistry.typedHooks.some(
+              (hook) => hook.hookName === "gateway_start",
+            ),
           });
           const workerEnvironmentSidecar = params.isClosing?.()
             ? null
@@ -1026,7 +997,7 @@ export async function startGatewayPostAttachRuntime(
           try {
             const activateSubagentRegistry = await runtimeDeps.loadSubagentRegistryActivation();
             if (params.isClosing?.() !== true) {
-              activateSubagentRegistry(params.resolveGatewayContext);
+              await activateSubagentRegistry(params.resolveGatewayContext);
             }
           } catch (err) {
             params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);

@@ -1,6 +1,3 @@
-/**
- * Sanitizes reasoning/thinking blocks for replay and recovery.
- */
 import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { collectErrorGraphCandidates, formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
@@ -26,7 +23,7 @@ type RecoverySessionMeta = {
 };
 
 const THINKING_BLOCK_ERROR_PATTERN =
-  /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
+  /(?:thinking|redacted_thinking).*?\b(?:cannot be modified|signature|invalid|missing|empty|blank)\b|\b(?:signature|invalid|missing|empty|blank)\b.*?(?:thinking|redacted_thinking)/i;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 function isToolCallBlock(block: AssistantContentBlock): boolean {
@@ -38,9 +35,6 @@ function isToolCallBlock(block: AssistantContentBlock): boolean {
 }
 
 function isSignedThinkingBlock(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     type?: unknown;
     signature?: unknown;
@@ -85,9 +79,6 @@ function filterAssistantContent(
 }
 
 function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
-  if (!isThinkingBlock(block)) {
-    return false;
-  }
   const record = block as {
     data?: unknown;
     signature?: unknown;
@@ -104,17 +95,8 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
 }
 
 /**
- * Strip thinking blocks with clearly invalid replay signatures.
- *
- * Anthropic and Bedrock reject persisted thinking blocks when the signature is
- * absent, empty, or blank. They are also the authority for opaque signature
- * validity, so this intentionally avoids local length or shape heuristics.
- *
- * By default, the latest assistant turn is exempt: providers reject modified
- * latest thinking blocks, so corrupted latest turns must flow through recovery
- * rather than being rewritten before the request. Callers that append a new
- * user turn before provider replay can disable that exemption because the
- * stored assistant turn is no longer latest in the outbound request.
+ * Providers decide opaque signature validity; only missing or blank signatures are stripped.
+ * Preserve the latest assistant turn for provider recovery unless the caller appends a user turn.
  */
 export function stripInvalidThinkingSignatures(
   messages: AgentMessage[],
@@ -135,18 +117,8 @@ export function stripInvalidThinkingSignatures(
 }
 
 /**
- * Strip `type: "thinking"` and `type: "redacted_thinking"` content blocks from
- * all assistant messages except the latest one.
- *
- * Thinking blocks in the latest assistant turn are preserved verbatim so
- * providers that require replay signatures can continue the conversation.
- *
- * If a non-latest assistant message becomes empty after stripping, it is
- * replaced with a synthetic non-empty text block to preserve turn structure
- * through provider adapters that filter blank text blocks.
- *
- * Returns the original array reference when nothing was changed (callers can
- * use reference equality to skip downstream work).
+ * Keep the latest turn's replay signatures and preserve empty turns with placeholder text.
+ * Unchanged history retains its original array identity.
  */
 export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
   const latestAssistantIndex = messages.findLastIndex(isAssistantMessageWithContent);
@@ -281,15 +253,11 @@ function shouldRecoverAnthropicThinkingError(
     current.errorBody,
     current.message,
   ]);
-  for (const candidate of candidates) {
-    if (
+  return candidates.some(
+    (candidate) =>
       typeof candidate === "string" &&
-      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta)
-    ) {
-      return true;
-    }
-  }
-  return false;
+      shouldRecoverAnthropicThinkingErrorMessage(candidate, sessionMeta),
+  );
 }
 
 function shouldRecoverAnthropicThinkingErrorMessage(

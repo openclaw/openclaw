@@ -13,8 +13,8 @@ export const PHASES = [
   "cut",
   "validate",
   "publish",
-  "sync-beta",
   "flip-github",
+  "sync-beta",
   "macos",
   "closeout",
 ] as const;
@@ -200,6 +200,7 @@ export const CANDIDATE_COMMAND =
   -f npm_dist_tag=latest \
   -f plugin_publish_scope=all-publishable \
   -f publish_openclaw_npm=true \
+  -f finalize_release_before_docker=true \
   -f wait_for_clawhub=true`.replaceAll("\\`", "`");
 
 export const publishParentRun = () => ({
@@ -250,7 +251,7 @@ export function publishPreparation(createTag = false): FakeStep[] {
     ),
     ...(createTag
       ? [
-          step("git", ["tag", "-a", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
+          step("git", ["tag", "-s", `v${RELEASE}`, CUT_SHA, "-m", `OpenClaw ${RELEASE}`]),
           step("git", ["push", "origin", `refs/tags/v${RELEASE}`]),
         ]
       : []),

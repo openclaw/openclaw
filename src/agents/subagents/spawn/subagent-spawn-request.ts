@@ -82,20 +82,11 @@ export async function resolveSubagentSpawnRequest(
     );
   }
   const cleanup: "delete" | "keep" =
-    spawnMode === "session"
-      ? "keep"
-      : params.cleanup === "keep" || params.cleanup === "delete"
-        ? params.cleanup
-        : "keep";
-  const expectsCompletionMessage = params.collect
-    ? false
-    : params.expectsCompletionMessage !== false;
+    spawnMode !== "session" && params.cleanup === "delete" ? "delete" : "keep";
+  const expectsCompletionMessage = !params.collect && params.expectsCompletionMessage !== false;
   const hookRunner: SubagentLifecycleHookRunner | null = getGlobalHookRunner();
   const cfg = getRuntimeConfig();
 
-  // When agent omits runTimeoutSeconds, use the config default.
-  // Falls back to 0 (no timeout) if config key is also unset,
-  // preserving current behavior for existing deployments.
   const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
     cfg,
     runTimeoutSeconds: params.runTimeoutSeconds,
@@ -119,6 +110,7 @@ export async function resolveSubagentSpawnRequest(
   // Capture the requester window before launch; a reset must not move child
   // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
+  let completionRequesterLifecycleRevision: string | undefined;
   const captureRequester = async () => {
     try {
       const target = await resolveGatewaySessionStoreTargetInWorker({
@@ -128,7 +120,9 @@ export async function resolveSubagentSpawnRequest(
         assertActive: ctx.assertActive,
       });
       ctx.assertActive?.();
-      completionRequesterSessionId = target.store[target.canonicalKey]?.sessionId;
+      const requesterEntry = target.store[target.canonicalKey];
+      completionRequesterSessionId = requesterEntry?.sessionId;
+      completionRequesterLifecycleRevision = requesterEntry?.lifecycleRevision;
     } catch (error) {
       return rejectSubagentSpawnRequest(
         "error",
@@ -188,13 +182,11 @@ export async function resolveSubagentSpawnRequest(
   const effectiveRequestedAgentId = usingDefaultAgentId
     ? swarmConfig.defaultAgentId
     : requestedAgentId;
-  if (usingDefaultAgentId) {
-    if (!isValidAgentId(effectiveRequestedAgentId)) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
-      );
-    }
+  if (usingDefaultAgentId && !isValidAgentId(effectiveRequestedAgentId)) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      `tools.swarm.defaultAgentId contains invalid agentId "${effectiveRequestedAgentId}".`,
+    );
   }
   const targetAgentId = effectiveRequestedAgentId
     ? normalizeAgentId(effectiveRequestedAgentId)
@@ -337,6 +329,7 @@ export async function resolveSubagentSpawnRequest(
         cleanup,
         expectsCompletionMessage,
         completionRequesterSessionId,
+        completionRequesterLifecycleRevision,
       },
       runtime: {
         hookRunner,

@@ -10,11 +10,15 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-import { selectUserProfileGitHubIdentities } from "./user-profile-github-identity.js";
+import {
+  selectProfileAccessEntries,
+  selectStoredGitHubIdentities,
+  selectUserProfileGitHubIdentities,
+} from "./user-profile-github-identity.js";
 import {
   matchUserProfileReference,
+  resolveCatalogProfile,
   projectUserProfileDisplay,
-  selectProfileDisplayEntries,
   selectResolvedUserProfile,
   selectUserProfileEmailAlias,
   selectResolvedUserProfileMetadataById,
@@ -26,7 +30,12 @@ import {
   ensureUserProfilesSchema,
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
-import type { ProfileDisplayRow, UserProfileEmailBinding } from "./user-profiles.types.js";
+import type {
+  ProfileDisplayRow,
+  UserProfileEmailBinding,
+  UserProfileIdentity,
+  UserProfileAuthority,
+} from "./user-profiles.types.js";
 
 export const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
   path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env));
@@ -75,6 +84,13 @@ export function readUserProfileIdForEmail(db: DatabaseSync, email: string): stri
 }
 
 export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {}) {
+  return readUserProfileSnapshotSync(options).profiles;
+}
+
+export function readUserProfileSnapshotSync(
+  options: OpenClawStateDatabaseOptions = {},
+  githubAccountIds?: readonly number[],
+) {
   ensureUserProfilesSchema(options);
   const database = openOpenClawStateDatabase(options);
   return runSqliteDeferredTransactionSync(
@@ -109,20 +125,34 @@ export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {})
       for (const { profile_id, email } of emails) {
         emailsByProfile.get(profile_id)?.push(email);
       }
-      return profiles.map((profile) =>
-        Object.assign(toUserProfile(profile), {
-          emails: emailsByProfile.get(profile.id) ?? [],
-          githubIdentity: githubIdentities.get(profile.id) ?? null,
-          hasAvatar: profile.has_avatar === 1,
-        }),
-      );
+      return {
+        profiles: profiles.map((profile) =>
+          Object.assign(toUserProfile(profile), {
+            emails: emailsByProfile.get(profile.id) ?? [],
+            githubIdentity: githubIdentities.get(profile.id) ?? null,
+            hasAvatar: profile.has_avatar === 1,
+          }),
+        ),
+        ...(githubAccountIds
+          ? {
+              githubProfiles: [
+                ...selectStoredGitHubIdentities(database.db, undefined, githubAccountIds),
+              ].flatMap(([profileId, { accounts }]) =>
+                accounts.map(({ accountId }) => ({ accountId, profileId })),
+              ),
+            }
+          : {}),
+      };
     },
     { databaseLabel: database.path, operationLabel: "user-profiles.list" },
   );
 }
 
 /** Resolve current authority and display together on the caller's admitted connection. */
-export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: string) {
+export function readUserProfileAuthorityInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileAuthority | undefined {
   return runSqliteDeferredTransactionSync(db, () => {
     const current = tableExists(db, "user_profiles")
       ? selectResolvedUserProfileMetadataById(db, profileId)
@@ -130,7 +160,7 @@ export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: 
     if (!current) {
       return undefined;
     }
-    const display = selectProfileDisplayEntries(db, [current.id])[0]?.[1];
+    const display = selectProfileAccessEntries(db, [current.id])[0]?.[1];
     if (!display) {
       return undefined;
     }
@@ -145,6 +175,7 @@ export function readUserProfileAuthorityInDatabase(db: DatabaseSync, profileId: 
     return {
       profileId: current.id,
       role: current.role ?? null,
+      githubLogin: display.githubLogin ?? null,
       aliases: [current.id, ...aliases.map((alias) => alias.id)],
       display: projectUserProfileDisplay(display),
     };
@@ -200,7 +231,10 @@ export function selectHasMultipleSessionSharingIdentities(db: DatabaseSync): boo
 }
 
 /** Exact canonical identity and aliases selected on the caller's admitted connection. */
-export function selectUserProfileIdentityInDatabase(db: DatabaseSync, profileId: string) {
+export function selectUserProfileIdentityInDatabase(
+  db: DatabaseSync,
+  profileId: string,
+): UserProfileIdentity | undefined {
   const profile = selectResolvedUserProfileMetadataById(db, profileId);
   return (
     profile && {
@@ -263,6 +297,38 @@ export function selectUserProfileDisplaysInDatabase(
       const raw = byId.get(toUSVString(id));
       return [id, raw?.merged_into ? (byId.get(raw.merged_into) ?? raw) : raw];
     }),
+  );
+}
+
+/** Project a bounded display cohort from the resident Gateway catalog. */
+export function projectUserProfileDisplays(
+  ids: readonly string[],
+  resolve: (id: string) => Omit<ProfileDisplayRow, "role"> | undefined,
+) {
+  return new Map(
+    ids.flatMap((id) => {
+      const profile = resolve(id);
+      return profile ? [[id, projectUserProfileDisplay(profile)] as const] : [];
+    }),
+  );
+}
+
+/** Resolve display navigation against the resident Gateway catalog. */
+export function resolveUserProfileReferenceInCatalog(
+  rows: Map<string, ProfileDisplayRow>,
+  reference: string,
+  allowedProfileIds?: ReadonlySet<string>,
+) {
+  const allowed = (row: ProfileDisplayRow) =>
+    !allowedProfileIds || allowedProfileIds.has(row.merged_into ?? row.id);
+  const raw = rows.get(reference);
+  return matchUserProfileReference(
+    reference,
+    raw && allowed(raw) ? resolveCatalogProfile(rows, reference)?.id : undefined,
+    (prefix) =>
+      [...rows.values()]
+        .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
+        .map((row) => row.merged_into ?? row.id),
   );
 }
 

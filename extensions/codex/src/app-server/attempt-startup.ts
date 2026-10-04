@@ -18,7 +18,6 @@ import {
 } from "./attempt-client-cleanup.js";
 import { buildCodexPluginThreadConfigEligibilityLogData } from "./attempt-diagnostics.js";
 import { verifyStartupArtifact } from "./attempt-runtime-artifact.js";
-import type { StartCodexAttemptThreadResult } from "./attempt-startup-result.js";
 import { CodexAppServerStartupError, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import { isCodexAppServerConnectionClosedError, type CodexAppServerClient } from "./client.js";
@@ -57,7 +56,7 @@ import {
   type CodexSandboxExecEnvironment,
 } from "./sandbox-exec-server.js";
 import { buildScheduledCodexAppAuthorityInputFingerprint } from "./scheduled-app-authority.js";
-import type { CodexAppServerBindingStore } from "./session-binding.js";
+import type { CodexBindingAuthority, CodexAppServerBindingStore } from "./session-binding.js";
 import {
   clearSharedCodexAppServerClientIfCurrent,
   clearSharedCodexAppServerClientIfCurrentAndUnclaimed,
@@ -77,6 +76,7 @@ import {
   startOrResumeThread,
   type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
+import { isCodexWebSocketOpenFailure } from "./transport-websocket.js";
 import { getCodexAppServerTurnRouter, type CodexThreadRouteReservation } from "./turn-router.js";
 import type { CodexNativeWebSearchSupport } from "./web-search.js";
 
@@ -84,8 +84,13 @@ const CODEX_APP_SERVER_STARTUP_MAX_ATTEMPTS = 3;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
+/**
+ * Starts or resumes the Codex app-server thread and returns the resources the
+ * run loop must later release.
+ */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
+  authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
   runtime?: PluginRuntime;
@@ -115,7 +120,7 @@ export async function startCodexAttemptThread(params: {
   persistentWebSearchAllowed?: boolean;
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
-  skillsInstructions?: string;
+  refreshableInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
   finalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["finalConfigPatch"];
   buildFinalConfigPatch?: Parameters<typeof startOrResumeThread>[0]["buildFinalConfigPatch"];
@@ -137,7 +142,7 @@ export async function startCodexAttemptThread(params: {
   onStartupTimeout: () => void | Promise<void>;
   onExecutionDisconnect?: (error: Error) => void;
   spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
-}): Promise<StartCodexAttemptThreadResult> {
+}) {
   let pluginAppServer = params.appServer;
   const startupRuntimeAuthProfileId =
     params.startupPreparedAuth?.kind === "profile"
@@ -212,7 +217,12 @@ export async function startCodexAttemptThread(params: {
               throw new CodexAppServerStartupError("aborted");
             }
             startupClient = await params.attemptClientFactory({
-              assertCurrent: params.assertCurrent,
+              // Process startup retains its synchronous admission contract. Ordinary
+              // native requests use the retained worker authority at wire admission.
+              assertCurrent: () => {
+                params.assertCurrent?.();
+                params.authority?.assertLegacyCurrent();
+              },
               startOptions: params.appServer.start,
               pluginConfig: params.pluginConfig,
               ...(params.startupPreparedAuth
@@ -447,6 +457,7 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 assertCurrent: params.assertCurrent,
+                authority: params.authority,
                 params: params.buildAttemptParams(),
                 runtimeModelId: params.runtimeModelId,
                 agentId: params.sessionAgentId,
@@ -457,7 +468,7 @@ export async function startCodexAttemptThread(params: {
                 webSearchAllowed: params.webSearchAllowed,
                 appServer: pluginAppServer,
                 developerInstructions: params.developerInstructions,
-                skillsInstructions: params.skillsInstructions,
+                refreshableInstructions: params.refreshableInstructions,
                 agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
                 config: threadConfig,
                 shellEnvironment: params.shellEnvironment,
@@ -630,6 +641,8 @@ export async function startCodexAttemptThread(params: {
             const clientRetired = error instanceof CodexThreadClientReplacementError;
             if (
               startupAbandonController.signal.aborted ||
+              // Physical startup already owns the bounded unopened-socket retries.
+              isCodexWebSocketOpenFailure(error) ||
               (clientRetired && replacedSettledFailureClient) ||
               (!clientRetired && !selectionChanged && !isCodexAppServerConnectionClosedError(error))
             ) {

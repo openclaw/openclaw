@@ -1,56 +1,113 @@
 import { randomUUID } from "node:crypto";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
-import { readLegacyAcpMigrationContextInDatabase } from "../../config/sessions/session-accessor.sqlite-acp-provenance.js";
-import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { mergeSessionEntry } from "../../config/sessions/types.js";
 import {
   legacyAcpMigrationBindingMatches,
   recordLegacyAcpMigrationCompletion,
 } from "../../infra/legacy-acp-migration-source.js";
-import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
   deferSqliteWorkerCommitReceipt,
   requestSqliteWorkerOperationAdmission,
 } from "../../infra/sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import type { AcpSessionControlConstraint } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
-import { selectAcpSessionRowForRead } from "./session-meta-keys.js";
+import {
+  acpSessionRowMatchesEntry,
+  buildAcpDatabaseSessionKey,
+  selectAcpSessionRow,
+  selectAcpSessionRowForRead,
+} from "./session-meta-keys.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
+import {
+  readAcpSessionControlInWorker,
+  readAcpSessionSourceInWorker,
+} from "./session-meta-source.worker.js";
 import { applyAcpSessionMutation } from "./session-meta-write.kernel.js";
 import type {
   AcpSessionMutationCommit,
   AcpSessionMutationDecision,
   AcpSessionMutationPreparation,
-  AcpSessionWriteOperations,
+  AcpSessionMutationPrepareInput,
+  AcpSessionMutationSource,
 } from "./session-meta-write.types.js";
 
-export function executeAcpSessionMutationInWorker(
+export const acpSessionOperations = {
+  "acp.prepareMutation": (input: AcpSessionMutationPrepareInput, { open }) =>
+    prepareAcpSessionMutationInWorker(open(), input),
+  "acp.commitMutation": (input: AcpSessionMutationCommit & { nonce: string }, { open }) =>
+    commitAcpSessionMutationInWorker(open(), input),
+} satisfies WorkerOperationHandlers;
+
+function readControlledAcpSessionMutation(
   database: OpenClawStateDatabase,
-  command: SqliteWorkerCommand<AcpSessionWriteOperations>,
+  control: AcpSessionControlConstraint,
 ) {
-  return command.type === "acp.prepareMutation"
-    ? prepareAcpSessionMutationInWorker(database, command.input)
-    : commitAcpSessionMutationInWorker(database, command.input);
+  const { entry, row } = readAcpSessionControlInWorker(database, control);
+  if (!entry || !row) {
+    throw new Error("ACP controlled metadata is no longer present before mutation");
+  }
+  const destination = selectAcpSessionRow(
+    database.db,
+    buildAcpDatabaseSessionKey(control.sessionKey, control.agentId),
+  );
+  // Read selection can skip an incompatible canonical row in favor of a legacy alias.
+  // A conditional update must not overwrite that other lifecycle when canonicalizing.
+  if (destination && !acpSessionRowMatchesEntry(destination, entry)) {
+    throw new Error("ACP controlled metadata destination binding changed before mutation");
+  }
+  return { entry, row };
+}
+
+function readMutationSource(
+  input: Omit<Parameters<typeof readAcpSessionSourceInWorker>[0], "source"> & {
+    source: AcpSessionMutationSource;
+  },
+  phase: "metadata preparation" | "legacy source consumption",
+) {
+  if ("kind" in input.source) {
+    // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
+    const current = input.source.snapshot;
+    assertAcpSessionMutationEntry(
+      current.entry,
+      input.entry ?? null,
+      input.expectedControlBinding,
+      phase,
+    );
+    return current;
+  }
+  return readAcpSessionSourceInWorker({ ...input, source: input.source }, phase);
 }
 
 function prepareAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
-  input: AcpSessionWriteOperations["acp.prepareMutation"]["input"],
+  input: AcpSessionMutationPrepareInput,
 ): AcpSessionMutationPreparation {
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const { entry } = readCurrentSource(input, "metadata preparation");
-      const row = selectAcpSessionRowForRead(db, { ...input.read, entry });
+      const controlled = input.control
+        ? readControlledAcpSessionMutation(database, input.control)
+        : undefined;
+      const { entry } = controlled ?? readMutationSource(input, "metadata preparation");
+      if (controlled) {
+        assertAcpSessionMutationEntry(
+          entry,
+          input.entry ?? null,
+          input.expectedControlBinding,
+          "metadata preparation",
+        );
+      }
+      const row = controlled?.row ?? selectAcpSessionRowForRead(db, { ...input.read, entry });
       const preparation: AcpSessionMutationPreparation = {
         entry,
         current: row ? rowToAcpSessionMeta(row) : undefined,
         currentRowKey: row?.session_key,
+        currentRowSessionId: row?.session_id,
         preparedEntry: mergeSessionEntry(entry, {
           updatedAt: input.updatedAt,
           ...(entry ? {} : { lifecycleRevision: randomUUID() }),
@@ -84,49 +141,8 @@ function prepareAcpSessionMutationInWorker(
   );
 }
 
-function readCurrentSource(
-  input: Pick<
-    AcpSessionMutationCommit,
-    "source" | "entry" | "sessionKey" | "agentId" | "expectedControlBinding"
-  >,
-  phase: "metadata preparation" | "legacy source consumption",
-) {
-  const source = input.source;
-  const assertSource = () => {
-    const observed = readDatabasePathIdentitySync(source.path);
-    if (
-      observed.key !== source.identity.key ||
-      observed.canonicalPath !== source.identity.canonicalPath ||
-      observed.birthtime !== source.identity.birthtime
-    ) {
-      throw new Error(`Canonical ACP session changed before ${phase}.`);
-    }
-  };
-  assertSource();
-  const read = withFreshOpenClawAgentDatabaseReadOnly(
-    (agent) =>
-      readLegacyAcpMigrationContextInDatabase(
-        agent,
-        resolveSqliteSessionKey(input.sessionKey, input.agentId),
-      ),
-    { agentId: source.agentId, path: source.path, env: getSqliteWorkerStateContext().environment },
-  );
-  assertSource();
-  if (!read.found && read.reason !== "database-missing") {
-    throw new Error("Canonical ACP session is unavailable before source consumption");
-  }
-  const current = read.found ? read.value : { entry: undefined, sources: [] };
-  assertAcpSessionMutationEntry(
-    current.entry,
-    input.entry ?? null,
-    input.expectedControlBinding,
-    phase,
-  );
-  return current;
-}
-
 function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutationCommit) {
-  const current = readCurrentSource(input, "legacy source consumption");
+  const current = readMutationSource(input, "legacy source consumption");
   for (const source of current.sources) {
     if (legacyAcpMigrationBindingMatches(source, current.entry)) {
       recordLegacyAcpMigrationCompletion(database.db, source, input.updatedAt);
@@ -136,7 +152,7 @@ function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutati
 
 function commitAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
-  input: AcpSessionWriteOperations["acp.commitMutation"]["input"],
+  input: AcpSessionMutationCommit & { nonce: string },
 ) {
   return runOpenClawStateWriteTransaction(
     (current) => {
@@ -144,6 +160,15 @@ function commitAcpSessionMutationInWorker(
         stage: "transaction",
         facts: { nonce: input.nonce },
       });
+      if (input.control) {
+        const { row } = readControlledAcpSessionMutation(current, input.control);
+        if (
+          row.session_key !== input.currentRowKey ||
+          row.session_id !== input.currentRowSessionId
+        ) {
+          throw new Error("ACP controlled metadata binding changed before commit");
+        }
+      }
       consumeSources(current, input);
       const db = current.db;
       applyAcpSessionMutation(db, input);

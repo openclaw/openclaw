@@ -22,6 +22,28 @@ Calling with `{}` preserves the acknowledgment-only response
 List parameters select the snapshot; they do not filter the connection's session
 event subscription.
 
+List views can pass `rowMode: "compact"` to omit repeated detail-only metadata:
+`contextWindows`, `contextWindowDefault`, `thinkingLevels`, `thinkingOptions`,
+`thinkingDefault`, `toolOverrides`, `providerReview`, `nativeRuntimeConsent`,
+`contextBudgetStatus`, `agentRuntime`, and `pluginExtensions`. Each returned row
+carries `rowMode: "compact"`; those omissions mean the detail was not requested,
+and must not clear previously admitted detail fields. Use `sessions.describe`
+or the full `chat.history.sessionInfo` for details. Omitting `rowMode` preserves
+the full row contract. Title, preview, and Activity recap enrichment remain
+controlled by their existing include flags.
+
+Control UI list requests use compact rows and a bounded diagnostic `source`:
+`sidebar`, `dashboard`, `activity`, `sessions-page`, `chat-pane`, `agent-roster`,
+`command-palette`, or `skill-workshop`.
+The source does not change selection or access. List and event rows include
+`hasBoard`, the prepared dashboard-membership fact, so a dashboard gallery can
+apply row updates without enumerating its pages again. Expanding a compact row
+on the Sessions page reads its full details with `sessions.describe`.
+Rows also carry `childOwnerSessionKeys`, the current retained owners used by the
+Gateway's `spawnedBy` filter. These receipts include runtime-controller and
+navigation ownership, expire through that same owner, and let child windows
+apply events without reimplementing retention rules in the browser.
+
 The Gateway registers the subscription before projecting the list. Clients must
 listen for `sessions.changed` before making the request: events can arrive while
 the snapshot is being built. Reconcile those events with the response and issue
@@ -36,7 +58,10 @@ completed-page cache or one-second staleness window. Keyed descriptions,
 resolution, and chat startup prepare their requested row without waiting for the
 bulk refresh. Newly admitted or replaced stores load their metadata once, and
 rows disappear when their store leaves the current topology. Each response
-applies the current viewer's visibility and current activity time.
+applies the current viewer's visibility and current activity time. Equivalent
+viewers share immutable row presentations and encoded row bytes until their
+projection facts change; `snapshotAt` retains the row's sampling time. Runtime
+authority, permission changes, and clock-expiring facts are checked before reuse.
 
 Resident rows use stored titles and usage. Optional message previews and terminal
 fallback-model metadata fill in through bounded read-only background transcript
@@ -61,6 +86,64 @@ The shared page still determines `limitApplied`, `offset`, `nextOffset`,
 exceed the shared page size. Use `nextOffset` to advance and deduplicate rows by
 session key across pages; do not derive the next offset from the displayed row
 count.
+
+## Session message subscriptions and narration
+
+`sessions.messages.subscribe` subscribes one connection to a session's live
+messages. Its `key` and optional `agentId` select the session; this is separate
+from the broad roster subscription above. Omit `mode` for full `chat` and `agent`
+streams, including foreground transcripts and passive views of runs started by
+another client. Repeating a request replaces that observer's subscription mode.
+`sessions.messages.unsubscribe` removes the observer identified by the same
+optional `subscriptionId`; omission selects the legacy observer.
+The subscribe acknowledgment includes the canonical `key` and resolved `agentId`.
+Clients retain the resolved owner for later `global` requests, whose key alone
+does not identify an agent. The SDK sends a stable opaque `subscriptionId` for
+each wire observer and includes it in resubscriptions and unsubscribe requests.
+For multiple IDs on one connection and session, full-stream interest takes
+precedence until its last owner releases; approvals remain enabled while any
+owner requests them. Omitting the ID retains the legacy single-observer behavior.
+Older clients remain compatible with the updated Gateway; the updated SDK's
+ownership fields require an updated Gateway.
+
+Background narration consumers declare `mode: "narration"`. The Gateway replaces
+their token-level `chat` deltas and raw `agent` assistant events with
+`session.narration` snapshots. Each snapshot contains `sessionKey`, optional
+`agentId`, `runId`, and `text`: at most 16,384 characters of the current visible
+assistant tail. Hidden reasoning and internal context are removed before the
+tail is bounded. An empty `text` retracts the previous narration. Consumers can
+derive a compact line from this text without reconstructing token deltas.
+
+The first text update can arrive immediately. Subsequent snapshots arrive at
+most once every two seconds per session per connection, using the latest text
+without postponing the pending deadline. Terminal chat events flush the last
+snapshot immediately before the terminal event, including final text corrections
+or retractions; this final flush is exempt from the two-second interval.
+Newer tool activity or a change of run discards pending older text, so a delayed
+snapshot cannot replace a newer tool line or switch the sidebar back to an older run.
+Lifecycle, status, tool, final, abort, and error events retain their existing
+delivery. Raw thinking streams and in-progress preamble or answer-candidate text
+are omitted; item completion and answer selection still arrive. Approval events
+still require `includeApprovals: true` and the normal
+approval authority. Queued narration is discarded on unsubscribe, mode changes,
+connection retirement, or run retirement, and delivery rechecks current access.
+
+The Gateway client SDK shares matching session addresses among local owners.
+The Gateway also combines independently identified observers that resolve to the
+same subscription key. If any owner requires full streams, delivery remains
+full; it returns to narration only after the last full owner releases it.
+Narration consumers sharing a foreground subscription must also accept full
+stream events. The Control UI waits for foreground admission before fetching
+history, so the snapshot covers activity emitted before full streams were enabled.
+
+The bundled Control UI declares narration intent for sidebar interests. It is
+version-locked to its Gateway and reloads on upgrade. Shared Apple chat clients
+use the default full mode for foreground sessions; Android and the TUI retain
+their broad event delivery. Existing SDK callers and older clients that omit
+`mode` retain full streams. Custom UI roots, development UIs, and cross-origin
+UIs exempt from build admission can therefore retain full-stream narration until
+updated. This is an additive protocol-v4 contract, with no capability negotiation
+or protocol-version change.
 
 ## Common event families
 
@@ -96,14 +179,29 @@ count.
   `chat` stream. Subscribe to one text projection for a display; consuming both
   streams into one accumulator duplicates output. In-process agent observers
   retain their cumulative-text contract.
+  A client that renders assistant text solely from `chat` can advertise
+  `chat-only-assistant-text` in its connect `caps`. The Gateway then omits
+  text-bearing `agent` events with `stream: "assistant"` from that connection,
+  including foreground and background narration subscriptions. Other agent
+  streams (tools, items, usage, run status, lifecycle, plans, and approvals),
+  assistant events without text, and the `chat` stream are unchanged. Filtered
+  frames do not consume connection sequence numbers. Clients without the
+  capability keep both projections; native clients that display current-item
+  agent text separately from cumulative chat text should not advertise it.
 - `session.message`, `session.operation`, `session.tool`: transcript, in-flight
   session operation, and event-stream updates for a subscribed session.
+- `session.narration`: bounded assistant-text snapshots for subscriptions with
+  narration intent, paced and settled as described above.
 - `session.approval`: sanitized pending and terminal approval truth for an
   explicitly opted-in exact-session subscriber. Child approvals use the
   persisted ancestor audience; events never mutate transcripts or wake agents.
 - `session.observer`: safe live session headline and status digest. A model-authored
   preamble can update the headline immediately; utility-model assessments replace
   it later when available. Web, iOS, and Android use the same run-scoped digest.
+  Utility-model replies may wrap the JSON digest in one plain or `json` Markdown
+  fence; surrounding prose and invalid digest fields are rejected. If repeated
+  invalid replies disable the observer for a run, the warning includes a redacted,
+  whitespace-collapsed prefix of the last rejected reply, capped at 160 characters.
   The optional `sessionId` and opaque `lifecycleRevision` identify the session
   lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
   increase across runs within that lifecycle but can restart after a reset.
@@ -125,7 +223,7 @@ count.
   take precedence when present. Merge an existing
   roster member's snapshot locally when the query's membership and pagination
   window remain valid. The Control UI reuses lifecycle and ordinary `patch`,
-  `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
+  `participants`, `placement`, `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
   `chat.title` snapshots for held rows with unchanged identity, archive,
   pin, owner, and parent facts and nondecreasing recency. Keyed `sessions.changed`
   and `session.message` publications also carry `ancestorSessions`, an array of
@@ -156,9 +254,13 @@ count.
   happens to match. Missing rows, generation or revision mismatches, and uncertain
   presentation ownership require the existing authoritative refresh path.
   The Gateway bounds this per-connection record and sends full rows after first
-  delivery, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
   eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
   session deletion invalidates remembered ancestors.
+  Recap-only (`reason: "activity-summary"`) events keep their ancestor payloads,
+  but full rows in those events retire the corresponding reference records:
+  shared rosters may skip recap admission. The next ordinary event supplies full
+  rows again; unchanged references already held by the client remain reusable.
   Older web clients ignore the additive reference field. Because `ancestorSessions`
   contains full rows only, they cannot apply a reference as a partial row and erase
   held fields. Missing ancestor snapshots cause their existing authoritative
@@ -175,13 +277,24 @@ count.
   thinking-metadata preservation rules still apply.
   The Control UI coalesces an authoritative
   refresh for missing rows or snapshots, broad/keyless changes, `catalogChanged`,
-  membership filters, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
+  filters whose membership cannot be established from row facts, incomplete ancestor snapshots, and uncertain boundaries (including owner-first rows
   promoted into the shared page). Events overlapping a roster read retain a
   trailing refresh so its response cannot lose an update. A retained list with a
   read error also refreshes on the next relevant event. Profile identity, runner
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Held row updates preserve unfiltered and dashboard-filtered windows without
+  refetching; title and preview enrichment flags do not change membership.
+  Healthy row traffic retains one fallback read after at least 60 seconds.
+  Dashboard pagination belongs to the shared roster window, which keeps loaded
+  pages across row updates and coalesces simultaneous reads for the same query.
+  Child windows use the Gateway's ownership receipts and complete parent child
+  lists. Certified excluded ancestor rows can be skipped; references require an
+  admitted current row from the connection's shared provenance owner.
+  The sidebar owner-count facet also retains its aggregate when admitted old and
+  new row facts prove unchanged contributions. Running state, ownership, sharing,
+  archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
   snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain

@@ -307,14 +307,19 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
         #","senderName":[]"#,
         #","senderUsername":false"#,
         #","senderProfileAvatarUrl":{}"#,
+        #","media":42"#,
+        #","media":[false]"#,
+        #","media":[{"url":"media://inbound/report.pdf","sizeBytes":"old"}]"#,
+        #","mediaImageLayout":42"#,
+        #","mediaImageLayout":{"slots":[{"kind":"inline","factIndex":"old"}]}"#,
     ])
-    func `legacy transcript rows survive reopening and retain their partition`(senderFields: String) async throws {
+    func `legacy transcript rows survive reopening and retain their partition`(optionalFields: String) async throws {
         await store.storeTestTranscript(
             sessionKey: "main",
             messages: [cacheMessage(role: "assistant", text: "cached reply", timestamp: 1000)])
-        // Older readers ignored sender fields. Invalid optional attribution must not invalidate the row.
+        // Older readers ignored this optional metadata; it must not invalidate the cached row.
         let legacyPayload = """
-        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(senderFields)}}
+        {"role":"assistant","content":[{"type":"text","text":"cached reply"}],"timestamp":1000,"__openclaw":{"runId":"old-run"\(optionalFields)}}
         """
         try await databases.cacheQueue.write { db in
             try db.execute(
@@ -635,21 +640,29 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
 
     @Test func `cache projection strips payloads and keeps bounded diffs`() throws {
         let oversizedDiff = "+1 " + String(repeating: "x", count: 64100)
+        let activity = try JSONDecoder().decode([OpenClawAgentActivityItem].self, from: Data(
+            #"[{"itemId":"live-tool","kind":"tool","phase":"start","title":"Editing"}]"#.utf8))
         let message = OpenClawChatMessage(
             role: "toolResult",
             content: [
                 OpenClawChatMessageContent(
                     type: "toolCall",
                     text: "done",
+                    thinkingSignature: "transient-signature",
                     mimeType: "image/jpeg",
                     fileName: "photo.jpg",
+                    playback: .transcode,
                     content: AnyCodable(String(repeating: "payload", count: 1000)),
+                    preview: OpenClawChatCanvasPreview(
+                        kind: "canvas", surface: "assistant_message", render: "url", title: "Live preview",
+                        preferredHeight: 320, url: "/__openclaw__/canvas/live", viewId: "live", sandbox: "scripts"),
                     name: "apply_patch",
                     arguments: AnyCodable([
                         "input": AnyCodable(oversizedDiff),
                         "ignored": AnyCodable("drop"),
                     ]),
-                    details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")])),
+                    details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
+                    runId: "transient-run"),
             ],
             timestamp: 1,
             details: AnyCodable(["diff": AnyCodable(oversizedDiff), "ignored": AnyCodable("drop")]),
@@ -660,11 +673,16 @@ final class ChatTranscriptCacheStoreTests: ClientDatabaseTestSuite, @unchecked S
                 kind: "compaction",
                 id: "compact-cache",
                 tokensBefore: 12000,
-                tokensAfter: 7000))
+                tokensAfter: 7000),
+            activity: activity)
 
         let cached = try #require(OpenClawChatSQLiteTranscriptCache.cacheableMessages([message]).first)
         #expect(cached.content[0].content == nil)
         #expect(cached.content[0].thinkingSignature == nil)
+        #expect(cached.content[0].playback == nil)
+        #expect(cached.content[0].preview == nil)
+        #expect(cached.content[0].runId == nil)
+        #expect(cached.activity == nil)
         #expect(Set(cached.content[0].arguments?.dictionaryValue?.keys.map(\.self) ?? []) == ["input"])
         #expect(cached.content[0].arguments?.dictionaryValue?["input"]?.stringValue?.utf16.count == 64000)
         #expect(Set(cached.details?.dictionaryValue?.keys.map(\.self) ?? []) == ["diff"])

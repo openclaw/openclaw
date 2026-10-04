@@ -3,7 +3,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { seedAttachedPlacementEnvironment } from "./placement-test-fixtures.js";
+import { advancePlacementFixtureToActive } from "./placement-test-fixtures.js";
 
 const SESSION: WorkerSessionPlacementIdentity = {
   sessionId: "session-placement",
@@ -17,36 +17,12 @@ it("filters reconciliation by exact session key across agents while preserving s
     let nowMs = 1_000;
     const store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
 
-    async function advanceToActive(identity: WorkerSessionPlacementIdentity) {
-      seedAttachedPlacementEnvironment(database, {
+    function advanceToActive(identity: WorkerSessionPlacementIdentity) {
+      return advancePlacementFixtureToActive(store, database, identity, {
         environmentId: `environment-${identity.sessionId}`,
-        sessionId: identity.sessionId,
-        ownerEpoch: 7,
+        remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
+        seedEnvironment: "before-dispatch",
       });
-      let placement = await store.startDispatch(identity);
-      for (const step of [
-        { to: "provisioning", patch: { environmentId: `environment-${identity.sessionId}` } },
-        { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-        {
-          to: "starting",
-          patch: {
-            workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-            remoteWorkspaceDir: `/workspace/${identity.sessionId}`,
-          },
-        },
-        { to: "active", patch: { activeOwnerEpoch: 7 } },
-      ] as const) {
-        placement = store.transition({
-          sessionId: identity.sessionId,
-          from: placement.state,
-          expectedGeneration: placement.generation,
-          ...step,
-        });
-      }
-      if (placement.state !== "active") {
-        throw new Error("expected active worker placement");
-      }
-      return placement;
     }
 
     const localClaim = await store.claimTurn({
@@ -58,19 +34,19 @@ it("filters reconciliation by exact session key across agents while preserving s
     });
     await store.releaseTurn(localClaim);
     const active = await advanceToActive({ ...SESSION, sessionId: "reclaimed" });
-    const draining = store.startDrain({
+    const draining = await store.startDrain({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: active.generation,
     });
-    const reconciling = store.startReconcile({
+    const reconciling = await store.startReconcile({
       sessionId: active.sessionId,
       environmentId: active.environmentId,
       ownerEpoch: active.activeOwnerEpoch,
       expectedGeneration: draining.generation,
     });
-    store.transition({
+    await store.transition({
       sessionId: active.sessionId,
       from: "reconciling",
       to: "reclaimed",
@@ -90,7 +66,7 @@ it("filters reconciliation by exact session key across agents while preserving s
     }
     nowMs = 4_000;
     await store.startDispatch({ ...SESSION, sessionId: "failed" });
-    store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
+    await store.fail({ sessionId: "failed", recoveryError: "dispatch failed" });
 
     expect(
       store.listForReconcile(SESSION.sessionKey).map(({ sessionId, state }) => [sessionId, state]),

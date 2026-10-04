@@ -7,6 +7,7 @@ import {
   normalizeOptionalStringifiedId,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -34,7 +35,54 @@ export function extractMessagingToolSourceReplyPayload(
   if (status && status !== "sent") {
     return undefined;
   }
-  const sourceReply = readRecord(details.sourceReply) ?? details;
+  return readSourceReplyPayload(details, readRecord(details.sourceReply) ?? details);
+}
+
+/**
+ * Reads the final reply a `canDeliverSourceReply` tool authored in `details.sourceReply`.
+ * Unlike internal-ui mirrors, nothing has been sent yet: the host delivers the payload
+ * to the current source and records it in the transcript after delivery. A reply needs
+ * text or media; `final: false` is not a deliverable reply, so the model continues as
+ * usual. Callers must already have verified the tool's capability and invocation scope.
+ */
+export function extractToolAuthoredSourceReplyPayload(
+  result: unknown,
+): MessagingToolSourceReplyPayload | undefined {
+  const details = readToolResultDetails(result);
+  const sourceReply = details ? readRecord(details.sourceReply) : undefined;
+  if (!details || !sourceReply || sourceReply.final === false) {
+    return undefined;
+  }
+  const payload = readSourceReplyPayload(details, sourceReply);
+  if (!payload) {
+    return undefined;
+  }
+  // Same admission as source-reply delivery: blank text and blank media entries are
+  // dropped there, and attachments ride along but do not qualify a reply on their own.
+  const hasDeliverableContent =
+    Boolean(payload.text?.trim()) || resolveSourceReplyMediaUrls(payload).length > 0;
+  return hasDeliverableContent ? payload : undefined;
+}
+
+/**
+ * The media a source reply delivers: `mediaUrls` when present, else `mediaUrl`,
+ * without blank entries. Delivery and tool-authored admission share it.
+ */
+export function resolveSourceReplyMediaUrls(
+  payload: Pick<MessagingToolSourceReplyPayload, "mediaUrl" | "mediaUrls">,
+): string[] {
+  const media = payload.mediaUrls?.length
+    ? payload.mediaUrls
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  return media.filter((value) => value.trim().length > 0);
+}
+
+function readSourceReplyPayload(
+  details: Record<string, unknown>,
+  sourceReply: Record<string, unknown>,
+): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
   const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
   if (text) {
@@ -59,31 +107,23 @@ export function extractMessagingToolSourceReplyPayload(
       if (!attachment) {
         return [];
       }
-      const durationMs = asNonNegativeFiniteNumber(attachment.durationMs);
-      const width = asNonNegativeFiniteNumber(attachment.width);
-      const height = asNonNegativeFiniteNumber(attachment.height);
-      const attachmentPath = readStringValue(attachment.path);
-      const attachmentUrl = readStringValue(attachment.url);
-      const attachmentMediaUrl = readStringValue(attachment.mediaUrl);
-      const filePath = readStringValue(attachment.filePath);
-      const mimeType = readStringValue(attachment.mimeType);
-      const name = readStringValue(attachment.name);
-      return [
-        {
-          ...(attachmentPath ? { path: attachmentPath } : {}),
-          ...(attachmentUrl ? { url: attachmentUrl } : {}),
-          ...(attachmentMediaUrl ? { mediaUrl: attachmentMediaUrl } : {}),
-          ...(filePath ? { filePath } : {}),
-          ...(mimeType ? { mimeType } : {}),
-          ...(name ? { name } : {}),
-          ...(typeof attachment.trustedLocalMedia === "boolean"
-            ? { trustedLocalMedia: attachment.trustedLocalMedia }
-            : {}),
-          ...(durationMs !== undefined ? { durationMs } : {}),
-          ...(width !== undefined ? { width } : {}),
-          ...(height !== undefined ? { height } : {}),
-        },
-      ];
+      const projected: ReplyMediaAttachment = {};
+      for (const key of ["path", "url", "mediaUrl", "filePath", "mimeType", "name"] as const) {
+        const fieldText = readStringValue(attachment[key]);
+        if (fieldText) {
+          projected[key] = fieldText;
+        }
+      }
+      if (typeof attachment.trustedLocalMedia === "boolean") {
+        projected.trustedLocalMedia = attachment.trustedLocalMedia;
+      }
+      for (const key of ["durationMs", "width", "height"] as const) {
+        const number = asNonNegativeFiniteNumber(attachment[key]);
+        if (number !== undefined) {
+          projected[key] = number;
+        }
+      }
+      return [projected];
     });
     if (attachments.length > 0) {
       payload.attachments = attachments;
@@ -117,9 +157,6 @@ export function extractMessagingToolSourceReplyPayload(
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
-
-// Core tool names that are allowed to emit trusted local media artifacts.
-// Plugin tools must be explicitly passed as trusted run-local names by the caller.
 
 function resolveMessageToolTarget(params: {
   action: string;

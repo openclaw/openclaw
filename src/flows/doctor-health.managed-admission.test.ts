@@ -3,8 +3,11 @@ import { registerDoctorManagedRepairTests } from "./doctor-health.managed.test-s
 
 describe("runDoctorHealthFlow managed service admission", () => {
   registerDoctorManagedRepairTests([
-    "clean-repair",
-    "clean-inspect",
+    "archive-verification",
+    "clean-stopped-repair",
+    "clean-stopped-probe-timeout",
+    "clean-stopped-owner-unknown",
+    "clean-stopped-manager-unknown",
     "clean-force-repair",
     "clean-force-inspect",
     "update-no-restart",

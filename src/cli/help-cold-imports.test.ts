@@ -1,6 +1,7 @@
 // Help cold import tests cover root help output without loading heavy command modules.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const loaded = vi.hoisted(() => {
   const modules = new Set<string>();
@@ -100,27 +101,6 @@ vi.mock("../commands/sessions-cleanup.js", () => {
 vi.mock("../commands/export-trajectory.js", () => {
   loaded.mark("export-trajectory-command");
   return { exportTrajectoryCommand: vi.fn(async () => {}) };
-});
-
-vi.mock("../commands/tasks.js", () => {
-  loaded.mark("tasks-command");
-  return {
-    tasksAuditCommand: vi.fn(async () => {}),
-    tasksCancelCommand: vi.fn(async () => {}),
-    tasksListCommand: vi.fn(async () => {}),
-    tasksMaintenanceCommand: vi.fn(async () => {}),
-    tasksNotifyCommand: vi.fn(async () => {}),
-    tasksShowCommand: vi.fn(async () => {}),
-  };
-});
-
-vi.mock("../commands/flows.js", () => {
-  loaded.mark("flows-command");
-  return {
-    flowsCancelCommand: vi.fn(async () => {}),
-    flowsListCommand: vi.fn(async () => {}),
-    flowsShowCommand: vi.fn(async () => {}),
-  };
 });
 
 vi.mock("../commands/configure.commands.js", () => {
@@ -277,8 +257,6 @@ describe("subcommand help cold imports", () => {
     expect(loaded.modules).not.toContain("sessions-command");
     expect(loaded.modules).not.toContain("sessions-cleanup-command");
     expect(loaded.modules).not.toContain("export-trajectory-command");
-    expect(loaded.modules).not.toContain("tasks-command");
-    expect(loaded.modules).not.toContain("flows-command");
   });
 
   it("keeps configure help out of configure action/wizard modules", async () => {

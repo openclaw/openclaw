@@ -8,6 +8,14 @@ title: "Updating"
 
 Keep OpenClaw up to date.
 
+App-owned packages declare their update owner in `openclaw-install-owner.json`
+at the package root. For `owner: "macos-app"`, update OpenClaw.app through its
+app updater to update the bundled Gateway and runtime together. `openclaw update`,
+`openclaw update repair`, and Gateway update requests return the marker's update
+hint without changing the package or stopping the Gateway; background checks
+skip package-registry updates. Missing or invalid markers retain normal install
+behavior, with a warning for an invalid marker.
+
 For Docker, Podman, and Kubernetes image replacements, see
 [Upgrading container images](/install/docker#upgrading-container-images). The
 image entrypoint runs Doctor before starting the Gateway and exits if mounted
@@ -19,10 +27,11 @@ backup.
 
 ## Upgrading very old versions
 
-For installations older than June 2026, upgrade to **`2026.9.5` first**, run its
+For installations older than July 2026, upgrade to **`2026.9.5` first**, run its
 Doctor migrations, and then upgrade to `latest`. The bridge release still
 imports the old `tasks/runs.sqlite`, `flows/registry.sqlite`, and
-`plugin-state/state.sqlite` databases, imports pre-June plugin JSON state and
+`plugin-state/state.sqlite` databases, imports the JSON plugin install index,
+pre-June plugin JSON state, and
 `credentials/oauth.json`, repairs retired agent and channel config keys, and
 includes the old runtime aliases. The retired plugin imports cover Telegram,
 iMessage, Active Memory, Nostr, and Microsoft Teams; see
@@ -31,10 +40,15 @@ those retired state files untouched.
 If you already installed the latest version, Doctor stops before rewriting config
 that still contains these retired keys and directs you through the same bridge.
 
+The retired same-file memory index (`meta`, `files`, and `chunks`) is also refused
+before canonical tables are created. Preserve the original state and configuration,
+then use **`2026.9.7`** to migrate a compatible copy of that index before retrying.
+Unrelated tables with these generic names remain untouched.
+
 If a newer release has already upgraded your SQLite databases, use a compatible
 pre-update backup for the bridge. Older releases cannot open newer database
 schemas; follow [downgrade recovery](/reference/database-schemas/integrity-and-recovery#downgrade-recovery)
-before running `2026.9.5` against that state.
+before running either bridge release against that state.
 
 Back up the state first and use a [supported Node version](/install/node):
 Node 24.16+ on the 24.x line, or Node 26.1+. Keep the same owning account,
@@ -95,6 +109,12 @@ without the capability marker fall back to installed checks, as do
 Admission selection is CLI-only: `--admission auto` is the default, and there is
 no environment-variable override.
 
+Windows candidates accept lease identities from the `2026.9.6` updater even
+when NTFS file IDs exceed JavaScript's exact numeric range. After validating
+the handoff, the candidate retains exact file and parent-directory identities;
+later replacement still stops the update. Lease read failures report their
+underlying cause instead of a parent-binding mismatch.
+
 Managed-service inspection is best effort. If the service manager is unavailable,
 including Linux hosts without systemd, the update continues and records a warning.
 It leaves unverified service definitions unchanged and skips their automatic
@@ -105,11 +125,44 @@ Service membership uses the running Gateway's process ancestry and native superv
 facts. An external terminal that inherited service environment markers can still update after native
 membership is verified as external. Reparented children remain inside when they
 share the Gateway's macOS process group or launchd job, or its systemd unit cgroup.
-Unreadable native membership refuses with `service-membership-unverified`;
+An already-current core update never refuses for service membership. When membership
+cannot be verified as external, it completes with `already-current` and a warning
+that plugin, runtime, and service maintenance was deferred, before that maintenance
+can change files or stop the Gateway. An explicit channel change is also left
+unapplied and named in the warning so it can be retried. Real updates retain the containment checks.
+Present but unreadable native membership refuses with `service-membership-unverified`;
 confirmed native membership uses `inside-gateway-service`. Windows currently uses
 verified ancestry and the inherited-marker fallback because job-object membership
 is not available to the runtime. A genuine Gateway descendant must use the managed
 update handoff or an independent terminal.
+
+Linux supports both cgroup v2 and the named systemd v1 hierarchy. When readable
+native observations establish that this host has no service containment tree or
+launchd job, a complete external ancestry walk and a distinct process group allow
+the updater to stop, update, and start the managed service itself. The service
+definition must still belong to this installation. The report and
+`openclaw update status --json` record a warning: `Service membership unverifiable
+on this host; using managed stop/update/start.`
+
+Permission failures, conflicting, incomplete or malformed observations, and known service
+members do not use this fallback. Reparented callers in the Gateway's process
+group remain inside even when there is no native unit tree. When native facts
+exist but cannot be read, run this sequence from an interactive external shell
+not started by the Gateway service, under the installation's owning account:
+
+```bash
+openclaw gateway stop && openclaw update --yes && openclaw gateway start
+```
+
+Stopping the Gateway removes the live containment ambiguity. Keep the same account,
+profile, and state/configuration paths throughout, and repeat any requested `--channel`
+or `--tag` on the update command. If the update reports an error,
+follow its recovery guidance before starting the Gateway. With native helper support,
+`openclaw gateway call update.run --params '{}'`, the Gateway tool's `update.run`
+action, and `/update` can instead perform a managed handoff. Linux transient user
+handoffs require `systemd-run`; an emulated manager without it cannot use that route.
+See [Automation and SSH](/cli/update#automation-and-ssh).
+
 Managed-service refusals retain a specific code, such as
 `inside-gateway-process-tree` or `service-definition-changed`, in the failure
 report and `openclaw update status --json`. Shared reports preserve that code and
@@ -135,7 +188,22 @@ stops before spawning and records `candidate-config-read-recursion`.
 Both runtimes use the same result channel for synchronous and asynchronous reads;
 config diagnostics stay separate from the result.
 
-When a writable managed Gateway service points at another global installation,
+Bun-hosted updates from 2026.9.7 can finish candidate Doctor and restart the
+Gateway after package replacement. Idle candidate workers release their IPC
+references after native work closes, so a completed Doctor does not leave the
+installed updater waiting indefinitely for its exit. This fix runs in the
+updated package; the published updater and its handoff markers are unchanged.
+
+The running Gateway retains its shutdown code before an in-place update can
+replace the package's bundled files. Transcript shutdown drains captures and
+persists deterministic notes without starting optional model inference. This
+protection applies to updates **from** a release containing the shutdown fix.
+Older running Gateways, including 2026.9.6, can still fail their first shutdown
+with `ERR_MODULE_NOT_FOUND` after package replacement; installing a fixed
+candidate cannot change code already running in that process. Start the updated
+Gateway with its installation owner if the old process exits without restarting.
+
+When a writable managed Node Gateway service points at another global installation,
 the update keeps the active CLI's installation as its target and refreshes the
 service through `gateway install --force` before verifying the restarted Gateway.
 The old service command remains the recovery identity until that handoff succeeds.
@@ -146,9 +214,54 @@ the order of retained `PATH` entries and prepends newly added managed entries.
 Paths carried over solely from the old definition still pass the existing safety
 filters. If the definition cannot be preserved, reconciliation requires manual repair.
 Deployment-owned definitions retain their existing installation owner.
+
+An owned managed **Bun** Gateway at a different package root uses the existing
+service-root update route: only the Gateway installation advances, and the
+invoking CLI installation stays unchanged. The updater validates the service's
+actual Bun executable against the Bun 1.4+ and WAL-safe `node:sqlite` requirements;
+Bun's emulated Node version is not checked against `engines.node`. If the updater
+runs on Node, its Node must also satisfy the target package's engine and SQLite
+requirements before package replacement, because finalization uses that runtime.
+Bun-owned package-manager probes and installs use that verified executable, and the
+existing install/restart path retains the recorded runtime pin. A path under
+`~/.openclaw` alone does not establish Bun package-manager ownership. See
+[Bun-only installs](/install/bun-compatibility#bun-only-installs).
+
+Doctor and `openclaw update repair` do not move a Bun Gateway onto a different
+CLI installation. A repair invoked from that other installation reports the
+drift and refuses service maintenance before stopping the Gateway. Run repair
+from the Gateway's own installation, for example
+`<bun> <service-root>/openclaw.mjs update repair`, or use `openclaw update` to
+advance its installation in place.
+
+The installed updater runs first. In a Linux split-root fixture, published
+2026.9.6 refused early with `ENOENT` when Bun was absent from PATH, leaving the
+Gateway and both installations unchanged. With the fork Bun on PATH, that
+published driver updated the Gateway installation in place and restarted it
+healthy while leaving the invoking CLI unchanged. The routing and explicit Bun
+selection described above apply only when the updater driving the update
+contains this fix. Installing a newer candidate cannot change that first hop.
+
 Pending package-publication recovery in either the CLI or selected service
 installation blocks writable preparation. Follow the package recovery command
 reported by the update before retrying; Doctor does not clear those artifacts.
+
+If a pnpm-owned install fails with `IO error: not a terminal`, the installed
+updater may be triggering an interactive pnpm build-approval prompt while
+capturing its output. A newer candidate cannot repair that first update.
+Follow the [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
+preserving the owning account, prefix, and state/configuration. Back up and stop
+the Gateway through its actual owner before replacing the package. For the
+installation step in a POSIX shell, supply noninteractive input:
+
+```bash
+pnpm add -g --allow-build=openclaw openclaw@VERSION </dev/null
+```
+
+Replace `VERSION` with a release containing this fix. Then run Doctor and restart
+through the same owner as described in the manual procedure. Updates driven by
+the fixed version supply noninteractive input to pnpm themselves. The recovery
+command permits OpenClaw's own install scripts without approving additional dependencies.
 
 The installed 2026.9.4 updater can refuse with `managed-service-preflight` before
 the target code runs. To reach a release containing this repair, use the
@@ -179,7 +292,7 @@ containing the managed-helper authority fix, subsequent updates started through
 **from** the fixed version; it does not repair the 2026.9.4 macOS handoff in place.
 </Note>
 
-Package updates inspect the exact candidate's Node requirement before activation.
+Package updates that select Node inspect the exact candidate's Node requirement before activation.
 An incompatible runtime produces `node-runtime-preflight`, with the target
 version, required engine range, selected Node version, and an upgrade command.
 npm directory permission failures produce `global-install-permission-denied`,
@@ -259,7 +372,17 @@ This lets validation run while the serving Gateway keeps its configured ports.
 It preserves non-secret Gateway auth settings such as `gateway.auth.rateLimit`
 for policy checks, while using a temporary token and disabling Tailscale identity
 authentication.
-The activated Gateway retains your normal listener settings.
+The activated Gateway retains your normal listener settings. Candidate startup
+progress is emitted only when the driving updater announces support, so older
+updaters, including 2026.9.5 and 2026.9.6, retain actual startup errors instead of
+mistaking a progress marker for the failure reason.
+The internal progress-capable launch repeats the existing `--update-canary`
+boolean marker; legacy launches contain it once. This is an internal
+updater-to-candidate contract, with no operator configuration setting.
+Startup failure reports retain the last meaningful stderr diagnostic and the end
+of bounded log lines, with secrets redacted. Canary progress markers do not
+replace the failure reason. The installed updater owns this reporting, so an
+older updater can retain its earlier diagnostic behavior on the first update.
 The canary verifies the copied plugin payloads without downloading replacements.
 It warns when plugin refresh is deferred; live update finalization owns that
 refresh, so a slow registry cannot consume the canary's startup budget.
@@ -280,8 +403,8 @@ read transaction, so a busy Gateway can keep writing while the copy includes
 committed WAL data. Each acquisition makes one copy instead of retrying until
 the database becomes quiet. On rollback-journal volumes, SQLite can delay writer
 commits until the consistent read finishes. Rehearsal records copied pages, bytes, and elapsed
-time in the update ledger, then checks, compacts, and publishes the private
-copy for validation. Source databases and recovery backups retain their existing
+time in the update ledger, then checks and publishes the private copy with row IDs
+preserved for validation. Source databases and recovery backups retain their existing
 protection; the faster preparation takes effect when the newer updater runs.
 
 Package updates also check npm availability for enabled configured plugins before
@@ -299,14 +422,72 @@ require registry requests.
 
 This metadata check does not reserve downloads. Plugin-only download, install,
 or load failures remain actionable warnings after an otherwise successful core
-update. Candidate rehearsal also reports a plugin source parse failure as a warning
-with the plugin ID, source path, and parser error, then continues checking other
-plugin entries. Valid ESM plugins can use `import.meta` during dependency inspection.
+update. Snapshot inventory runs from the staged candidate package, so it uses
+the target version's plugin inspector. Snapshot inventory and candidate Doctor
+share plugin source inspection. An unparseable entry produces a warning with the
+plugin ID, source path, and parser error while its files are copied unchanged and
+other entries are checked.
+Valid ESM plugins can use `import.meta` during dependency inspection.
 The updater preserves recorded choices and retains the previous plugin
 payload where possible. Follow the reported `openclaw plugins update <id>` command for a
 failed install or update, or `openclaw doctor --fix` for a load problem. Invalid
 configuration or state, ownership errors, and failed core startup or readiness
 checks still prevent completion.
+
+### Package-publication recovery
+
+Supported POSIX npm updates print a recovery command using the selected external
+Node or Bun executable before
+transferring the staged package into recovery custody. Keep the printed commands;
+each names one operation with required `--anchor` and `--operation` arguments.
+The initial journal and helper are published together in a private control
+directory only after both are complete. A later update first prints a temporary
+staging command, then the stable command after the helper has moved. The staging
+command is valid only before that move; an earlier operation's command cannot
+select a later operation. The helper verifies its own recorded path, identity
+and content before using that journal. It is outside the live package and disposable recovery
+directory. `status` reads the operation, `repair` resumes only its recorded
+package publication, and `retire` removes only its recorded obsolete objects.
+These commands do not replace post-update plugin, migration or service recovery.
+Keep other package managers stopped while recovering the operation.
+
+Bun recovery requires a supported Bun runtime with WAL-reset-safe SQLite and can
+run without Node installed. The installed updater controls the first upgrade:
+older releases may omit the recovery command on Bun or refuse a Bun recovery
+runtime. Installing a newer candidate does not change that first-hop behavior;
+subsequent updates use the candidate's recovery support.
+
+Retirement records removal of the disposable directory before recording the
+helper's final unlink intent. The helper is then removed. The bounded last
+receipt remains in the control directory and is readable through
+`openclaw update status --json` as `packageActivation`, even after helper removal.
+A completed receipt is replaced only when the next update is admitted through
+the same original executor store; it is not authority to mutate an installation.
+
+Missing, legacy or identity-mismatched recovery artifacts block the next mutable
+update. They are not silently migrated or deleted. Preserve them and use their
+original recovery owner; do not recreate the journal or remove them to bypass
+the refusal.
+
+SQLite recovery and rollback custody verify file identity, size, and content.
+Timestamp-only changes are accepted after verifying identical bytes; replaced
+files or changed database or journal bytes still require recovery by their owner.
+
+For older in-directory activation journals, `openclaw update status --json`
+reports the recorded phase and the original helper's `status` command. The
+current updater only inspects these journals; use their original helper to
+recover or retire the operation before starting another update.
+
+Package recovery does not replay a full-state checkpoint or reverse database
+migrations. Automatic rollback keeps compatible databases in place, preserving
+newer writes. If the previous runtime cannot read the current databases, the
+updater retains the candidate and recovery artifacts and reports why rollback
+was refused.
+
+Rollback snapshots settle local SQLite writers under maintenance ownership before
+capture, so writer shutdown during rollback is not mistaken for intervening writes.
+The installed updater owns snapshot capture; staging a newer candidate cannot
+change that behavior in an already-running older updater.
 
 Switch channels or target a specific version:
 

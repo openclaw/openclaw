@@ -22,7 +22,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.verificationToken`                           | Required for webhook mode                                                                                                               | -                                    |
 | `channels.feishu.encryptKey`                                  | Required for webhook mode                                                                                                               | -                                    |
 | `channels.feishu.webhookPath`                                 | Canonical HTTP request path (must start with `/`)                                                                                       | `/feishu/events`                     |
-| `channels.feishu.legacyWebhook`                               | Legacy forwarding listener: omitted preserves the historical endpoint, `{ port, host? }` overrides it, `false` disables it              | `{ port: 3000, host: "127.0.0.1" }`  |
+| `channels.feishu.legacyWebhook`                               | Explicit forwarding listener: `{ port, host? }`; omitted or `false` opens no listener, subject to account inheritance                   | none                                 |
 | `channels.feishu.accounts.<id>.appId`                         | App ID                                                                                                                                  | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                     | App Secret                                                                                                                              | -                                    |
 | `channels.feishu.accounts.<id>.domain`                        | Per-account domain override                                                                                                             | `feishu`                             |
@@ -96,45 +96,59 @@ in-flight body-read budgets because signature verification needs the complete
 body. Use distinct `webhookPath` pathnames for separate budgets. Trusted legacy
 endpoints retain independent in-flight capacity even when their paths match.
 
-Webhook mode also preserves the previous endpoint on `127.0.0.1:3000` when
-`legacyWebhook` is omitted. The Gateway owns this listener and forwards requests
-to the same plugin route and signature verifier. Set
-`legacyWebhook: { port: 3100, host: "127.0.0.1" }` to override the endpoint.
+New installations open no separate webhook port. On an existing installation,
+Doctor pins `legacyWebhook: { port: 3000, host: "127.0.0.1" }` once for enabled
+webhook accounts that relied on the implicit endpoint. The Gateway owns this
+explicit listener and forwards requests to the same plugin route and signature
+verifier. Set `legacyWebhook: { port: 3100, host: "127.0.0.1" }` to select another endpoint.
 An omitted object `host` binds to `127.0.0.1`; explicit hosts, including wildcard
 addresses, are preserved. Account entries inherit the root setting, and
 `accounts.<id>.legacyWebhook: false` disables forwarding for that account.
-A shared legacy socket stays open while another account still uses that endpoint.
+Feishu requires OpenClaw 2026.9.8 or newer. The Gateway owns every webhook
+listener, and a shared legacy socket stays open while another account still uses
+that endpoint.
 On account shutdown, authenticated responses may finish for up to five seconds,
 matching the previous listener's close grace period. Unfinished responses close
 at that deadline; other accounts keep their routes and listeners.
 During that grace period, correctly signed callbacks for the stopping account
 receive a retryable `503` unless a live successor already accepts their signature.
 
-On update, the plugin's Doctor migration moves `webhookPort` and `webhookHost`
+The plugin's Doctor migration moves `webhookPort` and `webhookHost`
 into `legacyWebhook: { port, host }`, preserving the effective old defaults when
-only one key was set. Doctor's normal config backup protects the original
+only one key was set. The normal config backup protects the original
 settings. Existing canonical `legacyWebhook` settings, including `false`, win.
-An install that omitted both old settings keeps receiving traffic on port `3000`.
+The one-shot pin preserves an existing install that omitted both old settings;
+it requires evidence of prior operation and is not applied to a fresh install.
+
+When updating from a 2026.9.6 host with these old keys, first update OpenClaw core
+to 2026.9.8 or newer, which includes the [plugin-update migration repair](https://github.com/openclaw/openclaw/pull/160682).
+Then explicitly update any pinned Feishu package to your chosen release. The core
+updater preserves explicit plugin version pins. The updated installer applies
+Feishu's migration before activating the replacement package; the published
+2026.9.6 installer rejects the new schema before it can run that repair. A refused
+plugin-only update leaves the previous installation and settings intact.
 
 The deprecated TypeScript `webhookPort` and `webhookHost` input fields remain
 source-compatible until the next Plugin SDK major. Runtime config uses
 `legacyWebhook`; run `openclaw doctor --fix` to migrate the old keys.
 
 To use only the Gateway port, update the Feishu callback URL or reverse-proxy
-upstream to the Gateway port and `webhookPath`, verify delivery, then set
-`legacyWebhook: false`. Removing that setting restores the inherited or default
-endpoint. Startup and Doctor print the destination and disable instruction.
+upstream to the Gateway port and `webhookPath`, verify delivery, then remove the
+`legacyWebhook` pin. Keep `meta.migrations.webhookListeners`, which Doctor saves
+with the pin, so later runs do not recreate it. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for included and read-only config sources. Use `accounts.<id>.legacyWebhook: false` to override an inherited
+root listener. Startup and Doctor print the destination and removal instruction.
 Doctor presents healthy endpoint guidance as information and path conflicts as
 warnings; disabled accounts and WebSocket accounts receive no webhook notes.
 OpenClaw cannot update callback URLs stored in the Feishu console.
 
 The exact Gateway probe paths (`/health`, `/healthz`, `/ready`, `/readyz`,
 `/startup`, and `/startupz`, including query strings) cannot receive Feishu
-callbacks on the Gateway port. With `legacyWebhook: false`, webhook startup
+callbacks on the Gateway port. Without an explicit legacy listener, webhook startup
 refuses these paths and names the replacement. The legacy listener continues
 serving the old path when enabled. Change `webhookPath` to `/feishu/events` (or
 another unreserved path), update the Feishu callback URL or reverse-proxy path,
-and verify delivery on the Gateway before setting `legacyWebhook: false`.
+and verify delivery on the Gateway before removing the `legacyWebhook` pin.
 Paths nested below a probe path are not reserved by this rule.
 
 Paths under `/api/channels` require Gateway authentication and cannot receive

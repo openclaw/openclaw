@@ -88,6 +88,7 @@ export async function deliverClientVoiceMutationDigest(
       writeVoiceSessionRecordInTransaction(database, current);
     },
     { agentId: record.agentId },
+    { operationLabel: "voice.mutation-digest.delivered" },
   );
 }
 
@@ -107,15 +108,6 @@ type MutationDigestAttempt<TContext> = {
   generation: number;
 };
 
-type MutationDigestPolicy = {
-  maxRetainedIntents: number;
-  maxRetainedIdentityBytes: number;
-  maxConcurrentAttempts: number;
-  maxAttemptFailures: number;
-  attemptAbortAfterMs: number;
-  failureRetentionMs: number;
-};
-
 export class ClientVoiceMutationDigestOwner<TContext> {
   private readonly intents = new Map<string, MutationDigestIntent<TContext>>();
   private readonly pendingKeys = new Set<string>();
@@ -123,6 +115,7 @@ export class ClientVoiceMutationDigestOwner<TContext> {
   private readonly activeAttempts = new Map<string, MutationDigestAttempt<TContext>>();
   private retainedIdentityBytes = 0;
   private generation = 0;
+  private readonly policy = CLIENT_VOICE_MUTATION_DIGEST_POLICY;
 
   constructor(
     private readonly options: {
@@ -133,13 +126,8 @@ export class ClientVoiceMutationDigestOwner<TContext> {
         signal: AbortSignal;
       }) => Promise<boolean>;
       warn: (message: string) => void;
-      policy?: MutationDigestPolicy;
     },
   ) {}
-
-  private get policy(): MutationDigestPolicy {
-    return this.options.policy ?? CLIENT_VOICE_MUTATION_DIGEST_POLICY;
-  }
 
   record(params: { agentId: string; voiceSessionId: string; context: TContext }): void {
     const key = this.key(params);

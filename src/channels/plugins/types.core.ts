@@ -4,9 +4,11 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../../packages/gateway-protocol/src/client-info.js";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { ReplyDeliveryContext, ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import type { MarkdownTableMode } from "../../config/types.base.js";
+import type { MarkdownTableMode, ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -99,12 +101,10 @@ export type ChannelMessageToolDiscovery = {
   mediaSourceParams?: ChannelMessageToolMediaSourceParams | null;
 };
 
-export type ChannelStatusIssue = {
+export type ChannelStatusIssue = SchemaContract<
+  Omit<NonNullable<ChannelsStatusResult["statusIssues"]>[number], "channel">
+> & {
   channel: ChannelId;
-  accountId: string;
-  kind: "intent" | "permissions" | "config" | "auth" | "runtime";
-  message: string;
-  fix?: string;
 };
 
 export type ChannelAccountState =
@@ -144,18 +144,14 @@ export type ChannelMeta = {
 };
 
 /** Snapshot row returned by channel status and lifecycle surfaces. */
-export type ChannelAccountSnapshot = {
-  accountId: string;
-  name?: string;
-  enabled?: boolean;
-  configured?: boolean;
+export type ChannelAccountSnapshot = SchemaContract<
+  Omit<
+    ChannelsStatusResult["channelAccounts"][string][number],
+    "healthState" | "credentialSource" | "audienceType" | "audience" | "webhookPath" | "webhookUrl"
+  >
+> & {
   statusState?: string;
-  linked?: boolean;
-  running?: boolean;
-  connected?: boolean;
   restartPending?: boolean;
-  reconnectAttempts?: number;
-  lastConnectedAt?: number | null;
   lastDisconnect?:
     | string
     | {
@@ -167,9 +163,7 @@ export type ChannelAccountSnapshot = {
     | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
-  lastTransportActivityAt?: number | null;
   stateReason?: string;
-  lastError?: string | null;
   /**
    * Legacy channel-authored health label; channel plugins should publish `lifecycle` instead.
    * Core-derived policy writes remain supported. There is no removal date; removal awaits
@@ -188,20 +182,6 @@ export type ChannelAccountSnapshot = {
    */
   ingressUnavailable?: true;
   terminalDisconnect?: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastInboundAt?: number | null;
-  lastOutboundAt?: number | null;
-  busy?: boolean;
-  activeRuns?: number;
-  lastRunActivityAt?: number | null;
-  activeRunStartedAt?: number | null;
-  mode?: string;
-  dmPolicy?: string;
-  allowFrom?: string[];
-  tokenSource?: string;
-  botTokenSource?: string;
-  appTokenSource?: string;
   userTokenSource?: string;
   signingSecretSource?: string;
   tokenStatus?: string;
@@ -217,15 +197,6 @@ export type ChannelAccountSnapshot = {
   audience?: string;
   webhookPath?: string;
   webhookUrl?: string;
-  baseUrl?: string;
-  allowUnmentionedGroups?: boolean;
-  cliPath?: string | null;
-  dbPath?: string | null;
-  port?: number | null;
-  probe?: unknown;
-  lastProbeAt?: number | null;
-  audit?: unknown;
-  application?: unknown;
   bot?: unknown;
   publicKey?: string | null;
   profile?: unknown;
@@ -255,17 +226,6 @@ export type ChannelGroupContext = {
   senderE164?: string | null;
 };
 
-/** TTS voice delivery behavior advertised by a channel plugin. */
-/**
- * Container tokens (file-extension shape, no leading dot) that the host
- * TTS pipeline knows how to pre-transcode synthesized audio into.
- * Channels that benefit from a specific container — currently only
- * iMessage, which needs Apple's native voice-memo CAF descriptor — name
- * one here. Adding a new entry requires extending the host transcoder
- * recipe table in lockstep so a typed declaration cannot silently no-op.
- */
-type PreferredAudioFileFormat = "caf";
-
 export type ChannelTtsVoiceDeliveryCapabilities = {
   synthesisTarget: "audio-file" | "voice-note";
   transcodesAudio?: boolean;
@@ -273,14 +233,12 @@ export type ChannelTtsVoiceDeliveryCapabilities = {
   /** Voice notes can carry the final reply text as a visible caption. */
   captionedFinalText?: boolean;
   /**
-   * Optional preferred audio container the channel wants for voice-memo
-   * delivery. When set and the host can transcode (e.g. `afconvert` on
-   * macOS), the TTS pipeline pre-encodes synthesized audio to this format
-   * before handing it to the channel. Useful for channels (such as
-   * iMessage) whose downstream attempts its own container conversion
-   * that races against the upload write and fails.
+   * Preferred file-extension token, without a leading dot, for host pre-transcoding.
+   * Conversion requires an available transcoder (e.g. `afconvert` on macOS).
+   * iMessage uses CAF for native voice memos to avoid a downstream conversion/upload race.
+   * New formats require a matching host transcoder recipe.
    */
-  preferAudioFileFormat?: PreferredAudioFileFormat;
+  preferAudioFileFormat?: "caf";
 };
 
 /** Static capability flags advertised by a channel plugin. */
@@ -288,6 +246,8 @@ export type ChannelCapabilities = {
   chatTypes: Array<ChatType | "thread">;
   polls?: boolean;
   reactions?: boolean;
+  /** Bot reactions per message; omitted means multiple independent emoji. */
+  reactionSlots?: "single" | "multiple";
   edit?: boolean;
   unsend?: boolean;
   reply?: boolean;
@@ -324,17 +284,12 @@ export type ChannelMentionAdapter = {
     cfg: OpenClawConfig | undefined;
     agentId?: string;
   }) => RegExp[];
-  stripPatterns?: (params: {
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string[];
-  stripMentions?: (params: {
-    text: string;
-    ctx: MsgContext;
-    cfg: OpenClawConfig | undefined;
-    agentId?: string;
-  }) => string;
+  stripPatterns?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0],
+  ) => string[];
+  stripMentions?: (
+    params: Parameters<NonNullable<ChannelMentionAdapter["stripRegexes"]>>[0] & { text: string },
+  ) => string;
 };
 
 export type ChannelStreamingAdapter = {
@@ -378,7 +333,7 @@ export type ChannelOutboundSessionRoute = {
     kind: ChatType;
     id: string;
   };
-  chatType: "direct" | "group" | "channel";
+  chatType: ChatType;
   from: string;
   to: string;
   threadId?: string | number;
@@ -402,7 +357,7 @@ export type ChannelThreadingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
     chatType?: string | null;
-  }) => "off" | "first" | "all" | "batched";
+  }) => ReplyToMode;
   /**
    * When replyToMode is "off", allow explicit reply tags/directives to keep replyToId.
    *
@@ -480,7 +435,7 @@ export type ChannelThreadingToolContext = {
   currentChannelProvider?: ChannelId;
   currentThreadTs?: string;
   currentMessageId?: string | number;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   /** True when posting at the parent conversation root would leak a thread-originated reply. */
   sameChannelThreadRequired?: boolean;
@@ -505,7 +460,7 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId: string;
     conversation: {
-      kind: "direct" | "group" | "channel";
+      kind: ChatType;
       peerId: string;
       /** Canonical delivery target when it differs from the routing peer. */
       target?: string;
@@ -538,7 +493,7 @@ export type ChannelMessagingAdapter = {
     sessionKey: string;
     ctx: MsgContext;
   }) => string | undefined;
-  deriveLegacySessionChatType?: (sessionKey: string) => "direct" | "group" | "channel" | undefined;
+  deriveLegacySessionChatType?: (sessionKey: string) => ChatType | undefined;
   isLegacyGroupSessionKey?: (key: string) => boolean;
   canonicalizeLegacySessionKey?: (params: {
     key: string;
@@ -554,10 +509,9 @@ export type ChannelMessagingAdapter = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => string[];
-  resolveRemoteInboundAttachmentRoots?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[];
+  resolveRemoteInboundAttachmentRoots?: NonNullable<
+    ChannelMessagingAdapter["resolveInboundAttachmentRoots"]
+  >;
   /**
    * Bundled plugins that need inbound conversation resolution before runtime
    * bootstrap can mirror it through a top-level `thread-binding-api.ts` surface.
@@ -602,10 +556,9 @@ export type ChannelMessagingAdapter = {
    * `resolveSessionConversation(...)` does not return
    * `parentConversationCandidates`.
    */
-  resolveParentConversationCandidates?: (params: {
-    kind: "group" | "channel";
-    rawId: string;
-  }) => string[] | null;
+  resolveParentConversationCandidates?: (
+    params: Parameters<NonNullable<ChannelMessagingAdapter["resolveSessionConversation"]>>[0],
+  ) => string[] | null;
   resolveSessionTarget?: (params: {
     kind: "group" | "channel";
     id: string;
@@ -685,10 +638,9 @@ export type ChannelMessagingAdapter = {
 
 export type ChannelAgentPromptAdapter = {
   messageToolHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
-  messageToolCapabilities?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => string[] | undefined;
+  messageToolCapabilities?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => string[] | undefined;
   /** Per-account formatting contract for agent turns whose visible text reaches this channel. */
   inboundFormattingHints?: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     | {
@@ -696,10 +648,9 @@ export type ChannelAgentPromptAdapter = {
         rules: string[];
       }
     | undefined;
-  reactionGuidance?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-  }) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
+  reactionGuidance?: (
+    params: Parameters<NonNullable<ChannelAgentPromptAdapter["messageToolHints"]>>[0],
+  ) => { level: "minimal" | "extensive"; channelLabel?: string } | undefined;
 };
 
 export type ChannelDirectoryEntryKind = "user" | "group" | "channel";

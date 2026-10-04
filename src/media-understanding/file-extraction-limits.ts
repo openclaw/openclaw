@@ -19,43 +19,30 @@ const INBOUND_FILE_EXTRACTION_MAX_BYTES_CAP = 25 * 1024 * 1024;
 const INBOUND_FILE_EXTRACTION_DEFAULT_MAX_PAGES = 20;
 const INBOUND_FILE_EXTRACTION_MAX_PAGES_CAP = 150;
 
-type InboundFileExtractionDefaults = {
-  mediaMaxMb?: number;
-  pdfMaxPages?: number;
-};
-
 /** Resolved inbound file limits plus whether the operator pinned an explicit MIME allowlist. */
 export type FileExtractionLimits = InputFileLimits & {
   allowedMimesConfigured: boolean;
 };
-
-function resolveInboundFileExtractionMaxBytes(
-  defaults: InboundFileExtractionDefaults | undefined,
-): number {
-  const maxMb =
-    positiveExtractionLimit(defaults?.mediaMaxMb) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_MB;
-  return Math.min(Math.floor(maxMb * 1024 * 1024), INBOUND_FILE_EXTRACTION_MAX_BYTES_CAP);
-}
-
-function resolveInboundFileExtractionMaxPages(
-  defaults: InboundFileExtractionDefaults | undefined,
-): number {
-  const pages =
-    positiveExtractionLimit(defaults?.pdfMaxPages) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_PAGES;
-  return Math.min(Math.trunc(pages), INBOUND_FILE_EXTRACTION_MAX_PAGES_CAP);
-}
 
 /** Builds inbound attachment extraction limits, sized to the agent's media/PDF config. */
 export function resolveFileExtractionLimits(cfg: OpenClawConfig): FileExtractionLimits {
   const files = cfg.gateway?.http?.endpoints?.responses?.files;
   const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
   const defaults = cfg.agents?.defaults;
+  const maxMb =
+    positiveExtractionLimit(defaults?.mediaMaxMb) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_MB;
+  const maxPages =
+    positiveExtractionLimit(defaults?.pdfMaxPages) ?? INBOUND_FILE_EXTRACTION_DEFAULT_MAX_PAGES;
   const inboundFiles: InputFileLimitsConfig = {
     ...files,
-    maxBytes: files?.maxBytes ?? resolveInboundFileExtractionMaxBytes(defaults),
+    maxBytes:
+      files?.maxBytes ??
+      Math.min(Math.floor(maxMb * 1024 * 1024), INBOUND_FILE_EXTRACTION_MAX_BYTES_CAP),
     pdf: {
       ...files?.pdf,
-      maxPages: files?.pdf?.maxPages ?? resolveInboundFileExtractionMaxPages(defaults),
+      maxPages:
+        files?.pdf?.maxPages ??
+        Math.min(Math.trunc(maxPages), INBOUND_FILE_EXTRACTION_MAX_PAGES_CAP),
     },
   };
   return {

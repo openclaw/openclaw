@@ -161,15 +161,21 @@ async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>
 }
 
 describe("managed Windows update after the startup canary", () => {
-  it.each([false, true])(
-    "records the active readiness budget and refreshes its wait reason (json=%s)",
-    async (json) => {
+  it.each([
+    { json: false, observedStartupMs: 300_000, timeoutMs: undefined, budgetMs: 3_000_000 },
+    { json: true, observedStartupMs: 300_000, timeoutMs: undefined, budgetMs: 3_000_000 },
+    { json: false, observedStartupMs: 600_000, timeoutMs: undefined, budgetMs: 3_600_000 },
+    { json: false, observedStartupMs: 600_000, timeoutMs: 7_200_000, budgetMs: 7_200_000 },
+  ])(
+    "records and refreshes the $budgetMs ms readiness budget (json=$json)",
+    async ({ json, observedStartupMs, timeoutMs, budgetMs }) => {
       const f = fixture();
       const probe = holdRuntimeProbe();
       const abort = new AbortController();
       const pending = verifyPreviousGatewayForUpdate({
         ...f.params,
-        observedStartupMs: 300_000,
+        observedStartupMs,
+        timeoutMs,
         opts: { ...f.params.opts, json },
         signal: abort.signal,
       });
@@ -179,8 +185,15 @@ describe("managed Windows update after the startup canary", () => {
         expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
         expect(f.wait()).toMatchObject({ status: "in_progress", startedAtMs: startedAt });
         expect(f.wait()?.detail).toMatch(/previous.Gateway readiness verification/i);
-        expect(f.wait()?.detail).toContain("3000000");
-        expect(f.wait()?.detail).toMatch(/300000.*10|10.*300000/);
+        expect(f.wait()?.detail).toContain(`Budget ${budgetMs}ms`);
+        expect(f.wait()?.detail).toContain(
+          timeoutMs === undefined ? "min(3600000ms" : "explicit --timeout",
+        );
+        if (timeoutMs === undefined) {
+          expect(f.wait()?.detail).toMatch(
+            new RegExp(`${observedStartupMs}.*10|10.*${observedStartupMs}`),
+          );
+        }
         expect(f.wait()?.detail).toMatch(/service|Scheduled Task/i);
         expect(f.wait()?.detail).toMatch(/listener|identity/i);
 
@@ -190,7 +203,7 @@ describe("managed Windows update after the startup canary", () => {
         const waiting = f.wait()!;
         expect(waiting.detail).toContain("Gateway RPC health probe timed out");
         expect(waiting.detail).toContain("4242");
-        expect(waiting.detail).toContain("2970000");
+        expect(waiting.detail).toContain(String(budgetMs - 30_000));
         expect(waiting.startedAtMs).toBe(startedAt);
         expect(renderUpdateRunReport(f.read()).markdown).toContain(waiting.detail);
         expect(toPublicUpdateRun(f.read()).steps).toContainEqual(waiting);
@@ -255,44 +268,6 @@ describe("managed Windows update after the startup canary", () => {
       await Promise.allSettled([pending]);
     }
   });
-
-  it.each([
-    { observedStartupMs: 0, timeoutMs: undefined, budgetMs: 300_000, reason: "min(3600000ms" },
-    {
-      observedStartupMs: 600_000,
-      timeoutMs: undefined,
-      budgetMs: 3_600_000,
-      reason: "min(3600000ms",
-    },
-    {
-      observedStartupMs: 600_000,
-      timeoutMs: 7_200_000,
-      budgetMs: 7_200_000,
-      reason: "explicit --timeout",
-    },
-  ])(
-    "publishes the selected $budgetMs ms budget before waiting",
-    async ({ observedStartupMs, timeoutMs, budgetMs, reason }) => {
-      const f = fixture();
-      const probe = holdRuntimeProbe();
-      const abort = new AbortController();
-      const pending = verifyPreviousGatewayForUpdate({
-        ...f.params,
-        observedStartupMs,
-        timeoutMs,
-        signal: abort.signal,
-      });
-      try {
-        await awaitProbe(probe.entered, pending);
-        expect(f.wait()?.detail).toContain(`Budget ${budgetMs}ms`);
-        expect(f.wait()?.detail).toContain(reason);
-      } finally {
-        abort.abort(new Error("fixture completed"));
-        probe.release();
-        await Promise.allSettled([pending]);
-      }
-    },
-  );
 
   it("records a warning and an operator next step when its explicit readiness budget expires", async () => {
     const f = fixture();

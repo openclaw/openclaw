@@ -36,7 +36,11 @@ import {
 } from "./worker-turn-launcher.test-support.js";
 
 // Pause the real placement store/coordinator at the producer's published setup state.
-async function setup(executionMode: "worker-turn" | "remote-exec", pauseAt = "syncing") {
+async function setup(
+  executionMode: "worker-turn" | "remote-exec",
+  pauseAt = "syncing",
+  onActivated?: () => Promise<void>,
+) {
   const paused = createDeferredCore();
   const finish = createDeferredCore();
   let failure: Error | undefined;
@@ -50,6 +54,9 @@ async function setup(executionMode: "worker-turn" | "remote-exec", pauseAt = "sy
           workspace: root,
           onTransition: async (placement) => {
             report?.(placement);
+            if (placement.state === "active") {
+              await onActivated?.();
+            }
             if (placement.state === pauseAt) {
               paused.resolve();
               await finish.promise;
@@ -95,12 +102,14 @@ function readyEnvironment() {
       if (request.source.kind !== "local") {
         throw new Error("expected local workspace");
       }
-      request.source.journal.commit(MANIFEST_REF);
+      await request.source.journal.commit(MANIFEST_REF);
       return {
         manifestRef: MANIFEST_REF,
         changed: false,
         verifyStable: async () => {},
         verifyLocalStable: async () => {},
+        publishStagedResult: async () => {},
+        discardPreparedStagedResult: async () => {},
       };
     },
     syncWorkspace: vi.fn(),
@@ -206,7 +215,21 @@ describe("initial worker setup admission", () => {
     "move",
     "replacement",
   ] as const)("does not execute held input after %s", async (change) => {
-    const fixture = await setup("remote-exec");
+    const fixture = await setup(
+      "remote-exec",
+      "syncing",
+      change === "replacement"
+        ? async () => {
+            const current = placements.get(SESSION_ID)!;
+            await placements.transition({
+              sessionId: SESSION_ID,
+              expectedGeneration: current.generation,
+              from: "active",
+              to: "draining",
+            });
+          }
+        : undefined,
+    );
     const environments = readyEnvironment();
     const controller = new AbortController();
     const runLocal = vi.fn(async () => ({ meta: { durationMs: 1 } }));
@@ -251,18 +274,6 @@ describe("initial worker setup admission", () => {
         });
       }
       void competing?.catch(() => undefined);
-      if (change === "replacement") {
-        // Replace live placement after the producer's completion, before its waiter resumes.
-        void fixture.operation.then(() => {
-          const current = placements.get(SESSION_ID)!;
-          placements.transition({
-            sessionId: SESSION_ID,
-            expectedGeneration: current.generation,
-            from: "active",
-            to: "draining",
-          });
-        });
-      }
       if (["abort", "stop", "move"].includes(change)) {
         await expect(run).rejects.toThrow(/aborted/);
       }

@@ -5,10 +5,14 @@ import { isPathInside, relativePluginPathInsideRootSync } from "./path-safety.js
 import { PluginSourceRecoveryUnavailableError } from "./plugin-instance-error.js";
 import type { PluginNativeRecovery } from "./plugin-native-admission.js";
 import {
-  assertPluginNativeReferenceNamespace,
+  createPluginNativeReferenceValidator,
   linkPluginNativeReference,
 } from "./plugin-native-reference.js";
-import { createPluginSourceCapture } from "./plugin-package-metadata-capture.js";
+import {
+  createPluginSourceCapture,
+  findPluginCapturedPackage,
+  type PluginPackageCapture,
+} from "./plugin-package-metadata-capture.js";
 import type { PluginNativeArtifactFact } from "./plugin-source-admission.types.js";
 
 function canonicalSource(rootDir: string, sourceRoot: string, source: string): string {
@@ -60,84 +64,6 @@ function createRecoverySourceDisposal(
     },
   };
 }
-
-function captureRecoverySource({
-  rootDir,
-  sourceRoot,
-  capturedRoot,
-  boundaryRoot,
-  capturedPaths,
-  captureNativeRecovery,
-}: {
-  rootDir: string;
-  sourceRoot: string;
-  capturedRoot: string;
-  boundaryRoot: string;
-  capturedPaths: ReadonlyMap<string, string>;
-  captureNativeRecovery?: () => PluginNativeRecovery;
-}) {
-  const recovery = createPluginSourceCapture();
-  let native: PluginNativeRecovery | undefined;
-  try {
-    native = captureNativeRecovery?.();
-    const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
-    // Preserve relative dependency links without reopening an updated package.
-    fs.cpSync(boundaryRoot, recovery.directory, {
-      recursive: true,
-      verbatimSymlinks: true,
-      filter: (from, to) => {
-        const fact = native?.references.get(from);
-        if (!fact) {
-          return true;
-        }
-        const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
-        if (linkPluginNativeReference(fact.capturedPath, to, retained) === "hardlink") {
-          hardlinkedTargets.set(to, retained);
-        }
-        native!.references.set(from, retained);
-        return false;
-      },
-    });
-    for (const [target, fact] of hardlinkedTargets) {
-      assertPluginNativeReferenceNamespace(
-        target,
-        fact,
-        native!.namespaces.get(fact.namespace)!,
-        recovery.directory,
-      );
-    }
-    const relocate = (filename: string) =>
-      path.join(recovery.directory, path.relative(boundaryRoot, filename));
-    // A partial capture can copy successfully while losing an already-loaded companion.
-    for (const captured of new Set(capturedPaths.values())) {
-      fs.lstatSync(relocate(captured));
-    }
-    const sources = new Map(
-      Array.from(capturedPaths, ([source, captured]) => [source, relocate(captured)]),
-    );
-    return {
-      rootDir: relocate(capturedRoot),
-      resolve: createRecoverySourceResolver(rootDir, sourceRoot, sources),
-      native: native && {
-        ...native,
-        references: new Map(
-          Array.from(native.references, ([source, fact]) => [relocate(source), fact]),
-        ),
-        directories: new Map(
-          Array.from(native.directories, ([source, namespace]) => [relocate(source), namespace]),
-        ),
-      },
-      ...createRecoverySourceDisposal(recovery, native),
-    };
-  } catch (error) {
-    createRecoverySourceDisposal(recovery, native).dispose();
-    if (hasErrnoCode(error, "ENOENT")) {
-      throw new PluginSourceRecoveryUnavailableError(error);
-    }
-    throw error;
-  }
-}
-
 /** Resolves captured source identities and gives recovery its own copy of their bytes. */
 export function createPluginGenerationSourceLookup({
   rootDir,
@@ -177,14 +103,107 @@ export function createPluginGenerationSourceLookup({
       assertModuleAvailable(captured);
       return captured;
     },
-    captureRecoverySource: () =>
-      captureRecoverySource({
-        rootDir,
-        sourceRoot,
-        capturedRoot,
-        boundaryRoot,
-        capturedPaths,
-        captureNativeRecovery,
-      }),
+    captureRecoverySource: () => {
+      for (const captured of new Set(capturedPaths.values())) {
+        assertModuleAvailable(captured);
+      }
+      const recovery = createPluginSourceCapture();
+      let native: PluginNativeRecovery | undefined;
+      try {
+        native = captureNativeRecovery?.();
+        const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
+        // Preserve relative dependency links without reopening an updated package.
+        fs.cpSync(boundaryRoot, recovery.directory, {
+          recursive: true,
+          verbatimSymlinks: true,
+          filter: (from, to) => {
+            const fact = native?.references.get(from);
+            if (!fact) {
+              return true;
+            }
+            const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
+            if (linkPluginNativeReference(fact.capturedPath, to, retained) === "hardlink") {
+              hardlinkedTargets.set(to, retained);
+            }
+            native!.references.set(from, retained);
+            return false;
+          },
+        });
+        const assertReference = createPluginNativeReferenceValidator(recovery.directory);
+        for (const [target, fact] of hardlinkedTargets) {
+          assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
+        }
+        const relocate = (filename: string) =>
+          path.join(recovery.directory, path.relative(boundaryRoot, filename));
+        // A partial capture can copy successfully while losing an already-loaded companion.
+        for (const captured of new Set(capturedPaths.values())) {
+          fs.lstatSync(relocate(captured));
+        }
+        const sources = new Map(
+          Array.from(capturedPaths, ([source, captured]) => [source, relocate(captured)]),
+        );
+        return {
+          rootDir: relocate(capturedRoot),
+          resolve: createRecoverySourceResolver(rootDir, sourceRoot, sources),
+          native: native && {
+            ...native,
+            references: new Map(
+              Array.from(native.references, ([source, fact]) => [relocate(source), fact]),
+            ),
+            directories: new Map(
+              Array.from(native.directories, ([source, namespace]) => [
+                relocate(source),
+                namespace,
+              ]),
+            ),
+          },
+          ...createRecoverySourceDisposal(recovery, native),
+        };
+      } catch (error) {
+        createRecoverySourceDisposal(recovery, native).dispose();
+        if (hasErrnoCode(error, "ENOENT")) {
+          throw new PluginSourceRecoveryUnavailableError(error);
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+/** Resolve first-demand executable files through the same captured-source availability owner. */
+export function createPluginResolvedModuleCapture({
+  capturedPaths,
+  assertModuleAvailable,
+  captureAdmitted,
+  captureExecutableFile,
+  packages,
+  directory,
+}: {
+  capturedPaths: Map<string, string>;
+  assertModuleAvailable: (filename: string) => void;
+  captureAdmitted: ReturnType<typeof createPluginSourceCapture>["capture"];
+  captureExecutableFile: (filename: string) => string | undefined;
+  packages: ReadonlyMap<string, PluginPackageCapture>;
+  directory: string;
+}) {
+  return (filename: string) => {
+    const known = capturedPaths.get(path.resolve(filename));
+    if (known) {
+      assertModuleAvailable(known);
+      return known;
+    }
+    return captureAdmitted(() => {
+      const captured = findPluginCapturedPackage(packages, filename, directory);
+      // import.meta.url can name a deferred peer through a private dependency link.
+      const original = captured
+        ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))
+        : filename;
+      const source = captureExecutableFile(original);
+      const target = source ? capturedPaths.get(source) : undefined;
+      if (target) {
+        capturedPaths.set(path.resolve(filename), target);
+      }
+      return target;
+    }).value;
   };
 }

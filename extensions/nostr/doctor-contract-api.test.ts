@@ -25,6 +25,7 @@ describe.each([
       },
     };
     const migration = expectDefined(stateMigrations[index], "Nostr migration");
+    expect(await migration.collectBackupResources?.(params)).toEqual([]);
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
     await expect(migration.migrateLegacyState(params)).resolves.toEqual({
       changes: [],
@@ -38,6 +39,7 @@ describe.each([
     await fs.mkdir(nostrDir);
     await fs.writeFile(sourcePath, source);
 
+    expect(await migration.collectBackupResources?.(params)).toEqual([]);
     expect(await migration.detectLegacyState(params)).not.toBeNull();
     expect(await migration.migrateLegacyState(params)).toEqual({
       changes: [],
@@ -48,5 +50,11 @@ describe.each([
 
     await fs.rename(sourcePath, `${sourcePath}.migrated`);
     await expect(migration.detectLegacyState(params)).resolves.toBeNull();
+
+    await fs.rm(nostrDir, { recursive: true });
+    await fs.writeFile(nostrDir, "not a directory");
+    await expect(migration.detectLegacyState(params)).rejects.toMatchObject({ code: "ENOTDIR" });
+    await expect(migration.migrateLegacyState(params)).rejects.toMatchObject({ code: "ENOTDIR" });
+    await expect(fs.readFile(nostrDir, "utf8")).resolves.toBe("not a directory");
   });
 });

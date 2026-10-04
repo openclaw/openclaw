@@ -75,58 +75,66 @@ function pending(state: ChatPageHost, sendId: string) {
 }
 
 describe("sender-local scroll intent", () => {
-  it("does not treat already loaded history as a fresh input", () => {
-    const state = setup([userMessage("loaded")]);
+  it.each(["loaded history", "initial/replacement conversation", "assistant stream"])(
+    "does not treat %s as a new remote input",
+    (scenario) => {
+      const state = setup(scenario === "loaded history" ? [userMessage("loaded")] : []);
+      if (scenario === "initial/replacement conversation") {
+        state.chatHasAutoScrolled = false;
+        state.chatMessages = [userMessage("initial")];
+      } else if (scenario === "assistant stream") {
+        state.chatStream = "The locally requested response continues.";
+      }
+      state.requestUpdate?.();
+      expect(state.chatFollowLocked).toBe(false);
+      if (scenario === "initial/replacement conversation") {
+        state.chatHasAutoScrolled = true;
+        state.currentSessionId = "replacement-session";
+        state.chatMessages = [userMessage("existing-in-replacement")];
+        state.requestUpdate?.();
+        expect(state.chatFollowLocked).toBe(false);
+      }
+    },
+  );
+  it.each(["spoken", "queued"])("keeps following when local %s input persists", (source) => {
+    const state = setup();
+    if (source === "spoken") {
+      state.realtimeTalkConversationState.entries = [
+        {
+          id: "rt-1",
+          role: "user",
+          text: "Local speech",
+          isStreaming: false,
+          transcriptId: "voice:local-call:1",
+        },
+      ];
+      state.chatMessages = [userMessage("voice-local", "voice:local-call:1")];
+    } else {
+      state.chatQueue = [
+        { id: "local-queue", text: "own", createdAt: 1, sendRunId: "own", sendState: "sending" },
+      ];
+      state.requestUpdate?.();
+      pending(state, "own");
+      state.chatQueue = [];
+      state.chatMessages = [userMessage("own", "canonical-own", "execution-own")];
+    }
     state.requestUpdate?.();
     expect(state.chatFollowLocked).toBe(false);
-  });
-  it("pauses following before a newly accepted remote input renders", () => {
-    const state = setup();
-    pending(state, "remote");
-    expect(state.chatFollowLocked).toBe(true);
-    expect(state.chatUserNearBottom).toBe(false);
-  });
-  it("keeps following when this browser's spoken input is persisted", () => {
-    const state = setup();
-    state.realtimeTalkConversation = [
-      {
-        id: "rt-1",
-        role: "user",
-        text: "Local speech",
-        isStreaming: false,
-        transcriptId: "voice:local-call:1",
-      },
-    ];
-    state.chatMessages = [userMessage("voice-local", "voice:local-call:1")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(false);
-    expect(state.chatUserNearBottom).toBe(true);
-    state.chatMessages = [...state.chatMessages, userMessage("voice-remote", "voice:other-call:1")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(true);
-  });
-  it("does not infer local intent from the same authenticated sender profile", () => {
-    const state = setup();
-    state.chatMessages = [userMessage("another-browser")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(true);
-  });
-  it("keeps local submit follow through acceptance and canonical reconciliation", () => {
-    const state = setup();
-    state.chatQueue = [
-      { id: "local-queue", text: "own", createdAt: 1, sendRunId: "own", sendState: "sending" },
-    ];
-    state.requestUpdate?.();
-    pending(state, "own");
-    state.chatQueue = [];
-    state.chatMessages = [userMessage("own", "canonical-own", "execution-own")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(false);
+    if (source === "spoken") {
+      expect(state.chatUserNearBottom).toBe(true);
+      state.chatMessages = [
+        ...state.chatMessages,
+        userMessage("voice-remote", "voice:other-call:1"),
+      ];
+      state.requestUpdate?.();
+      expect(state.chatFollowLocked).toBe(true);
+    }
   });
   it("does not pause again when an acknowledged remote input persists after a local return", () => {
     const state = setup();
     pending(state, "remote");
     expect(state.chatFollowLocked).toBe(true);
+    expect(state.chatUserNearBottom).toBe(false);
     // Policy after an explicit local return; custody retirement is not a new input.
     state.chatFollowLocked = false;
     state.chatUserNearBottom = true;
@@ -135,24 +143,6 @@ describe("sender-local scroll intent", () => {
     state.requestUpdate?.();
     expect(state.chatFollowLocked).toBe(false);
     state.chatMessages = [userMessage("remote", "canonical-remote", "execution-remote")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(false);
-  });
-  it("does not pause initial loading or a different physical conversation", () => {
-    const state = setup();
-    state.chatHasAutoScrolled = false;
-    state.chatMessages = [userMessage("initial")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(false);
-    state.chatHasAutoScrolled = true;
-    state.currentSessionId = "replacement-session";
-    state.chatMessages = [userMessage("existing-in-replacement")];
-    state.requestUpdate?.();
-    expect(state.chatFollowLocked).toBe(false);
-  });
-  it("does not pause on assistant stream growth alone", () => {
-    const state = setup();
-    state.chatStream = "The locally requested response continues.";
     state.requestUpdate?.();
     expect(state.chatFollowLocked).toBe(false);
   });

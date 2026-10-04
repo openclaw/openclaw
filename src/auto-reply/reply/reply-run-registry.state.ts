@@ -232,10 +232,10 @@ type ReplyOperationAfterClear = {
   barrier?: ReplyRunAdmissionBarrier;
 };
 const afterClearByOperation = new WeakMap<ReplyOperation, ReplyOperationAfterClear>();
-const successorBarrierStartsByOperation = new WeakMap<ReplyOperation, Set<() => void>>();
 type ReplyOperationSuccessorBarrierGroup = {
   registrationKey: string;
-  barriers: Set<ReplyRunAdmissionBarrier>;
+  sources: Map<string, ReplyRunAdmissionSource>;
+  start: () => void;
 };
 // Alias-keyed fences registered for one lane rotate together. Rekeyed command
 // operations retain prior-lane identities so source successors do not adopt
@@ -423,15 +423,13 @@ function resolveReplyRunAdmissionSource(
 function registerReplyRunAdmissionBarrier(
   barriersByKey: Map<string, ReplyRunAdmissionBarrier>,
   sessionKey: string,
-  sessionId: string,
+  initialSource: ReplyRunAdmissionSource,
   barrier: Promise<void>,
-  operation: ReplyOperation,
 ): ReplyRunAdmissionBarrier {
   const previous = barriersByKey.get(sessionKey);
-  const source = resolveReplyRunAdmissionSource(
-    operation,
-    sessionId,
-    previous?.sources.get(lifecycleAdmissionByOperation.get(operation)?.databaseIdentity),
+  const source = mergeReplyRunAdmissionSource(
+    initialSource,
+    previous?.sources.get(initialSource.databaseIdentity),
   );
   // Retain only the latest source per physical store in this pending chain.
   // A foreign global barrier must not hide a same-store compaction successor.
@@ -456,21 +454,31 @@ export function registerReplyOperationSuccessorBarrier(params: {
   sessionId: string;
   sessionKeys: readonly string[];
   start: () => PromiseLike<unknown>;
+  /** Resource release fences start at clear; moving an active owner does not release it. */
+  deferUntilClear?: boolean;
 }): void {
   const settlement = createDeferredCore();
-  const barriers = new Set<ReplyRunAdmissionBarrier>();
+  const sources = new Map<string, ReplyRunAdmissionSource>();
   for (const sessionKey of new Set(params.sessionKeys.map(normalizeOptionalString))) {
     if (sessionKey) {
-      barriers.add(
+      sources.set(sessionKey, resolveReplyRunAdmissionSource(params.operation, params.sessionId));
+    }
+  }
+  const publish = () => {
+    for (const [sessionKey, source] of sources) {
+      sources.set(
+        sessionKey,
         registerReplyRunAdmissionBarrier(
           replyRunState.successorAdmissionBarriersByKey,
           sessionKey,
-          params.sessionId,
+          source,
           settlement.promise,
-          params.operation,
-        ),
+        ).source,
       );
     }
+  };
+  if (!params.deferUntilClear) {
+    publish();
   }
   let started = false;
   const start = () => {
@@ -479,6 +487,9 @@ export function registerReplyOperationSuccessorBarrier(params: {
     }
     started = true;
     try {
+      if (params.deferUntilClear) {
+        publish();
+      }
       void Promise.resolve(params.start()).then(
         () => settlement.resolve(undefined),
         () => {},
@@ -495,23 +506,15 @@ export function registerReplyOperationSuccessorBarrier(params: {
   const groups =
     successorBarrierGroupsByOperation.get(params.operation) ??
     new Set<ReplyOperationSuccessorBarrierGroup>();
-  groups.add({ registrationKey: params.operation.key, barriers });
+  groups.add({ registrationKey: params.operation.key, sources, start });
   successorBarrierGroupsByOperation.set(params.operation, groups);
-  const starts = successorBarrierStartsByOperation.get(params.operation) ?? new Set<() => void>();
-  starts.add(start);
-  successorBarrierStartsByOperation.set(params.operation, starts);
 }
 
 export function startReplyOperationSuccessorBarriers(operation: ReplyOperation): void {
-  const starts = successorBarrierStartsByOperation.get(operation);
-  // These maps are operation-owned lifecycle metadata, not identity indexes.
-  // Clear drops both before handoff starts so adoption cannot retain stale groups.
-  successorBarrierStartsByOperation.delete(operation);
+  const groups = successorBarrierGroupsByOperation.get(operation);
+  // Drop operation-owned metadata before handoff so adoption cannot retain stale groups.
   successorBarrierGroupsByOperation.delete(operation);
-  if (!starts) {
-    return;
-  }
-  for (const start of starts) {
+  for (const { start } of groups ?? []) {
     start();
   }
 }
@@ -524,8 +527,8 @@ export function updateSuccessorAdmissionSessionId(
     if (group.registrationKey !== operation.key) {
       continue;
     }
-    for (const barrier of group.barriers) {
-      resolveReplyRunAdmissionSource(operation, sessionId, barrier.source);
+    for (const source of group.sources.values()) {
+      resolveReplyRunAdmissionSource(operation, sessionId, source);
     }
   }
 }
@@ -580,22 +583,15 @@ export function waitForReplyBarrierSettlement(
       );
       const checkOwnerActivity = () => {
         const remainingMs = maxTimeoutMs - (Date.now() - startedAt);
-        if (remainingMs <= 0) {
-          finish();
-          return;
-        }
-        let shouldExtend: boolean;
         try {
-          shouldExtend = timeout.shouldExtend();
+          if (remainingMs > 0 && timeout.shouldExtend()) {
+            schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, remainingMs), checkOwnerActivity);
+            return;
+          }
         } catch {
-          finish();
-          return;
+          // A failed owner probe cannot extend admission blocking.
         }
-        if (!shouldExtend) {
-          finish();
-          return;
-        }
-        schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, remainingMs), checkOwnerActivity);
+        finish();
       };
       schedule(Math.min(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, maxTimeoutMs), checkOwnerActivity);
     }
@@ -611,9 +607,8 @@ export function registerFollowupAdmissionBarrier(
   const entry = registerReplyRunAdmissionBarrier(
     replyRunState.followupAdmissionBarriersByKey,
     operation.key,
-    operation.sessionId,
+    resolveReplyRunAdmissionSource(operation, operation.sessionId),
     waitForReplyBarrierSettlement(barrier, timeout),
-    operation,
   );
   // A later global barrier may belong to another store. Late callbacks still
   // wait for this operation's own delivery before releasing admission.

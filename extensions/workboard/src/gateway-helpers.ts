@@ -1,12 +1,10 @@
-import { WORKBOARD_STATUSES, type WorkboardCard } from "@openclaw/workboard-contract";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { asRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawPluginApi } from "../api.js";
 import { redactClaimToken, redactDispatchResult } from "./card-redaction.js";
-import {
-  dispatchAndStartWorkboardCards,
-  type WorkboardDispatchStartOptions,
-} from "./dispatcher.js";
+import { dispatchAndStartWorkboardCards } from "./dispatcher.js";
 import { WorkboardCardConflictError, type WorkboardStore } from "./store.js";
 import {
   resolveAgentWorkboardWorkspaceRuntime,
@@ -24,7 +22,22 @@ type WorkboardGatewayScope = NonNullable<
   NonNullable<Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2]>["scope"]
 >;
 
+export class WorkboardUploadsDisabledError extends Error {
+  constructor() {
+    super("File and image uploads are disabled by gateway.uploads.enabled");
+    this.name = "WorkboardUploadsDisabledError";
+  }
+}
+
 export function respondError(respond: GatewayRespond, error: unknown) {
+  if (error instanceof WorkboardUploadsDisabledError) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.FORBIDDEN, error.message, { details: { code: "UPLOADS_DISABLED" } }),
+    );
+    return;
+  }
   if (error instanceof WorkboardCardConflictError) {
     respond(false, undefined, {
       code: "workboard_conflict",
@@ -91,26 +104,13 @@ function readOptionalPositiveInteger(value: unknown, fieldName: string): number 
 }
 
 export function readPatch(params: Record<string, unknown>): Record<string, unknown> {
-  const patch = params.patch;
-  if (patch && typeof patch === "object" && !Array.isArray(patch)) {
-    return patch as Record<string, unknown>;
-  }
-  return params;
+  return isRecord(params.patch) ? params.patch : params;
 }
 
 export function assertNoCursorAdvance(params: Record<string, unknown>) {
   if (params.advance === true) {
     throw new Error("notification cursor advancement requires workboard.notifications.advance.");
   }
-}
-
-export async function listWorkboardCards(
-  store: WorkboardStore,
-  boardId: unknown,
-  redactCard: (card: WorkboardCard) => WorkboardCard,
-) {
-  const [cards, { boards }] = await Promise.all([store.list({ boardId }), store.listBoards()]);
-  return { cards: cards.map(redactCard), boards, statuses: WORKBOARD_STATUSES };
 }
 
 export function resolveGatewayWorkboardWorkspaceAccess(params: {
@@ -132,40 +132,9 @@ export function resolveGatewayWorkboardWorkspaceAccess(params: {
   });
 }
 
-function gatewayDispatchOptions(params: {
-  api: OpenClawPluginApi;
-  request: Pick<GatewayMethodContext, "client" | "context">;
-  input: Pick<
-    WorkboardDispatchStartOptions,
-    "boardId" | "cardId" | "maxStarts" | "provider" | "model"
-  >;
-}): WorkboardDispatchStartOptions {
-  const { context, client } = params.request;
-  return {
-    ...params.input,
-    materializeWorktree: true,
-    resolveAgentWorkspace: (agentId) =>
-      resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
-    resolveAgentWorkspaceRuntime: (agentId, sessionKey, workspaceDir, modelProvider, modelId) => {
-      const config = context.getRuntimeConfig();
-      return resolveAgentWorkboardWorkspaceRuntime({
-        config,
-        agentId,
-        sessionKey,
-        workspaceDir,
-        modelProvider,
-        modelId,
-        prepareSandboxWorkspaceAuthority: params.api.runtime.sandbox.prepareWorkspaceAuthority,
-      });
-    },
-    workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({ context, client }),
-  };
-}
-
 export function createWorkboardDispatchHandler(params: {
   api: OpenClawPluginApi;
   store: WorkboardStore;
-  redactCard: (card: WorkboardCard) => WorkboardCard;
 }) {
   return async (
     { params: requestParams, respond, client, context }: GatewayMethodContext,
@@ -173,14 +142,7 @@ export function createWorkboardDispatchHandler(params: {
   ) => {
     try {
       const cardId = options.directCard ? readId(requestParams) : undefined;
-      const boardId =
-        requestParams && typeof requestParams === "object" && "boardId" in requestParams
-          ? requestParams.boardId
-          : undefined;
-      const rawMaxStarts =
-        requestParams && typeof requestParams === "object" && "maxStarts" in requestParams
-          ? requestParams.maxStarts
-          : undefined;
+      const { boardId, maxStarts: rawMaxStarts } = asRecord(requestParams);
       if (!options.supportsMaxStarts && rawMaxStarts !== undefined) {
         throw new Error("maxStarts requires workboard.cards.dispatchWithOptions.");
       }
@@ -201,27 +163,46 @@ export function createWorkboardDispatchHandler(params: {
         store: params.store,
         subagent: params.api.runtime.subagent,
         worktrees: params.api.runtime.worktrees,
-        options: gatewayDispatchOptions({
-          api: params.api,
-          request: { context, client },
-          input: {
-            ...(cardId ? { cardId, maxStarts: 1 } : {}),
-            boardId: typeof boardId === "string" ? boardId : undefined,
-            ...(maxStarts !== undefined ? { maxStarts } : {}),
-            ...(provider ? { provider } : {}),
-            ...(model ? { model } : {}),
+        options: {
+          ...(cardId ? { cardId, maxStarts: 1 } : {}),
+          boardId: typeof boardId === "string" ? boardId : undefined,
+          ...(maxStarts !== undefined ? { maxStarts } : {}),
+          ...(provider ? { provider } : {}),
+          ...(model ? { model } : {}),
+          materializeWorktree: true,
+          resolveAgentWorkspace: (agentId) =>
+            resolveWorkboardAgentWorkspace(context.getRuntimeConfig(), agentId),
+          resolveAgentWorkspaceRuntime: (
+            agentId,
+            sessionKey,
+            workspaceDir,
+            modelProvider,
+            modelId,
+          ) => {
+            const config = context.getRuntimeConfig();
+            return resolveAgentWorkboardWorkspaceRuntime({
+              config,
+              agentId,
+              sessionKey,
+              workspaceDir,
+              modelProvider,
+              modelId,
+              prepareSandboxWorkspaceAuthority:
+                params.api.runtime.sandbox.prepareWorkspaceAuthority,
+            });
           },
-        }),
+          workspaceAccess: resolveGatewayWorkboardWorkspaceAccess({ context, client }),
+        },
       });
       if (cardId) {
         const started = result.started[0];
         if (!started?.card) {
           throw new Error(result.startFailures[0]?.error ?? "Workboard card did not start.");
         }
-        respond(true, { ...started, card: params.redactCard(started.card) });
+        respond(true, { ...started, card: redactClaimToken(started.card) });
         return;
       }
-      respond(true, redactDispatchResult(result, params.redactCard));
+      respond(true, redactDispatchResult(result));
     } catch (error) {
       respondError(respond, error);
     }

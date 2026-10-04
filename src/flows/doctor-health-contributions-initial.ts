@@ -6,6 +6,7 @@ import {
 import {
   runChannelIngressDeadLettersHealth,
   runAgentMemorySchemaHealth,
+  runCodexBwrapHealth,
   runCodexSessionRouteHealth,
   runConfigAuditScrubHealth,
   runDatabaseBloatHealth,
@@ -325,6 +326,20 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: runRetainedUpdateRuntimesHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:update-snapshots",
+      label: "Retained update database snapshots",
+      updateWork: { kind: "standalone" },
+      healthChecks: {
+        description: "Retained npm update database snapshots need operator review before removal.",
+        defaultEnabled: true,
+        async detect(ctx) {
+          const { collectUpdateSnapshotHealthFindings } =
+            await import("../commands/doctor-update-snapshots.js");
+          return collectUpdateSnapshotHealthFindings(ctx.env);
+        },
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:ui-protocol-freshness",
       label: "UI protocol freshness",
       healthCheckIds: ["core/doctor/ui-protocol-freshness"],
@@ -501,6 +516,12 @@ export function resolveInitialDoctorHealthContributions(params: {
         }, "legacy doctor sandbox contribution owns registry migration"),
       },
       run: runSandboxHealth,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:codex-bwrap",
+      label: "Codex bwrap sandbox",
+      updateWork: { kind: "standalone" },
+      run: runCodexBwrapHealth,
     }),
   ];
 }

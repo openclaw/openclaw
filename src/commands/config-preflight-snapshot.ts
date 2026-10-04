@@ -2,6 +2,11 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { createConfigIO } from "../config/io.factory.js";
 import {
+  createConfigReadError,
+  formatInvalidConfigDetails,
+  isConfigReadFailure,
+} from "../config/io.invalid-config.js";
+import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
   type ConfigSnapshotReadMeasure,
@@ -12,14 +17,11 @@ import { describeConfigSnapshotInputChange } from "../config/snapshot-inputs.js"
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import { recordStartupMigrationWarnings } from "../infra/state-migrations.messages.js";
 import { withDeferredPluginDoctorMigrations } from "../plugins/doctor-contract-registry.js";
 import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { ExitError } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
@@ -31,16 +33,12 @@ import {
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   refuseStartupMigrationsForLiveGatewayOwner,
+  rethrowStartupConfigFailure,
   throwStartupMigrationGuardRejected,
   throwStartupMigrationIdentityChanged,
-  throwStartupMigrationRefusal,
 } from "./doctor-startup-migration-refusal.js";
 import { addDoctorLegacyIssues } from "./doctor/shared/legacy-config-issues.js";
 import { completeDoctorPluginMetadataSnapshot } from "./doctor/shared/plugin-metadata-snapshot-scope.js";
-
-const loadInstalledPluginIndexStoreWrite = createLazyRuntimeModule(
-  () => import("../plugins/installed-plugin-index-store-write.js"),
-);
 
 export type ConfigPreflightSnapshotRead = {
   snapshot: ConfigFileSnapshot;
@@ -173,7 +171,7 @@ export async function persistRefreshedPluginIndex(params: {
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
   // Startup precedes plugin ownership; derive again after any pending installer settles.
   return await withPluginLifecycleLease(
-    { env: params.env, assertCurrent: params.assertCurrent },
+    { env: params.env, assertCurrent: params.assertCurrent, processBound: true },
     async (pluginLease) => {
       const fresh = await params.readPersistedSnapshot();
       assertPreflightConfigUnchanged(params.snapshotRead.snapshot, fresh.snapshot);
@@ -190,7 +188,7 @@ export async function persistRefreshedPluginIndex(params: {
       }
       const { writePersistedInstalledPluginIndexWithLeaseSync } = await params.measure(
         "plugin-index-store-import",
-        loadInstalledPluginIndexStoreWrite,
+        () => import("../plugins/installed-plugin-index-store-write.js"),
       );
       // Persist the original workspace scope; a config-wide union cannot pass scoped freshness checks.
       await params.measure("plugin-index-persistence", () =>
@@ -250,6 +248,14 @@ export async function readAdmittedConfigSnapshot(params: {
           pluginValidation: "core-only",
         }),
       );
+      // Retain definitive source failures before storage admission. Provisional
+      // plugin migration issues still need the full snapshot's validation below.
+      if (
+        isConfigReadFailure(selected) ||
+        selected.issues.some((issue) => issue.errorCode === "CONFIG_SOURCE_INVALID")
+      ) {
+        return { snapshot: selected };
+      }
       const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
       const coreRecovery = await measureDoctorConfigPreflightStep("admission.core-recovery", () =>
         createConfigIO({
@@ -305,10 +311,7 @@ export async function readAdmittedConfigSnapshot(params: {
       }
       return { ...read, ...(recovery ? { recovery } : {}) };
     } catch (error) {
-      if (error instanceof ExitError) {
-        throw error;
-      }
-      return throwStartupMigrationRefusal(formatErrorMessage(error), error);
+      return rethrowStartupConfigFailure(error);
     }
   });
 }
@@ -317,6 +320,11 @@ export function assertPreflightConfigUnchanged(
   before: ConfigFileSnapshot,
   after: ConfigFileSnapshot,
 ): void {
+  // Unavailable bytes cannot prove input drift or authorize a terminal refusal.
+  const unreadable = [before, after].find(isConfigReadFailure);
+  if (unreadable) {
+    throw createConfigReadError(unreadable.path, formatInvalidConfigDetails(unreadable.issues));
+  }
   const change = describeConfigSnapshotInputChange(before, after);
   if (change) {
     throwStartupMigrationIdentityChanged(change);

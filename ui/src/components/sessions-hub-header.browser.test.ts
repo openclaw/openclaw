@@ -1,7 +1,7 @@
 import { html, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../i18n/index.ts";
-import "../styles.css";
+import "../test-helpers/load-styles.ts";
 import { renderSessionsHubHeader } from "./sessions-hub-header.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
@@ -109,11 +109,5 @@ describe.skipIf(!hasBrowserLayout)("Sessions hub header browser layout", () => {
     expect(
       operationalHeader.querySelector("button")?.getBoundingClientRect().width,
     ).toBeGreaterThan(0);
-
-    const chatContent = document.createElement("main");
-    chatContent.className = "content content--chat";
-    chatContent.innerHTML = '<section class="content-header"></section>';
-    document.body.append(chatContent);
-    expect(getComputedStyle(chatContent.querySelector(".content-header")!).display).toBe("none");
   });
 });

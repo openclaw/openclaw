@@ -3,37 +3,6 @@ import path from "node:path";
 export function testApiLifecycleFixtureFiles(repoRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const files: Record<string, string> = {};
-  for (const generation of ["producer", "observer"]) {
-    files[`05-${generation === "producer" ? "c" : "d"}-task-registry.test.ts`] = `
-import { expect, it, vi } from "vitest";
-import { emitAgentEvent } from ${sourcePath("infra/agent-events.ts")};
-import { prepareTaskRegistryRead } from ${sourcePath("tasks/task-registry-read.ts")};
-import * as listenerState from ${sourcePath("tasks/task-registry-listener-state.ts")};
-import { configureInMemoryTaskStoresForTests, createTaskFixture } from ${sourcePath("tasks/task-registry.test-support.ts")};
-it("receives task events in the ${generation} file", async () => {
-  configureInMemoryTaskStoresForTests();
-  const runId = "runner-task-${generation}";
-  const task = createTaskFixture("cli", {
-    runId,
-    task: "Observe task events across file cleanup",
-    notifyPolicy: "silent",
-  });
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name: "read" } });
-  const read = await prepareTaskRegistryRead();
-  expect(read?.getTaskById(task.taskId)).toMatchObject({ toolUseCount: 1, lastToolName: "read" });
-  ${
-    generation === "producer"
-      ? `vi.spyOn(listenerState, "resetTaskRegistryListenerState").mockImplementation(() => {});
-  vi.spyOn(vi, "resetModules");
-  expect(vi.resetModules()).toBe(vi);
-  emitAgentEvent({ runId, stream: "tool", data: { phase: "start", name: "after-reset" } });
-  const afterReset = await prepareTaskRegistryRead();
-  expect(afterReset?.getTaskById(task.taskId)).toMatchObject({ toolUseCount: 2, lastToolName: "after-reset" });`
-      : ""
-  }
-});
-`;
-  }
   for (const [prefix, generation] of [
     ["09-d", "producer"],
     ["09-e", "observer"],
@@ -95,7 +64,7 @@ describe("${generation} test API consumers", () => {
     const controller = new AbortController();
     nativeCron.registerActiveCronTaskRun({ runId: "native-fixture", controller });
     native.api.resetActiveCronTaskRunsForTests();
-    expect(nativeCron.cancelActiveCronTaskRun({ runId: "native-fixture" })).toBe(false);
+    expect(nativeCron.abortActiveCronTaskRuns()).toBe(0);
     expect(controller.signal.aborted).toBe(false);
     const cfg = { auth: { order: { "fixture-provider": [] } } };
     expect(repairStaleConfiguredAuthOrders({ cfg, stores: [] })).toEqual({
@@ -169,7 +138,7 @@ const native = createRequire(import.meta.url)("./native-cron.cjs");
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 const { resetLegacyWorkspaceStateCheckForTest } = await import(${sourcePath("agents/workspace-legacy-state.test-support.ts")});
 function verifyPartialMock() {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe(".openclaw");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("workspace-attestations");
   expect(vi.isMockFunction(workspace.prepareLegacyWorkspaceStateReset)).toBe(true);
   expect(() => resetLegacyWorkspaceStateCheckForTest()).not.toThrow();
   expect(nativeCron.registerActiveCronTaskRun).toBe(native.register);
@@ -195,10 +164,10 @@ it("loads a fresh real source after the partial mock retires", () => {
   files["09-j-test-api-mock-only.test.ts"] = `
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
-vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_STATE_DIRNAME: "mock-only" }));
+vi.mock(${sourcePath("agents/workspace-legacy-state.ts")}, () => ({ LEGACY_WORKSPACE_ATTESTATION_DIRNAME: "mock-only" }));
 const workspace = await import(${sourcePath("agents/workspace-legacy-state.ts")});
 it("does not execute the source behind a mock-only import", () => {
-  expect(workspace.LEGACY_WORKSPACE_STATE_DIRNAME).toBe("mock-only");
+  expect(workspace.LEGACY_WORKSPACE_ATTESTATION_DIRNAME).toBe("mock-only");
   const key = Symbol.for("openclaw.workspaceLegacyStateTestApi");
   expect(Object.hasOwn(globalThis, key)).toBe(false);
   Reflect.set(globalThis, key, "foreign");

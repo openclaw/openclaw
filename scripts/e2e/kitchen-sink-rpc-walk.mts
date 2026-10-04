@@ -28,6 +28,7 @@ import {
   resolveWindowsSystem32Path,
   resolveWindowsTaskkillPath,
 } from "../lib/windows-taskkill.mjs";
+import { resolveGatewayCliPayload } from "./lib/gateway-frame-payload.mjs";
 import {
   calibrateKitchenSinkResources,
   KITCHEN_RESOURCE_CONTROLS,
@@ -1075,16 +1076,7 @@ export function unwrapRpcPayload(raw: unknown): unknown {
   ) {
     throw new Error(`gateway RPC returned error envelope: ${boundedJsonPreview(envelope.error)}`);
   }
-  if (hasOwnPayloadField(raw, "result")) {
-    return raw.result;
-  }
-  if (hasOwnPayloadField(raw, "payload")) {
-    return raw.payload;
-  }
-  if (hasOwnPayloadField(raw, "data")) {
-    return raw.data;
-  }
-  return raw;
+  return resolveGatewayCliPayload(raw);
 }
 
 async function rpcCall(method: string, params: unknown, options: RpcCallOptions) {
@@ -1357,7 +1349,6 @@ async function delayWithAbort(delayMs: number, signal?: AbortSignal) {
 export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const config = asRecord(fs.existsSync(configPath) ? readJson(configPath) : {});
-  const frozenTarget = env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy";
   const gateway = asRecord(config.gateway);
   const plugins = asRecord(config.plugins);
   const pluginEntries = asRecord(plugins.entries);
@@ -1382,11 +1373,7 @@ export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
   config.plugins = {
     ...plugins,
     enabled: true,
-    ...(frozenTarget
-      ? {}
-      : {
-          allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
-        }),
+    allow: [...new Set([...(Array.isArray(plugins.allow) ? plugins.allow : []), PLUGIN_ID])],
     entries: {
       ...pluginEntries,
       [PLUGIN_ID]: {
@@ -1423,12 +1410,7 @@ export function configureKitchenSink(env: KitchenSinkEnv, port: number) {
       },
     },
   };
-  if (frozenTarget) {
-    const messages = asRecord(config.messages);
-    config.messages = { ...messages, tts: { ...asRecord(messages.tts), ...ttsConfig } };
-  } else {
-    config.tts = { ...tts, ...ttsConfig };
-  }
+  config.tts = { ...tts, ...ttsConfig };
   writeJson(configPath, config);
 }
 
@@ -1975,7 +1957,6 @@ const READ_ONLY_RPC_PROBES = [
   { method: "sessions.list", params: {} },
   { method: "cron.status", params: {} },
   { method: "cron.list", params: { includeDisabled: true } },
-  { method: "tasks.list", params: {} },
   { method: "usage.status", params: {} },
   { method: "usage.cost", params: {} },
   { method: "voicewake.get", params: {} },
@@ -2133,8 +2114,6 @@ export function assertGatewayStatusPayload(payload: unknown) {
     ],
     [Array.isArray(status.channelSummary), "channelSummary array"],
     [Array.isArray(status.queuedSystemEvents), "queuedSystemEvents array"],
-    [isRecord(status.tasks), "tasks summary"],
-    [isRecord(status.taskAudit), "taskAudit summary"],
     [
       isRecord(sessions) &&
         Array.isArray(sessions.paths) &&

@@ -31,11 +31,7 @@ function normalizeOpenAiModel(model: string): string {
 }
 
 function isNativeOpenAiBaseUrl(baseUrl: string): boolean {
-  try {
-    return new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
-  } catch {
-    return false;
-  }
+  return URL.parse(baseUrl)?.hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com";
 }
 
 export async function createOpenAiEmbeddingProvider(
@@ -71,6 +67,7 @@ async function resolveOpenAiEmbeddingClient(
   const originalModel = options.model;
   const client = await resolveRemoteEmbeddingClient({
     provider: options.provider ?? "openai",
+    capability: "embedding",
     options,
     defaultBaseUrl: DEFAULT_OPENAI_BASE_URL,
     normalizeModel: normalizeOpenAiModel,

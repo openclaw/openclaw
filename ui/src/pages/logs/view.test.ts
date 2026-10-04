@@ -82,11 +82,49 @@ async function useTestPortugueseLogsLabels() {
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   i18n.registerTranslation("pt-BR", pt_BR);
   await i18n.setLocale("en");
 });
 
 describe("renderLogs", () => {
+  it("bounds time formatting setup per render while preserving localized timestamps", async () => {
+    const container = document.createElement("div");
+    const validTimes = ["2026-09-22T12:00:37Z", "1970-01-01T00:00:00Z"];
+    const props = createProps({
+      status: { error: null, hasLoaded: true, stale: false, awaitingGateway: false },
+      entries: [...validTimes, "not a timestamp", "", null, undefined].map((time) => ({
+        time,
+        raw: "log entry",
+      })),
+    });
+    const timeCalls = vi.spyOn(Date.prototype, "toLocaleTimeString");
+    const formatterSetups = vi.spyOn(Intl, "DateTimeFormat");
+
+    for (const locale of ["en", "fr", "en"] as const) {
+      await i18n.setLocale(locale);
+      const expected = [
+        ...validTimes.map((time) =>
+          new Date(time).toLocaleTimeString(locale, { timeStyle: "short" }),
+        ),
+        "not a timestamp",
+        "",
+        "",
+        "",
+      ];
+      timeCalls.mockClear();
+      formatterSetups.mockClear();
+      render(renderLogs(props), container);
+      expect(Array.from(container.querySelectorAll(".log-time"), (row) => row.textContent)).toEqual(
+        expected,
+      );
+      // Native toLocaleTimeString prepares its formatter internally too.
+      expect(timeCalls.mock.calls.length + formatterSetups.mock.calls.length).toBeLessThanOrEqual(
+        1,
+      );
+    }
+  });
+
   it("does not claim the log is empty before the initial load completes", () => {
     const container = document.createElement("div");
 
@@ -127,16 +165,6 @@ describe("renderLogs", () => {
       container.querySelector<HTMLButtonElement>(".settings-section__actions .btn")?.disabled,
     ).toBe(true);
     expect(container.querySelector(".logs-refresh-status button")).toBeNull();
-  });
-
-  it("renders the subtitle under the section header", () => {
-    const container = document.createElement("div");
-
-    render(renderLogs(createProps()), container);
-
-    expect(container.querySelector(".settings-section__desc")?.textContent?.trim()).toBe(
-      "Gateway file logs (JSONL).",
-    );
   });
 
   it.each([

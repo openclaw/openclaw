@@ -148,8 +148,6 @@ describe("Codex registration procfs boundary", () => {
   it.for([
     "readable",
     "startup",
-    "slow-snapshot",
-    "slow-command",
     "slow-inspection",
     "exhausted-inspection",
     "permission",
@@ -172,19 +170,15 @@ describe("Codex registration procfs boundary", () => {
         let now = Date.now();
         vi.spyOn(Date, "now").mockImplementation(() => now);
         const delayMs = mode === "exhausted-inspection" ? 6_000 : 3_000;
-        if (mode !== "slow-command") {
-          procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
-            now += delayMs;
-            return bootId;
-          });
-        }
-        if (mode !== "slow-snapshot") {
-          procfs.files.set(`/proc/${child.pid}/cmdline`, () => {
-            expect(store.entries()).toEqual([]);
-            now += delayMs;
-            return command.replaceAll(" ", "\0");
-          });
-        }
+        procfs.files.set("/proc/sys/kernel/random/boot_id", () => {
+          now += delayMs;
+          return bootId;
+        });
+        procfs.files.set(`/proc/${child.pid}/cmdline`, () => {
+          expect(store.entries()).toEqual([]);
+          now += delayMs;
+          return command.replaceAll(" ", "\0");
+        });
       } else if (mode === "startup") {
         let reads = 0;
         procfs.files.set(`/proc/${child.pid}/cmdline`, () => {

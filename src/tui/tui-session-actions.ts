@@ -22,12 +22,15 @@ import {
 } from "./tui-formatters.js";
 import { extractTuiImageSources } from "./tui-images.js";
 import {
+  captureTuiSessionIncarnation,
+  captureTuiSessionSelection,
   matchesTuiSessionMetadata,
   matchesTuiSessionSelection,
   readTuiSessionUserMessage,
 } from "./tui-session-events.js";
 import { readTuiSessionHistory } from "./tui-session-history.js";
 import {
+  copyDefinedSessionInfo,
   sessionInfoUiEquals,
   type SessionInfoDefaults,
   type SessionInfoEntry,
@@ -86,10 +89,7 @@ export function createSessionActions(context: SessionActionContext) {
   let historyLoadGeneration = 0;
   let lastSessionDefaults: SessionInfoDefaults | null = null;
 
-  const captureSessionSelection = () => ({
-    sessionKey: state.currentSessionKey,
-    agentId: state.currentAgentId,
-  });
+  const captureSessionSelection = () => captureTuiSessionSelection(state);
 
   const isCurrentSessionSelection = (selection: { sessionKey: string; agentId: string }): boolean =>
     matchesTuiSessionSelection(state, selection);
@@ -242,38 +242,22 @@ export function createSessionActions(context: SessionActionContext) {
     }
 
     const next = { ...state.sessionInfo };
-    if (entry?.thinkingLevel !== undefined) {
-      next.thinkingLevel = entry.thinkingLevel;
-    }
+    copyDefinedSessionInfo(next, entry, [
+      "thinkingLevel",
+      "agentRuntime",
+      "fastMode",
+      "verboseLevel",
+      "traceLevel",
+      "reasoningLevel",
+      "responseUsage",
+      "effectiveResponseUsage",
+      "inputTokens",
+      "outputTokens",
+      "displayName",
+      "updatedAt",
+    ]);
     if (entry?.thinkingLevels !== undefined || defaults?.thinkingLevels !== undefined) {
       next.thinkingLevels = entry?.thinkingLevels ?? defaults?.thinkingLevels;
-    }
-    if (entry?.agentRuntime !== undefined) {
-      next.agentRuntime = entry.agentRuntime;
-    }
-    if (entry?.fastMode !== undefined) {
-      next.fastMode = entry.fastMode;
-    }
-    if (entry?.verboseLevel !== undefined) {
-      next.verboseLevel = entry.verboseLevel;
-    }
-    if (entry?.traceLevel !== undefined) {
-      next.traceLevel = entry.traceLevel;
-    }
-    if (entry?.reasoningLevel !== undefined) {
-      next.reasoningLevel = entry.reasoningLevel;
-    }
-    if (entry?.responseUsage !== undefined) {
-      next.responseUsage = entry.responseUsage;
-    }
-    if (entry?.effectiveResponseUsage !== undefined) {
-      next.effectiveResponseUsage = entry.effectiveResponseUsage;
-    }
-    if (entry?.inputTokens !== undefined) {
-      next.inputTokens = entry.inputTokens;
-    }
-    if (entry?.outputTokens !== undefined) {
-      next.outputTokens = entry.outputTokens;
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
@@ -304,20 +288,8 @@ export function createSessionActions(context: SessionActionContext) {
       next.contextTokens =
         entry?.contextTokens ?? defaults?.contextTokens ?? state.sessionInfo.contextTokens;
     }
-    if (entry?.displayName !== undefined) {
-      next.displayName = entry.displayName;
-    }
-    if (entry?.updatedAt !== undefined) {
-      next.updatedAt = entry.updatedAt;
-    }
 
-    const selection = resolveModelSelection(entry);
-    if (selection.modelProvider !== undefined) {
-      next.modelProvider = selection.modelProvider;
-    }
-    if (selection.model !== undefined) {
-      next.model = selection.model;
-    }
+    copyDefinedSessionInfo(next, resolveModelSelection(entry), ["modelProvider", "model"]);
 
     const previous = state.sessionInfo;
     const uiChanged = !sessionInfoUiEquals(previous, next);
@@ -666,15 +638,9 @@ export function createSessionActions(context: SessionActionContext) {
       tui.requestRender();
       return;
     }
-    const selection = captureSessionSelection();
-    const sessionId = state.currentSessionId;
-    const sessionGeneration = state.sessionGeneration ?? 0;
+    const { selection, isCurrent: isCurrentAbort } = captureTuiSessionIncarnation(state);
     const pendingRunId = submit.getPendingSubmitAcceptedRunId(state);
     const activeRunId = state.activeChatRunId;
-    const isCurrentAbort = () =>
-      isCurrentSessionSelection(selection) &&
-      (state.sessionGeneration ?? 0) === sessionGeneration &&
-      (sessionId === null || state.currentSessionId === sessionId);
     const dropPendingRun = (runId: string) => {
       reduceTuiSessionProjection(state, {
         type: "sendFailed",

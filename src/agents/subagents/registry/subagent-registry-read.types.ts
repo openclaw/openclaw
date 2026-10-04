@@ -99,6 +99,8 @@ export type SubagentRunReadRecord = {
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
   swarmRequesterSessionKey?: string;
   childSessionKey: string;
+  /** Agent captured at registration for raw child session keys. */
+  childAgentId?: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
   /** Effective requester agent, including cron/hook overrides not encoded in the session key. */
@@ -119,6 +121,8 @@ export type SubagentRunReadRecord = {
   delivery?: SubagentCompletionDeliveryState;
   execution: {
     status: "queued" | "running" | "interrupted" | "terminal";
+    /** Retained after restart settlement; an interrupted execution is not a task failure. */
+    interruptionReason?: "gateway-restart";
     startedAt?: number;
     endedAt?: number;
     outcome?: SubagentRunOutcome;
@@ -127,3 +131,22 @@ export type SubagentRunReadRecord = {
     status: SwarmCollectorStatus;
   };
 };
+
+/** Cloneable comparison input; source custody and the deletion verdict remain with the caller. */
+export type SubagentRunsDurableBasis = Readonly<{
+  databasePath: string;
+  databaseIdentity: string;
+  databaseBirthtime?: string;
+  sessionKeys: readonly string[];
+  liveTopology: readonly Readonly<{
+    childSessionKey: string;
+    requesterSessionKey: string;
+  }>[];
+  digest: string | null;
+}>;
+
+/** Maintenance compares its compact physical projection, without descendant topology. */
+export type SubagentMaintenanceDurableBasis = Pick<
+  SubagentRunsDurableBasis,
+  "databasePath" | "databaseIdentity" | "databaseBirthtime" | "digest"
+>;

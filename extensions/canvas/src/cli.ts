@@ -38,17 +38,12 @@ export type CanvasNodesRpcOpts = {
 
 export type CanvasCliDependencies = {
   defaultRuntime: CanvasCliRuntime;
-  nodesCallOpts: (cmd: Command, defaults?: { timeoutMs?: number }) => Command;
+  nodesCallOpts: typeof nodesCallOpts;
   runNodesCommand: (label: string, action: () => Promise<void>) => Promise<void> | void;
   getNodesTheme: () => { ok: (value: string) => string };
   parseTimeoutMs: (raw: unknown) => number | undefined;
   resolveNodeId: (opts: CanvasNodesRpcOpts, query: string) => Promise<string>;
-  buildNodeInvokeParams: (params: {
-    nodeId: string;
-    command: string;
-    params?: Record<string, unknown>;
-    timeoutMs?: number;
-  }) => Record<string, unknown>;
+  buildNodeInvokeParams: typeof buildNodeInvokeParams;
   callGatewayCli: (
     method: string,
     opts: CanvasNodesRpcOpts,

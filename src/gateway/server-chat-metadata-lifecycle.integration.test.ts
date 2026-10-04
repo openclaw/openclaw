@@ -67,7 +67,7 @@ const config = {
       models: { "openai/gpt-5.4": {} },
       modelPolicy: { allow: ["openai/gpt-5.4"] },
     },
-    list: [{ id: "main", default: true }],
+    entries: { main: {} },
   },
 } as OpenClawConfig;
 const context = {
@@ -117,6 +117,17 @@ async function publishOwner(ownerConfig: OpenClawConfig = config): Promise<void>
     catalogMode: "live",
     allowGatewaySubagentBinding: true,
   });
+}
+
+function createCatalogContext(getConfig: () => OpenClawConfig) {
+  const loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (params) =>
+    loadGatewayModelCatalogSnapshot({ ...params, getConfig });
+  registerGatewayModelCatalogPrivateAccess(loader, {
+    loadDeferred: (params) => loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig }),
+    readPrepared: (params) =>
+      readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig }),
+  });
+  return { ...context, getRuntimeConfig: getConfig, loadGatewayModelCatalogSnapshot: loader };
 }
 
 async function expectAvailable(
@@ -190,7 +201,7 @@ describe("gateway chat metadata lifecycle composition", () => {
             },
             modelPolicy: { allow: ["openai/*", "openai/gpt-5.6-luna"] },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       };
       const rows = ["codex-latest", "gpt-5.6-luna"].map((id) => ({
@@ -329,7 +340,7 @@ describe("gateway chat metadata lifecycle composition", () => {
             models: { [modelRef]: { agentRuntime: { id: "native-test" } } },
             modelPolicy: { allow: [modelRef] },
           },
-          list: [{ id: "main", default: true }],
+          entries: { main: {} },
         },
       };
       let currentConfig = nativeConfig;
@@ -392,22 +403,8 @@ describe("gateway chat metadata lifecycle composition", () => {
         routeVariants: [nativeModel],
         authoritative,
       });
-      const loader: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (params) =>
-        loadGatewayModelCatalogSnapshot({ ...params, getConfig: () => currentConfig });
-      registerGatewayModelCatalogPrivateAccess(loader, {
-        loadDeferred: (params) =>
-          loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => currentConfig }),
-        readPrepared: (params) =>
-          readPreparedGatewayModelCatalogOwnerSnapshot({
-            ...params,
-            getConfig: () => currentConfig,
-          }),
-      });
-      const nativeContext = {
-        ...context,
-        getRuntimeConfig: () => currentConfig,
-        loadGatewayModelCatalogSnapshot: loader,
-      };
+      const nativeContext = createCatalogContext(() => currentConfig);
+      const loader = nativeContext.loadGatewayModelCatalogSnapshot;
       try {
         await publishOwner(nativeConfig);
         expect(loadModelCatalog).toHaveBeenCalled();
@@ -701,7 +698,7 @@ describe("gateway chat metadata lifecycle composition", () => {
         });
       const rosterConfig: OpenClawConfig = {
         ...config,
-        agents: { ...config.agents, list: [{ id: "main", default: true }, { id: "healthy" }] },
+        agents: { ...config.agents, entries: { main: {}, healthy: {} } },
       };
       mocks.configuredAgentIds = ["main", "healthy"];
       const retiredRegistry = createEmptyPluginRegistry();
@@ -757,26 +754,7 @@ describe("gateway chat metadata lifecycle composition", () => {
     } satisfies OpenClawConfig;
     await publishOwner(publishedConfig);
     const lifecycle = await createLifecycle(() => currentConfig);
-    const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
-      loadParams,
-    ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: () => currentConfig });
-    registerGatewayModelCatalogPrivateAccess(loadCatalogSnapshot, {
-      loadDeferred: (loadParams) =>
-        loadPreparedGatewayModelCatalogSnapshot({
-          ...loadParams,
-          getConfig: () => currentConfig,
-        }),
-      readPrepared: (loadParams) =>
-        readPreparedGatewayModelCatalogOwnerSnapshot({
-          ...loadParams,
-          getConfig: () => currentConfig,
-        }),
-    });
-    const currentContext = {
-      ...context,
-      getRuntimeConfig: () => currentConfig,
-      loadGatewayModelCatalogSnapshot: loadCatalogSnapshot,
-    } as GatewayRequestContext;
+    const currentContext = createCatalogContext(() => currentConfig);
 
     await lifecycle.attachContext(currentContext, sidecars.publish);
 

@@ -1,4 +1,7 @@
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalObjectRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ReplayDecision =
   | {
@@ -47,12 +50,9 @@ export function decideReplayAction(input?: ReplayShimInput): ReplayDecision {
   };
 }
 
-type ResumeFailureKind = "missing" | "unknown";
-
-interface ResumeFailureClassification {
-  readonly recoverable: boolean;
-  readonly kind: ResumeFailureKind;
-}
+type ResumeFailureClassification =
+  | { readonly recoverable: true; readonly kind: "missing" }
+  | { readonly recoverable: false; readonly kind: "unknown" };
 
 const MISSING_SESSION_CODES = new Set([
   "SESSION_NOT_FOUND",
@@ -70,33 +70,18 @@ const MISSING_SESSION_MESSAGE_PATTERNS: readonly RegExp[] = [
   /\bno such session\b/i,
 ];
 
-function readErrorField(error: unknown, key: string): unknown {
-  if (!error || typeof error !== "object") {
-    return undefined;
-  }
-  return (error as Record<string, unknown>)[key];
-}
-
 // Only missing sessions permit recovery; auth and transport failures must surface.
 export function classifyResumeFailure(error: unknown): ResumeFailureClassification {
-  const status = readErrorField(error, "status");
-  if (status === 404) {
+  const record = asOptionalObjectRecord(error);
+  if (record?.status === 404 || record?.statusCode === 404) {
     return { recoverable: true, kind: "missing" };
   }
-  const statusCode = readErrorField(error, "statusCode");
-  if (statusCode === 404) {
-    return { recoverable: true, kind: "missing" };
-  }
-
-  const code = readErrorField(error, "code");
-  if (typeof code === "string" && MISSING_SESSION_CODES.has(code)) {
-    return { recoverable: true, kind: "missing" };
-  }
-
-  const message = readErrorField(error, "message");
+  const code = record?.code;
+  const message = record?.message;
   if (
-    typeof message === "string" &&
-    MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message))
+    (typeof code === "string" && MISSING_SESSION_CODES.has(code)) ||
+    (typeof message === "string" &&
+      MISSING_SESSION_MESSAGE_PATTERNS.some((pattern) => pattern.test(message)))
   ) {
     return { recoverable: true, kind: "missing" };
   }

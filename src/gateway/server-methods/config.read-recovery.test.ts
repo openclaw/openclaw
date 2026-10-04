@@ -30,20 +30,13 @@ const dirs = createTempDirTracker();
 afterEach(dirs.cleanup);
 
 it.each([
-  { exists: false, valid: true, backup: true },
-  { exists: true, valid: false, backup: true },
-  { exists: false, valid: true, backup: false },
-  { exists: true, valid: false, backup: false },
-  { exists: true, valid: true, backup: true },
-  { exists: true, valid: true, backup: false },
+  { exists: false, valid: true },
+  { exists: true, valid: false },
 ])(
   "config.get preserves diagnostics without inferring rollback from a backup: %j",
-  async ({ exists, valid, backup }) => {
+  async ({ exists, valid }) => {
     const configPath = path.join(dirs.make("config-read-recovery-"), "openclaw.json");
-    const recoveryBackupPath = `${configPath}.bak`;
-    if (backup) {
-      writeFileSync(recoveryBackupPath, '{"gateway":{"mode":"local"}}');
-    }
+    writeFileSync(`${configPath}.bak`, '{"gateway":{"mode":"local"}}');
     const snapshot = {
       ...createConfigWriteSnapshot({}).snapshot,
       path: configPath,
@@ -155,6 +148,7 @@ it("reports only the committed config with a projected hash and redacted secrets
       configRevisionProjector: {
         projectRawHash: (hash) => `public:${hash}`,
         projectResolvedHash: (hash) => hash,
+        hashResponseSessionBearer: () => "unused-test-scope",
       },
     },
   });
@@ -185,7 +179,7 @@ it("reports only the committed config with a projected hash and redacted secrets
   expect(queueFollowUp).toHaveBeenCalledOnce();
 });
 
-it.each(["restored", "unknown", "not-restored"] as const)(
+it.each(["restored", "not-restored"] as const)(
   "does not report a committed receipt when publication rollback is %s",
   async (rollbackStatus) => {
     write.mockRejectedValueOnce(

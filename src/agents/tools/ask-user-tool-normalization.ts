@@ -1,5 +1,5 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Type, type Static } from "typebox";
+import { Type } from "typebox";
 import { Value } from "typebox/value";
 import {
   QuestionOptionSchema,
@@ -14,18 +14,14 @@ export const QUESTION_RPC_GRACE_MS = 10_000;
 const MIN_ASK_USER_TIMEOUT_SECONDS = 30;
 const MAX_ASK_USER_TIMEOUT_SECONDS = 3600;
 
-export type NormalizedAskUserParams = {
-  questions: QuestionRequestQuestion[];
-  timeoutSeconds: number;
-};
+export type NormalizedAskUserParams = ReturnType<typeof normalizeAskUserParams>;
 
 /** Validates and canonicalizes model-authored ask_user arguments. */
-export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams {
+export function normalizeAskUserParams(value: unknown) {
   if (!Value.Check(AskUserToolSchema, value)) {
     throw new ToolInputError("ask_user arguments do not match the model-facing question contract");
   }
-  const params = value as Static<typeof AskUserToolSchema>;
-  const questions: QuestionRequestQuestion[] = params.questions.map((question) => ({
+  const questions: QuestionRequestQuestion[] = value.questions.map((question) => ({
     questionId: question.id.trim(),
     header: truncateUtf16Safe(question.header.trim(), 12),
     question: question.question.trim(),
@@ -55,7 +51,7 @@ export function normalizeAskUserParams(value: unknown): NormalizedAskUserParams 
     throw new ToolInputError(semanticError);
   }
 
-  return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(params.timeoutSeconds) };
+  return { questions, timeoutSeconds: normalizeQuestionTimeoutSeconds(value.timeoutSeconds) };
 }
 
 /** Shared human-question wait contract, including credential entry and harness watchdogs. */

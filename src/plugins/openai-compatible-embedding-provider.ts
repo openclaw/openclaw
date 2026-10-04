@@ -1,4 +1,3 @@
-// Builds OpenAI-compatible embedding provider entries for plugins.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
@@ -17,7 +16,7 @@ import type {
   ConfiguredProviderLocalServiceTarget,
 } from "../agents/provider-local-service-target.js";
 import { redactProviderResponseErrorText } from "../agents/provider-request-header-redaction.js";
-import type { ModelProviderLocalServiceConfig } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import { readResponseTextPrefix } from "../infra/http-body.js";
 import { ssrfPolicyFromHttpBaseUrlAllowedHostname, type SsrFPolicy } from "../infra/net/ssrf.js";
@@ -53,13 +52,9 @@ type OpenAICompatibleEmbeddingClient = {
   acquireLocalService?: AcquireConfiguredProviderLocalService;
 };
 
-type ConfiguredEmbeddingProvider = {
-  api?: string;
-  baseUrl?: string;
-  apiKey?: unknown;
-  headers?: Record<string, unknown>;
-  localService?: ModelProviderLocalServiceConfig;
-};
+type ConfiguredEmbeddingProvider = Partial<
+  Pick<ModelProviderConfig, "api" | "baseUrl" | "apiKey" | "headers" | "localService">
+>;
 
 type ResolvedConfiguredEmbeddingProvider = {
   providerId: string;
@@ -112,11 +107,6 @@ function normalizeDimensions(value: number | undefined): number | undefined {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }
   return value;
-}
-
-function normalizeOptionalInputType(value: string | undefined): string | undefined {
-  const inputType = value?.trim();
-  return inputType ? inputType : undefined;
 }
 
 function resolveRequestInputType(
@@ -233,9 +223,7 @@ function isOpenAICompatibleProviderConfig(
 function resolveConfiguredProvider(
   options: EmbeddingProviderCreateOptions,
 ): ResolvedConfiguredEmbeddingProvider | undefined {
-  const providers = options.config.models?.providers as
-    | Record<string, ConfiguredEmbeddingProvider>
-    | undefined;
+  const providers = options.config.models?.providers;
   if (!providers) {
     return undefined;
   }
@@ -388,9 +376,9 @@ async function createOpenAICompatibleEmbeddingClient(
   const providerOwnsDestination =
     providerBaseUrl !== undefined && embeddingProviderOwnsDestination({ baseUrl, providerBaseUrl });
   const model = normalizeModel(options.model, options.provider);
-  const inputType = normalizeOptionalInputType(options.inputType);
-  const queryInputType = normalizeOptionalInputType(options.queryInputType);
-  const documentInputType = normalizeOptionalInputType(options.documentInputType);
+  const inputType = normalizeOptionalString(options.inputType);
+  const queryInputType = normalizeOptionalString(options.queryInputType);
+  const documentInputType = normalizeOptionalString(options.documentInputType);
   const headers = buildHeaders({
     apiKey: normalizeResolvedSecretInputString({
       value: options.remote?.apiKey,

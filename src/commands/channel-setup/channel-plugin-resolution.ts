@@ -1,7 +1,6 @@
-// Resolves or installs channel plugins needed by setup/onboarding flows.
 import type { ChannelPluginCatalogEntry } from "../../channels/plugins/catalog.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
-import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -24,7 +23,6 @@ type ResolveInstallableChannelPluginResult = {
   catalogEntry?: ChannelPluginCatalogEntry;
   configChanged: boolean;
   pluginInstalled: boolean;
-  supportsRequestedCapability?: boolean;
 };
 
 /** Resolve an existing channel plugin, scoped setup plugin, or installable catalog entry. */
@@ -53,7 +51,6 @@ export async function resolveInstallableChannelPlugin(params: {
       plugin: registeredPlugin,
       configChanged: false,
       pluginInstalled: false,
-      supportsRequestedCapability: supports(registeredPlugin),
     };
   }
 
@@ -134,6 +131,5 @@ export async function resolveInstallableChannelPlugin(params: {
     catalogEntry,
     configChanged: nextCfg !== params.cfg,
     pluginInstalled,
-    supportsRequestedCapability: plugin ? supports(plugin) : undefined,
   };
 }

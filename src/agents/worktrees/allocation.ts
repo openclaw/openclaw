@@ -25,8 +25,9 @@ export async function withWorktreeAllocationLease<T>(
   },
   run: (guard: WorktreeAllocationGuard) => Promise<T>,
 ): Promise<T> {
-  // Disk headroom is shared across repositories. Hold one renewable lease
-  // through checkout, setup, snapshots, and publication, including CLI processes.
+  // Shared disk headroom requires holding this lease through multi-minute Git work.
+  // Parent renewal (zero busy timeout, one attempt per tick) lost it under contention;
+  // the worker retries contention and survives parent-thread stalls.
   const acquisition = new AbortController();
   const abortAcquisition = () => acquisition.abort(params.signal?.reason);
   params.signal?.addEventListener("abort", abortAcquisition, { once: true });
@@ -34,6 +35,7 @@ export async function withWorktreeAllocationLease<T>(
     abortAcquisition();
   }
   try {
+    params.commitGuard?.();
     return await withOpenClawStateLease(
       {
         scope: WORKTREE_CREATE_LEASE_SCOPE,
@@ -41,6 +43,7 @@ export async function withWorktreeAllocationLease<T>(
         database: { scope: "shared", options: { env: params.env } },
         leaseMs: WORKTREE_CREATE_LEASE_MS,
         waitMs: WORKTREE_CREATE_LEASE_WAIT_MS,
+        heartbeat: "worker",
         leaseLabel: "managed worktree allocation lease",
         operationLabel: "agents.worktrees.allocation",
         signal: acquisition.signal,

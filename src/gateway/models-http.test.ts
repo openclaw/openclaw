@@ -1,5 +1,6 @@
 // Models HTTP tests cover OpenAI-compatible /v1/models behavior, read-scope
 // authorization, ordering, and disabled-surface responses.
+import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
@@ -154,19 +155,37 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
   it("rejects when disabled", async () => {
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
     const port = portClaim.port;
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port: portClaim,
-      auth: { mode: "none" },
-      openAiChatCompletionsEnabled: false,
-    });
+    const competitor = createServer();
+    let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
     try {
+      server = await startOpenAiCompatGatewayServer({
+        startGatewayServer: async (...args) => {
+          // Try to steal the socket before the Gateway can finish its awaited startup work.
+          const collision = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => {
+            competitor.once("error", resolve);
+            competitor.listen(port, "127.0.0.1", () => resolve(undefined));
+          });
+          expect(collision?.code).toBe("EADDRINUSE");
+          return await startGatewayServer(...args);
+        },
+        port: portClaim,
+        auth: { mode: "none" },
+        openAiChatCompletionsEnabled: false,
+      });
       const res = await fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {},
       });
       expect(res.status).toBe(404);
     } finally {
-      await server.close({ reason: "models disabled test done" });
+      try {
+        await server?.close({ reason: "models disabled test done" });
+      } finally {
+        if (competitor.listening) {
+          await new Promise<void>((resolve, reject) => {
+            competitor.close((error) => (error ? reject(error) : resolve()));
+          });
+        }
+      }
     }
   });
 

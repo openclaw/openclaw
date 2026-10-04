@@ -15,24 +15,21 @@ enum ExecShellWrapperParser {
         case powershell
     }
 
-    private struct WrapperSpec {
-        let kind: Kind
-        let names: Set<String>
-    }
-
     private static let posixInlineFlags = Set(["-lc", "-c", "--command"])
     private static let powershellInlineFlags = Set(["-c", "-command", "--command"])
 
-    private static let wrapperSpecs: [WrapperSpec] = [
-        WrapperSpec(kind: .posix, names: ["ash", "sh", "bash", "zsh", "dash", "ksh", "fish"]),
-        WrapperSpec(kind: .cmd, names: ["cmd.exe", "cmd"]),
-        WrapperSpec(kind: .powershell, names: ["powershell", "powershell.exe", "pwsh", "pwsh.exe"]),
-    ]
-    private static let loginStartupShellNames = Set(["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"])
+    private static func kind(for name: String) -> Kind? {
+        switch name {
+        case "ash", "sh", "bash", "zsh", "dash", "ksh", "fish": .posix
+        case "cmd.exe", "cmd": .cmd
+        case "powershell", "powershell.exe", "pwsh", "pwsh.exe": .powershell
+        default: nil
+        }
+    }
 
     static func isShellWrapperExecutable(_ token: String) -> Bool {
         let name = ExecCommandToken.basenameLower(token)
-        return self.wrapperSpecs.contains { $0.names.contains(name) }
+        return self.kind(for: name) != nil
     }
 
     static func extract(command: [String], rawCommand: String?) -> ParsedShellWrapper {
@@ -78,11 +75,10 @@ enum ExecShellWrapperParser {
                 depth: depth + 1)
         }
 
-        guard let spec = wrapperSpecs.first(where: { $0.names.contains(base0) }) else {
+        guard let kind = self.kind(for: base0) else {
             return .notWrapper
         }
-        if spec.kind == .posix,
-           base0 == "fish",
+        if base0 == "fish",
            ExecInlineCommandParser.hasFishAttachedCommandOption(command)
         {
             return .blockedWrapper
@@ -90,18 +86,18 @@ enum ExecShellWrapperParser {
         let includeLegacyLoginInlineForm = failClosedOnStartupWrappers &&
             !self.legacyLoginInlinePayloadMatchesRaw(
                 command: command,
-                spec: spec,
+                kind: kind,
                 base0: base0,
                 preferredRaw: preferredRaw)
         if self.startupWrapperRequiresFullArgv(
             command: command,
-            spec: spec,
+            kind: kind,
             base0: base0,
             includeLegacyLoginInlineForm: includeLegacyLoginInlineForm)
         {
             return .blockedWrapper
         }
-        guard let payload = extractPayload(command: command, spec: spec) else {
+        guard let payload = extractPayload(command: command, kind: kind) else {
             return .notWrapper
         }
         let normalized = failClosedOnStartupWrappers ? payload : preferredRaw ?? payload
@@ -110,11 +106,11 @@ enum ExecShellWrapperParser {
 
     private static func startupWrapperRequiresFullArgv(
         command: [String],
-        spec: WrapperSpec,
+        kind: Kind,
         base0: String,
         includeLegacyLoginInlineForm: Bool) -> Bool
     {
-        guard spec.kind == .posix else {
+        guard kind == .posix else {
             return false
         }
         if base0 == "fish",
@@ -122,11 +118,7 @@ enum ExecShellWrapperParser {
         {
             return true
         }
-        if self.loginStartupShellNames.contains(base0),
-           ExecInlineCommandParser.hasPosixLoginStartupBeforeInlineCommand(
-               command,
-               flags: self.posixInlineFlags)
-        {
+        if ExecInlineCommandParser.hasPosixLoginStartupBeforeInlineCommand(command, flags: self.posixInlineFlags) {
             return includeLegacyLoginInlineForm || !(base0 == "sh" && self.isLegacyLoginInlineForm(command))
         }
         return ExecInlineCommandParser.hasPosixInteractiveStartupBeforeInlineCommand(
@@ -143,28 +135,29 @@ enum ExecShellWrapperParser {
 
     private static func legacyLoginInlinePayloadMatchesRaw(
         command: [String],
-        spec: WrapperSpec,
+        kind: Kind,
         base0: String,
         preferredRaw: String?) -> Bool
     {
         guard let preferredRaw,
               base0 == "sh",
               isLegacyLoginInlineForm(command),
-              let payload = extractPayload(command: command, spec: spec)
+              let payload = extractPayload(command: command, kind: kind)
         else {
             return false
         }
         return payload == preferredRaw.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func extractPayload(command: [String], spec: WrapperSpec) -> String? {
-        switch spec.kind {
+    private static func extractPayload(command: [String], kind: Kind) -> String? {
+        switch kind {
         case .posix:
             ExecInlineCommandParser.extractInlineCommand(command, flags: self.posixInlineFlags, allowCombinedC: true)
         case .cmd:
             self.extractCmdInlineCommand(command)
         case .powershell:
-            self.extractPowerShellInlineCommand(command)
+            ExecInlineCommandParser.extractInlineCommand(
+                command, flags: self.powershellInlineFlags, allowCombinedC: false)
         }
     }
 
@@ -177,24 +170,5 @@ enum ExecShellWrapperParser {
         let tail = command.suffix(from: command.index(after: idx)).joined(separator: " ")
         let payload = tail.trimmingCharacters(in: .whitespacesAndNewlines)
         return payload.isEmpty ? nil : payload
-    }
-
-    private static func extractPowerShellInlineCommand(_ command: [String]) -> String? {
-        for idx in 1..<command.count {
-            let token = command[idx].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if token.isEmpty {
-                continue
-            }
-            if token == "--" {
-                break
-            }
-            if self.powershellInlineFlags.contains(token) {
-                return ExecInlineCommandParser.extractInlineCommand(
-                    command,
-                    flags: self.powershellInlineFlags,
-                    allowCombinedC: false)
-            }
-        }
-        return nil
     }
 }

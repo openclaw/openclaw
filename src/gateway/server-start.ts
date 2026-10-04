@@ -1,7 +1,7 @@
 import { formatErrorMessage } from "../infra/errors.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { bumpSkillsSnapshotVersion } from "../skills/runtime/refresh-state.js";
 import { createGatewayKernel, gatewayKernelLogs } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
@@ -9,10 +9,6 @@ import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { rethrowGatewayStartupError, runGatewayCloseSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
 import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
-
-const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
-  () => import("./server-startup-post-attach.js"),
-);
 
 const { log, logTailscale, logChannels, logHealth, logCron, logReload, logHooks, logWsControl } =
   gatewayKernelLogs;
@@ -33,10 +29,7 @@ async function startGatewayServerWithSdkHost(
   opts: GatewayServerOptions,
   sdkResourceHost: LegacyPluginSdkResourceHost,
 ): Promise<GatewayServer> {
-  let releasePostReadyWork: () => void = () => {};
-  const postReadyWorkBarrier = new Promise<void>((resolve) => {
-    releasePostReadyWork = resolve;
-  });
+  const { promise: postReadyWorkBarrier, resolve: releasePostReadyWork } = createDeferredCore();
   const gatewayKernel = await createGatewayKernel(port, opts, {
     deferEarlyRuntime: true,
     sdkResourceHost,
@@ -92,7 +85,6 @@ async function startGatewayServerWithSdkHost(
       logChannels,
       logCron,
       logReload,
-      loadGatewayStartupPostAttachModule,
       waitForPostReadyWork: () => postReadyWorkBarrier,
     });
     startupSettled = startup.startupSettled;

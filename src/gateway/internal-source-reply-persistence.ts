@@ -14,7 +14,10 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import { sessionMatchesExpectedTranscriptTurn } from "../config/sessions/session-transcript-turn-state.js";
-import { getOwnedSessionTranscriptWriterFence } from "../config/sessions/transcript-write-context.js";
+import {
+  captureOwnedTranscriptWriteAssertion,
+  getOwnedSessionTranscriptWriterFence,
+} from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
 import {
@@ -54,6 +57,7 @@ async function completePersistedInternalSourceReply(params: {
     storePath,
   };
   scope.sessionKey = resolveSessionEntrySelection(scope).normalizedKey;
+  const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
   const expected = {
     expectedSessionId: params.expectedSessionId,
     ...getOwnedSessionTranscriptWriterFence({ sessionKey: scope.sessionKey }),
@@ -72,6 +76,7 @@ async function completePersistedInternalSourceReply(params: {
     throw new Error("Internal source reply transcript identity is unavailable");
   }
   const assertCurrentReplay = (entryId: string) => {
+    assertCurrent();
     if (
       !sessionMatchesExpectedTranscriptTurn(loadExactSessionEntry(scope), expected) ||
       !readActiveTranscriptEntryAnchor({ ...scope, entryId })
@@ -84,15 +89,16 @@ async function completePersistedInternalSourceReply(params: {
   const replay = await persistSessionTranscriptTurn(scope, {
     config: params.cfg,
     ...expected,
+    assertCurrent,
     messages: [
       {
         eventId: messageId,
         message,
         idempotencyLookup: "scan",
-        shouldAppendInTransaction: () => {
-          // A removed or abandoned original must never become a new append on retry.
-          assertCurrentReplay(messageId);
-          return true;
+        predicate: {
+          kind: "active-entry",
+          entryId: messageId,
+          errorMessage: "Internal source reply no longer owns the active transcript",
         },
       },
     ],
@@ -100,7 +106,6 @@ async function completePersistedInternalSourceReply(params: {
     updateMode: "file-only",
     publishWhen: "always",
     onMessageCommitted: (result, acceptCompletion) => {
-      // The queue await can outlive admission or the active branch; promotion must use current ownership.
       assertCurrentReplay(result.messageId);
       attachSourceReplyMedia(result, acceptCompletion);
     },

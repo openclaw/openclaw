@@ -258,100 +258,59 @@ describe("channel ingress claim ownership", () => {
     });
   });
 
-  it("refreshes claimed rows only with the active claim token", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const claimed = await queue.claim("event-1", { ownerId: "worker" });
-      if (!claimed) {
-        throw new Error("Expected a claimed ingress event");
-      }
-
-      expect(await queue.refreshClaim?.(claimed, { refreshedAt: 20 })).toBe(true);
-      expect(
-        (await queue.listClaims()).map((claim) => ({
-          id: claim.id,
-          claimedAt: claim.claim.claimedAt,
-          updatedAt: claim.updatedAt,
-        })),
-      ).toEqual([{ id: "event-1", claimedAt: 20, updatedAt: 20 }]);
-
-      expect(
-        await queue.refreshClaim?.(
-          { id: "event-1", claim: { token: "wrong" } },
-          {
-            refreshedAt: 30,
-          },
-        ),
-      ).toBe(false);
-      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(20);
-    });
-  });
-
-  it("does not let old claim tokens refresh recovered and reclaimed rows", async () => {
-    await withTempState(async (stateDir) => {
-      const queue = createTestIngressQueue(stateDir, { now: () => 10 });
-
-      await queue.enqueue("event-1", { text: "claimed" });
-      const oldClaim = await queue.claim("event-1", { ownerId: "worker-1" });
-      if (!oldClaim) {
-        throw new Error("Expected a claimed ingress event");
-      }
-      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20 })).toBe(1);
-      const newClaim = await queue.claim("event-1", { ownerId: "worker-2" });
-      if (!newClaim) {
-        throw new Error("Expected reclaimed ingress event");
-      }
-
-      expect(await queue.refreshClaim?.(oldClaim, { refreshedAt: 30 })).toBe(false);
-      expect(await queue.refreshClaim?.(newClaim, { refreshedAt: 40 })).toBe(true);
-      expect((await queue.listClaims())[0]?.claim).toMatchObject({
-        ownerId: "worker-2",
-        claimedAt: 40,
-      });
-    });
-  });
-
-  it.each(["refreshed", "reclaimed"] as const)(
-    "does not recover a claim %s after stale recovery snapshots it",
+  it.each(["refreshed", "reclaimed", "recovered"] as const)(
+    "fences stale recovery and refresh against a %s claim",
     async (change) => {
       await withTempState(async (stateDir) => {
         const queue = createTestIngressQueue(stateDir, { now: () => 10 });
-
         await queue.enqueue("event-1", { text: "claimed" });
-        const claimed = await queue.claim("event-1", { ownerId: "worker" });
-        if (!claimed) {
-          throw new Error("Expected a claimed ingress event");
-        }
-
+        const claimed = expectDefined(
+          await queue.claim("event-1", { ownerId: "worker" }),
+          "original claim",
+        );
         let currentClaim = claimed;
-        expect(
-          await queue.recoverStaleClaims({
-            staleMs: 5,
-            now: 20,
-            shouldRecover: async (claim) => {
-              expect(claim.id).toBe("event-1");
-              if (change === "refreshed") {
-                expect(await queue.refreshClaim?.(claim, { refreshedAt: 20 })).toBe(true);
-              } else {
-                expect(await queue.release(claim, { recordAttempt: false })).toBe(true);
-                currentClaim = expectDefined(
-                  await queue.claim(claim.id, { ownerId: "replacement" }),
-                  "replacement claim",
-                );
-                expect(currentClaim.claim.token).not.toBe(claim.claim.token);
-              }
-              return true;
-            },
-          }),
-        ).toBe(0);
+        const reclaim = async () => {
+          currentClaim = expectDefined(
+            await queue.claim(claimed.id, { ownerId: "replacement" }),
+            "replacement claim",
+          );
+          expect(currentClaim.claim.token).not.toBe(claimed.claim.token);
+        };
+        if (change === "recovered") {
+          expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20 })).toBe(1);
+          await reclaim();
+        } else {
+          expect(
+            await queue.recoverStaleClaims({
+              staleMs: 5,
+              now: 20,
+              shouldRecover: async (claim) => {
+                expect(claim.id).toBe("event-1");
+                if (change === "refreshed") {
+                  expect(await queue.refreshClaim?.(claim, { refreshedAt: 20 })).toBe(true);
+                } else {
+                  expect(await queue.release(claim, { recordAttempt: false })).toBe(true);
+                  await reclaim();
+                }
+                return true;
+              },
+            }),
+          ).toBe(0);
+        }
         expect((await queue.listPending()).map((record) => record.id)).toEqual([]);
         expect((await queue.listClaims())[0]?.claim).toMatchObject({
           token: currentClaim.claim.token,
           ownerId: change === "refreshed" ? "worker" : "replacement",
           claimedAt: change === "refreshed" ? 20 : 10,
         });
+        if (change === "recovered") {
+          expect(await queue.refreshClaim?.(claimed, { refreshedAt: 30 })).toBe(false);
+          expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(10);
+          expect(await queue.refreshClaim?.(currentClaim, { refreshedAt: 40 })).toBe(true);
+          expect(await queue.listClaims()).toMatchObject([
+            { id: "event-1", updatedAt: 40, claim: { ownerId: "replacement", claimedAt: 40 } },
+          ]);
+        }
       });
     },
   );

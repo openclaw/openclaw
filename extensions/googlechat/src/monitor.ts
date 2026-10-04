@@ -11,12 +11,11 @@ import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gate
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { parseDateStringTimestampMs as resolveGoogleChatTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { maybeHandleGoogleChatApprovalCardClick } from "./approval-card-click.js";
-import type { GoogleChatAudienceType } from "./auth.js";
 import { applyGoogleChatInboundAccessPolicy } from "./monitor-access.js";
 import { resolveGoogleChatDurableReplyOptions } from "./monitor-durable.js";
 import {
@@ -28,6 +27,7 @@ import {
   deliverGoogleChatReply,
   type GoogleChatTypingMessage,
 } from "./monitor-reply-delivery.js";
+import { normalizeGoogleChatReplyTarget } from "./monitor-reply-target.js";
 import {
   registerGoogleChatWebhookTarget,
   setGoogleChatWebhookEventProcessor,
@@ -51,21 +51,6 @@ function logVerbose(core: GoogleChatCoreRuntime, runtime: GoogleChatRuntimeEnv, 
   }
 }
 
-function normalizeAudienceType(value?: string | null): GoogleChatAudienceType | undefined {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "app-url" || normalized === "app_url" || normalized === "app") {
-    return "app-url";
-  }
-  if (
-    normalized === "project-number" ||
-    normalized === "project_number" ||
-    normalized === "project"
-  ) {
-    return "project-number";
-  }
-  return undefined;
-}
-
 function resolveBotDisplayName(params: {
   accountName?: string;
   agentId: string;
@@ -86,6 +71,7 @@ async function processGoogleChatEvent(
   event: GoogleChatEvent,
   target: WebhookTarget,
   turnAdoptionLifecycle?: GoogleChatIngressLifecycle,
+  config: OpenClawConfig = target.config,
 ): Promise<void> {
   const eventType = event.type ?? event.eventType;
   if (eventType === "CARD_CLICKED") {
@@ -95,7 +81,7 @@ async function processGoogleChatEvent(
   if (eventType !== "MESSAGE") {
     return;
   }
-  const { account, config, runtime, core, statusSink, mediaMaxMb } = target;
+  const { account, runtime, core, statusSink, mediaMaxMb } = target;
   const space = event.space;
   const message = event.message;
   if (!space || !message) {
@@ -296,7 +282,7 @@ async function processGoogleChatEvent(
     typingIndicator = "message";
   }
   let typingMessage: GoogleChatTypingMessage | undefined;
-  const typingMessageThreadName =
+  const effectiveReplyThreadName =
     account.config.replyToMode && account.config.replyToMode !== "off"
       ? replyThreadName
       : undefined;
@@ -312,12 +298,12 @@ async function processGoogleChatEvent(
         account,
         space: spaceId,
         text: `_${botName} is typing..._`,
-        thread: typingMessageThreadName,
+        thread: effectiveReplyThreadName,
       });
       if (result?.messageName) {
         typingMessage = createGoogleChatTypingMessage({
           messageName: result.messageName,
-          requestedThreadName: typingMessageThreadName,
+          requestedThreadName: effectiveReplyThreadName,
           deliveredThreadName: result.threadName,
         });
       }
@@ -349,14 +335,22 @@ async function processGoogleChatEvent(
         delivery: {
           durable: (payload, info) =>
             resolveGoogleChatDurableReplyOptions({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               infoKind: info.kind,
               spaceId,
               hasTypingMessage: Boolean(typingMessage),
             }),
           deliver: async (payload) => {
             await deliverGoogleChatReply({
-              payload,
+              payload: normalizeGoogleChatReplyTarget({
+                payload,
+                sourceMessageName: message.name,
+                replyThreadName: effectiveReplyThreadName,
+              }),
               account,
               spaceId,
               runtime,
@@ -414,19 +408,15 @@ export async function startGoogleChatMonitor(
   options: GoogleChatMonitorOptions,
 ): Promise<() => Promise<void>> {
   const core = getGoogleChatRuntime();
-  const webhookPath = resolveWebhookPath({
-    webhookPath: options.webhookPath,
-    webhookUrl: options.webhookUrl,
-    defaultPath: "/googlechat",
-  });
+  const webhookPath = resolveGoogleChatWebhookPath(options);
   if (!webhookPath) {
     options.runtime.error?.(`[${options.account.accountId}] invalid webhook path`);
     return async () => {};
   }
 
-  const audienceType = normalizeAudienceType(options.account.config.audienceType);
+  const audienceType = options.account.config.audienceType;
   const audience = options.account.config.audience?.trim();
-  if (!audienceType || !audience) {
+  if ((audienceType !== "app-url" && audienceType !== "project-number") || !audience) {
     const error =
       "Google Chat webhook authentication requires channels.googlechat.audienceType and channels.googlechat.audience.";
     options.runtime.error?.(`[${options.account.accountId}] ${error}`);
@@ -448,12 +438,13 @@ export async function startGoogleChatMonitor(
     log: options.runtime.log,
   });
 
+  const readConfig = createRuntimeConfigReader(options.config);
   const ingress = createGoogleChatIngressMonitor({
     accountId: options.account.accountId,
     runtime: options.runtime,
     abortSignal: options.abortSignal,
     dispatch: async (event, lifecycle) => {
-      await processGoogleChatEvent(event, target, lifecycle);
+      await processGoogleChatEvent(event, target, lifecycle, readConfig());
     },
   });
   const target: WebhookTarget = {
@@ -484,15 +475,14 @@ export async function startGoogleChatMonitor(
   };
 }
 
-// Null keeps the same meaning it has in startGoogleChatMonitor above: the
-// configured webhookUrl does not parse, so no route is ever bound. Falling back
-// to the default path here would report a route the monitor never registers.
-export function resolveGoogleChatWebhookPath(params: {
-  account: ResolvedGoogleChatAccount;
-}): string | null {
+// Invalid webhook URLs stay null so status never advertises an unbound default route.
+export function resolveGoogleChatWebhookPath({
+  webhookPath,
+  webhookUrl,
+}: Pick<GoogleChatMonitorOptions, "webhookPath" | "webhookUrl">): string | null {
   return resolveWebhookPath({
-    webhookPath: params.account.config.webhookPath,
-    webhookUrl: params.account.config.webhookUrl,
+    webhookPath,
+    webhookUrl,
     defaultPath: "/googlechat",
   });
 }

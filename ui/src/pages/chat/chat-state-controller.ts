@@ -15,10 +15,13 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
-import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
-import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
+import {
+  clearSessionWorkspacePreviews,
+  clearWorkspaceTimer,
+} from "./components/chat-session-workspace-state.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.ts";
 import {
   captureChatComposerOwner,
@@ -48,7 +51,8 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
   private previousChatStreamSegments: ChatPageHost["chatStreamSegments"] = [];
   private previousGuardianNotices: ChatPageHost["guardianNotices"] = [];
   private previousChatStream: string | null = null;
-  private previousRealtimeConversation: ChatPageHost["realtimeTalkConversation"] = [];
+  private previousRealtimeConversation: ChatPageHost["realtimeTalkConversationState"]["entries"] =
+    [];
   private scrollAfterUpdate = false;
   private scrollContentChangedAfterUpdate = false;
   private forceScrollAfterUpdate = false;
@@ -66,10 +70,6 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     );
     this.composerPersistence = new ChatComposerPersistence(() => this.stateValue);
     host.addController(this);
-  }
-
-  get state(): TState | undefined {
-    return this.stateValue;
   }
 
   get attachmentReads(): ChatAttachmentReadLifecycle {
@@ -94,9 +94,10 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     const reads = this.attachmentReads;
     const readSignal = reads.readSignal;
     return {
+      uploadConfig: state.uploadConfig,
       attachmentReads: reads,
       attachments: state.chatAttachments,
-      attachmentLimits: state.hello?.policy?.attachments,
+      attachmentLimits: resolveChatAttachmentLimits(state.hello?.policy),
       getAttachments: () => state.chatAttachments,
       pendingAttachmentReads: reads.pendingReads,
       getPendingAttachmentReads: () => reads.pendingReads,
@@ -154,7 +155,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatStreamSegments = state.chatStreamSegments;
     this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
-    this.previousRealtimeConversation = state.realtimeTalkConversation;
+    this.previousRealtimeConversation = state.realtimeTalkConversationState.entries;
     const renderLifecycle = state.renderLifecycle;
     state.requestUpdate = () => renderLifecycle.invalidate();
     this.cleanups.push(
@@ -505,7 +506,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       const entryId = identity.id;
       if (
         entryId &&
-        state.realtimeTalkConversation.some((entry) => entry.transcriptId === entryId)
+        state.realtimeTalkConversationState.entries.some((entry) => entry.transcriptId === entryId)
       ) {
         return;
       }
@@ -529,7 +530,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
       this.previousChatToolMessages !== state.chatToolMessages ||
       this.previousChatStreamSegments !== state.chatStreamSegments ||
       this.previousGuardianNotices !== state.guardianNotices ||
-      this.previousRealtimeConversation !== state.realtimeTalkConversation;
+      this.previousRealtimeConversation !== state.realtimeTalkConversationState.entries;
     const streamChanged = this.previousChatStream !== state.chatStream;
     const loadingChanged = this.previousChatLoading !== state.chatLoading;
     const loadFinished = this.previousChatLoading && !state.chatLoading;
@@ -541,7 +542,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     this.previousChatStreamSegments = state.chatStreamSegments;
     this.previousGuardianNotices = state.guardianNotices;
     this.previousChatStream = state.chatStream;
-    this.previousRealtimeConversation = state.realtimeTalkConversation;
+    this.previousRealtimeConversation = state.realtimeTalkConversationState.entries;
     if (remoteInputArrived) {
       lockChatScroll(state, "remote-input");
     }
@@ -600,7 +601,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
         state.sidebarContent = null;
       }
       clearSessionWorkspacePreviews(state);
-      clearSessionWorkspaceTimers(state);
+      clearWorkspaceTimer(state.sessionWorkspaceState);
       stopChatRealtimeTalk(state);
       state.resetToolStream?.();
     }

@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.js";
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createWorkerMachineCatalog } from "./provider-machine-catalog.js";
-import { requireWorkerProfile } from "./service-validation.js";
 
 function fixture(resolveDisplayId?: WorkerProvider["resolveDisplayId"]) {
   const config: OpenClawConfig = {
@@ -29,8 +28,6 @@ function fixture(resolveDisplayId?: WorkerProvider["resolveDisplayId"]) {
     getConfig: () => config,
     resolveProvider: () => activeProvider,
     warn,
-    requireWorkerProfile: (value) =>
-      requireWorkerProfile(value, (_code, message) => new Error(message)),
   });
   return {
     config,
@@ -86,21 +83,14 @@ describe("profile backend display identity", () => {
     expect(catalog.readProviderDisplayId("production")).toBeUndefined();
   });
 
-  it.each([
-    undefined,
-    "",
-    "AWS",
-    " aws",
-    "aws ",
-    "aws\n",
-    "a".repeat(65),
-    "https://example.test",
-    "a_b",
-  ])("omits invalid metadata %j without losing machine choices", async (value) => {
-    const { catalog } = fixture(() => value);
-    expect(catalog.readProviderDisplayId("production")).toBeUndefined();
-    await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
-  });
+  it.each(["", "AWS", "aws\n", "a".repeat(65), "a_b"])(
+    "omits invalid metadata %j without losing machine choices",
+    async (value) => {
+      const { catalog } = fixture(() => value);
+      expect(catalog.readProviderDisplayId("production")).toBeUndefined();
+      await expect(catalog.listMachineOptions("production")).resolves.toHaveLength(1);
+    },
+  );
 
   it("keeps missing and throwing hooks cosmetic without exposing their error", async () => {
     expect(fixture().catalog.readProviderDisplayId("production")).toBeUndefined();

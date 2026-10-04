@@ -10,7 +10,7 @@ import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import { waitForAgentRunReply } from "../run-wait.js";
 import {
   callAgentToolGatewayRequest,
-  type AgentToolGatewayRequestCaller,
+  type AgentToolGatewayRequestCaller as GatewayCaller,
 } from "./in-process-gateway.js";
 
 export type AgentStepSession = {
@@ -18,85 +18,41 @@ export type AgentStepSession = {
   lifecycleRevision?: string;
 };
 
-type GatewayCaller = AgentToolGatewayRequestCaller;
-type AgentCommandRunner = typeof import("../../commands/agent.js").agentCommandFromIngress;
-
-function extractAgentCommandReply(
-  result: Awaited<ReturnType<AgentCommandRunner>>,
-): string | undefined {
-  const error = result?.meta.error;
-  // Plain incomplete-turn output is a control failure; trusted terminal tool presentations remain deliverable.
-  if (error?.kind === "incomplete_turn" && error.terminalPresentation !== true) {
-    return undefined;
-  }
-  const texts = result?.payloads
-    ?.map((payload) => payload.text)
-    .filter((text): text is string => Boolean(text?.trim()));
-  return texts?.length ? texts.join("\n\n") : undefined;
-}
-
-export async function runAgentStep(
-  params: {
-    agentId?: string;
-    sessionKey: string;
-    message: string;
-    extraSystemPrompt: string;
-    timeoutMs: number;
-    channel?: string;
-    lane?: string;
-    sourceAgentId?: string;
-    sourceSessionKey?: string;
-    sourceChannel?: string;
-    sourceTool?: string;
-    sourceRole?: "subagent";
-    callGateway?: GatewayCaller;
-  } & (
-    | {
-        transcriptMessage?: undefined;
-        deliveryContext?: DeliveryContext;
-        expectedSession?: AgentStepSession;
-      }
-    | { transcriptMessage: string; deliveryContext?: never; expectedSession?: never }
-  ),
-): Promise<string | undefined> {
+export async function runAgentStep(params: {
+  agentId?: string;
+  sessionKey: string;
+  message: string;
+  extraSystemPrompt: string;
+  timeoutMs: number;
+  sourceAgentId?: string;
+  sourceSessionKey?: string;
+  sourceTool?: string;
+  sourceRole?: "subagent";
+  callGateway?: GatewayCaller;
+  deliveryContext?: DeliveryContext;
+  expectedSession?: AgentStepSession;
+}): Promise<void> {
   const promptedAt = Date.now();
   const stepIdem = crypto.randomUUID();
   const inputProvenance = {
     kind: "inter_session" as const,
     sourceSessionKey: params.sourceSessionKey,
-    sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool ?? "sessions_send",
     ...(params.sourceRole ? { sourceRole: params.sourceRole } : {}),
   };
-  const agentParams = {
-    message: annotateInterSessionPromptText(params.message, inputProvenance),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionKey: params.sessionKey,
-    deliver: false,
-    sourceReplyDeliveryMode: "message_tool_only",
-    channel: params.deliveryContext?.channel ?? params.channel ?? INTERNAL_MESSAGE_CHANNEL,
-    lane: params.lane ?? resolveNestedAgentLaneForSession(params.sessionKey),
-    extraSystemPrompt: params.extraSystemPrompt,
-    inputProvenance,
-  } as const;
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
-  if (params.transcriptMessage !== undefined) {
-    // Intentional direct in-process exception: the public agent schema rejects transcriptMessage.
-    // Keep announce bookkeeping off the wire without expanding the model-authored RPC surface.
-    const ingress: Parameters<AgentCommandRunner>[0] = {
-      ...agentParams,
-      transcriptMessage: params.transcriptMessage,
-      runId: stepIdem,
-      allowModelOverride: false,
-    };
-    const { agentCommandFromIngress } = await import("../../commands/agent.js");
-    const result = await agentCommandFromIngress(ingress);
-    return extractAgentCommandReply(result);
-  }
   const response = await gatewayCall({
     method: "agent",
     params: {
-      ...agentParams,
+      message: annotateInterSessionPromptText(params.message, inputProvenance),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      sessionKey: params.sessionKey,
+      deliver: false,
+      sourceReplyDeliveryMode: "message_tool_only",
+      channel: params.deliveryContext?.channel ?? INTERNAL_MESSAGE_CHANNEL,
+      lane: resolveNestedAgentLaneForSession(params.sessionKey),
+      extraSystemPrompt: params.extraSystemPrompt,
+      inputProvenance,
       idempotencyKey: stepIdem,
       expectedExistingSessionId: params.expectedSession?.sessionId,
       expectedExistingSessionLifecycleRevision: params.expectedSession
@@ -123,11 +79,10 @@ export async function runAgentStep(
 
   const resolvedRunId =
     typeof response?.runId === "string" && response.runId ? response.runId : stepIdem;
-  const result = await waitForAgentRunReply({
+  await waitForAgentRunReply({
     runId: resolvedRunId,
     timeoutMs: Math.min(params.timeoutMs, 60_000),
     callGateway: gatewayCall,
     untilTerminal: true,
   });
-  return result.status === "ok" ? result.replyText : undefined;
 }

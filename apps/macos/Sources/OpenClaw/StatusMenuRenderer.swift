@@ -126,10 +126,6 @@ final class StatusMenuRenderer: NSObject {
         StatusMenuAppearance.pin(menu)
     }
 
-    func render(_ descriptor: StatusMenuDescriptor) {
-        self.reconcile(descriptor)
-    }
-
     func reconcile(_ descriptor: StatusMenuDescriptor) {
         let entries = self.flatten(descriptor)
         let liveItems = self.menu.items
@@ -263,39 +259,27 @@ final class StatusMenuRenderer: NSObject {
     }
 
     private func configureAction(_ item: NSMenuItem, action: StatusMenuDescriptor.Action) {
-        let title: String
-        let symbol: String
-
-        switch action {
+        let (title, symbol) = switch action {
         case .dashboard:
-            title = String(localized: "Open Dashboard")
-            symbol = "gauge"
+            (String(localized: "Open Dashboard"), "gauge")
         case .quickChat:
-            title = String(localized: "Quick Chat")
-            symbol = "text.bubble"
+            (String(localized: "Quick Chat"), "text.bubble")
         case .talkMode:
-            title = self.state.talkEnabled
-                ? String(localized: "Stop Talk Mode")
-                : String(localized: "Start Talk Mode")
-            symbol = "waveform.circle.fill"
+            (
+                self.state.talkEnabled ? String(localized: "Stop Talk Mode") : String(localized: "Start Talk Mode"),
+                "waveform.circle.fill")
         case .allSessions:
-            title = String(localized: "All Sessions…")
-            symbol = "rectangle.stack"
+            (String(localized: "All Sessions…"), "rectangle.stack")
         case .settings:
-            title = String(localized: "Settings…")
-            symbol = "gearshape"
+            (String(localized: "Settings…"), "gearshape")
         case .connection:
-            title = String(localized: "Connection…")
-            symbol = "point.3.connected.trianglepath.dotted"
+            (String(localized: "Connection…"), "point.3.connected.trianglepath.dotted")
         case .debug:
-            title = String(localized: "Debug")
-            symbol = "ladybug"
+            (String(localized: "Debug"), "ladybug")
         case .about:
-            title = String(localized: "About OpenClaw")
-            symbol = "info.circle"
+            (String(localized: "About OpenClaw"), "info.circle")
         case .quit:
-            title = String(localized: "Quit")
-            symbol = "power"
+            (String(localized: "Quit"), "power")
         }
 
         self.configureNative(item, title: title, symbol: symbol, action: #selector(self.performAction(_:)))
@@ -431,7 +415,7 @@ final class StatusMenuRenderer: NSObject {
         }
 
         entries.append(self.debugSeparator("logging"))
-        let enabled = AppLogSettings.fileLoggingEnabled()
+        let enabled = DiagnosticsFileLog.isEnabled()
         let title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
         let fileLogging = self.debugItem("fileLogging", title, "doc.text.magnifyingglass")
         fileLogging.state = enabled ? .on : .off
@@ -513,7 +497,7 @@ final class StatusMenuRenderer: NSObject {
 
         switch id {
         case "config": DebugActions.openConfigFolder()
-        case "health": Task { await DebugActions.runHealthCheckNow() }
+        case "health": Task { await HealthStore.shared.refresh(onDemand: true) }
         case "heartbeat": Task { _ = await DebugActions.sendTestHeartbeat() }
         case "pairing":
             #if DEBUG
@@ -524,7 +508,7 @@ final class StatusMenuRenderer: NSObject {
         case "verbose":
             Task { _ = await DebugActions.toggleVerboseLoggingMain() }
         case "fileLogging":
-            let enabled = !AppLogSettings.fileLoggingEnabled()
+            let enabled = !DiagnosticsFileLog.isEnabled()
             AppDefaults.standard.set(enabled, forKey: debugFileLogEnabledKey)
             sender.state = enabled ? .on : .off
             sender.title = enabled ? String(localized: "File Logging: On") : String(localized: "File Logging: Off")
@@ -552,14 +536,14 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = error.localizedDescription
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 
     private func sendTestNotification(_ sender: NSMenuItem) async {
         guard !self.testNotificationPending else { return }
         self.testNotificationPending = true
         sender.isEnabled = false
-        let outcome = await DebugActions.sendTestNotification()
+        let outcome = await TestNotificationAction.send()
         self.testNotificationPending = false
         sender.isEnabled = true
 
@@ -574,6 +558,6 @@ final class StatusMenuRenderer: NSObject {
             alert.informativeText = message
             alert.alertStyle = .warning
         }
-        alert.runModal()
+        AppActivation.shared.presentAlert(alert)
     }
 }

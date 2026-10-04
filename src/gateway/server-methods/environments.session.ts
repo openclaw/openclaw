@@ -8,6 +8,7 @@ import {
 import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
+  resolveGatewayPersonalToolParticipant,
 } from "../../agents/tools/gateway-caller-context.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { authorizeSessionSharingTarget } from "../session-sharing.js";
@@ -144,105 +145,106 @@ export const environmentsSessionHandlers: GatewayRequestHandlers = {
     validateEnvironmentsSessionCreateParams,
     async (options) => {
       const { params, respond, context } = options;
-      try {
-        const caller = resolveSessionEnvironmentCaller(options, params);
-        const { presentation, ...request } = params;
-        const assertAllowed = presentation
-          ? captureSessionEnvironmentToolPolicy(options, caller, "screen").assertAllowed
-          : caller.assertCurrent;
-        assertAllowed();
-        const service = context.workerEnvironmentService;
-        if (!service) {
-          throw new Error("Cloud worker environments are not configured");
+      const caller = resolveSessionEnvironmentCaller(options, params);
+      const { presentation, ...request } = params;
+      if (presentation) {
+        try {
+          resolveGatewayPersonalToolParticipant(options.client?.internal?.agentRuntimeIdentity);
+        } catch (error) {
+          throw new Error(
+            `${error instanceof Error ? error.message : String(error)} Create the environment without presentation, then show it with screen (desktop_show or portal_show with environmentId) and user set to the requester's requester_profile.id.`,
+            { cause: error },
+          );
         }
-        const result = await service.createSessionAttachment(
-          { ...request, ...caller.identity },
-          assertAllowed,
-          caller.signal,
-          presentation
-            ? async ({ environmentId }) => {
-                assertAllowed();
-                const dispatched = dispatchUiCommandToRequester({
-                  client: options.client,
-                  context,
-                  params: {
-                    sessionKey: caller.identity.sessionKey,
-                    agentId: caller.identity.agentId,
-                    command: {
-                      kind: "panel",
-                      panel: presentation === "desktop" ? "desktop" : "portal",
-                      environmentId,
-                      open: true,
-                      dock: "right",
-                    },
-                  },
-                });
-                if (!dispatched.ok) {
-                  throw new Error(dispatched.error.message);
-                }
-                assertAllowed();
-              }
-            : undefined,
-        );
-        assertAllowed();
-        respond(true, { ...result, environment: summarizeWorkerEnvironment(result.environment) });
-      } catch (error) {
-        respond(false, undefined, failure(error));
       }
+      const assertAllowed = presentation
+        ? captureSessionEnvironmentToolPolicy(options, caller, "screen").assertAllowed
+        : caller.assertCurrent;
+      assertAllowed();
+      const service = context.workerEnvironmentService;
+      if (!service) {
+        throw new Error("Cloud worker environments are not configured");
+      }
+      const result = await service.createSessionAttachment(
+        { ...request, ...caller.identity },
+        assertAllowed,
+        caller.signal,
+        presentation
+          ? async ({ environmentId }) => {
+              assertAllowed();
+              const dispatched = dispatchUiCommandToRequester({
+                client: options.client,
+                context,
+                params: {
+                  sessionKey: caller.identity.sessionKey,
+                  agentId: caller.identity.agentId,
+                  command: {
+                    kind: "panel",
+                    panel: presentation === "desktop" ? "desktop" : "portal",
+                    environmentId,
+                    open: true,
+                    dock: "right",
+                  },
+                },
+              });
+              if (!dispatched.ok) {
+                throw new Error(dispatched.error.message);
+              }
+              assertAllowed();
+            }
+          : undefined,
+      );
+      assertAllowed();
+      respond(true, { ...result, environment: summarizeWorkerEnvironment(result.environment) });
     },
+    failure,
   ),
   "environments.session.status": defineValidatedGatewayMethod(
     "environments.session.status",
     validateEnvironmentsSessionStatusParams,
     (options) => {
       const { params, respond, context } = options;
-      try {
-        const caller = resolveSessionEnvironmentCaller(options, params);
-        const result = context.workerEnvironmentService?.getSessionAttachmentStatus(
-          caller.identity.sessionId,
-        );
-        if (params.environmentId && result?.attachment.environmentId !== params.environmentId) {
-          throw new Error("Conversation environment target changed");
-        }
-        caller.assertCurrent();
-        respond(
-          true,
-          result
-            ? {
-                attachment: result.attachment,
-                closed: result.attachment.closedAtMs !== null,
-                environment: summarizeWorkerEnvironment(result.environment),
-              }
-            : { attachment: null },
-        );
-      } catch (error) {
-        respond(false, undefined, failure(error));
+      const caller = resolveSessionEnvironmentCaller(options, params);
+      const result = context.workerEnvironmentService?.getSessionAttachmentStatus(
+        caller.identity.sessionId,
+      );
+      if (params.environmentId && result?.attachment.environmentId !== params.environmentId) {
+        throw new Error("Conversation environment target changed");
       }
+      caller.assertCurrent();
+      respond(
+        true,
+        result
+          ? {
+              attachment: result.attachment,
+              closed: result.attachment.closedAtMs !== null,
+              environment: summarizeWorkerEnvironment(result.environment),
+            }
+          : { attachment: null },
+      );
     },
+    failure,
   ),
   "environments.session.destroy": defineValidatedGatewayMethod(
     "environments.session.destroy",
     validateEnvironmentsSessionDestroyParams,
     async (options) => {
       const { params, respond, context } = options;
-      try {
-        const caller = resolveSessionEnvironmentCaller(options, params);
-        const service = context.workerEnvironmentService;
-        if (!service) {
-          throw new Error("Cloud worker environments are not configured");
-        }
-        const result = await service.destroySessionAttachment(
-          { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
-          caller.assertCurrent,
-        );
-        caller.assertCurrent();
-        respond(true, {
-          stopped: true,
-          ...(result ? { environment: summarizeWorkerEnvironment(result) } : {}),
-        });
-      } catch (error) {
-        respond(false, undefined, failure(error));
+      const caller = resolveSessionEnvironmentCaller(options, params);
+      const service = context.workerEnvironmentService;
+      if (!service) {
+        throw new Error("Cloud worker environments are not configured");
       }
+      const result = await service.destroySessionAttachment(
+        { sessionId: caller.identity.sessionId, environmentId: params.environmentId },
+        caller.assertCurrent,
+      );
+      caller.assertCurrent();
+      respond(true, {
+        stopped: true,
+        ...(result ? { environment: summarizeWorkerEnvironment(result) } : {}),
+      });
     },
+    failure,
   ),
 };

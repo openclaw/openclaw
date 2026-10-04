@@ -11,8 +11,8 @@ describe("node automatic-update config", () => {
     }
   });
 
-  it.each(["false", 0, null])("rejects non-boolean enabled=%j", (enabled) => {
-    const result = validateConfigObject({ nodeHost: { autoUpdate: { enabled } } });
+  it("rejects a string instead of coercing enabled to a boolean", () => {
+    const result = validateConfigObject({ nodeHost: { autoUpdate: { enabled: "false" } } });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {

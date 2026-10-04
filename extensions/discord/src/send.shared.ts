@@ -1,30 +1,23 @@
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
-import type { APIChannel } from "discord-api-types/v10";
+import { Routes, type APIChannel } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  buildOutboundMediaLoadOptions,
   extensionForMime,
   normalizePollDurationHours,
   normalizePollInput,
-  type OutboundMediaAccess,
   type PollInput,
 } from "openclaw/plugin-sdk/media-runtime";
+import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { isDiscordThreadChannelType } from "./channel-type.js";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
-import {
-  createChannelMessage,
-  createUserDmChannel,
-  getChannel,
-  RequestClient,
-} from "./internal/discord.js";
-import { parseAndResolveRecipient } from "./recipient-resolution.js";
+import { createUserDmChannel, getChannel, RequestClient } from "./internal/discord.js";
+import { parseAndResolveRecipient, type DiscordRecipient } from "./recipient-resolution.js";
 import { resolveDiscordReplyMessageId, type DiscordReplyReference } from "./reply-reference.js";
 import type { DiscordRetryRunner } from "./retry.js";
 import {
@@ -36,7 +29,7 @@ import {
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
 import { fetchChannelPermissionsDiscord } from "./send.permissions.js";
-import { DiscordSendError } from "./send.types.js";
+import { DiscordSendError, type DiscordOutboundMediaOpts } from "./send.types.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
@@ -70,16 +63,6 @@ export {
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
-type DiscordRecipient =
-  | {
-      kind: "user";
-      id: string;
-    }
-  | {
-      kind: "channel";
-      id: string;
-    };
-
 function normalizeReactionEmoji(raw: string) {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -381,11 +364,11 @@ async function sendDiscordChunks(
         async () => {
           await params.onPlatformSendDispatch?.();
           params.assertPlatformSendAuthorized?.();
-          return createChannelMessage<{ id: string; channel_id: string }>(
-            params.rest,
-            params.channelId,
-            { body },
-          );
+          // SAFETY: Discord's Create Message response includes its message and channel IDs.
+          return (await params.rest.post(Routes.channelMessages(params.channelId), { body })) as {
+            id: string;
+            channel_id: string;
+          };
         },
         files ? "media" : "text",
         { safety: "nonce-protected-create" },
@@ -414,25 +397,20 @@ async function sendDiscordText(params: DiscordTextSendParams) {
   return sendDiscordChunks(params);
 }
 
-type DiscordMediaSendParams = DiscordTextSendParams & {
-  mediaUrl: string;
-  filename?: string;
-  mediaAccess?: OutboundMediaAccess;
-  mediaLocalRoots?: readonly string[];
-  mediaReadFile?: (filePath: string) => Promise<Buffer>;
-  maxBytes?: number;
-};
+type DiscordMediaSendParams = DiscordTextSendParams &
+  DiscordOutboundMediaOpts & {
+    mediaUrl: string;
+    filename?: string;
+    maxBytes?: number;
+  };
 
 async function sendDiscordMedia(params: DiscordMediaSendParams) {
-  const media = await loadWebMedia(
-    params.mediaUrl,
-    buildOutboundMediaLoadOptions({
-      maxBytes: params.maxBytes,
-      mediaAccess: params.mediaAccess,
-      mediaLocalRoots: params.mediaLocalRoots,
-      mediaReadFile: params.mediaReadFile,
-    }),
-  );
+  const media = await loadOutboundMediaFromUrl(params.mediaUrl, {
+    maxBytes: params.maxBytes,
+    mediaAccess: params.mediaAccess,
+    mediaLocalRoots: params.mediaLocalRoots,
+    mediaReadFile: params.mediaReadFile,
+  });
   const resolvedFileName =
     params.filename?.trim() ||
     media.fileName ||

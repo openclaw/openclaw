@@ -1,8 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  enableNodeSqliteKyselyStatementCache,
-  registerNodeSqliteDisposeCallback,
-} from "../infra/kysely-sync-cache-state.js";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import { runInSqliteMaintenanceContext } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -91,7 +88,6 @@ export function withCommittedOpenClawAgentDatabaseReadOnly<T>(
       if (!matchesWriter(reader, writer)) {
         return readOpenClawAgentDatabase(reader, operation);
       }
-      enableNodeSqliteKyselyStatementCache(reader.db);
       unregisterDispose = registerNodeSqliteDisposeCallback(writer.db, close);
       idleTimer = runInSqliteMaintenanceContext(() =>
         setTimeout(() => {

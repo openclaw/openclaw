@@ -477,10 +477,9 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
 .login-gate__body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
 }
-
-/* ── Title block ── */
 
 .login-gate__status-head {
   display: flex;
@@ -536,12 +535,11 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .login-gate__lede,
 .login-gate__failure-summary {
   margin: 0;
+  overflow-wrap: anywhere;
   font-size: 14px;
   line-height: 1.5;
   color: var(--muted);
 }
-
-/* ── Hero command: the one thing to run ── */
 
 .login-gate__hero {
   display: grid;
@@ -647,8 +645,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   opacity: 1;
 }
 
-/* ── Steps ── */
-
 .login-gate__failure-steps {
   margin: 0;
   padding-left: 20px;
@@ -694,8 +690,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .login-gate__failure-refresh {
   justify-self: start;
 }
-
-/* ── Form ── */
 
 .login-gate__form {
   display: grid;
@@ -789,8 +783,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   margin-bottom: 14px;
 }
 
-/* ── Footer ── */
-
 .login-gate__foot {
   display: flex;
   align-items: baseline;
@@ -858,13 +850,10 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   font-size: 12px;
 }
 
-/* Phones (matches the layout.mobile.css breakpoint). The gate renders outside
-   the shell, so it needs its own safe-area padding for notch/home-bar overlap
-   with viewport-fit=cover. */
+/* The outer app owns safe areas for the login gate as well as the shell. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .login-gate {
-    padding: max(16px, var(--safe-area-top)) max(12px, var(--safe-area-right))
-      max(16px, var(--safe-area-bottom)) max(12px, var(--safe-area-left));
+    padding: 16px var(--chat-mobile-edge-inset);
   }
 
   .login-gate__card {
@@ -903,15 +892,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 
   .login-gate__connection-cred {
     display: none;
-  }
-}
-
-/* The standalone body already owns safe-area insets. Reusing them inside the
-   gate would double notch/home-bar spacing and shrink its scroll viewport. */
-@media (display-mode: standalone) and (max-width: 768px),
-  (display-mode: standalone) and (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .login-gate {
-    padding: 16px 12px;
   }
 }
 
@@ -1048,10 +1028,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   }
 }
 
-/* ===========================================
-   Cards - Refined with depth
-   =========================================== */
-
 .card {
   border: 1px solid var(--border);
   background: var(--card);
@@ -1098,10 +1074,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   stroke-width: 1.75;
 }
 
-/* ===========================================
-   Stats - Bold values, subtle labels
-   =========================================== */
-
 .stat {
   background: var(--card);
   border-radius: var(--radius-md);
@@ -1123,10 +1095,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   letter-spacing: -0.03em;
   line-height: 1.1;
 }
-
-/* ===========================================
-   Labels & Pills
-   =========================================== */
 
 .label {
   color: var(--muted);
@@ -1157,10 +1125,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   color: var(--danger);
 }
 
-/* ===========================================
-   Status Dot - With glow for emphasis
-   =========================================== */
-
 .statusDot {
   width: 8px;
   height: 8px;
@@ -1188,10 +1152,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   animation: none;
   opacity: 0.5;
 }
-
-/* ===========================================
-   Buttons - Tactile with personality
-   =========================================== */
 
 /* A disabled button reads as "unavailable"; the spinner says "working" so a
    multi-minute update does not look like a dead control. */
@@ -1332,7 +1292,7 @@ openclaw-toast-host[data-toast-placement="shell"]
  * Keep this opt-in so anchored notices and the shell's top placement stay intact. */
 .app-toast--bottom {
   top: auto;
-  bottom: calc(20px + var(--safe-area-bottom));
+  bottom: calc(100% - var(--shell-canvas-height) + 20px + var(--shell-safe-area-bottom));
   transition:
     opacity 180ms ease-out,
     translate 180ms ease-out;
@@ -1503,12 +1463,12 @@ openclaw-toast-host[data-toast-placement="shell"]
   min-width: 36px;
   height: 36px;
   border: 1px solid var(--border);
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-elevated);
 }
 
 .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
+  background: var(--bg-hover);
+  border-color: var(--border-strong);
 }
 
 .btn--icon svg {
@@ -1673,7 +1633,7 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__status--idle > span {
-  background: var(--warn);
+  background: var(--presence-idle);
 }
 
 .person-activity-card__status--unknown > span,
@@ -1878,10 +1838,6 @@ openclaw-session-progress-hovercard-provider {
   cursor: not-allowed;
 }
 
-/* ===========================================
-   Form Fields
-   =========================================== */
-
 .field {
   display: grid;
   gap: 6px;
@@ -2070,7 +2026,18 @@ select.input {
   padding-right: 36px;
   background-image: var(--select-chevron);
   background-repeat: no-repeat;
-  background-position: right 10px center;
+  background-position:
+    right 18px center,
+    right 14px center;
+  background-size: 5px 5px;
+}
+
+@media (forced-colors: active) {
+  .field select {
+    appearance: auto;
+    padding-inline-end: 10px;
+    background-image: none;
+  }
 }
 
 .field textarea {
@@ -2127,14 +2094,14 @@ select.input {
 }
 
 :root[data-theme-mode="light"] .btn--icon {
-  background: var(--button-icon-bg);
+  background: var(--bg-elevated);
   border-color: var(--border);
-  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  box-shadow: var(--shadow-sm);
   color: var(--muted);
 }
 
 :root[data-theme-mode="light"] .btn--icon:hover:where(:not(:disabled, [aria-disabled="true"])) {
-  background: var(--button-icon-bg);
+  background: var(--bg-hover);
   border-color: var(--border-strong);
   color: var(--text);
 }
@@ -2153,10 +2120,6 @@ select.input {
   border-color: transparent;
 }
 
-/* ===========================================
-   Utilities
-   =========================================== */
-
 .muted {
   color: var(--muted);
 }
@@ -2164,10 +2127,6 @@ select.input {
 .mono {
   font-family: var(--mono);
 }
-
-/* ===========================================
-   Callouts - Informative with subtle depth
-   =========================================== */
 
 .callout {
   padding: 14px 16px;
@@ -2206,7 +2165,7 @@ select.input {
 }
 
 .callout__dismiss:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: color-mix(in srgb, var(--text) 8%, transparent);
 }
 
 .callout__dismiss svg {
@@ -2306,6 +2265,18 @@ select.input {
   font-size: 13px;
 }
 
+.agent-startup-state {
+  margin: auto;
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 32px 24px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+}
+
 /* Lazy route load failure — a centered panel state, not a stretched callout. */
 .lazy-view-error {
   margin: auto;
@@ -2369,7 +2340,13 @@ select.input {
   margin-top: 8px;
 }
 
+.lazy-view-error__details {
+  max-width: 100%;
+  color: var(--muted);
+}
+
 .lazy-view-error__detail {
+  display: block;
   margin-top: 8px;
   max-width: 100%;
   color: var(--muted);
@@ -2378,16 +2355,6 @@ select.input {
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
-
-@keyframes compaction-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* ===========================================
-   Code Blocks
-   =========================================== */
 
 .code-block {
   font-family: var(--mono);
@@ -2704,11 +2671,7 @@ select.input {
 
 .code-block-copy:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.1);
-}
-
-:root[data-theme-mode="light"] .code-block-copy:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: color-mix(in srgb, var(--text) 10%, transparent);
 }
 
 .code-block-copy__done,
@@ -2737,10 +2700,6 @@ select.input {
   color: var(--danger);
 }
 
-/* ===========================================
-   Lists
-   =========================================== */
-
 .list {
   display: grid;
   gap: 8px;
@@ -2750,10 +2709,6 @@ select.input {
 .list-title {
   font-weight: 500;
 }
-
-/* ===========================================
-   Chips - Compact and punchy
-   =========================================== */
 
 .chip-row {
   display: flex;
@@ -2795,10 +2750,6 @@ select.input {
   border-color: color-mix(in srgb, var(--warn) 30%, transparent);
   background: var(--warn-subtle);
 }
-
-/* ===========================================
-   Data Table
-   =========================================== */
 
 .data-table-search {
   flex: 1;
@@ -2938,7 +2889,6 @@ select.input {
   border-bottom: none;
 }
 
-/* Checkbox column */
 .data-table-checkbox-col {
   width: var(--data-table-checkbox-col-width);
   min-width: var(--data-table-checkbox-col-width);
@@ -2953,16 +2903,19 @@ select.input {
   z-index: 2;
 }
 
-.data-table th.data-table-checkbox-col {
+.data-table th.data-table-checkbox-col,
+.data-table th.data-table-key-col {
   z-index: 4;
   background: var(--bg-elevated);
 }
 
-td.data-table-checkbox-col {
+td.data-table-checkbox-col,
+td.data-table-key-col {
   background: var(--card);
 }
 
-.data-table tbody tr:hover td.data-table-checkbox-col {
+.data-table tbody tr:hover td.data-table-checkbox-col,
+.data-table tbody tr:hover td.data-table-key-col {
   background: var(--bg-hover);
 }
 
@@ -2981,21 +2934,10 @@ td.data-table-checkbox-col {
   min-width: 180px;
 }
 
-.data-table th.data-table-key-col {
-  z-index: 4;
-  background: var(--bg-elevated);
-}
-
 td.data-table-key-col {
-  background: var(--card);
   box-shadow: 2px 0 4px rgba(0, 0, 0, 0.08);
 }
 
-.data-table tbody tr:hover td.data-table-key-col {
-  background: var(--bg-hover);
-}
-
-/* Bulk action bar */
 .data-table-bulk-bar {
   display: flex;
   align-items: center;
@@ -3013,7 +2955,6 @@ td.data-table-key-col {
   height: 14px;
 }
 
-/* Pagination */
 .data-table-pagination {
   display: flex;
   align-items: center;
@@ -3054,10 +2995,6 @@ td.data-table-key-col {
   cursor: not-allowed;
 }
 
-/* ===========================================
-   Chat
-   =========================================== */
-
 .shell--chat .chat {
   flex: 1;
 }
@@ -3067,10 +3004,6 @@ td.data-table-key-col {
   width: fit-content;
   padding: 10px 16px;
 }
-
-/* ===========================================
-   QR Code
-   =========================================== */
 
 .qr-wrap {
   margin-top: 16px;
@@ -3087,10 +3020,6 @@ td.data-table-key-col {
   border-radius: var(--radius-sm);
   image-rendering: pixelated;
 }
-
-/* ===========================================
-   Exec Approval Modal
-   =========================================== */
 
 .exec-approval-card {
   --exec-approval-accent: var(--border);
@@ -3151,7 +3080,7 @@ td.data-table-key-col {
 
 .exec-approval-queue,
 .exec-approval-chip {
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 500;
   color: var(--muted);
   border: 1px solid var(--border);
@@ -3345,10 +3274,6 @@ td.data-table-key-col {
   font-variant-numeric: tabular-nums;
 }
 
-/* ===========================================
-   Secret Reveal Modal
-   =========================================== */
-
 .secret-reveal__value {
   display: flex;
   align-items: flex-start;
@@ -3436,10 +3361,6 @@ td.data-table-key-col {
   font-size: 12px;
   line-height: 1.5;
 }
-
-/* ===========================================
-   Agents
-   =========================================== */
 
 .agents-layout {
   display: grid;
@@ -3568,7 +3489,9 @@ td.data-table-key-col {
   color: var(--muted);
 }
 
-.agent-select__chevron svg {
+.agent-select__chevron svg,
+.agent-select__avatar--icon svg,
+.agent-select__footer-icon svg {
   width: 14px;
   height: 14px;
   fill: none;
@@ -3632,17 +3555,6 @@ td.data-table-key-col {
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
-}
-
-.agent-select__avatar--icon svg,
-.agent-select__footer-icon svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .agent-select__badge {
@@ -3780,10 +3692,18 @@ td.data-table-key-col {
   width: 100%;
 }
 
+.agent-identity-editor__content {
+  display: grid;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
 .agent-identity-editor__actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
@@ -3808,20 +3728,29 @@ td.data-table-key-col {
 }
 
 .agent-identity-editor__fields {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
   gap: 12px;
-  flex: 1;
   min-width: 0;
 }
 
 .agent-identity-editor__fields .field {
-  flex: 1 1 200px;
   min-width: 0;
 }
 
-.agent-identity-editor__fields .agent-identity-editor__emoji {
-  flex: 0 1 96px;
+.agent-identity-editor__emoji-control {
+  position: relative;
+}
+
+.agent-identity-editor__emoji-control > input {
+  padding-inline-end: 42px;
+}
+
+.agent-identity-editor__emoji-control > openclaw-agent-emoji-picker {
+  position: absolute;
+  inset-inline-end: 3px;
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .agent-identity-editor__fields input {
@@ -3831,6 +3760,12 @@ td.data-table-key-col {
 
 .agent-identity-editor__hint {
   font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .agent-identity-editor__fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .workspace-link {
@@ -3892,8 +3827,8 @@ td.data-table-key-col {
   border-radius: calc(var(--radius-xl) + 6px);
   background: linear-gradient(180deg, color-mix(in srgb, var(--panel) 94%, black 6%), var(--panel));
   box-shadow:
-    0 32px 96px rgba(0, 0, 0, 0.48),
-    0 1px 0 rgba(255, 255, 255, 0.04) inset;
+    var(--shadow-xl),
+    0 1px 0 var(--card-highlight) inset;
   overflow: hidden;
 }
 
@@ -3922,7 +3857,7 @@ td.data-table-key-col {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -3981,7 +3916,7 @@ td.data-table-key-col {
   color: color-mix(in srgb, var(--text) 86%, var(--muted));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.045),
-    0 8px 20px rgba(0, 0, 0, 0.18);
+    var(--shadow-md);
 }
 
 .md-preview-icon-btn:hover:not(:disabled) {
@@ -3994,7 +3929,7 @@ td.data-table-key-col {
   color: var(--text-strong);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 10px 24px rgba(0, 0, 0, 0.24);
+    var(--shadow-md);
 }
 
 .md-preview-icon-btn[aria-pressed="true"] {
@@ -4003,7 +3938,7 @@ td.data-table-key-col {
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.07),
     0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent),
-    0 12px 28px rgba(0, 0, 0, 0.28);
+    var(--shadow-lg);
 }
 
 .md-preview-icon-btn > span {
@@ -4029,7 +3964,11 @@ td.data-table-key-col {
       color-mix(in srgb, var(--accent) 5.5%, transparent),
       transparent 32%
     ),
-    radial-gradient(circle at bottom left, rgba(20, 184, 166, 0.045), transparent 28%),
+    radial-gradient(
+      circle at bottom left,
+      color-mix(in srgb, var(--accent-2) 4.5%, transparent),
+      transparent 28%
+    ),
     linear-gradient(
       180deg,
       color-mix(in srgb, var(--panel) 84%, black 16%),
@@ -4104,8 +4043,8 @@ td.data-table-key-col {
     var(--md-preview-document-bg)
   );
   box-shadow:
-    0 22px 54px rgba(0, 0, 0, 0.32),
-    inset 0 1px 0 rgba(255, 255, 255, 0.035);
+    var(--shadow-lg),
+    inset 0 1px 0 var(--card-highlight);
 }
 
 .md-preview-dialog__reader::before {
@@ -4494,7 +4433,7 @@ td.data-table-key-col {
 
 .agent-tools-runtime-chip__meta {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   white-space: nowrap;
 }
 
@@ -4530,7 +4469,7 @@ td.data-table-key-col {
 .agent-tools-group__summary::before {
   content: "▸";
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   line-height: 20px;
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
@@ -4573,7 +4512,7 @@ td.data-table-key-col {
   flex-wrap: wrap;
   min-width: 0;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
 }
 
 .agent-tools-group__preview > span {
@@ -4595,7 +4534,7 @@ td.data-table-key-col {
   gap: 8px;
   flex-wrap: wrap;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -4649,7 +4588,7 @@ td.data-table-key-col {
   top: 18px;
   right: 64px;
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   transition: transform var(--duration-fast) var(--ease-in-out);
 }
 
@@ -4734,7 +4673,7 @@ td.data-table-key-col {
 
 .agent-tool-sub {
   color: var(--muted);
-  font-size: 12px; /* was 11px */
+  font-size: 12px;
   margin-top: 3px;
   min-width: 0;
   overflow: hidden;
@@ -5252,13 +5191,7 @@ td.data-table-key-col {
   border: 2px solid var(--border-strong);
   border-top-color: var(--accent);
   border-radius: 50%;
-  animation: device-pair-setup-spin 0.8s linear infinite;
-}
-
-@keyframes device-pair-setup-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: btn-spinner-spin 0.8s linear infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -5296,7 +5229,7 @@ td.data-table-key-col {
   border: 1px solid var(--border);
   border-radius: 22px;
   background: var(--qr-bg);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+  box-shadow: var(--shadow-lg);
 }
 
 .device-pair-setup__qr {
@@ -5796,18 +5729,13 @@ td.data-table-key-col {
 
 .session-run-spinner,
 .session-glyph__ring {
-  animation: session-run-spin 1.6s linear infinite;
+  animation: btn-spinner-spin 1.6s linear infinite;
 }
 
 .session-glyph__ring--queued,
+.session-run-indicator--offscreen,
 .session-glyph__trace--queued .session-glyph__trace-run {
   animation-play-state: paused;
-}
-
-@keyframes session-run-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @keyframes session-run-trace {
@@ -5831,10 +5759,6 @@ td.data-table-key-col {
     stroke: var(--accent);
   }
 }
-
-/* ===========================================
-   Hover Marquee
-   =========================================== */
 
 /* Only the title viewport is masked; badges and row controls stay outside it.
    Extra travel equal to the fade width leaves the complete tail opaque. */
@@ -5959,8 +5883,6 @@ td.data-table-key-col {
   }
 }
 
-/* ---- Plugin tab embeds (plugin-served panels) ---- */
-
 .plugin-tab-embed {
   display: flex;
   flex: 1;
@@ -6027,10 +5949,7 @@ td.data-table-key-col {
 
 .provider-brand-icon[data-provider-icon="llamacpp"],
 .provider-brand-icon[data-provider-icon="lmstudio"],
-.provider-brand-icon[data-provider-icon="ollama"] {
-  color: var(--text-strong);
-}
-
+.provider-brand-icon[data-provider-icon="ollama"],
 .provider-brand-icon[data-provider-icon="opencode"],
 .provider-brand-icon[data-provider-icon="opencodego"],
 .provider-brand-icon[data-provider-icon="pi"] {

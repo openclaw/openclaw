@@ -68,7 +68,6 @@ export async function withNodeWorkerUploadSnapshot<T>(
     async (workspace) => {
       const sourceRoot = await root(params.workspaceDir, {
         hardlinks: "allow",
-        nonBlockingRead: true,
         symlinks: "follow-parents-within-root",
       });
       const stagedRoot = await workspace.store.root();
@@ -88,6 +87,7 @@ export async function withNodeWorkerUploadSnapshot<T>(
         stream: async (file, write, signal) => {
           signal?.throwIfAborted();
           await using handle = (await stagedRoot.open(file.name)).handle;
+          signal?.throwIfAborted();
           for await (const value of handle.createReadStream({ autoClose: false, signal })) {
             await write(Buffer.isBuffer(value) ? value : Buffer.from(value));
           }

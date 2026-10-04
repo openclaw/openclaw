@@ -174,7 +174,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
     ...(overrides?.modelApi !== undefined ? { modelApi: overrides.modelApi } : {}),
     ...(overrides?.model !== undefined ? { model: asProviderRuntimeModel(overrides.model) } : {}),
   });
-  const resolveTranscriptRuntimePolicy = (overrides?: ToolContextOverrides) =>
+  const resolveTranscriptRuntimePolicy = (
+    overrides?: Parameters<AgentRuntimePlan["transcript"]["resolvePolicy"]>[0],
+  ) =>
     resolveTranscriptPolicy({
       provider: params.provider,
       modelId: params.modelId,
@@ -184,6 +186,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       runtimeHandle: providerRuntimeHandleForPlugins,
       modelApi: overrides?.modelApi ?? modelApi,
       model: asProviderRuntimeModel(overrides?.model) ?? model,
+      directApiKey: overrides?.directApiKey,
     });
   const resolveTransportExtraParams = (
     overrides: Parameters<AgentRuntimePlan["transport"]["resolveExtraParams"]>[0] = {},
@@ -284,13 +287,9 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       resolveExtraParams: resolveTransportExtraParams,
     },
     observability: {
+      ...resolvedRef,
       resolvedRef: `${params.provider}/${params.modelId}`,
-      provider: params.provider,
-      modelId: params.modelId,
-      ...(modelApi ? { modelApi } : {}),
-      ...(params.harnessId ? { harnessId: params.harnessId } : {}),
       ...(auth.forwardedAuthProfileId ? { authProfileId: auth.forwardedAuthProfileId } : {}),
-      ...(transport ? { transport } : {}),
     },
   };
 }

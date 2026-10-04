@@ -384,8 +384,6 @@ it.each(dispatchCases)(
             maybeAnnounceFastModeAutoOff: vi.fn(),
             notifyExecutionPhase: vi.fn(),
             notifyRunProgress: vi.fn(),
-            notifyToolResult: vi.fn(),
-            notifyAgentEvent: vi.fn(),
           },
         },
         preparedRuntime: {

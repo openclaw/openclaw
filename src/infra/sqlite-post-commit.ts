@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 
 type PendingTransactionState = {
   commit: () => void;
@@ -53,15 +54,31 @@ export function stageSqliteTransactionState(
   return true;
 }
 
+function rollbackTransactionState(states: PendingTransactionState[], error: unknown): void {
+  const failures: unknown[] = [];
+  for (const state of states.toReversed()) {
+    try {
+      state.rollback(error);
+    } catch (failure) {
+      failures.push(failure);
+    }
+  }
+  if (failures.length > 0) {
+    throw createSqliteLifecycleAggregateError(
+      [error, ...failures],
+      "SQLite transaction and rollback observers failed",
+      error,
+    );
+  }
+}
+
 /** A lost transaction invalidates every savepoint's staged state and observers. */
 export function discardSqliteTransactionState(db: DatabaseSync, error: unknown): void {
   pendingPublications.get(db)?.splice(0);
   const rolledBackState = pendingTransactionState.get(db)?.splice(0) ?? [];
   pendingPublications.delete(db);
   pendingTransactionState.delete(db);
-  for (const state of rolledBackState.toReversed()) {
-    state.rollback(error);
-  }
+  rollbackTransactionState(rolledBackState, error);
 }
 
 /** Nested rollback restores staged state and discards observers; savepoints wait for outer commit. */
@@ -81,9 +98,7 @@ export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transactio
   } catch (error) {
     publications?.splice(publicationStart);
     const rolledBackState = transactionState?.splice(stateStart) ?? [];
-    for (const state of rolledBackState.toReversed()) {
-      state.rollback(error);
-    }
+    rollbackTransactionState(rolledBackState, error);
     throw error;
   } finally {
     if (!nested) {

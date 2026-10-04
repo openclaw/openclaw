@@ -1,6 +1,8 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root as fsSafeRoot, type Root } from "@openclaw/fs-safe/root";
+import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -23,6 +25,7 @@ describe("installPackageDir rollback", () => {
   });
 
   afterEach(async () => {
+    __setFsSafeTestHooksForTest(undefined);
     vi.restoreAllMocks();
     await fixtureRootTracker.cleanup();
   });
@@ -49,17 +52,21 @@ describe("installPackageDir rollback", () => {
     sourceDir: string,
     targetDir: string,
     options: Pick<Parameters<typeof installPackageDir>[0], "sourceHardlinks"> = {},
+    assertOwned?: () => void,
   ) {
     let backupDir = "";
     const result = await installPackageDir(
-      requestDeferredPackageDirInstall({
-        ...updateOptions(sourceDir, targetDir),
-        ...options,
-        afterBackup: async (directory: string) => {
-          backupDir = directory;
-          return { ok: true as const };
+      requestDeferredPackageDirInstall(
+        {
+          ...updateOptions(sourceDir, targetDir),
+          ...options,
+          afterBackup: async (directory: string) => {
+            backupDir = directory;
+            return { ok: true as const };
+          },
         },
-      }),
+        assertOwned,
+      ),
     );
     expect(result.ok).toBe(true);
     const transaction = resolvePackageDirInstallTransaction(result);
@@ -178,7 +185,6 @@ describe("installPackageDir rollback", () => {
       };
       const paused = createDeferred();
       const release = createDeferred();
-      const realRm = fs.rm.bind(fs);
       let originalBackup = "";
       let rollback = Promise.resolve();
 
@@ -203,19 +209,23 @@ describe("installPackageDir rollback", () => {
         }
         const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
         let pauseConsumed = false;
-        vi.spyOn(fs, "rm").mockImplementation(async (...args: Parameters<typeof fs.rm>) => {
-          const candidate = fsSync.lstatSync(args[0], { bigint: true, throwIfNoEntry: false });
-          if (
-            !pauseConsumed &&
-            args[1]?.recursive &&
-            candidate?.dev === publishedIdentity.dev &&
-            candidate.ino === publishedIdentity.ino
-          ) {
-            pauseConsumed = true;
-            paused.resolve();
-            await release.promise;
-          }
-          return await realRm(...args);
+        __setFsSafeTestHooksForTest({
+          beforeRootFallbackMutation: async (operation, target) => {
+            const candidate = fsSync.lstatSync(path.dirname(target), {
+              bigint: true,
+              throwIfNoEntry: false,
+            });
+            if (
+              !pauseConsumed &&
+              operation === "remove" &&
+              candidate?.dev === publishedIdentity.dev &&
+              candidate.ino === publishedIdentity.ino
+            ) {
+              pauseConsumed = true;
+              paused.resolve();
+              await release.promise;
+            }
+          },
         });
         rollback = transaction.rollback();
         void rollback.catch(() => undefined);
@@ -273,18 +283,29 @@ describe("installPackageDir rollback", () => {
       const publishedIdentity = await fs.lstat(targetDir, { bigint: true });
       const ioError = Object.assign(new Error(`${failure} failed`), { code: "EIO" });
       let injected = false;
-      const realRm = fs.rm.bind(fs);
       const realRename = fs.rename.bind(fs);
       if (failure === "removal") {
-        vi.spyOn(fs, "rm").mockImplementation(async (...args: Parameters<typeof fs.rm>) => {
-          if (!injected && args[1]?.recursive) {
-            const current = fsSync.lstatSync(args[0], { bigint: true, throwIfNoEntry: false });
-            if (current?.dev === publishedIdentity.dev && current.ino === publishedIdentity.ino) {
-              injected = true;
-              throw ioError;
-            }
+        const prototype = Object.getPrototypeOf(await fsSafeRoot(installBaseDir)) as Root;
+        // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted Root receiver to preserve its path and mutation authority.
+        const remove = prototype.remove;
+        vi.spyOn(prototype, "remove").mockImplementation(async function (
+          this: Root,
+          target,
+          options,
+        ) {
+          const current = fsSync.lstatSync(path.dirname(path.join(this.rootReal, target)), {
+            bigint: true,
+            throwIfNoEntry: false,
+          });
+          if (
+            !injected &&
+            current?.dev === publishedIdentity.dev &&
+            current.ino === publishedIdentity.ino
+          ) {
+            injected = true;
+            throw ioError;
           }
-          return await realRm(...args);
+          await remove.call(this, target, options);
         });
       } else {
         vi.spyOn(fs, "rename").mockImplementation((...args: Parameters<typeof fs.rename>) => {
@@ -308,6 +329,7 @@ describe("installPackageDir rollback", () => {
       } else {
         await expect(rollback).rejects.toBe(ioError);
       }
+      expect(injected).toBe(true);
       expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
       await transaction.rollback();
       expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("old");
@@ -316,34 +338,275 @@ describe("installPackageDir rollback", () => {
     },
   );
 
-  it.each([
-    { action: "commit", sourceHardlinks: "package-manager" },
-    { action: "rollback", sourceHardlinks: "package-manager" },
-    { action: "commit", sourceHardlinks: "reject" },
-    { action: "rollback", sourceHardlinks: "reject" },
-  ] as const)(
-    "preserves a substituted $sourceHardlinks backup when $action is requested",
-    async ({ action, sourceHardlinks }) => {
-      const { fixtureRoot, sourceDir, targetDir } = await createFixture("substituted-backup");
-      const { backupDir, transaction } = await installRetainedUpdate(sourceDir, targetDir, {
-        sourceHardlinks,
+  it.each(["deferred", "immediate"] as const)(
+    "stops %s backup retirement at the first refused leaf without swallowing an errno",
+    async (settlement) => {
+      const { sourceDir, targetDir } = await createFixture("backup-retirement-owner");
+      await fs.writeFile(path.join(targetDir, "a.txt"), "first");
+      await fs.writeFile(path.join(targetDir, "b.txt"), "retained");
+      let backupDir = "";
+      let published = false;
+      let publishedIdentity: fsSync.BigIntStats | undefined;
+      let armed = false;
+      let refusals = 0;
+      const refused = Object.assign(new Error("original retirement owner refused"), {
+        code: "EIO",
       });
-      const retainedBackup = path.join(fixtureRoot, "retained-backup");
-      await fs.rename(backupDir, retainedBackup);
-      await fs.mkdir(backupDir);
-      await fs.writeFile(path.join(backupDir, "marker.txt"), "foreign backup");
+      const assertOwned = () => {
+        if (armed && refusals === 0) {
+          refusals += 1;
+          throw refused;
+        }
+      };
+      const rename = fs.rename.bind(fs);
+      vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+        await rename(from, to);
+        if (normalizeComparablePath(String(to)) === normalizeComparablePath(targetDir)) {
+          publishedIdentity = await fs.lstat(targetDir, { bigint: true });
+          published = true;
+        }
+      });
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation(operation, target) {
+          if (
+            published &&
+            operation === "remove" &&
+            normalizeComparablePath(target) ===
+              normalizeComparablePath(path.join(backupDir, "b.txt"))
+          ) {
+            armed = true;
+          }
+        },
+      });
+      const params = {
+        ...updateOptions(sourceDir, targetDir),
+        beforePersistentApply: assertOwned,
+        afterBackup: async (directory: string) => {
+          backupDir = directory;
+          return { ok: true as const };
+        },
+      };
+      const settleInstall = async () => {
+        const result = await installPackageDir(
+          settlement === "deferred"
+            ? requestDeferredPackageDirInstall(params, assertOwned)
+            : params,
+        );
+        expect(result.ok).toBe(true);
+        if (settlement === "deferred") {
+          const transaction = resolvePackageDirInstallTransaction(result);
+          if (!transaction) {
+            throw new Error("expected a retained update transaction");
+          }
+          await transaction.commit();
+        }
+      };
 
-      await expect(transaction[action]()).rejects.toThrow("install directory changed");
-      expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("foreign backup");
-      expect(await fs.readFile(path.join(retainedBackup, "marker.txt"), "utf8")).toBe("old");
+      await expect(settleInstall()).rejects.toBe(refused);
+
+      expect(armed).toBe(true);
+      expect(refusals).toBe(1);
+      if (!publishedIdentity) {
+        throw new Error("expected a published package identity");
+      }
+      expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
+        dev: publishedIdentity.dev,
+        ino: publishedIdentity.ino,
+      });
       expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("new");
-
-      await fs.rm(backupDir, { recursive: true });
-      await fs.rename(retainedBackup, backupDir);
-      await transaction[action]();
-      expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe(
-        action === "commit" ? "new" : "old",
+      expect(await fs.readFile(path.join(backupDir, "b.txt"), "utf8")).toBe("retained");
+      await expect(fs.lstat(path.join(backupDir, "a.txt"))).rejects.toHaveProperty(
+        "code",
+        "ENOENT",
       );
+    },
+  );
+
+  it.each([
+    { name: "Error", refusal: new Error("retained owner closed") },
+    { name: "false", refusal: false },
+    {
+      name: "errno",
+      refusal: Object.assign(new Error("retained owner missing"), { code: "ENOENT" }),
+    },
+    { name: "Promise", refusal: undefined },
+  ])(
+    "keeps a one-shot $name transaction refusal across repeated commit and rollback",
+    async ({ refusal }) => {
+      const { sourceDir, targetDir } = await createFixture("retained-settlement-refusal");
+      await fs.writeFile(path.join(targetDir, "a.txt"), "first");
+      await fs.writeFile(path.join(targetDir, "b.txt"), "retained");
+      let armed = false;
+      let refusals = 0;
+      const { backupDir, transaction } = await installRetainedUpdate(
+        sourceDir,
+        targetDir,
+        {},
+        (): unknown => {
+          if (armed && refusals === 0) {
+            refusals += 1;
+            if (refusal === undefined) {
+              return Promise.resolve();
+            }
+            // oxlint-disable-next-line typescript/only-throw-error -- Non-Error owner refusals must retain their exact identity.
+            throw refusal;
+          }
+          return undefined;
+        },
+      );
+      const liveIdentity = await fs.lstat(targetDir, { bigint: true });
+      let injections = 0;
+      __setFsSafeTestHooksForTest({
+        beforeRootFallbackMutation(operation, target) {
+          if (
+            operation === "remove" &&
+            normalizeComparablePath(target) ===
+              normalizeComparablePath(path.join(backupDir, "b.txt"))
+          ) {
+            injections += 1;
+            armed = true;
+          }
+        },
+      });
+      const unlink = vi.spyOn(fs, "unlink");
+      const rmdir = vi.spyOn(fs, "rmdir");
+      const rename = vi.spyOn(fs, "rename");
+      const renameSync = vi.spyOn(fsSync, "renameSync");
+
+      const firstRefusal = await transaction.commit().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      if (refusal === undefined) {
+        expect(firstRefusal).toBeInstanceOf(TypeError);
+      } else {
+        expect(firstRefusal).toBe(refusal);
+      }
+      expect(injections).toBe(1);
+      expect(refusals).toBe(1);
+      expect(unlink).toHaveBeenCalledOnce();
+      await expect(fs.lstat(path.join(backupDir, "a.txt"))).rejects.toHaveProperty(
+        "code",
+        "ENOENT",
+      );
+
+      for (const action of ["commit", "rollback", "commit", "rollback"] as const) {
+        await expect(transaction[action]()).rejects.toBe(firstRefusal);
+      }
+
+      expect(injections).toBe(1);
+      expect(refusals).toBe(1);
+      expect(unlink).toHaveBeenCalledOnce();
+      expect(rmdir).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+      expect(renameSync).not.toHaveBeenCalled();
+      expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
+        dev: liveIdentity.dev,
+        ino: liveIdentity.ino,
+      });
+      expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("new");
+      expect(await fs.readFile(path.join(backupDir, "b.txt"), "utf8")).toBe("retained");
+      expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
+    },
+  );
+
+  it("does not clean a replacement quarantine or restore over it after private custody changes", async () => {
+    const { fixtureRoot, sourceDir, targetDir } = await createFixture("rollback-private-owner");
+    const retained = path.join(fixtureRoot, "retained-quarantine");
+    const { backupDir, transaction } = await installRetainedUpdate(sourceDir, targetDir);
+    let replaced = "";
+    __setFsSafeTestHooksForTest({
+      beforeRootFallbackMutation: async (operation, target) => {
+        const quarantine = path.dirname(path.dirname(target));
+        if (
+          !replaced &&
+          operation === "remove" &&
+          path.basename(quarantine).startsWith(".openclaw-install-rollback-")
+        ) {
+          replaced = quarantine;
+          await fs.rename(quarantine, retained);
+          await fs.mkdir(path.join(quarantine, "package"), { recursive: true });
+          await fs.writeFile(path.join(quarantine, "package", "marker.txt"), "foreign");
+        }
+      },
+    });
+
+    await expect(transaction.rollback()).rejects.toThrow("install directory changed");
+
+    expect(replaced).not.toBe("");
+    expect(await fs.readFile(path.join(replaced, "package", "marker.txt"), "utf8")).toBe("foreign");
+    expect(await fs.readFile(path.join(retained, "package", "marker.txt"), "utf8")).toBe("new");
+    expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
+    await expect(fs.lstat(targetDir)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it.each([
+    { replaced: "backup", action: "commit", sourceHardlinks: "package-manager" },
+    { replaced: "backup", action: "rollback", sourceHardlinks: "package-manager" },
+    { replaced: "backup", action: "commit", sourceHardlinks: "reject" },
+    { replaced: "backup", action: "rollback", sourceHardlinks: "reject" },
+    { replaced: "install", action: "rollback", sourceHardlinks: "reject" },
+  ] as const)(
+    "preserves a substituted $sourceHardlinks $replaced when $action is requested",
+    async ({ replaced, action, sourceHardlinks }) => {
+      const { fixtureRoot, sourceDir, targetDir } = await createFixture("substituted-identity");
+      const run = async (assertOwned?: () => void) => {
+        const { backupDir, transaction } = await installRetainedUpdate(
+          sourceDir,
+          targetDir,
+          { sourceHardlinks },
+          assertOwned,
+        );
+        const substitutedDir = replaced === "backup" ? backupDir : targetDir;
+        const retainedDir = path.join(fixtureRoot, "retained-original");
+        const replacement = replaced === "backup" ? "foreign backup" : "replacement";
+        await fs.rename(substitutedDir, retainedDir);
+        await fs.mkdir(substitutedDir);
+        await fs.writeFile(path.join(substitutedDir, "marker.txt"), replacement);
+        const replacementIdentity =
+          replaced === "install" ? await fs.lstat(targetDir, { bigint: true }) : undefined;
+        assertOwned?.();
+
+        await expect(transaction[action]()).rejects.toThrow("install directory changed");
+        expect(await fs.readFile(path.join(substitutedDir, "marker.txt"), "utf8")).toBe(
+          replacement,
+        );
+        expect(await fs.readFile(path.join(retainedDir, "marker.txt"), "utf8")).toBe(
+          replaced === "backup" ? "old" : "new",
+        );
+        expect(
+          await fs.readFile(
+            path.join(replaced === "backup" ? targetDir : backupDir, "marker.txt"),
+            "utf8",
+          ),
+        ).toBe(replaced === "backup" ? "new" : "old");
+
+        if (replacementIdentity) {
+          expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
+            dev: replacementIdentity.dev,
+            ino: replacementIdentity.ino,
+          });
+        } else {
+          await fs.rm(backupDir, { recursive: true });
+          await fs.rename(retainedDir, backupDir);
+          await transaction[action]();
+          expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe(
+            action === "commit" ? "new" : "old",
+          );
+        }
+      };
+      if (replaced === "backup") {
+        await run();
+      } else {
+        try {
+          await withPluginLifecycleLease(
+            { path: path.join(fixtureRoot, "leases.sqlite"), leaseMs: 300_000, waitMs: 0 },
+            async (lease) => run(lease.assertOwned.bind(lease)),
+          );
+        } finally {
+          closeOpenClawStateDatabaseForTest();
+        }
+      }
     },
   );
 
@@ -379,50 +642,4 @@ describe("installPackageDir rollback", () => {
       expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("old");
     },
   );
-
-  it("preserves a replacement inode while the original rollback owner remains live", async () => {
-    const { fixtureRoot, sourceDir, targetDir } = await createFixture("rollback-inode");
-    const preservedDir = path.join(fixtureRoot, "preserved-install");
-    let backupDir = "";
-    try {
-      await withPluginLifecycleLease(
-        { path: path.join(fixtureRoot, "leases.sqlite"), leaseMs: 300_000, waitMs: 0 },
-        async (lease) => {
-          const result = await installPackageDir(
-            requestDeferredPackageDirInstall(
-              {
-                ...updateOptions(sourceDir, targetDir),
-                afterBackup: async (directory: string) => {
-                  backupDir = directory;
-                  return { ok: true as const };
-                },
-              },
-              lease.assertOwned.bind(lease),
-            ),
-          );
-          expect(result.ok).toBe(true);
-          const transaction = resolvePackageDirInstallTransaction(result);
-          if (!transaction) {
-            throw new Error("Expected a retained package transaction");
-          }
-          await fs.rename(targetDir, preservedDir);
-          await fs.mkdir(targetDir);
-          await fs.writeFile(path.join(targetDir, "marker.txt"), "replacement");
-          const replacementIdentity = await fs.lstat(targetDir, { bigint: true });
-          lease.assertOwned();
-
-          await expect(transaction.rollback()).rejects.toThrow("install directory changed");
-          expect(await fs.readFile(path.join(targetDir, "marker.txt"), "utf8")).toBe("replacement");
-          expect(await fs.lstat(targetDir, { bigint: true })).toMatchObject({
-            dev: replacementIdentity.dev,
-            ino: replacementIdentity.ino,
-          });
-          expect(await fs.readFile(path.join(preservedDir, "marker.txt"), "utf8")).toBe("new");
-          expect(await fs.readFile(path.join(backupDir, "marker.txt"), "utf8")).toBe("old");
-        },
-      );
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-    }
-  });
 });

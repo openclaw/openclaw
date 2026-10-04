@@ -425,7 +425,7 @@ describe("runPostUpgradeProbes — plugin.entry_unresolved", () => {
 });
 
 describe("runPostUpgradeProbes — plugin.manifest_drift", () => {
-  it("flags a plugin whose manifest hash differs from installs.json", async () => {
+  it("flags a plugin whose manifest hash differs from the installed index", async () => {
     await withFixtureRoot("manifest-drift", async (root) => {
       const oldManifestRaw = JSON.stringify({ id: "drifted", version: 1 });
       const oldManifestHash = crypto.createHash("sha256").update(oldManifestRaw).digest("hex");

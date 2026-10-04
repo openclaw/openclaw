@@ -12,6 +12,7 @@ import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { AcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { needsTtsFallback } from "./dispatch-from-config.finalize.js";
@@ -22,6 +23,7 @@ const loadDispatchAcpManagerRuntime = createLazyPromise(
 );
 
 export async function finalizeAcpTurnOutput(params: {
+  preparedTtsPreferences: PreparedTtsPreferences;
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId: string;
@@ -43,6 +45,7 @@ export async function finalizeAcpTurnOutput(params: {
   const hasAccumulatedBlockText = accumulatedBlockTtsText.trim().length > 0;
   const ttsStatus = resolveStatusTtsSnapshot({
     cfg: params.cfg,
+    preparedTtsPreferences: params.preparedTtsPreferences,
     sessionAuto: params.sessionTtsAuto,
     agentId: params.agentId,
     channelId: params.ttsChannel,
@@ -82,6 +85,7 @@ export async function finalizeAcpTurnOutput(params: {
         return queuedFinal;
       }
       const ttsSyntheticReply = await maybeApplyTtsToPayload({
+        preparedTtsPreferences: params.preparedTtsPreferences,
         payload: { text: accumulatedBlockTtsText },
         cfg: params.cfg,
         channel: params.ttsChannel,
@@ -93,13 +97,13 @@ export async function finalizeAcpTurnOutput(params: {
       });
       if (ttsSyntheticReply.mediaUrl) {
         const finalTtsPayload = markReplyPayloadAsTtsSupplement(
-          shouldDeferVisibleTextForTts
-            ? {
-                ...ttsSyntheticReply,
-                text: accumulatedVisibleBlockText || undefined,
-                trustedLocalMedia: true,
-              }
-            : { ...ttsSyntheticReply, text: undefined, trustedLocalMedia: true },
+          {
+            ...ttsSyntheticReply,
+            text: shouldDeferVisibleTextForTts
+              ? accumulatedVisibleBlockText || undefined
+              : undefined,
+            trustedLocalMedia: true,
+          },
           accumulatedBlockTtsText,
           shouldDeferVisibleTextForTts ? undefined : { visibleTextAlreadyDelivered: true },
         );

@@ -63,8 +63,7 @@ describe("proxy stream wrappers", () => {
         headers: {
           "HTTP-Referer": "https://openclaw.ai",
           "X-OpenRouter-Title": "OpenClaw",
-          "X-OpenRouter-Categories":
-            "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
+          "X-OpenRouter-Categories": "personal-agent,cli-agent",
           "X-Custom": "1",
         },
       },
@@ -98,6 +97,13 @@ describe("proxy stream wrappers", () => {
     expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
     expect(calls[0]?.headers?.["X-OpenRouter-Cache-Clear"]).toBe("true");
     expect(calls[0]?.headers?.["X-OpenRouter-Cache-TTL"]).toBe("86400");
+  });
+
+  it.each([Number.NaN, Infinity, -Infinity])("omits non-finite response cache TTL %s", (ttl) => {
+    const calls = captureHeaders({ responseCache: true, responseCacheTtlSeconds: ttl });
+
+    expect(calls[0]?.headers?.["X-OpenRouter-Cache"]).toBe("true");
+    expect(calls[0]?.headers).not.toHaveProperty("X-OpenRouter-Cache-TTL");
   });
 
   it("does not add OpenRouter response caching headers to custom proxy routes", () => {
@@ -181,7 +187,12 @@ describe("proxy stream wrappers", () => {
             systemPrompt: `${stable}${SYSTEM_PROMPT_CACHE_BOUNDARY}VOLATILE`,
             messages: [
               ...(hasUser ? [{ role: "user" as const, content: "Question", timestamp: 1 }] : []),
-              { role: "user", content: "Runtime", timestamp: 2, runtimeContextCarrier: true },
+              {
+                role: "user",
+                content: "OpenClaw runtime context:\nRuntime",
+                timestamp: 2,
+                runtimeContext: {},
+              },
             ],
           });
           const wire = JSON.stringify(payload);
@@ -196,7 +207,7 @@ describe("proxy stream wrappers", () => {
             expect(payload.messages).toEqual([
               { role: "system", content: `${stable}\nVOLATILE` },
               ...(hasUser ? [{ role: "user", content: "Question" }] : []),
-              { role: "user", content: "Runtime" },
+              { role: "system", content: "OpenClaw runtime context:\nRuntime" },
             ]);
           }
           expect(wire.includes('"ttl":"1h"')).toBe(

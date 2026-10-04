@@ -41,7 +41,6 @@ import {
   prepareGatewaySessionStoreTargetsReadOnly,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
-  resolveGatewaySessionStoreTargetsReadOnly,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
@@ -84,7 +83,37 @@ async function withGlobalSessions(mainKey: string, run: (cfg: OpenClawConfig) =>
 }
 
 describe("global session lookup ownership", () => {
-  it("retains alias rejection after a canonical row becomes malformed in a warm store", async () => {
+  it("resolves routing metadata without decoding unrelated session payloads", async () => {
+    await withGlobalSessions("main", async (cfg) => {
+      const unrelatedLabel = "unrelated-routing-payload";
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "agent:main:dashboard:unrelated" },
+        { sessionId: "unrelated-session", updatedAt: 1, label: unrelatedLabel },
+      );
+      const parse = JSON.parse;
+      let unrelatedDecodes = 0;
+      const parsing = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+        if (text.includes(unrelatedLabel)) {
+          unrelatedDecodes++;
+        }
+        return parse(text, reviver);
+      });
+      try {
+        expect(
+          resolveGatewaySessionStoreTarget({ cfg, key: "global", agentId: "main" }),
+        ).toMatchObject({
+          agentId: "main",
+          canonicalKey: "global",
+          storeKeys: ["global"],
+        });
+        expect(unrelatedDecodes).toBe(0);
+      } finally {
+        parsing.mockRestore();
+      }
+    });
+  });
+
+  it("rejects a malformed canonical candidate before falling back to its alias", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const alias = "agent:main:main";
       await replaceSessionEntry(
@@ -97,12 +126,12 @@ describe("global session lookup ownership", () => {
         .run("{", "global");
 
       expect(() => resolveGatewaySessionStoreTarget({ cfg, key: alias })).toThrow(
-        "non-canonical persisted row resolves to session key global",
+        "invalid persisted session row requires repair for global",
       );
     });
   });
 
-  it("keeps different candidate listings separate within the same store cache", async () => {
+  it("keeps different exact candidates separate within the same store cache", async () => {
     await withGlobalSessions("main", async (cfg) => {
       const storeCache: GatewaySessionStoreCache = new Map();
       for (const key of ["global", "agent:main:global", "global"]) {
@@ -111,7 +140,7 @@ describe("global session lookup ownership", () => {
           key,
           agentId: "main",
           projection: "list",
-          listCandidatesOnly: true,
+          exactRead: true,
           storeCache,
         });
         expect(Object.keys(target.store)).toEqual([key]);
@@ -279,7 +308,7 @@ describe("global session lookup ownership", () => {
     });
   });
 
-  it("keeps deferred errors in visitor order without changing eager batch failure order", async () => {
+  it("keeps deferred errors in visitor order", async () => {
     await withStateDirEnv("gateway-deferred-lookup-errors-", async ({ stateDir }) => {
       const cfg: OpenClawConfig = {
         agents: { ownership: "explicit", entries: { main: {}, research: {} } },
@@ -300,9 +329,6 @@ describe("global session lookup ownership", () => {
         { key: "agent:retired-agent:main" },
         { key: "agent:main:main", agentId: "research" },
       ];
-      expect(() => resolveGatewaySessionStoreTargetsReadOnly({ cfg, targets })).toThrow(
-        'belongs to "main"',
-      );
       const results = prepareGatewaySessionStoreTargetsReadOnly({
         cfg,
         targets,
@@ -364,9 +390,15 @@ describe("global session lookup ownership", () => {
         );
         const targets =
           mode === "batch"
-            ? resolveGatewaySessionStoreTargetsReadOnly({
+            ? prepareGatewaySessionStoreTargetsReadOnly({
                 cfg,
                 targets: requests.map(({ key }) => ({ key })),
+                projection: "list",
+              }).map((result) => {
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
               })
             : requests.map(({ key }) =>
                 mode === "single"
@@ -397,9 +429,15 @@ describe("global session lookup ownership", () => {
         const read = (config: OpenClawConfig, key: string, agentId?: string) => {
           setRuntimeConfigSnapshot(config, config);
           return mode === "batch"
-            ? resolveGatewaySessionStoreTargetsReadOnly({
+            ? prepareGatewaySessionStoreTargetsReadOnly({
                 cfg: config,
                 targets: [{ key, agentId }],
+                projection: "list",
+              }).map((result) => {
+                if (!result.ok) {
+                  throw result.error;
+                }
+                return result.value;
               })
             : mode === "single"
               ? resolveGatewaySessionStoreTargetWithStore({ cfg: config, key, agentId })
@@ -433,7 +471,7 @@ describe("global session lookup ownership", () => {
     await withGlobalSessions("main", async (cfg) => {
       const latestShared = vi.fn<
         NonNullable<GatewayRequestContext["githubPublicationService"]>["latestShared"]
-      >(() => null);
+      >(async () => null);
       const context = {
         getRuntimeConfig: () => cfg,
         githubPublicationService: { latestShared },
@@ -473,6 +511,7 @@ describe("global session lookup ownership", () => {
             sessionId: agentId + "-global",
           }),
           undefined,
+          expect.any(Function),
         );
       }
     });
@@ -604,7 +643,7 @@ it.each([
         session: { scope: "global", ...(storePath ? { store: storePath } : {}) },
         agents: {
           ...(shared ? { ownership: "explicit" } : {}),
-          entries: { main: { default: true }, work: {}, ...(shared ? { ops: {} } : {}) },
+          entries: { main: {}, work: {}, ...(shared ? { ops: {} } : {}) },
           defaults: {
             model: { primary: "ollama/llama3.1:8b" },
             ...(shared ? { sessionStore: { agentId: "ops" } } : {}),
@@ -757,10 +796,14 @@ it.each([
       const allAgents = await listSessions({ client, context, request: { limit: 20 } });
       expect(allAgents.sessions.find((row) => row.key === created.key)).toMatchObject(expected);
 
-      const [batched] = resolveGatewaySessionStoreTargetsReadOnly({
+      const [batched] = prepareGatewaySessionStoreTargetsReadOnly({
         cfg,
         targets: [{ key: created.key, agentId: "work" }],
+        projection: "list",
       });
+      if (!batched?.ok) {
+        throw new Error("Expected prepared child lookup to succeed");
+      }
       const cachedRequest = {
         cfg,
         key: created.key,
@@ -771,7 +814,7 @@ it.each([
       };
       resolveGatewaySessionStoreTargetWithStore(cachedRequest);
       const cached = resolveGatewaySessionStoreTargetWithStore(cachedRequest);
-      for (const selected of [batched!, cached]) {
+      for (const selected of [batched.value, cached]) {
         expect(createGatewaySessionEntryReader({ cfg, ...selected })("global")?.modelOverride).toBe(
           "qwen3:14b",
         );

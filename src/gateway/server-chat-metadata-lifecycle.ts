@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
+import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import { modelSelectionPoliciesMatch } from "./operator-model-presentation.js";
 import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
@@ -48,9 +49,33 @@ export async function createGatewayChatMetadataLifecycle(params: {
     ...(params.minimalTestGateway
       ? {
           beforeRefresh: async () => {
+            const [
+              { listAgentIds },
+              { getPreparedModelCatalogOwnerSnapshot },
+              { readAgentDatabaseAdmissionRefusal },
+            ] = await Promise.all([
+              import("../agents/agent-scope.js"),
+              import("../agents/prepared-model-catalog.js"),
+              import("../state/agent-database-admission.js"),
+            ]);
+            const config = params.getConfig();
+            // Catalog and skill publications can change metadata while its model owner stays current.
+            if (
+              listAgentIds(config).every(
+                (agentId) =>
+                  readAgentDatabaseAdmissionRefusal(agentId) ||
+                  getPreparedModelCatalogOwnerSnapshot({
+                    agentId,
+                    config,
+                    allowGatewaySubagentBinding: true,
+                  })?.isCurrent(),
+              )
+            ) {
+              return;
+            }
             const { refreshPreparedModelRuntimeSnapshots } =
               await import("../agents/prepared-model-runtime.js");
-            await refreshPreparedModelRuntimeSnapshots(params.getConfig(), {
+            await refreshPreparedModelRuntimeSnapshots(config, {
               gatewayLifecycle: true,
               catalogMode: "static",
               allowGatewaySubagentBinding: true,
@@ -135,7 +160,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
       registerRuntimeAuthProfileStoreMutationListener(() => {
         refreshForSubordinateChange();
       });
+    const unregisterTopology = sessionChanges.subscribe((change) => {
+      if (isSessionStoreTopologyChange(change)) {
+        refreshForSubordinateChange();
+      }
+    });
     return () => {
+      unregisterTopology();
       unregisterRuntimeAuthProfileStoreMutation();
       unregisterPreparedModelRuntimePublication();
       unregisterSkillsChange();
@@ -204,6 +235,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
       }
     },
     read: runtime.read,
+    readModelsList: runtime.readModelsList,
     readStartup: runtime.readStartup,
     refresh: runtime.refresh,
   };

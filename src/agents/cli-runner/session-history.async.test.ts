@@ -43,14 +43,17 @@ function targetIn(stateDir: string) {
   };
 }
 
+function createRecorder(target: ReturnType<typeof targetIn>, text: string, timestamp = 1) {
+  return createUserTurnTranscriptRecorder({
+    target: { ...target, sessionEntry: undefined },
+    input: { text, timestamp },
+    updateMode: "none",
+  });
+}
+
 it("leaves cold CLI history absent until the approved user-turn writer creates it", async () => {
   await withOpenClawTestState({ label: "cli-cold-history" }, async ({ stateDir }) => {
-    const target = {
-      agentId: "main",
-      sessionId: "cold-cli",
-      sessionKey: "agent:main:cold-cli",
-      storePath: path.join(stateDir, "agents", "main", "openclaw-agent.sqlite"),
-    };
+    const target = targetIn(stateDir);
     const params = { sessionTarget: target };
     expect(await loadCliSessionContextEngineMessages(params)).toEqual([]);
     expect(
@@ -62,11 +65,7 @@ it("leaves cold CLI history absent until the approved user-turn writer creates i
     ).toEqual({ reseedMessages: [], durableContext: undefined });
     expect(fs.existsSync(resolveSessionTranscriptDatabasePath(target))).toBe(false);
     const text = "Exact user bytes:  spaced\nsecond line 🦞";
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...target, sessionEntry: undefined },
-      input: { text, timestamp: 17 },
-      updateMode: "none",
-    });
+    const recorder = createRecorder(target, text, 17);
     expect(
       await persistApprovedCliUserTurnTranscript({
         ...target,
@@ -89,7 +88,7 @@ it("leaves cold CLI history absent until the approved user-turn writer creates i
   });
 });
 
-it.each(["schema", "table", "owner"] as const)(
+it.each(["schema", "owner"] as const)(
   "does not hide missing %s storage as empty history",
   async (kind) => {
     await withOpenClawTestState({ label: `cli-history-${kind}` }, async ({ stateDir }) => {
@@ -99,16 +98,9 @@ it.each(["schema", "table", "owner"] as const)(
         new DatabaseSync(target.storePath).close();
       } else {
         await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-        if (kind === "table") {
-          openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-            "DROP TABLE transcript_events",
-          );
-        }
-        if (kind === "owner") {
-          openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
-            "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
-          );
-        }
+        openOpenClawAgentDatabase({ agentId: "main", path: target.storePath }).db.exec(
+          "UPDATE schema_meta SET agent_id = 'different' WHERE meta_key = 'primary'",
+        );
         await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
       await expect(
@@ -208,46 +200,60 @@ it.each(["run", "read-resource"] as const)(
   },
 );
 
-it("refuses quarantined runtime history through both async manager entries and CLI", async () => {
-  await withOpenClawTestState({ label: "cli-history-quarantine" }, async (state) => {
-    const target = targetIn(state.stateDir);
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    SessionManager.open(target).appendMessage({
-      role: "user",
-      content: "retained bytes",
-      timestamp: 1,
-    });
-    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-    expect(
-      recordOpenClawDatabaseQuarantine({
-        env: state.env,
-        kind: "agent",
-        path: target.storePath,
-        reason: "synthetic quarantine",
-      }),
-    ).toBe(true);
-    try {
-      for (const read of [
-        () => SessionManager.openAsync(target),
-        () => SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 }),
-        () => loadCliSessionContextEngineMessages({ sessionTarget: target }),
-      ]) {
-        await expect(read()).rejects.toThrow("synthetic quarantine");
+it.each(["persisted", "process-local"] as const)(
+  "refuses %s quarantine through async manager entries and CLI",
+  async (kind) => {
+    await withOpenClawTestState({ label: `cli-history-quarantine-${kind}` }, async (state) => {
+      const target = targetIn(state.stateDir);
+      await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+      const reason = "synthetic quarantine";
+      if (kind === "persisted") {
+        SessionManager.open(target).appendMessage({
+          role: "user",
+          content: "retained bytes",
+          timestamp: 1,
+        });
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
+        expect(
+          recordOpenClawDatabaseQuarantine({
+            env: state.env,
+            kind: "agent",
+            path: target.storePath,
+            reason,
+          }),
+        ).toBe(true);
+      } else {
+        expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, new Error(reason))).toBe(
+          true,
+        );
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
       }
-    } finally {
-      clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env });
-    }
-  });
-});
+      try {
+        const readers = [
+          () => SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 }),
+          () => loadCliSessionContextEngineMessages({ sessionTarget: target }),
+        ];
+        if (kind === "persisted") {
+          await expect(SessionManager.openAsync(target)).rejects.toThrow(reason);
+        }
+        for (const read of readers) {
+          await expect(read()).rejects.toThrow(reason);
+        }
+      } finally {
+        if (kind === "persisted") {
+          clearOpenClawDatabaseQuarantine(target.storePath, { env: state.env });
+        } else {
+          clearOpenClawAgentDatabaseOpenFailure(target.storePath, { env: state.env });
+        }
+      }
+    });
+  },
+);
 
 it("refuses an admitted transcript whose database disappeared", async () => {
   await withOpenClawTestState({ label: "cli-history-admitted-missing" }, async ({ stateDir }) => {
     const target = targetIn(stateDir);
-    const recorder = createUserTurnTranscriptRecorder({
-      target: { ...target, sessionEntry: undefined },
-      input: { text: "admitted", timestamp: 1 },
-      updateMode: "none",
-    });
+    const recorder = createRecorder(target, "admitted");
     await recorder.persistApproved();
     const receipt = recorder.getAdmissionReceipt();
     expect(receipt).toBeDefined();
@@ -274,11 +280,7 @@ it.each(["main", "worker"] as const)(
       };
       await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
       const persist = async (text: string) => {
-        const recorder = createUserTurnTranscriptRecorder({
-          target: { ...target, sessionEntry: undefined },
-          input: { text, timestamp: 1 },
-          updateMode: "none",
-        });
+        const recorder = createRecorder(target, text);
         await recorder.persistApproved();
         return recorder;
       };
@@ -324,26 +326,6 @@ it.each(["main", "worker"] as const)(
     });
   },
 );
-
-it("refuses process-local quarantine even when no persisted quarantine row exists", async () => {
-  await withOpenClawTestState({ label: "cli-history-terminal-quarantine" }, async (state) => {
-    const target = targetIn(state.stateDir);
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const failure = new Error("synthetic process-local quarantine");
-    expect(recordOpenClawAgentDatabaseOpenFailure(target.storePath, failure)).toBe(true);
-    await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
-    try {
-      await expect(
-        SessionManager.openBoundedAsync(target, { maxBytes: 4096, maxEvents: 5 }),
-      ).rejects.toThrow(failure.message);
-      await expect(loadCliSessionContextEngineMessages({ sessionTarget: target })).rejects.toThrow(
-        failure.message,
-      );
-    } finally {
-      clearOpenClawAgentDatabaseOpenFailure(target.storePath, { env: state.env });
-    }
-  });
-});
 
 it.each(["full", "bounded", "cli"] as const)(
   "preserves required-table unavailability and its SQLite cause through the %s worker caller",

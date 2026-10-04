@@ -1,5 +1,3 @@
-// Irc plugin module implements protocol behavior.
-import { randomUUID } from "node:crypto";
 import { hasIrcControlChars, stripIrcControlChars } from "./control-chars.js";
 
 const IRC_TARGET_PATTERN = /^[^\s:]+$/u;
@@ -42,10 +40,6 @@ export function parseIrcLine(line: string): ParsedIrcLine | null {
 
   const firstSpace = cursor.indexOf(" ");
   const command = (firstSpace === -1 ? cursor : cursor.slice(0, firstSpace)).trim();
-  if (!command) {
-    return null;
-  }
-
   cursor = firstSpace === -1 ? "" : cursor.slice(firstSpace + 1);
   const params: string[] = [];
   let trailing: string | undefined;
@@ -144,18 +138,12 @@ export function sanitizeIrcTarget(raw: string): string {
     throw new Error("IRC target is required");
   }
   // Reject any surrounding whitespace instead of trimming it away.
-  if (decoded !== decoded.trim()) {
-    throw new Error(`Invalid IRC target: ${raw}`);
-  }
-  if (hasIrcControlChars(decoded)) {
-    throw new Error(`Invalid IRC target: ${raw}`);
-  }
-  if (!IRC_TARGET_PATTERN.test(decoded)) {
+  if (
+    decoded !== decoded.trim() ||
+    hasIrcControlChars(decoded) ||
+    !IRC_TARGET_PATTERN.test(decoded)
+  ) {
     throw new Error(`Invalid IRC target: ${raw}`);
   }
   return decoded;
-}
-
-export function makeIrcMessageId() {
-  return randomUUID();
 }

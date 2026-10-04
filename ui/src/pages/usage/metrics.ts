@@ -18,7 +18,6 @@ const DAY_MS = 86_400_000;
 
 type UsageCostWindowSummary = {
   days: number;
-  startDate: string;
   endDate: string;
   totals: UsageTotals;
 };
@@ -181,25 +180,23 @@ function getZonedWeekday(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCDay() : date.getDay();
 }
 
-function parseUtcDate(dateStr: string): Date | null {
+function parseYmdDate(dateStr: string, timeZone: "local" | "utc" = "local"): Date | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
   if (!match) {
     return null;
   }
-  const [, yStr, mStr, dStr] = match;
-  const y = Number(yStr);
-  const m = Number(mStr);
-  const d = Number(dStr);
-  const date = new Date(Date.UTC(y, m - 1, d));
-  if (
-    Number.isNaN(date.valueOf()) ||
-    date.getUTCFullYear() !== y ||
-    date.getUTCMonth() !== m - 1 ||
-    date.getUTCDate() !== d
-  ) {
-    return null;
-  }
-  return date;
+  const [, y, m, d] = match;
+  const year = Number(y);
+  const month = Number(m) - 1;
+  const day = Number(d);
+  const date =
+    timeZone === "utc" ? new Date(Date.UTC(year, month, day)) : new Date(year, month, day);
+  const [actualYear, actualMonth, actualDay] =
+    timeZone === "utc"
+      ? [date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()]
+      : [date.getFullYear(), date.getMonth(), date.getDate()];
+  // Reject normalized dates, including a local calendar date skipped by an offset change.
+  return actualYear === year && actualMonth === month && actualDay === day ? date : null;
 }
 
 type UtcQuarterBucketState = {
@@ -219,7 +216,7 @@ function mapUtcQuarterBucket(
   }
   if (dateStr !== state.utcDateKey) {
     state.utcDateKey = dateStr;
-    const date = parseUtcDate(dateStr);
+    const date = parseYmdDate(dateStr, "utc");
     state.utcWeekday = date ? date.getUTCDay() : null;
     state.utcStartMs = date ? date.getTime() : 0;
   }
@@ -406,112 +403,103 @@ function renderUsageMosaic(
   onSelectHour: (hour: number, shiftKey: boolean) => void,
 ) {
   const stats = buildUsageMosaicStats(sessions, timeZone);
-  if (!stats.hasData) {
-    return renderSettingsSection(
-      {
-        title: t("usage.mosaic.title"),
-        description: t("usage.mosaic.subtitleEmpty"),
-        actions: html`
-          <div class="usage-mosaic-total">
-            ${formatUsageTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
-          </div>
-        `,
-      },
-      html`
-        <div class="usage-panel usage-mosaic">
-          <div class="usage-empty-block usage-empty-block--compact">
-            ${t("usage.mosaic.noTimelineData")}
-          </div>
-        </div>
-      `,
-    );
-  }
-
   const maxHour = Math.max(...stats.hourTotals, 1);
   const maxWeekday = Math.max(...stats.weekdayTotals.map((d) => d.tokens), 1);
 
   return renderSettingsSection(
     {
       title: t("usage.mosaic.title"),
-      description: t("usage.mosaic.subtitle", {
-        zone:
-          timeZone === "utc" ? t("usage.filters.timeZoneUtc") : t("usage.filters.timeZoneLocal"),
-      }),
+      description: stats.hasData
+        ? t("usage.mosaic.subtitle", {
+            zone:
+              timeZone === "utc"
+                ? t("usage.filters.timeZoneUtc")
+                : t("usage.filters.timeZoneLocal"),
+          })
+        : t("usage.mosaic.subtitleEmpty"),
       actions: html`
         <div class="usage-mosaic-total">
-          ${formatUsageTokens(stats.totalTokens)}
+          ${formatUsageTokens(stats.hasData ? stats.totalTokens : 0)}
           ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       `,
     },
     html`
       <div class="usage-panel usage-mosaic">
-        <div class="usage-mosaic-grid">
-          <div class="usage-mosaic-section">
-            <div class="usage-mosaic-section-title">${t("usage.mosaic.dayOfWeek")}</div>
-            <div class="usage-daypart-grid">
-              ${stats.weekdayTotals.map((part) => {
-                const intensity = Math.min(part.tokens / maxWeekday, 1);
-                const bg =
-                  part.tokens > 0
-                    ? `color-mix(in srgb, var(--accent) ${(12 + intensity * 60).toFixed(1)}%, transparent)`
-                    : "transparent";
-                return html`
-                  <div class="usage-daypart-cell" style="background: ${bg};">
-                    <div class="usage-daypart-label">${part.label}</div>
-                    <div class="usage-daypart-value">${formatUsageTokens(part.tokens)}</div>
+        ${
+          stats.hasData
+            ? html`
+                <div class="usage-mosaic-grid">
+                  <div class="usage-mosaic-section">
+                    <div class="usage-mosaic-section-title">${t("usage.mosaic.dayOfWeek")}</div>
+                    <div class="usage-daypart-grid">
+                      ${stats.weekdayTotals.map((part) => {
+                        const intensity = Math.min(part.tokens / maxWeekday, 1);
+                        const bg =
+                          part.tokens > 0
+                            ? `color-mix(in srgb, var(--accent) ${(12 + intensity * 60).toFixed(1)}%, transparent)`
+                            : "transparent";
+                        return html`
+                          <div class="usage-daypart-cell" style="background: ${bg};">
+                            <div class="usage-daypart-label">${part.label}</div>
+                            <div class="usage-daypart-value">${formatUsageTokens(part.tokens)}</div>
+                          </div>
+                        `;
+                      })}
+                    </div>
                   </div>
-                `;
-              })}
-            </div>
-          </div>
-          <div class="usage-mosaic-section">
-            <div class="usage-mosaic-section-title">
-              <span>${t("usage.filters.hours")}</span>
-              <span class="usage-mosaic-sub">0 → 23</span>
-            </div>
-            <div class="usage-hour-grid">
-              ${stats.hourTotals.map((value, hour) => {
-                const intensity = Math.min(value / maxHour, 1);
-                const bg =
-                  value > 0
-                    ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
-                    : "transparent";
-                const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(
-                  t("usage.metrics.tokens"),
-                )}`;
-                const border =
-                  intensity > 0.7
-                    ? "color-mix(in srgb, var(--accent) 60%, transparent)"
-                    : "color-mix(in srgb, var(--accent) 24%, transparent)";
-                const selected = selectedHours.includes(hour);
-                return html`
-                  <button
-                    type="button"
-                    class="usage-hour-cell ${selected ? "selected" : ""}"
-                    style="background: ${bg}; border-color: ${border};"
-                    title="${title}"
-                    aria-label=${title}
-                    aria-pressed=${selected ? "true" : "false"}
-                    @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
-                  ></button>
-                `;
-              })}
-            </div>
-            <div class="usage-hour-labels">
-              <span>${t("usage.mosaic.midnight")}</span>
-              <span>${t("usage.mosaic.fourAm")}</span>
-              <span>${t("usage.mosaic.eightAm")}</span>
-              <span>${t("usage.mosaic.noon")}</span>
-              <span>${t("usage.mosaic.fourPm")}</span>
-              <span>${t("usage.mosaic.eightPm")}</span>
-            </div>
-            <div class="usage-hour-legend">
-              <span></span>
-              ${t("usage.mosaic.legend")}
-            </div>
-          </div>
-        </div>
+                  <div class="usage-mosaic-section">
+                    <div class="usage-mosaic-section-title">
+                      <span>${t("usage.filters.hours")}</span>
+                      <span class="usage-mosaic-sub">0 → 23</span>
+                    </div>
+                    <div class="usage-hour-grid">
+                      ${stats.hourTotals.map((value, hour) => {
+                        const intensity = Math.min(value / maxHour, 1);
+                        const bg =
+                          value > 0
+                            ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
+                            : "transparent";
+                        const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                          t("usage.metrics.tokens"),
+                        )}`;
+                        const border =
+                          intensity > 0.7
+                            ? "color-mix(in srgb, var(--accent) 60%, transparent)"
+                            : "color-mix(in srgb, var(--accent) 24%, transparent)";
+                        const selected = selectedHours.includes(hour);
+                        return html`
+                          <button
+                            type="button"
+                            class="usage-hour-cell ${selected ? "selected" : ""}"
+                            style="background: ${bg}; border-color: ${border};"
+                            title="${title}"
+                            aria-label=${title}
+                            aria-pressed=${selected ? "true" : "false"}
+                            @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
+                          ></button>
+                        `;
+                      })}
+                    </div>
+                    <div class="usage-hour-labels">
+                      <span>${t("usage.mosaic.midnight")}</span>
+                      <span>${t("usage.mosaic.fourAm")}</span>
+                      <span>${t("usage.mosaic.eightAm")}</span>
+                      <span>${t("usage.mosaic.noon")}</span>
+                      <span>${t("usage.mosaic.fourPm")}</span>
+                      <span>${t("usage.mosaic.eightPm")}</span>
+                    </div>
+                    <div class="usage-hour-legend">
+                      <span></span>
+                      ${t("usage.mosaic.legend")}
+                    </div>
+                  </div>
+                </div>
+              `
+            : html`<div class="usage-empty-block usage-empty-block--compact">
+                ${t("usage.mosaic.noTimelineData")}
+              </div>`
+        }
       </div>
     `,
   );
@@ -524,34 +512,9 @@ function formatIsoDate(date: Date, timeZone: "local" | "utc" = "local"): string 
   return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-function parseYmdDate(dateStr: string): Date | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-  if (!match) {
-    return null;
-  }
-  const [, y, m, d] = match;
-  const year = Number(y);
-  const monthIndex = Number(m) - 1;
-  const day = Number(d);
-  const date = new Date(year, monthIndex, day);
-  if (
-    Number.isNaN(date.valueOf()) ||
-    date.getFullYear() !== year ||
-    date.getMonth() !== monthIndex ||
-    date.getDate() !== day
-  ) {
-    return null;
-  }
-  return date;
-}
-
 function parseIsoDayIndex(dateStr: string): number | null {
-  const date = parseUtcDate(dateStr);
+  const date = parseYmdDate(dateStr, "utc");
   return date ? date.getTime() / DAY_MS : null;
-}
-
-function formatIsoDayIndex(dayIndex: number): string {
-  return new Date(dayIndex * DAY_MS).toISOString().slice(0, 10);
 }
 
 function formatDayLabel(dateStr: string): string {
@@ -570,38 +533,10 @@ function formatFullDate(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
-function buildUsageCostWindowSummary(
-  daily: Array<UsageTotals & { date: string }>,
-  startDate: string,
-  endDate: string,
-): UsageCostWindowSummary | null {
-  const startDay = parseIsoDayIndex(startDate);
-  const endDay = parseIsoDayIndex(endDate);
-  if (startDay === null || endDay === null || startDay > endDay) {
-    return null;
-  }
-
-  const totals = createEmptyCostUsageTotals();
-  for (const entry of daily) {
-    const day = parseIsoDayIndex(entry.date);
-    if (day !== null && day >= startDay && day <= endDay) {
-      addCostUsageTotals(totals, entry);
-    }
-  }
-
-  return {
-    days: endDay - startDay + 1,
-    startDate,
-    endDate,
-    totals,
-  };
-}
-
 function buildUsageCostWindows(
   daily: Array<UsageTotals & { date: string }>,
   rangeStartDate: string,
   rangeEndDate: string,
-  periods: number[] = [1, 7, 30, 90],
 ): UsageCostWindowSummary[] {
   const rangeStartDay = parseIsoDayIndex(rangeStartDate);
   const rangeEndDay = parseIsoDayIndex(rangeEndDate);
@@ -610,14 +545,17 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return Array.from(new Set(periods.map((days) => Math.max(1, Math.trunc(days)))))
-    .filter((days) => days < rangeDays)
-    .toSorted((left, right) => left - right)
-    .map((days) => {
-      const startDate = formatIsoDayIndex(rangeEndDay - days + 1);
-      return buildUsageCostWindowSummary(daily, startDate, rangeEndDate);
-    })
-    .filter((summary): summary is UsageCostWindowSummary => summary !== null);
+  return [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => {
+    const startDay = rangeEndDay - days + 1;
+    const totals = createEmptyCostUsageTotals();
+    for (const entry of daily) {
+      const day = parseIsoDayIndex(entry.date);
+      if (day !== null && day >= startDay && day <= rangeEndDay) {
+        addCostUsageTotals(totals, entry);
+      }
+    }
+    return { days, endDate: rangeEndDate, totals };
+  });
 }
 
 const buildAggregatesFromSessions = (
@@ -690,7 +628,6 @@ const buildUsageInsightStats = (
 export type { UsageInsightStats };
 export {
   buildAggregatesFromSessions,
-  buildUsageCostWindowSummary,
   buildUsageCostWindows,
   buildPeakErrorHours,
   buildUsageInsightStats,

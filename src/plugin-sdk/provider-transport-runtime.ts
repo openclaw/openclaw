@@ -3,6 +3,7 @@
  */
 export { buildGuardedModelFetch } from "../agents/provider-transport-fetch.js";
 export { buildOpenAICompletionsParams } from "../agents/openai-transport-stream.js";
+export { buildAssistantMessage } from "../agents/stream-message-shared.js";
 export {
   sortPromptCacheToolsByName,
   splitSystemPromptCacheBoundary,
@@ -37,6 +38,5 @@ export {
   parseTerminalToolCallArguments,
   sanitizeTransportPayloadText,
   withProviderAcceptanceObserver,
-  type ProviderAcceptance,
   type WritableTransportStream,
 } from "@openclaw/ai/transports";

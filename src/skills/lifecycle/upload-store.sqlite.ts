@@ -48,33 +48,12 @@ export type SkillUploadMetadataRow = InferResult<
   ReturnType<typeof selectSkillUploadMetadata>
 >[number];
 
-export function resolveSkillUploadDatabaseOptions(options: {
-  env?: NodeJS.ProcessEnv;
-  path?: string;
-}): OpenClawStateDatabaseOptions {
-  return {
-    ...(options.env ? { env: options.env } : {}),
-    ...(options.path ? { path: options.path } : {}),
-  };
-}
-
 function openSkillUploadDatabase(options: OpenClawStateDatabaseOptions) {
   const database = openOpenClawStateDatabase(options);
   return {
     database,
     kysely: getNodeSqliteKysely<SkillUploadDatabase>(database.db),
   };
-}
-
-function readSkillUploadMetadata(
-  uploadId: string,
-  options: OpenClawStateDatabaseOptions,
-): SkillUploadMetadataRow | undefined {
-  const { database, kysely } = openSkillUploadDatabase(options);
-  return executeSqliteQueryTakeFirstSync(
-    database.db,
-    selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
-  );
 }
 
 export function deleteSkillUploadState(
@@ -143,20 +122,6 @@ export function hasLiveSkillUploadInstallLease(
         .where("lease_key", "=", uploadId)
         .where("expires_at", ">", nowMs),
     ),
-  );
-}
-
-function deleteExpiredSkillUploadUnlessLeased(params: {
-  uploadId: string;
-  options: OpenClawStateDatabaseOptions;
-}): "active" | "deleted" | "leased" | "missing" {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) =>
-      deleteExpiredSkillUploadUnlessLeasedInDatabase(db, {
-        uploadId: params.uploadId,
-        nowMs: Date.now(),
-      }),
-    params.options,
   );
 }
 
@@ -232,7 +197,11 @@ export function requireUploadMetadata(
   uploadId: string,
   options: OpenClawStateDatabaseOptions,
 ): SkillUploadMetadataRow {
-  const row = readSkillUploadMetadata(uploadId, options);
+  const { database, kysely } = openSkillUploadDatabase(options);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    selectSkillUploadMetadata(kysely).where("upload_id", "=", uploadId),
+  );
   if (!row) {
     throw new SkillUploadRequestError(`upload not found: ${uploadId}`);
   }
@@ -249,7 +218,14 @@ export function assertNotExpired(
     throw new SkillUploadRequestError("upload has expired");
   }
   if (!isFutureDateTimestampMs(row.expires_at, { nowMs: validNow })) {
-    deleteExpiredSkillUploadUnlessLeased({ uploadId: row.upload_id, options });
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        deleteExpiredSkillUploadUnlessLeasedInDatabase(db, {
+          uploadId: row.upload_id,
+          nowMs: Date.now(),
+        }),
+      options,
+    );
     throw new SkillUploadRequestError("upload has expired");
   }
 }

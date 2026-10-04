@@ -2,8 +2,8 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
+  OpenClawPluginApi,
+  OpenClawPluginServiceContextV2,
   OpenClawPluginGatewayEvents,
 } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -11,9 +11,12 @@ import {
   createPluginStateKeyedStoreForTests,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import {
+  createTestPluginApi,
+  createTestPluginServiceScheduler,
+} from "openclaw/plugin-sdk/plugin-test-api";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { registerBrowserPlugin } from "../plugin-registration.js";
 import {
   interceptStoreActions,
@@ -226,24 +229,18 @@ describe("Browser dashboard lifetime", () => {
     expect((await requestBrowserDashboard({ ...request, resume: true })).paused).toBe(false);
   });
 
-  it.each(["removed", "session deleted", "replaced", "URL changed", "profile changed"] as const)(
+  it.each(["replaced", "URL changed", "profile changed"] as const)(
     "retires cold Stop intent when the definition is %s without starting a browser",
     async (change) => {
       await stopBrowserDashboard(request);
-      if (change === "removed" || change === "session deleted") {
-        fixture.widgets = [];
-      } else if (change === "replaced") {
+      if (change === "replaced") {
         fixture.widgets[0]!.instanceId = "instance-two";
       } else if (change === "URL changed") {
         fixture.widgets[0]!.props.url = "http://updated.example/";
       } else {
         fixture.widgets[0]!.props.profile = "other-managed";
       }
-      if (change === "session deleted") {
-        await closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey] });
-      } else {
-        await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
-      }
+      await sweepTrackedBrowserTabs({ ordinaryCleanup: false });
       expect(await getBrowserSessionTabStore().entries()).toEqual([]);
       expect(browser.open).not.toHaveBeenCalled();
       expect(browser.closeOwned).not.toHaveBeenCalled();
@@ -387,13 +384,11 @@ describe("Browser dashboard lifetime", () => {
     expect(browser.open).not.toHaveBeenCalled();
   });
 
-  it.each(["removed", "invalid URL", "invalid profile"] as const)(
+  it.each(["invalid URL", "invalid profile"] as const)(
     "reconciles %s definitions even when ordinary tab cleanup is disabled",
     async (condition) => {
       await requestBrowserDashboard(request);
-      if (condition === "removed") {
-        fixture.widgets = [];
-      } else if (condition === "invalid URL") {
+      if (condition === "invalid URL") {
         fixture.widgets[0]!.props.url = "ftp://service.example/";
       } else {
         fixture.widgets[0]!.props.profile = " ";
@@ -402,9 +397,7 @@ describe("Browser dashboard lifetime", () => {
       expect(fixture.tabs).toEqual([]);
       expect(await readBrowserDashboardTabs()).toEqual([]);
       expect(browser.closeOwned).toHaveBeenCalledOnce();
-      if (condition !== "removed") {
-        await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
-      }
+      await expect(requestBrowserDashboard(request)).rejects.toThrow(/widget_put/);
     },
   );
 
@@ -562,7 +555,6 @@ describe("Browser dashboard lifetime", () => {
     const { app, getHandlers } = createBrowserRouteApp();
     registerBrowserTabRoutes(app, {
       forProfile: () => ({ profile, isReachable, listTabs }),
-      mapTabError: () => null,
     } as unknown as BrowserRouteContext);
     const response = createBrowserRouteResponse();
     await getHandlers.get("/tabs")!(
@@ -668,7 +660,7 @@ describe("Browser dashboard lifetime", () => {
 
   it("publishes changed lifetimes and drains board-change cleanup through the existing service events", async () => {
     const serviceScope = new AsyncLocalStorage<string>();
-    const services: OpenClawPluginService[] = [];
+    const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
     let boardChanged: Parameters<OpenClawPluginGatewayEvents["onSessionsChanged"]>[0] | undefined;
     const emit = vi.fn();
     const unsubscribe = vi.fn();
@@ -686,14 +678,17 @@ describe("Browser dashboard lifetime", () => {
             openKeyedStore: (options: OpenKeyedStoreOptions) =>
               createPluginStateKeyedStoreForTests("browser", options),
           },
-          gateway: { isAvailable: async () => true, request: fixture.readBoard },
+          gateway: fixture.gateway,
         } as unknown as PluginRuntime,
         registerService: (value) => {
           services.push(value);
         },
       }),
     );
-    const context: OpenClawPluginServiceContext = {
+    const scheduler = createTestPluginServiceScheduler();
+    onTestFinished(() => scheduler.stop());
+    const context: OpenClawPluginServiceContextV2 = {
+      scheduler,
       config: {},
       stateDir: fixture.stateDir,
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
@@ -803,39 +798,24 @@ describe("Browser dashboard lifetime", () => {
     expect(fixture.tabs).toEqual([]);
   });
 
-  it.each(["removed", "replaced", "url-changed", "caller-aborted"] as const)(
-    "compensates an open when %s races browser creation",
-    async (kind) => {
-      const started = createDeferred<void>();
-      const finish = createDeferred<void>();
-      browser.open.mockImplementationOnce(async () => {
-        started.resolve();
-        await finish.promise;
-        return fixture.openedTab();
-      });
-      const controller = new AbortController();
-      const pending = requestBrowserDashboard(request, { signal: controller.signal });
-      const rejected = expect(pending).rejects.toThrow();
-      await started.promise;
-      if (kind === "removed") {
-        fixture.widgets = [];
-      }
-      if (kind === "replaced") {
-        fixture.widgets[0]!.instanceId = "instance-two";
-      }
-      if (kind === "url-changed") {
-        fixture.widgets[0]!.props.url = "http://other.example/";
-      }
-      if (kind === "caller-aborted") {
-        controller.abort(new Error("caller aborted"));
-      }
-      finish.resolve();
-      await rejected;
-      expect(fixture.tabs).toEqual([]);
-      expect(await readBrowserDashboardTabs()).toEqual([]);
-      expect(browser.closeOwned).toHaveBeenCalledOnce();
-    },
-  );
+  it("compensates an open when widget replacement races browser creation", async () => {
+    const started = createDeferred<void>();
+    const finish = createDeferred<void>();
+    browser.open.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      return fixture.openedTab();
+    });
+    const pending = requestBrowserDashboard(request);
+    const rejected = expect(pending).rejects.toThrow();
+    await started.promise;
+    fixture.widgets[0]!.instanceId = "instance-two";
+    finish.resolve();
+    await rejected;
+    expect(fixture.tabs).toEqual([]);
+    expect(await readBrowserDashboardTabs()).toEqual([]);
+    expect(browser.closeOwned).toHaveBeenCalledOnce();
+  });
 
   it("bounds retained-tab materialization while reconciling unrelated dashboard removals", async () => {
     const store = getBrowserSessionTabStore();

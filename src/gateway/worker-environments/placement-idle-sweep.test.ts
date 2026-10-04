@@ -1,20 +1,21 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
+import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { coordinateWorkerPlacementDispatch } from "./placement-dispatch-coordinator.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementIdleSweep } from "./placement-idle-sweep.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 
-const tempDirs = createTempDirTracker();
+const tempDirs = useStateDatabaseTempDirs();
 
 describe("worker placement idle suspension", () => {
   let nowMs: number;
@@ -27,11 +28,7 @@ describe("worker placement idle suspension", () => {
     database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database, now: () => nowMs });
   });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    tempDirs.cleanup();
-  });
+  afterEach(() => vi.restoreAllMocks());
 
   function createIdleFixture(
     options: {
@@ -105,7 +102,16 @@ describe("worker placement idle suspension", () => {
     const active = await harness.service.dispatch(REQUEST);
 
     nowMs += 59_999;
-    await idleSweep.sweep();
+    const sql = observeHostDataSql();
+    try {
+      expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
+      expect(sql.queries.length).toBeGreaterThan(0);
+      const beforeSweep = sql.queries.length;
+      await idleSweep.sweep();
+      expect(sql.queries.slice(beforeSweep)).toEqual([]);
+    } finally {
+      sql.restore();
+    }
     expect(placements.get(REQUEST.sessionId)?.state).toBe("active");
     expect(harness.environments.destroy).not.toHaveBeenCalled();
 
@@ -242,14 +248,14 @@ describe("worker placement idle suspension", () => {
           },
         });
         if (kind === "pending-result") {
-          placements.markWorkspaceResultPending(claim);
+          await placements.markWorkspaceResultPending(claim);
           placements.clearLocalTurnClaimsAfterRestart();
           expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
-          expect(placements.listPendingWorkspaceResults()).toHaveLength(1);
+          expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
         }
       } else if (kind === "reconciling-result") {
         const basePack = Buffer.from("idle workspace journal");
-        placements.beginWorkspaceReconciliation(
+        await placements.beginWorkspaceReconciliation(
           {
             sessionId: active.sessionId,
             environmentId: active.environmentId,
@@ -270,7 +276,7 @@ describe("worker placement idle suspension", () => {
         );
         expect(placements.get(REQUEST.sessionId)?.turnClaim).toBeNull();
       } else if (kind === "draining") {
-        placements.startDrain({
+        await placements.startDrain({
           sessionId: active.sessionId,
           environmentId: active.environmentId,
           ownerEpoch: active.activeOwnerEpoch,
@@ -314,6 +320,35 @@ describe("worker placement idle suspension", () => {
     expect(info).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
   });
+
+  it.each(["transaction", "commit"] as const)(
+    "rechecks idle policy at drain %s admission",
+    async (stage) => {
+      const { harness, idleSweep, profile, info, warn } = createIdleFixture({
+        getSessionWorkAdmissionCheck: async () => () => false,
+      });
+      const active = await harness.service.dispatch(REQUEST);
+      nowMs += 60_000;
+      const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+        (admit, attachment) =>
+          createAdmission((request, grant) => {
+            if (request.stage === stage) {
+              profile.suspendAfter = undefined;
+            }
+            admit(request, grant);
+          }, attachment),
+      );
+      await idleSweep.sweep();
+      expect(placements.get(REQUEST.sessionId)).toMatchObject({
+        state: "active",
+        generation: active.generation,
+      });
+      expect(harness.environments.destroy).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+      expect(warn).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["activity", "disabled policy", "longer timeout"])(
     "rechecks %s after delayed automatic reclaim preparation",

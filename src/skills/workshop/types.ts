@@ -2,6 +2,7 @@ import type {
   SkillProposalEvaluation as ProtocolSkillProposalEvaluation,
   SkillProposalLifecycleEvent,
   SkillsProposalCreateParams,
+  SkillsProposalEventsListResult,
   SkillsProposalRecordResult,
   SkillsProposalsListResult,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
@@ -123,6 +124,8 @@ type SkillProposalContext = {
 };
 
 export type SkillProposalCreateInput = SkillProposalContext & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   name: string;
   description: string;
   content: string;
@@ -152,6 +155,8 @@ export type SkillProposalUpdateInput = Omit<
 };
 
 export type SkillProposalReviseInput = SkillProposalRevisionInput & {
+  /** Caller-owned synchronous authority for draft bytes and metadata publication. */
+  assertCommitAllowed?: () => void;
   content?: string;
   supportFiles?: SkillProposalSupportFileInput[];
   description?: string;
@@ -181,10 +186,7 @@ export type SkillProposalEventsListInput = {
   limit?: number;
 };
 
-export type SkillProposalEventsListResult = {
-  events: SkillProposalEvent[];
-  nextSequence?: number;
-};
+export type SkillProposalEventsListResult = SkillsProposalEventsListResult;
 
 export type SkillProposalReadResult = {
   record: SkillProposalRecord;

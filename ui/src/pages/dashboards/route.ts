@@ -2,18 +2,14 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
+import type { SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import {
   isUiGlobalScopeConfigured,
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
-import { dashboardSessionListQuery as dashboardSessionListQueryForAgent } from "../../lib/sessions/session-requests.ts";
+import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
 import type { DashboardsRouteData } from "./view.ts";
-
-export function dashboardSessionListQuery(context: ApplicationContext): SessionListOptions {
-  return dashboardSessionListQueryForAgent(context.agentSelection.state.scopeId);
-}
 
 export function dashboardsRouteData(
   context: ApplicationContext,
@@ -36,10 +32,10 @@ export function dashboardsRouteData(
 }
 
 async function loadDashboardsRoute(context: ApplicationContext): Promise<DashboardsRouteData> {
-  const query = dashboardSessionListQuery(context);
+  const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
   let snapshot = context.sessions.listSnapshot(query);
   if (!snapshot.result && !snapshot.loading) {
-    await context.sessions.refreshList({ ...query, force: true });
+    await context.sessions.refreshList(query);
     snapshot = context.sessions.listSnapshot(query);
   }
   return dashboardsRouteData(context, snapshot);

@@ -15,6 +15,9 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
+/** An accepted visible work session and its canonical Control UI link. */
+export type VisibleWorkSession = { sessionKey: string; url: string; label?: string };
+
 /** A successful runtime append, independent of optional active-path projection anchors. */
 export type ReplyDispatchAssistantTranscript = Pick<
   TranscriptEntryAnchor,
@@ -122,7 +125,7 @@ export type PartialReplyPayload = {
   replace?: true;
 };
 
-type ReasoningStreamPayload = Pick<
+export type ReasoningStreamPayload = Pick<
   ReplyPayload,
   "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
 > & {
@@ -170,6 +173,8 @@ export type GetReplyOptions = {
   ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
+  /** Reports visible work sessions this agent run spawned, in acceptance order. */
+  onVisibleWorkSessions?: (sessions: readonly VisibleWorkSession[]) => void;
   /**
    * Canonical adoption lifecycle (adopted / deferred / abandoned / settled + pre-adoption abort).
    */
@@ -187,6 +192,8 @@ export type GetReplyOptions = {
   /** If false, send only the initial typing signal without periodic keepalive refreshes. */
   typingKeepalive?: boolean;
   isHeartbeat?: boolean;
+  /** Wording only; heartbeat visibility/suppression semantics stay on isHeartbeat. */
+  useHeartbeatFailureCopy?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */

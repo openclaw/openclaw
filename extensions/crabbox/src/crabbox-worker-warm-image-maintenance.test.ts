@@ -1,16 +1,40 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
+import { openWarmImageStore } from "./crabbox-state.test-support.js";
+import { commandResult } from "./crabbox-worker-provider.test-support.js";
 import type { WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
 import {
-  commandResult,
   createWarmProvider,
   managedBinary,
-  openWarmImageStore,
   provisionWarmProfile,
   PROFILE,
 } from "./crabbox-worker-warm-image.test-support.js";
 
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
+const REFRESH_MS = 24 * 60 * 60 * 1_000;
+const captureUnsupported = (atMs: number) => ({
+  atMs,
+  provider: "hetzner",
+  message: "Native capture is unsupported by this coordinator",
+});
+const retainedColdProfile = (atMs: number): WarmProfileRecord => ({
+  version: 3,
+  captureUnsupported: captureUnsupported(atMs),
+  allocations: {
+    cbx_retained: {
+      choice: { kind: "cold" },
+      machineClass: "standard",
+      phase: "pending",
+      preparationKey: null,
+      cacheKey: null,
+      purpose: null,
+      demandAtMs: null,
+      imageGeneration: null,
+    },
+  },
+});
 const context = () => ({
   profiles: [PROFILE],
   signal: new AbortController().signal,
@@ -40,13 +64,100 @@ const expiredImage = (id: string): WarmProfileRecord => ({
 });
 
 describe("Crabbox idle image maintenance", () => {
+  it.each([REFRESH_MS - 1, REFRESH_MS])(
+    "retains a cold-only profile after its last release only while its refusal is active (age=%i)",
+    async (age) => {
+      const now = 2 * REFRESH_MS;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const { provider, calls } = createWarmProvider();
+      const store = openWarmImageStore();
+      const record = retainedColdProfile(now - age);
+      store.register("retained", record);
+
+      await provider.destroy({
+        leaseId: "cbx_retained",
+        profile: { ...PROFILE, warmImage: false },
+      });
+
+      expect(store.lookup("retained")).toEqual(
+        age < REFRESH_MS ? { ...record, allocations: {} } : undefined,
+      );
+      expect(calls.map(({ argv }) => argv[1])).toEqual(["stop"]);
+    },
+  );
+
+  it("collects expired marker-only profiles without deleting active markers or allocation owners", async () => {
+    const now = 2 * REFRESH_MS;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const { provider, calls } = createWarmProvider();
+    const store = openWarmImageStore();
+    const held = retainedColdProfile(now - REFRESH_MS);
+    const active = {
+      version: 3 as const,
+      allocations: {},
+      captureUnsupported: captureUnsupported(now),
+    };
+    store.register("retained", held);
+    store.register("active", active);
+    store.register("expired", {
+      version: 3,
+      allocations: {},
+      captureUnsupported: captureUnsupported(now - REFRESH_MS),
+    });
+
+    await provider.maintain!(context());
+
+    expect(store.lookup("expired")).toBeUndefined();
+    expect(store.lookup("active")).toEqual(active);
+    expect(store.lookup("retained")).toEqual(held);
+    expect(calls).toEqual([]);
+  });
+
+  it.each([
+    { fixture: "marker-only", withImage: false },
+    { fixture: "image and marker", withImage: true },
+  ])(
+    "frees a capacity slot held by a retained refusal ($fixture) to admit an allocation",
+    async ({ withImage }) => {
+      const now = 2 * REFRESH_MS;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const { provider, calls } = createWarmProvider();
+      const store = openWarmImageStore();
+      for (let index = 0; index < 128; index += 1) {
+        store.register(`cold-only-${index}`, {
+          version: 3,
+          allocations: {},
+          captureUnsupported: captureUnsupported(now),
+          ...(withImage
+            ? {
+                image: {
+                  ...expiredImage(`chk_refused_${index}`).image!,
+                  createdAtMs: now - 3_600_000,
+                  lastDemandAtMs: now - 3_600_000,
+                },
+              }
+            : {}),
+        });
+      }
+
+      const lease = await provisionWarmProfile(provider);
+
+      expect(store.entries()).toHaveLength(128);
+      expect(store.entries().filter(({ value }) => value.captureUnsupported)).toHaveLength(127);
+      expect(store.entries().some(({ value }) => value.allocations[lease.leaseId])).toBe(true);
+      expect(
+        calls.filter(({ argv }) => argv[1] === "checkpoint").map(({ argv }) => argv.slice(1)),
+      ).toEqual(withImage ? [["checkpoint", "delete", "chk_refused_0"]] : []);
+    },
+  );
+
   it("deletes expired images through a healthy binary when another acquisition fails", async () => {
     const { provider, calls, warn } = createWarmProvider();
     vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
       if (params?.binary === "/opt/b/crabbox") {
         throw new Error("fixture binary acquisition unavailable");
       }
-      return { binary: params?.binary ?? "crabbox", version: "0.55.0" };
+      return { binary: params?.binary ?? "crabbox", version: "999.0.0" };
     });
     const store = openWarmImageStore();
     store.register("expired", expiredImage("chk_expired"));
@@ -77,7 +188,7 @@ describe("Crabbox idle image maintenance", () => {
     expect(store.lookup("expired")).toEqual(expired);
   });
 
-  it.each(["scrubbing", "creating", "uncertain"] as const)(
+  it.each(["creating", "uncertain"] as const)(
     "preserves ownership and pins while reporting an old %s capture",
     async (phase) => {
       const { provider, calls, warn } = createWarmProvider();
@@ -135,26 +246,6 @@ describe("Crabbox idle image maintenance", () => {
       }
     },
   );
-
-  it("retains failed deletion for a later idle sweep", async () => {
-    let fails = true;
-    const { provider, warn } = createWarmProvider(({ argv }) =>
-      argv[2] === "delete" && fails
-        ? commandResult({ code: 7, stderr: "fixture deletion unavailable" })
-        : undefined,
-    );
-    const store = openWarmImageStore();
-    store.register("expired", expiredImage("chk_expired"));
-    await provider.maintain!(context());
-    expect(store.lookup("expired")?.operation).toEqual({
-      type: "retire",
-      checkpointId: "chk_expired",
-    });
-    expect(warn).toHaveBeenCalledOnce();
-    fails = false;
-    await provider.maintain!(context());
-    expect(store.lookup("expired")).toBeUndefined();
-  });
 
   it("reports paused captures once per ownership snapshot without attempting capture", async () => {
     const { provider, calls, warn } = createWarmProvider();
@@ -269,9 +360,18 @@ describe("Crabbox idle image maintenance", () => {
       expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv)).toEqual([
         ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
       ]);
-      const replacement = createWarmProvider(undefined, stateDir);
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const replacement = createWarmProvider(
+        () => commandResult({ stdout: "checkpoint absent id=chk_expired\n" }),
+        stateDir,
+      );
       await replacement.provider.maintain!(context());
-      expect(store.lookup("expired")).toBeUndefined();
+      expect(openWarmImageStore().lookup("expired")).toBeUndefined();
+      await replacement.provider.maintain!(context());
+      expect(replacement.calls.map(({ argv }) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_expired"],
+      ]);
       if (boundary !== "authority") {
         expect(stopped).toBe(true);
         expect(() => provider.maintain!(context())).toThrow();
@@ -313,7 +413,11 @@ describe("Crabbox idle image maintenance", () => {
   it.each(["exit", "command"])(
     "retains a deletion after a first-executable %s error without consulting another catalog",
     async (failure) => {
+      let fails = true;
       const { provider, calls, warn } = createWarmProvider(() => {
+        if (!fails) {
+          return commandResult({ stdout: "checkpoint absent id=chk_expired\n" });
+        }
         if (failure === "command") {
           throw new Error("fixture command unavailable");
         }
@@ -335,6 +439,14 @@ describe("Crabbox idle image maintenance", () => {
       ]);
       expect(warn).toHaveBeenCalledOnce();
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("deletion obligation retained"));
+      fails = false;
+      calls.length = 0;
+      await provider.maintain!(context());
+      expect(store.lookup("expired")).toBeUndefined();
+      expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
+        ["checkpoint", "delete", "chk_expired"],
+      ]);
+      expect(warn).toHaveBeenCalledOnce();
     },
   );
 
@@ -349,6 +461,11 @@ describe("Crabbox idle image maintenance", () => {
       });
       const store = openWarmImageStore();
       store.register("expired", expiredImage("chk_expired"));
+      store.register("expired-cold-only", {
+        version: 3,
+        allocations: {},
+        captureUnsupported: captureUnsupported(now - REFRESH_MS),
+      });
 
       await provider.maintain!(mixedContext());
 
@@ -362,44 +479,29 @@ describe("Crabbox idle image maintenance", () => {
       );
       if (elapsed < 60_000) {
         expect(store.lookup("expired")).toBeUndefined();
+        expect(store.lookup("expired-cold-only")).toBeUndefined();
       } else {
         expect(store.lookup("expired")?.operation).toEqual({
           type: "retire",
           checkpointId: "chk_expired",
         });
+        expect(store.lookup("expired-cold-only")?.captureUnsupported).toBeDefined();
       }
       expect(warn).not.toHaveBeenCalled();
     },
   );
 
-  it.each(["", "checkpoint absent id=chk_expired_other\n"])(
-    "accepts successful deletion without an exact absent line: %j",
-    async (stdout) => {
-      const { provider, calls, warn } = createWarmProvider(() => commandResult({ stdout }));
-      const store = openWarmImageStore();
-      store.register("expired", expiredImage("chk_expired"));
-
-      await provider.maintain!(mixedContext());
-
-      expect(calls.map(({ argv }) => argv)).toEqual([
-        ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
-      ]);
-      expect(store.lookup("expired")).toBeUndefined();
-      expect(warn).not.toHaveBeenCalled();
-    },
-  );
-
-  it("clears an absent checkpoint after one successful single-executable command", async () => {
+  it("does not confuse another checkpoint's absence with the deletion result", async () => {
     const { provider, calls, warn } = createWarmProvider(() =>
-      commandResult({ stdout: "checkpoint absent id=chk_expired\n" }),
+      commandResult({ stdout: "checkpoint absent id=chk_expired_other\n" }),
     );
     const store = openWarmImageStore();
     store.register("expired", expiredImage("chk_expired"));
 
-    await provider.maintain!(context());
+    await provider.maintain!(mixedContext());
 
-    expect(calls.map(({ argv }) => argv.slice(1))).toEqual([
-      ["checkpoint", "delete", "chk_expired"],
+    expect(calls.map(({ argv }) => argv)).toEqual([
+      ["/opt/a/crabbox", "checkpoint", "delete", "chk_expired"],
     ]);
     expect(store.lookup("expired")).toBeUndefined();
     expect(warn).not.toHaveBeenCalled();

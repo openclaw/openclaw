@@ -1,8 +1,8 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
+  SpeechDirectiveTokenParseResult,
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
@@ -30,18 +30,9 @@ const OPENAI_SPEECH_RESPONSE_FORMATS = ["mp3", "opus", "wav"] as const;
 
 type OpenAiSpeechResponseFormat = (typeof OPENAI_SPEECH_RESPONSE_FORMATS)[number];
 
-type OpenAITtsProviderConfig = {
-  apiKey?: string;
-  baseUrl: string;
-  model: string;
-  voice: string;
-  speed?: number;
-  instructions?: string;
-  responseFormat?: OpenAiSpeechResponseFormat;
-  extraBody?: Record<string, unknown>;
-};
-
-function resolveOpenAISpeechApiKey(config: OpenAITtsProviderConfig): string | undefined {
+function resolveOpenAISpeechApiKey(
+  config: Partial<Pick<ReturnType<typeof normalizeOpenAIProviderConfig>, "apiKey">>,
+): string | undefined {
   return (
     normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.OPENAI_API_KEY)
   );
@@ -62,12 +53,8 @@ function normalizeOpenAISpeechResponseFormat(
 }
 
 function isGroqSpeechBaseUrl(baseUrl: string): boolean {
-  try {
-    const hostname = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    return hostname === "groq.com" || hostname.endsWith(".groq.com");
-  } catch {
-    return false;
-  }
+  const hostname = normalizeLowercaseStringOrEmpty(URL.parse(baseUrl)?.hostname);
+  return hostname === "groq.com" || hostname.endsWith(".groq.com");
 }
 
 function resolveSpeechResponseFormat(
@@ -103,9 +90,7 @@ function normalizeOpenAISpeechSpeed(value: unknown, baseUrl?: string): number | 
   return speed >= 0.25 && speed <= 4 ? speed : undefined;
 }
 
-function normalizeOpenAIProviderConfig(
-  rawConfig: Record<string, unknown>,
-): OpenAITtsProviderConfig {
+function normalizeOpenAIProviderConfig(rawConfig: Record<string, unknown>) {
   const raw = resolveOpenAIProviderConfigRecord(rawConfig);
   const extraBody = readExtraBody(raw?.extraBody) ?? readExtraBody(raw?.extra_body);
   const baseUrl = normalizeOpenAITtsBaseUrl(
@@ -128,7 +113,7 @@ function normalizeOpenAIProviderConfig(
   };
 }
 
-function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProviderConfig {
+function readOpenAIProviderConfig(config: SpeechProviderConfig) {
   const normalized = normalizeOpenAIProviderConfig({});
   return {
     apiKey: normalizeOptionalString(config.apiKey) ?? normalized.apiKey,
@@ -147,11 +132,9 @@ function readOpenAIProviderConfig(config: SpeechProviderConfig): OpenAITtsProvid
   };
 }
 
-function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
-  handled: boolean;
-  overrides?: SpeechProviderOverrides;
-  warnings?: string[];
-} {
+function parseDirectiveToken(
+  ctx: SpeechDirectiveTokenParseContext,
+): SpeechDirectiveTokenParseResult {
   const baseUrl = normalizeOptionalString(asOptionalRecord(ctx.providerConfig)?.baseUrl);
   switch (ctx.key) {
     case "voice":

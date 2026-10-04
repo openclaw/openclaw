@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   projectQaEvidenceScenarioOutcomes,
-  type QaEvidenceSummaryJson,
   type QaEvidenceSummaryV3Json,
 } from "./evidence-summary.js";
 import type { QaLabServerHandle } from "./lab-server.types.js";
@@ -14,7 +13,7 @@ import {
 import * as scenarioCatalog from "./scenario-catalog.js";
 import { runQaFlowSuiteFromRuntime } from "./suite-run.runtime.js";
 import { runQaRuntimeParitySuite } from "./suite-runtime-parity-runner.js";
-import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
+import { makeQaSuiteTestScenario, recordQaSuiteTestResults } from "./suite-test-helpers.js";
 import type { QaSuiteRunner, QaSuiteScenarioRunner } from "./suite-types.js";
 import * as suite from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -60,7 +59,7 @@ const mocks = vi.hoisted(() => ({
       channel?: string | null;
       channelDriver?: string | null;
       transportArtifacts?: unknown;
-      recordedEvidence?: QaEvidenceSummaryJson;
+      recordedEvidence: QaEvidenceSummaryV3Json;
     }) => ({
       evidence: _params.recordedEvidence,
       evidencePath: "/qa-output/qa-evidence.json",
@@ -229,7 +228,11 @@ function createCleanupTestChild(
     reportPath: "/qa-child/qa-suite-report.md",
     summaryPath: "/qa-child/qa-suite-summary.json",
     report: "",
-    scenarios: [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+    ...recordQaSuiteTestResults(
+      params,
+      [makeQaSuiteTestScenario("runtime-cleanup")],
+      [{ name: "runtime-cleanup", status: "pass", steps: [] }],
+    ),
     startedScenarioIds,
     watchUrl: lab.baseUrl,
     runtimeParityCell: {

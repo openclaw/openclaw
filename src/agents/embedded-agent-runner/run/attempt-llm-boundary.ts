@@ -1,13 +1,21 @@
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
-import type { ImageContent } from "../../../llm/types.js";
+import {
+  hasLegacyRuntimeContextEnvelope,
+  RUNTIME_CONTEXT_BEGIN_MARKER,
+  RUNTIME_CONTEXT_END_MARKER,
+  type ImageContent,
+  type UserMessage,
+} from "../../../llm/types.js";
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
 import {
   escapeInternalRuntimeContextDelimiters,
+  isOpenClawSystemUpdateMessage,
   OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE,
+  projectRuntimeContextFragments,
   resolveRuntimeContextPromptOwner,
   retainRuntimeContextMessageForPrompt,
   stripHistoricalRuntimeContextCustomMessages,
@@ -28,8 +36,7 @@ import {
   type UserTranscriptContext,
 } from "./attempt-history.js";
 import {
-  buildRuntimeContextMessageContent,
-  projectRuntimeContextFragments,
+  materializeSteeringRuntimeContext,
   type RuntimeContextCustomMessage,
 } from "./runtime-context-prompt.js";
 
@@ -43,15 +50,21 @@ const runtimeContextDetailsSchema = z.object({
     }),
   ),
 });
+const systemUpdateDetailsSchema = z.object({
+  kind: z.enum(["prompt-update", "runtime-context"]),
+  turnScoped: z.boolean(),
+});
 
 type LlmBoundaryOptions = {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  inHistorySystemUpdates?: boolean;
   timezone?: string;
   includeTimestamp?: boolean;
   projectPersistedSenderContext?: boolean;
   userTranscriptContexts?: readonly UserTranscriptContext[];
   currentUserTimestampOverride?: CurrentUserTimestampMatch;
+  onRuntimeContextCarrierRemoved?: (removed: AgentMessage[]) => void;
 };
 
 /** A session keeps its model projection across replay and process restarts. */
@@ -65,16 +78,40 @@ export function usesEscapedRuntimeContext(sessionVersion?: number): boolean {
   throw new Error(`Unsupported session prompt projection version: ${sessionVersion}`);
 }
 
-function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[] {
+function projectRuntimeContextMessages(
+  messages: AgentMessage[],
+  options?: LlmBoundaryOptions,
+): AgentMessage[] {
+  const escape = usesEscapedRuntimeContext(options?.sessionVersion);
   return messages.map((message) => {
+    if (message.role === "custom" && isOpenClawSystemUpdateMessage(message)) {
+      const details = systemUpdateDetailsSchema.safeParse(message.details);
+      if (details.success) {
+        const projected: UserMessage = {
+          role: "user",
+          content: message.content,
+          timestamp: message.timestamp,
+        };
+        if (options?.inHistorySystemUpdates) {
+          projected.operatorMessage = { turnScoped: details.data.turnScoped };
+        }
+        return projected;
+      }
+    }
+    if (!escape || (message.role === "user" && message.operatorMessage)) {
+      return message;
+    }
     if (message.role === "custom" && message.customType === OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE) {
       const details = runtimeContextDetailsSchema.safeParse(message.details);
       if (details.success) {
+        const projected = projectRuntimeContextFragments(details.data.fragments);
         return {
           ...message,
-          content: buildRuntimeContextMessageContent(
-            projectRuntimeContextFragments(details.data.fragments),
-          ),
+          content:
+            typeof message.content === "string" && hasLegacyRuntimeContextEnvelope(message.content)
+              ? `${RUNTIME_CONTEXT_BEGIN_MARKER}\n${projected}\n${RUNTIME_CONTEXT_END_MARKER}`
+              : projected,
+          details: details.data,
         };
       }
     }
@@ -92,7 +129,7 @@ function projectRuntimeContextMessages(messages: AgentMessage[]): AgentMessage[]
                 })
               : block,
           );
-    return { ...message, content: projected };
+    return Object.assign({}, message, { content: projected });
   });
 }
 
@@ -110,7 +147,9 @@ export function normalizeMessagesForLlmBoundary(
   options?: LlmBoundaryOptions,
 ): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
-    stripToolResultDetails(normalizeAssistantReplayContent(messages)),
+    stripToolResultDetails(
+      normalizeAssistantReplayContent(materializeSteeringRuntimeContext(messages)),
+    ),
   );
   const userTranscriptMessages = resolveUserTranscriptMessages(
     normalized,
@@ -123,17 +162,23 @@ export function normalizeMessagesForLlmBoundary(
       ? normalizedUserMessages
       : projectPersistedSenderContext(normalizedUserMessages, userTranscriptMessages);
   // Prefix-bound thinking must replay every earlier carrier in its original position.
-  const retained = options?.appendOnlyRuntimeContext
-    ? withPersistedSenderContext
-    : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
-  return usesEscapedRuntimeContext(options?.sessionVersion)
-    ? projectRuntimeContextMessages(retained)
-    : retained;
+  const retained =
+    options?.appendOnlyRuntimeContext || options?.inHistorySystemUpdates
+      ? withPersistedSenderContext
+      : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+  if (retained.length < withPersistedSenderContext.length) {
+    const retainedMessages = new Set(retained);
+    options?.onRuntimeContextCarrierRemoved?.(
+      withPersistedSenderContext.filter((message) => !retainedMessages.has(message)),
+    );
+  }
+  return projectRuntimeContextMessages(retained, options);
 }
 
 type CurrentPromptBoundaryInput = {
   sessionVersion?: number;
   appendOnlyRuntimeContext?: boolean;
+  inHistorySystemUpdates?: boolean;
   prompt: string;
   timezone?: string;
   includeTimestamp?: boolean;
@@ -170,6 +215,7 @@ function buildCurrentPromptBoundaryInput(params: CurrentPromptBoundaryInput): {
   const options: LlmBoundaryOptions = {
     sessionVersion: params.sessionVersion,
     appendOnlyRuntimeContext: params.appendOnlyRuntimeContext,
+    inHistorySystemUpdates: params.inHistorySystemUpdates,
     ...(params.timezone ? { timezone: params.timezone } : {}),
     ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
     ...(params.currentUserTranscriptMessage
@@ -306,34 +352,29 @@ function replaceUserTextPrompt(params: {
     return params.messages;
   }
   const content = (message as { content?: unknown }).content;
+  let nextContent: unknown;
   if (typeof content === "string") {
-    const replacement = params.replace(content);
-    if (replacement === undefined) {
+    nextContent = params.replace(content);
+    if (nextContent === undefined) {
       return params.messages;
     }
-    const next = params.messages.slice();
-    next[userIndex] = { ...message, content: replacement } as AgentMessage;
-    if (params.transcriptText !== undefined) {
-      markTranscriptPromptText(next[userIndex], params.transcriptText);
+  } else if (Array.isArray(content)) {
+    let replaced = false;
+    nextContent = content.map((block) => {
+      if (replaced || !isUserTextBlock(block)) {
+        return block;
+      }
+      const replacement = params.replace(block.text);
+      if (replacement === undefined) {
+        return block;
+      }
+      replaced = true;
+      return Object.assign({}, block, { text: replacement });
+    });
+    if (!replaced) {
+      return params.messages;
     }
-    return next;
-  }
-  if (!Array.isArray(content)) {
-    return params.messages;
-  }
-  let replaced = false;
-  const nextContent = content.map((block) => {
-    if (replaced || !isUserTextBlock(block)) {
-      return block;
-    }
-    const replacement = params.replace(block.text);
-    if (replacement === undefined) {
-      return block;
-    }
-    replaced = true;
-    return Object.assign({}, block, { text: replacement });
-  });
-  if (!replaced) {
+  } else {
     return params.messages;
   }
   const next = params.messages.slice();
@@ -513,7 +554,7 @@ function normalizeUserMessagesForLlmBoundary(
   }
   let changed = false;
   const nextMessages = messages.map((message, index) => {
-    if (message.role !== "user") {
+    if (message.role !== "user" || message.operatorMessage) {
       return message;
     }
     const content = (message as { content?: unknown }).content;
@@ -521,7 +562,10 @@ function normalizeUserMessagesForLlmBoundary(
     const isActive =
       index === activeUserMessageIndex ||
       (promptUserMessageIndex >= 0 && index >= promptUserMessageIndex);
-    const preserveInboundMetadata = isActive || options?.appendOnlyRuntimeContext === true;
+    const preserveInboundMetadata =
+      isActive ||
+      options?.appendOnlyRuntimeContext === true ||
+      options?.inHistorySystemUpdates === true;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
     const useCurrentUserTimestampOverride =

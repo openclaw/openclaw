@@ -39,11 +39,13 @@ export type WorkerInferenceCancellation = {
   }): Promise<string[]>;
 };
 
-type WorkerInferenceSessionControl = {
-  reserveDrain: (sessionId: string) => WorkerInferenceSessionDrainReservation;
-  captureCancel: (sessionId: string, runId?: string) => WorkerInferenceCancellation;
-  resolveTarget: (runId: string) => BoundAgentRunSessionTarget | undefined;
-};
+type WorkerInferenceSessionControl = Pick<
+  ReturnType<typeof createWorkerInferenceSessionControls>,
+  | "hasSession"
+  | "reserveSessionDrain"
+  | "captureSessionCancellation"
+  | "resolveSessionTargetForRunId"
+>;
 
 // Session lifecycle needs a stronger control without widening the inferred public service shape.
 // The weak registration follows the concrete service instance's lifetime.
@@ -56,35 +58,13 @@ export function registerWorkerInferenceSessionControl(
   sessionControlByService.set(service, control);
 }
 
-export function reserveWorkerInferenceSessionDrain(
+export function getWorkerInferenceSessionControl(
   service: unknown,
-  sessionId: string,
-): WorkerInferenceSessionDrainReservation | undefined {
+): WorkerInferenceSessionControl | undefined {
   if (typeof service !== "object" || service === null) {
     return undefined;
   }
-  return sessionControlByService.get(service)?.reserveDrain(sessionId);
-}
-
-export function captureWorkerInferenceCancellation(
-  service: unknown,
-  sessionId: string,
-  runId?: string,
-): WorkerInferenceCancellation | undefined {
-  if (typeof service !== "object" || service === null) {
-    return undefined;
-  }
-  return sessionControlByService.get(service)?.captureCancel(sessionId, runId);
-}
-
-export function resolveWorkerInferenceTarget(
-  service: unknown,
-  runId: string,
-): BoundAgentRunSessionTarget | undefined {
-  if (typeof service !== "object" || service === null) {
-    return undefined;
-  }
-  return sessionControlByService.get(service)?.resolveTarget(runId);
+  return sessionControlByService.get(service);
 }
 
 export function safeRevalidate(
@@ -155,6 +135,7 @@ export function preserveInferenceAuthorityFailure(
 export async function joinInferenceOperations(
   operations: Iterable<Promise<unknown>>,
   retainedFailures: Iterable<unknown> = [],
+  aggregateMessage = "Worker inference settlement failed",
 ): Promise<void> {
   const results = await Promise.allSettled(operations);
   const errors = [
@@ -167,7 +148,7 @@ export async function joinInferenceOperations(
     throw errors[0];
   }
   if (errors.length > 1) {
-    throw new AggregateError(errors, "Worker inference settlement failed");
+    throw new AggregateError(errors, aggregateMessage);
   }
 }
 

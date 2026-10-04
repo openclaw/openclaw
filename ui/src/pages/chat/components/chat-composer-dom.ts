@@ -310,12 +310,14 @@ export function adjustTextareaHeight(
       thread.scrollTop = thread.scrollHeight;
     }
     const after = thread.scrollTop;
-    if (thread.clientHeight === threadHeight && after === scrollPosition?.scrollTop) {
+    const clientHeight = thread.clientHeight;
+    if (clientHeight === threadHeight && after === scrollPosition?.scrollTop) {
       return;
     }
     // A following composer commit can hide this viewport from browser observers.
     publishTranscriptScroll(thread, {
       type: "resize",
+      viewport: { clientHeight, scrollHeight: thread.scrollHeight, scrollTop: after },
       ...(scrollPosition?.anchorToEnd && scrollPosition.scrollTop !== after
         ? { scrollCorrection: { before: scrollPosition.scrollTop, after } }
         : {}),
@@ -442,7 +444,13 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
   if (!connected) {
     return;
   }
-  if (target.closest(COMPOSER_CHROME_INTERACTIVE_SELECTOR)) {
+  // A menu action can replace its clicked row before this bubbling listener.
+  // The dispatch path still records that the interaction belonged to a control.
+  if (
+    event
+      .composedPath()
+      .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR))
+  ) {
     return;
   }
   const currentTarget = event.currentTarget;

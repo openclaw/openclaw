@@ -4,7 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { setUserPreferences } from "../../state/user-preferences.js";
+import { setCanonicalUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { pushHandlers } from "./push.js";
 
@@ -35,18 +35,37 @@ vi.mock("../../infra/push-web.js", () => ({
   clearBoundWebPushSubscription: vi.fn(),
   withBoundWebPushSubscriptionByEndpoint: async <T>(
     params: { endpoint: string },
-    prepare: (subscription: BoundWebPushSubscription | null) => { start: () => T } | undefined,
-  ) => prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params))?.start(),
+    prepare: (
+      subscription: BoundWebPushSubscription | null,
+    ) => { start: () => T } | undefined | Promise<{ start: () => T } | undefined>,
+  ) => (await prepare(await mocks.findBoundWebPushSubscriptionByEndpoint(params)))?.start(),
   registerWebPushSubscription: vi.fn(),
   resolveVapidKeys: vi.fn(),
   setWebPushSubscriptionPreferences: vi.fn(),
 }));
 
 vi.mock("../../state/user-preferences.js", () => ({
-  getUserPreferences: vi.fn(() => ({})),
-  setUserPreferences: vi.fn(() => ({ ok: true })),
+  getCanonicalUserPreferences: vi.fn(async () => ({ profileId: "profile-owner", entries: {} })),
+  setCanonicalUserPreferences: vi.fn(async () => ({
+    ok: true,
+    value: { profileId: "profile-owner" },
+  })),
 }));
 
+vi.mock("../../state/user-channel-identity-operations.js", () => ({
+  prepareUserProfileSelectionAuthority: vi.fn(async (id: string) => {
+    const profileId = resolveUserProfileId(id);
+    return profileId
+      ? { profileId, isCurrent: () => resolveUserProfileId(id) === profileId }
+      : undefined;
+  }),
+}));
+vi.mock("../../state/user-profile-list.js", () => ({
+  prepareUserProfileCatalog: async () => ({
+    readCurrentIdentity: (id: string) => ({ profileId: resolveUserProfileId(id) }),
+    release: vi.fn(),
+  }),
+}));
 vi.mock("../../state/user-profiles.js", () => ({
   resolveUserProfileId: vi.fn((profileId: string) => profileId),
 }));
@@ -546,7 +565,7 @@ describe("push.web.subscribe handler", () => {
 
 describe("bound Web Push handlers", () => {
   beforeEach(() => {
-    vi.mocked(setUserPreferences).mockClear();
+    vi.mocked(setCanonicalUserPreferences).mockClear();
     vi.mocked(resolveUserProfileId).mockImplementation((profileId) => profileId);
     vi.mocked(clearBoundWebPushSubscription).mockReset();
     vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
@@ -648,7 +667,6 @@ describe("bound Web Push handlers", () => {
           agentFinished: false,
           agentQuestion: false,
           scheduledTaskFailed: false,
-          backgroundTaskFailed: false,
           ...(humanMentioned === undefined ? {} : { humanMentioned }),
         },
         detailLevel: "private",
@@ -671,9 +689,13 @@ describe("bound Web Push handlers", () => {
         ...preferences,
         categories: { ...preferences.categories, humanMentioned: humanMentioned ?? false },
       };
-      expect(setUserPreferences).toHaveBeenCalledWith("profile-owner", {
-        "notifications.web.v1": normalized,
-      });
+      expect(setCanonicalUserPreferences).toHaveBeenCalledWith(
+        "profile-owner",
+        {
+          "notifications.web.v1": normalized,
+        },
+        { assertCurrent: expect.any(Function) },
+      );
       expect(firstRespondCall(respond)).toEqual([
         true,
         { scope: "user", preferences: normalized },
@@ -717,7 +739,6 @@ describe("bound Web Push handlers", () => {
                 agentFinished: false,
                 agentQuestion: false,
                 scheduledTaskFailed: false,
-                backgroundTaskFailed: false,
               },
               detailLevel: "private",
               quietHours: {

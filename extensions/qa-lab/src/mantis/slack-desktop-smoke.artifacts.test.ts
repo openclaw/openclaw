@@ -16,7 +16,7 @@ vi.mock("@openclaw/crabbox-provider/cli-runtime-api.js", async (importOriginal) 
     ...actual,
     ensureManagedCrabboxBinary: vi.fn(async ({ binary }: { binary: string }) => ({
       binary,
-      version: "0.55.0",
+      version: "999.0.0",
     })),
   };
 });
@@ -267,6 +267,7 @@ describe("Mantis Slack artifact ownership", () => {
       const codexScenario = "slack-codex-approval-exec-native";
       for (const state of ["pending", "resolved"] as const) {
         await changeCheckpoint(outputDir, codexScenario, state, {
+          approvalKind: "exec",
           channelId: "CLEASED",
           messageTs: "1.000000",
           threadTs: state === "pending" ? null : "1.000000",

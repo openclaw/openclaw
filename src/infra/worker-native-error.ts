@@ -1,0 +1,116 @@
+type NativeErrorValue = NativeWorkerError | { kind: "value"; value: unknown };
+
+type NativeWorkerError = {
+  kind: "error";
+  constructorName: string;
+  name: string;
+  message: string;
+  stack?: string;
+  code?: string | number;
+  errcode?: number;
+  errno?: number;
+  cause?: NativeErrorValue;
+  errors?: NativeErrorValue[];
+};
+
+export type NativeWorkerFailure = NativeErrorValue;
+
+const errorConstructors = new Map<string, new (message: string) => Error>(
+  [EvalError, RangeError, ReferenceError, SyntaxError, TypeError, URIError, Error].map(
+    (constructor) => [constructor.name, constructor],
+  ),
+);
+
+/** Node's Worker error events use prototype-only Errors that a second clone would erase. */
+export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
+  const seen = new Map<Error, NativeWorkerError>();
+  const encode = (current: unknown): NativeErrorValue => {
+    if (!(current instanceof Error)) {
+      return { kind: "value", value: current };
+    }
+    const prior = seen.get(current);
+    if (prior) {
+      return prior;
+    }
+    const node: NativeWorkerError = {
+      kind: "error",
+      constructorName:
+        current instanceof AggregateError
+          ? "AggregateError"
+          : ([...errorConstructors].find(
+              ([, Constructor]) => current instanceof Constructor,
+            )?.[0] ?? "Error"),
+      name: current.name,
+      message: current.message,
+      stack: current.stack,
+    };
+    seen.set(current, node);
+    const code: unknown = Object.getOwnPropertyDescriptor(current, "code")?.value;
+    if (typeof code === "string" || typeof code === "number") {
+      node.code = code;
+    }
+    for (const key of ["errcode", "errno"] as const) {
+      const field: unknown = Object.getOwnPropertyDescriptor(current, key)?.value;
+      if (typeof field === "number") {
+        node[key] = field;
+      }
+    }
+    if (Object.hasOwn(current, "cause")) {
+      node.cause = encode(current.cause);
+    }
+    // Node reconstructs AggregateError with Error.prototype while retaining its errors field.
+    const errors: unknown = Object.getOwnPropertyDescriptor(current, "errors")?.value;
+    if (Array.isArray(errors)) {
+      node.errors = errors.map(encode);
+    }
+    return node;
+  };
+  return encode(value);
+}
+
+export function decodeNativeWorkerFailure(value: NativeWorkerFailure): unknown {
+  const seen = new Map<NativeWorkerError, Error>();
+  const decode = (current: NativeErrorValue): unknown => {
+    if (current.kind === "value") {
+      return current.value;
+    }
+    const prior = seen.get(current);
+    if (prior) {
+      return prior;
+    }
+    const Constructor = errorConstructors.get(current.constructorName) ?? Error;
+    const error =
+      current.constructorName === "AggregateError"
+        ? new AggregateError([], current.message)
+        : new Constructor(current.message);
+    seen.set(current, error);
+    error.name = current.name;
+    error.stack = current.stack;
+    for (const key of ["code", "errcode", "errno"] as const) {
+      if (current[key] !== undefined) {
+        Object.defineProperty(error, key, {
+          value: current[key],
+          writable: true,
+          configurable: true,
+          enumerable: true,
+        });
+      }
+    }
+    if (current.cause) {
+      Object.defineProperty(error, "cause", {
+        value: decode(current.cause),
+        writable: true,
+        configurable: true,
+      });
+    }
+    if (current.errors) {
+      Object.defineProperty(error, "errors", {
+        value: current.errors.map(decode),
+        writable: true,
+        configurable: true,
+      });
+    }
+    return error;
+  };
+  return decode(value);
+}

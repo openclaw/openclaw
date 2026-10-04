@@ -7,14 +7,15 @@ const { guardedJsonApiRequestMock } = vi.hoisted(() => ({
   guardedJsonApiRequestMock: vi.fn(),
 }));
 
-vi.mock("./shared/guarded-json-api.js", () => ({
+vi.mock("./shared/guarded-json-api.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./shared/guarded-json-api.js")>()),
   guardedJsonApiRequest: guardedJsonApiRequestMock,
 }));
 
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import { MediaStreamHandler } from "../media-stream.js";
 import { createTelephonyTtsProvider, type TelephonyTtsRuntime } from "../telephony-tts.js";
 import { connectWs, startUpgradeWsServer, withTimeout } from "../websocket-test-support.js";
-import { WebSocket } from "../websocket.js";
 import { TwilioProvider } from "./twilio.js";
 
 beforeEach(() => {

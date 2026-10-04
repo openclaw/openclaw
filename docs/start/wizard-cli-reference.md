@@ -97,6 +97,12 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
   </Step>
   <Step title="Workspace">
     - Default `~/.openclaw/workspace` (configurable).
+    - The prompt and `--workspace` reject files, non-directory ancestors,
+      dangling symbolic links, and symlink loops at the workspace path or any
+      ancestor, identifying the failing path. Other inspection failures, such
+      as permission errors, are reported, not treated as missing directories.
+      Missing directories and symbolic links to existing directories are
+      allowed.
     - Seeds workspace files needed for first-run bootstrap.
     - On rerun, an existing agent roster keeps its fleet-wide workspace unless
       you explicitly confirm the move. Non-interactive reruns warn and preserve
@@ -170,6 +176,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
       - If task creation is denied, OpenClaw falls back to a per-user Startup-folder login item and starts the gateway immediately.
       - Scheduled Tasks remain preferred because they provide better supervisor status.
     - Runtime selection: Node is the primary, default, and recommended runtime. Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in.
+      QuickStart reports the runtime selected by the install plan, including Bun when no supported Node is available on a Bun-only first install.
     - A SecretRef-managed `gateway.auth.token` is validated without copying its
       resolved plaintext value into supervisor service metadata. An unresolved
       token ref blocks daemon installation with remediation guidance.
@@ -339,6 +346,7 @@ on a different release.
   </Accordion>
   <Accordion title="Custom provider">
     Works with OpenAI-compatible, OpenAI Responses-compatible, and Anthropic-compatible endpoints.
+    The API base URL must use `http://` or `https://`; other URL schemes are rejected before verification.
 
     Interactive onboarding supports the same API key storage choices as other provider API key flows:
     - **Paste API key now** (plaintext)
@@ -514,6 +522,15 @@ and allow an explicit retry after the competing setup finishes. A terminal wizar
 rolled back. Generic request failures, timeouts, disconnects, and a missing wizard
 do not establish whether setup ran; clients must preserve that uncertainty rather
 than automatically retrying or claiming successful activation.
+
+If a Gateway restart loses the in-memory model setup wizard, the Control UI
+refreshes the saved model and provider state. A configured model is offered for
+explicit verification and continuation; if none is configured, provider choices
+become available again without waiting for the old wizard deadline. Failed
+refreshes retain the recovery guard and can be retried with **Check again**.
+Recovery never replays the previous sign-in or answer, treats a saved model as a
+successful verification, or requires deleting setup state. Model settings that
+support config hot reload apply without restarting the Gateway.
 
 ## Signal setup behavior
 

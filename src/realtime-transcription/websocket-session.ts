@@ -1,26 +1,20 @@
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { toErrorObject, toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type WebSocket from "ws";
 import { RetrySupervisor } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { captureWsEventAsync } from "../proxy-capture/runtime.js";
+import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import type {
   RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCallbacks,
 } from "./provider-types.js";
 
-// The installed receiver enforces maxPayload; Bun's built-in ws adapter ignores it.
-const require = createRequire(import.meta.url);
-let webSocketConstructor: Promise<typeof WebSocket> | undefined;
-function loadWebSocket(): Promise<typeof WebSocket> {
-  return (webSocketConstructor ??= import(
-    pathToFileURL(path.join(path.dirname(require.resolve("ws/package.json")), "wrapper.mjs")).href
-  ).then((module: typeof import("ws")) => module.default));
-}
+const loadWebSocket = createLazyRuntimeNamedExport(
+  () => import("../../packages/gateway-client/src/websocket.js"),
+  "WebSocket",
+);
 const WEBSOCKET_OPEN = 1;
 
 // Generic websocket-backed realtime transcription session. Providers supply URL,
@@ -163,23 +157,15 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     if (this.ws === socket) {
       // Keep the owning socket alive for provider final transcripts, but never
       // let its shutdown deadline terminate a later connection generation.
-      this.closeTimer = setTimeout(() => this.forceClose(socket), this.closeTimeoutMs);
+      this.closeTimer = setTimeout(
+        () => this.forceClose(socket),
+        this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS,
+      );
     }
   }
 
   isConnected(): boolean {
     return this.ready;
-  }
-
-  private get closeTimeoutMs(): number {
-    return this.options.closeTimeoutMs ?? DEFAULT_CLOSE_TIMEOUT_MS;
-  }
-  private get connectTimeoutMs(): number {
-    return this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS;
-  }
-
-  private get maxQueuedBytes(): number {
-    return this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES;
   }
 
   private async doConnect(generation: number): Promise<void> {
@@ -303,7 +289,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
               `${this.options.providerId} realtime transcription connection timeout`,
           ),
         );
-      }, this.connectTimeoutMs);
+      }, this.options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
 
       void (async () => {
         let connection: { headers?: Record<string, string>; url: string };
@@ -476,7 +462,7 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     this.queuedAudio.push(queued);
     this.queuedBytes += queued.byteLength;
     while (
-      this.queuedBytes > this.maxQueuedBytes &&
+      this.queuedBytes > (this.options.maxQueuedBytes ?? DEFAULT_MAX_QUEUED_BYTES) &&
       this.queuedAudioHead < this.queuedAudio.length
     ) {
       // Keep the most recent audio when reconnects stall; old buffered audio is

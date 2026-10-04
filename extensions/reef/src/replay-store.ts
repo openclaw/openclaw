@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { gcm } from "@noble/ciphers/aes.js";
 import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
+import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
   PluginStateKeyedStore,
@@ -149,7 +150,7 @@ export class ReefSqliteReplayStore implements ReplayStore {
     | Required<Pick<PluginStateKeyedStore<ReefReplayRecord>, "observe" | "compareAndApply">>
     | undefined;
   readonly #claimOwners = new Map<string, string>();
-  #pending = Promise.resolve();
+  readonly #enqueue = createAsyncLock();
 
   constructor(
     runtime: PluginRuntime,
@@ -179,15 +180,6 @@ export class ReefSqliteReplayStore implements ReplayStore {
       // and owner publication. Available worker failures never select this path.
       this.#legacy = runtime.state.openSyncKeyedStore<ReefReplayRecord>(options);
     }
-  }
-
-  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
-    const pending = this.#pending.then(operation);
-    this.#pending = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return pending;
   }
 
   #mutate<T>(key: string, prepare: () => ReplayMutation<T>): T | Promise<T> {
@@ -347,34 +339,6 @@ export class ReefSqliteReplayStore implements ReplayStore {
         },
         publish: (completed) => {
           if (!completed) {
-            throw new Error("replay claim is not in flight");
-          }
-          this.#claimOwners.delete(key);
-        },
-      };
-    });
-  }
-
-  async consume(peer: string, id: string): Promise<void> {
-    const key = reefReplayStoreKey(peer, id);
-    await this.#mutate(key, () => {
-      const owner = this.#claimOwners.get(key);
-      return {
-        decide: (existing) => {
-          if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
-            return { value: existing, result: false };
-          }
-          const {
-            receipt: _receipt,
-            body: _body,
-            claimOwner: _claimOwner,
-            claimExpiresAt: _claimExpiresAt,
-            ...rest
-          } = existing;
-          return { value: { ...rest, state: "consumed" }, result: true };
-        },
-        publish: (consumed) => {
-          if (!consumed) {
             throw new Error("replay claim is not in flight");
           }
           this.#claimOwners.delete(key);

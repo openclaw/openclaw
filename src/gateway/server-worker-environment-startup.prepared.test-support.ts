@@ -108,7 +108,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
       resolveGatewayContext: () => undefined,
       desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
       startup,
-      log: { child: () => ({ warn: () => {} }) },
+      log: { child: () => ({ info: () => {}, warn: () => {} }) },
     });
     owned.runtime = runtime;
     const options = factory.mock.calls.at(-1)?.[0];
@@ -385,7 +385,7 @@ async function createPreparedNodeAcknowledgement(root: string) {
         agentId: "main",
       });
       for (const to of ["provisioning", "syncing"] as const) {
-        placement = startup.placementStore.transition({
+        placement = await startup.placementStore.transition({
           sessionId: binding.sessionId,
           from: placement.state,
           to,

@@ -1,11 +1,15 @@
-// Gateway setup prompt shared constants.
-// Provides Tailscale copy and Control UI origin updates for CLI setup flows.
 import { isIpv6Address, parseCanonicalIpAddress } from "@openclaw/net-policy/ip";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { formatPortRangeHint } from "../cli/error-format.js";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getTailnetHostname } from "../infra/tailscale.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
+
+export function validateGatewayPortInput(value: unknown): string | undefined {
+  return parseTcpPort(value) === null ? formatPortRangeHint() : undefined;
+}
 
 export const TAILSCALE_EXPOSURE_OPTIONS = [
   { value: "off", label: "Off", hint: "No Tailscale exposure" },
@@ -52,11 +56,7 @@ function buildTailnetHttpsOrigin(rawHost: string): string | null {
   if (!normalizedHost) {
     return null;
   }
-  try {
-    return new URL(`https://${normalizedHost}`).origin;
-  } catch {
-    return null;
-  }
+  return URL.parse(`https://${normalizedHost}`)?.origin ?? null;
 }
 
 function appendAllowedOrigin(existing: string[] | undefined, origin: string): string[] {

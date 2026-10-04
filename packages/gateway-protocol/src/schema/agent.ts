@@ -260,12 +260,7 @@ export const ConversationTurnResultSchema = Type.Union([
     channel: NonEmptyString,
     messageId: Type.Optional(NonEmptyString),
     correlationPersisted: Type.Boolean(),
-    status: Type.Union([
-      Type.Literal("sent"),
-      Type.Literal("queued"),
-      Type.Literal("suppressed"),
-      Type.Literal("unknown"),
-    ]),
+    status: ConversationSendResultSchema.properties.status,
     error: NonEmptyString,
   }),
 ]);

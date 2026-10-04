@@ -68,7 +68,7 @@ export function gatewayContext(
     basePath,
     gateway: {
       connection: { gatewayUrl: "" },
-      snapshot: { client },
+      snapshot: { client, phase: "connected" },
     },
   } as unknown as ApplicationContext;
 }

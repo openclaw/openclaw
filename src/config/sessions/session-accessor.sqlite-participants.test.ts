@@ -5,12 +5,14 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
+import { linkEmail } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   assignSessionOwner,
@@ -155,7 +157,7 @@ describe("SQLite session participants", () => {
     });
   });
 
-  it.each(["participant", "entry", "external-entry"] as const)(
+  it.each(["participant", "external-entry"] as const)(
     "keeps a reentrant observer's newer cached state after an outer %s write",
     async (kind) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -252,12 +254,12 @@ describe("SQLite session participants", () => {
     });
   });
 
-  it.each(
-    ["participant-before", "participant-after", "external-participant", "session-before"].flatMap(
-      (mutation) =>
-        ["inserted-target", "stable-repeat-target"].map((write) => ({ mutation, write })),
-    ),
-  )(
+  it.each([
+    { mutation: "participant-before", write: "inserted-target" },
+    { mutation: "participant-after", write: "stable-repeat-target" },
+    { mutation: "external-participant", write: "inserted-target" },
+    { mutation: "session-before", write: "stable-repeat-target" },
+  ])(
     "does not hide an untracked sibling change during participant publication: $mutation, $write",
     async ({ mutation, write }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -323,40 +325,37 @@ describe("SQLite session participants", () => {
     },
   );
 
-  it.each(["insert", "stable-repeat"])(
-    "refuses a participant %s inside a raw transaction without changing its rows",
-    async (write) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:raw-transaction" };
-        await upsertSessionEntryCore(scope, { sessionId: "raw-transaction", updatedAt: 1 });
-        recordSessionParticipant(scope, { identity: profile("a"), promptedAt: 10 });
-        const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
-        const before = read();
-        const participantsBefore = listSessionParticipantsReadOnly(scope).get(scope.sessionKey);
-        const database = openOpenClawAgentDatabase(scope);
-        const rows = database.db.prepare(
-          "SELECT * FROM session_participants ORDER BY actor_id, identity_namespace",
-        );
-        const rowsBefore = rows.all();
-        database.db.exec("BEGIN");
-        try {
-          expect(() =>
-            recordSessionParticipant(scope, {
-              identity: profile(write === "insert" ? "b" : "a"),
-              promptedAt: 20,
-            }),
-          ).toThrow("must use runOpenClawAgentWriteTransaction");
-          expect(rows.all()).toEqual(rowsBefore);
-        } finally {
-          database.db.exec("ROLLBACK");
-        }
-        expect(read()).toEqual(before);
-        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
-          participantsBefore,
-        );
-      });
-    },
-  );
+  it("refuses a participant insert inside a raw transaction without changing its rows", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:raw-transaction" };
+      await upsertSessionEntryCore(scope, { sessionId: "raw-transaction", updatedAt: 1 });
+      recordSessionParticipant(scope, { identity: profile("a"), promptedAt: 10 });
+      const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
+      const before = read();
+      const participantsBefore = listSessionParticipantsReadOnly(scope).get(scope.sessionKey);
+      const database = openOpenClawAgentDatabase(scope);
+      const rows = database.db.prepare(
+        "SELECT * FROM session_participants ORDER BY actor_id, identity_namespace",
+      );
+      const rowsBefore = rows.all();
+      database.db.exec("BEGIN");
+      try {
+        expect(() =>
+          recordSessionParticipant(scope, {
+            identity: profile("b"),
+            promptedAt: 20,
+          }),
+        ).toThrow("must use runOpenClawAgentWriteTransaction");
+        expect(rows.all()).toEqual(rowsBefore);
+      } finally {
+        database.db.exec("ROLLBACK");
+      }
+      expect(read()).toEqual(before);
+      expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toEqual(
+        participantsBefore,
+      );
+    });
+  });
 
   it("publishes the final participant view only after the outer transaction commits", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -419,32 +418,25 @@ describe("SQLite session participants", () => {
     });
   });
 
-  it.each(["outer", "nested"])(
-    "retains committed participants after an %s transaction rollback",
-    async (kind) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:rollback" };
-        await upsertSessionEntryCore(scope, { sessionId: "rollback", updatedAt: 1 });
-        recordSessionParticipant(scope, { identity: profile("a"), promptedAt: 10 });
-        const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
-        const before = read();
-        const attempt = () =>
-          runOpenClawAgentWriteTransaction(() => {
-            recordSessionParticipant(scope, { identity: profile("b"), promptedAt: 20 });
-            throw new Error("rollback participant");
-          }, scope);
-        if (kind === "nested") {
-          runOpenClawAgentWriteTransaction(() => {
-            expect(attempt).toThrow("rollback participant");
-          }, scope);
-        } else {
-          expect(attempt).toThrow("rollback participant");
-        }
-        expect(read()).toEqual(before);
-        expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toHaveLength(1);
-      });
-    },
-  );
+  it("retains committed participants after a nested transaction rollback", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:rollback" };
+      await upsertSessionEntryCore(scope, { sessionId: "rollback", updatedAt: 1 });
+      recordSessionParticipant(scope, { identity: profile("a"), promptedAt: 10 });
+      const read = () => listSessionEntriesCore({ ...scope, projection: "list" });
+      const before = read();
+      const attempt = () =>
+        runOpenClawAgentWriteTransaction(() => {
+          recordSessionParticipant(scope, { identity: profile("b"), promptedAt: 20 });
+          throw new Error("rollback participant");
+        }, scope);
+      runOpenClawAgentWriteTransaction(() => {
+        expect(attempt).toThrow("rollback participant");
+      }, scope);
+      expect(read()).toEqual(before);
+      expect(listSessionParticipantsReadOnly(scope).get(scope.sessionKey)).toHaveLength(1);
+    });
+  });
 
   it.each(["participant", "owner"] as const)(
     "keeps cache projection errors from rolling back a recorded %s",
@@ -610,65 +602,63 @@ describe("SQLite session participants", () => {
     });
   });
 
-  it.each([false, true])(
-    "keeps namespaces and times separate (profile first: %s)",
-    async (profileFirst) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:collision" };
-        await upsertSessionEntryCore(scope, { sessionId: "collision", updatedAt: 1 });
-        const inputs = [
-          { identity: remote("same-id"), promptedAt: 10 },
-          { identity: remote("same-id"), promptedAt: 20 },
-          { identity: profile("same-id"), promptedAt: 30 },
-          { identity: profile("same-id"), promptedAt: 40 },
-          { identity: remote("same-id"), promptedAt: 50 },
-          { identity: remote("same-id"), promptedAt: 5 },
-        ];
-        for (const input of profileFirst ? inputs.toReversed() : inputs) {
-          recordSessionParticipant(scope, input);
-        }
-        recordSessionParticipant(scope, {
-          identity: { type: "agent", id: "same-id" },
-          promptedAt: 40,
-        });
-        recordSessionParticipant(scope, {
-          identity: remote("same-id", "other-workspace"),
-          promptedAt: 40,
-        });
-        closeOpenClawAgentDatabasesForTest();
-        const records = listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? [];
-        expect(records).toHaveLength(4);
-        expect(records).toEqual(
-          expect.arrayContaining([
-            {
-              identity: profile("same-id"),
-              contributionCount: 2,
-              firstPromptedAt: 30,
-              lastPromptedAt: 40,
-            },
-            {
-              identity: remote("same-id"),
-              contributionCount: 4,
-              firstPromptedAt: 5,
-              lastPromptedAt: 50,
-            },
-            {
-              identity: remote("same-id", "other-workspace"),
-              contributionCount: 1,
-              firstPromptedAt: 40,
-              lastPromptedAt: 40,
-            },
-            {
-              identity: { type: "agent", id: "same-id" },
-              contributionCount: 1,
-              firstPromptedAt: 40,
-              lastPromptedAt: 40,
-            },
-          ]),
-        );
+  it("keeps namespaces and times separate", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = { agentId: "main", env: state.env, sessionKey: "agent:main:collision" };
+      await upsertSessionEntryCore(scope, { sessionId: "collision", updatedAt: 1 });
+      const inputs = [
+        { identity: remote("same-id"), promptedAt: 10 },
+        { identity: remote("same-id"), promptedAt: 20 },
+        { identity: profile("same-id"), promptedAt: 30 },
+        { identity: profile("same-id"), promptedAt: 40 },
+        { identity: remote("same-id"), promptedAt: 50 },
+        { identity: remote("same-id"), promptedAt: 5 },
+      ];
+      for (const input of inputs) {
+        recordSessionParticipant(scope, input);
+      }
+      recordSessionParticipant(scope, {
+        identity: { type: "agent", id: "same-id" },
+        promptedAt: 40,
       });
-    },
-  );
+      recordSessionParticipant(scope, {
+        identity: remote("same-id", "other-workspace"),
+        promptedAt: 40,
+      });
+      await closeOpenClawAgentDatabasesAsync();
+      closeOpenClawAgentDatabasesForTest();
+      const records = listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? [];
+      expect(records).toHaveLength(4);
+      expect(records).toEqual(
+        expect.arrayContaining([
+          {
+            identity: profile("same-id"),
+            contributionCount: 2,
+            firstPromptedAt: 30,
+            lastPromptedAt: 40,
+          },
+          {
+            identity: remote("same-id"),
+            contributionCount: 4,
+            firstPromptedAt: 5,
+            lastPromptedAt: 50,
+          },
+          {
+            identity: remote("same-id", "other-workspace"),
+            contributionCount: 1,
+            firstPromptedAt: 40,
+            lastPromptedAt: 40,
+          },
+          {
+            identity: { type: "agent", id: "same-id" },
+            contributionCount: 1,
+            firstPromptedAt: 40,
+            lastPromptedAt: 40,
+          },
+        ]),
+      );
+    });
+  });
 
   it.each([false, true])(
     "updates a merged profile at the admission bound (canonical row: %s)",

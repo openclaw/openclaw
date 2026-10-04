@@ -9,13 +9,16 @@ import {
   syncWorkboardAgentEnded,
   syncWorkboardSubagentEnded,
 } from "./src/lifecycle-sync.js";
+import { createWorkboardSessionsBoardService } from "./src/sessions-board.js";
 import { resolveWorkboardSqliteWorkerModuleUrl } from "./src/sqlite-store-paths.js";
 import { registerWorkboardStoreLifecycle } from "./src/store-lifecycle.js";
 import { WorkboardStore } from "./src/store.js";
+import { createWorkboardSessionsBoardTools } from "./src/tools-sessions-board.js";
 import { createWorkboardTools } from "./src/tools.js";
 import {
   guardWorkboardToolsForWorkspaceAccess,
-  WORKBOARD_TOOL_NAMES,
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
 } from "./src/workspace-access.js";
 
 export default definePluginEntry({
@@ -36,6 +39,11 @@ export default definePluginEntry({
       store,
     });
     resourceServices.push(automationNudge);
+    const sessionsBoard = createWorkboardSessionsBoardService({
+      store,
+      gateway: api.runtime.gateway,
+    });
+    resourceServices.push(sessionsBoard);
     const lifecycleSync = createWorkboardLifecycleService({
       store,
       worktrees: api.runtime.worktrees,
@@ -70,10 +78,11 @@ export default definePluginEntry({
       label: "Workboard summary",
       requiredScopes: ["operator.read"],
     });
-    registerWorkboardGatewayMethods({ api, store });
+    registerWorkboardGatewayMethods({ api, store, sessionsBoard });
     registerWorkboardCommand({ api, store });
     api.registerService(changeEvents);
     api.registerService(automationNudge);
+    api.registerService(sessionsBoard);
     api.registerService(lifecycleSync);
     api.on("gateway_start", (_event, context) => lifecycleSync.onGatewayStart(context.abortSignal));
     api.on("gateway_stop", () => lifecycleSync.onGatewayStop());
@@ -120,9 +129,22 @@ export default definePluginEntry({
           api.runtime.sandbox.resolveWorkspaceAuthority,
         ),
       {
-        names: [...WORKBOARD_TOOL_NAMES],
+        names: [...WORKBOARD_CARD_TOOL_NAMES],
         optional: true,
       },
+    );
+    // The docked Board agent needs these without a tools.allow entry.
+    api.registerTool(
+      {
+        contextVersion: 2,
+        create: (ctx) =>
+          createWorkboardSessionsBoardTools({
+            store,
+            sessionsBoard,
+            caller: { assertCurrent: ctx.assertInvocationCurrent },
+          }),
+      },
+      { names: [...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES] },
     );
   },
 });

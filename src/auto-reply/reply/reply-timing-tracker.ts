@@ -42,11 +42,7 @@ export function isReplyProfilerEnabled(params?: {
 /** Keeps slow replies diagnosable; profiling lowers the warning thresholds. */
 export function createReplyTimingTracker<TLogParams extends object = ReplyTimingLogParams>(params: {
   log: { warn: (message: string, details?: Record<string, unknown>) => void };
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  enabled?: boolean;
-  totalWarnMs?: number;
-  stageWarnMs?: number;
+  enabled: boolean;
   formatMessage?: (
     params: TLogParams,
     summary: ReplyTimingSummary,
@@ -54,12 +50,10 @@ export function createReplyTimingTracker<TLogParams extends object = ReplyTiming
   ) => string;
   detailKeys?: (params: TLogParams) => readonly string[];
 }): ReplyTimingTracker<TLogParams> {
-  const profilerEnabled =
-    params.enabled ?? isReplyProfilerEnabled({ config: params.config, env: params.env });
   const timing = createStageTimingTracker();
   let didLog = false;
-  const totalWarnMs = params.totalWarnMs ?? (profilerEnabled ? 1_000 : 10_000);
-  const stageWarnMs = params.stageWarnMs ?? (profilerEnabled ? 500 : 5_000);
+  const totalWarnMs = params.enabled ? 1_000 : 10_000;
+  const stageWarnMs = params.enabled ? 500 : 5_000;
   return {
     measure: timing.measure,
     measureSync: timing.measureSync,

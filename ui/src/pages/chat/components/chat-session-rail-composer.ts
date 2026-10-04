@@ -3,6 +3,11 @@ import { ref } from "lit/directives/ref.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../../lib/ime.ts";
 import type { ChatSessionCompanionThread } from "../chat-session-companion.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import {
@@ -16,6 +21,15 @@ import {
   observeTextareaOverflow,
   scheduleTextareaHeightAdjustment,
 } from "./chat-composer-dom.ts";
+
+export function sessionRailQuestion(companion: ChatSessionCompanionThread): string {
+  return (
+    companion.draft.trim() ||
+    (companion.attachments?.some((attachment) => attachment.mimeType.startsWith("image/"))
+      ? t("chat.rail.askImageQuestion")
+      : "")
+  );
+}
 
 export function createSessionRailComposer(options: {
   submit: () => void;
@@ -45,7 +59,7 @@ export function createSessionRailComposer(options: {
       }
     },
     handleKeydown: (event: KeyboardEvent) => {
-      if (event.isComposing || event.keyCode === 229) {
+      if (isComposingKeyboardEvent(event)) {
         return;
       }
       const sendShortcutMatches =
@@ -110,6 +124,9 @@ export function renderSessionRailComposer(options: {
               }
             }}
             @keydown=${composer.handleKeydown}
+            @compositionend=${recordCompositionEnd}
+            @keyup=${clearCompositionEnd}
+            @blur=${clearCompositionEnd}
             @input=${composer.handleInput}
             ${ref(composer.ref)}
           ></textarea>
@@ -123,7 +140,7 @@ export function renderSessionRailComposer(options: {
               class="chat-send-btn"
               type="submit"
               aria-label=${t("chat.rail.askSubmit")}
-              ?disabled=${!connected || pending || Boolean(attachmentProps.attachmentReads?.pendingReads) || (!companion.draft.trim() && !companion.attachments?.length)}
+              ?disabled=${!connected || pending || Boolean(attachmentProps.attachmentReads?.pendingReads) || !sessionRailQuestion(companion)}
             >
               ${icons.arrowUp}
             </button>

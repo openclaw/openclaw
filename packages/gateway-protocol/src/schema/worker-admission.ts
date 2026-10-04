@@ -1,26 +1,32 @@
-import { Type, type Static, type TProperties } from "typebox";
+import { Type, type Static } from "typebox";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../client-info.js";
 import { closedObject } from "./closed-object.js";
 import { FailoverReasonSchema } from "./failover-reason.js";
-import { PresenceQueryParamsSchema } from "./presence.js";
 import { withSince } from "./since.js";
 import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
+import {
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_TOOL_METHODS,
+  WorkerToolSurfaceSchema,
+} from "./worker-gateway-tool.js";
 import {
   LiveIntegerSchema,
   LiveSequenceSchema,
   LiveTextSchema,
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
-  WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
-  WorkerErrorResponseFrameSchema,
   WorkerErrorShapeSchema,
-  WorkerFrameIdSchema,
   WorkerIdentifierSchema,
   WorkerProtocolCloseReasonSchema,
-  WorkerTranscriptAssistantDiagnosticSchema,
-  WorkerTranscriptUsageSchema,
+  WorkerProviderReplayStateSchema,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  workerMessageSchemas,
+  workerErrorResponseSchema,
+  workerRequestSchema,
+  workerResponseSchema,
 } from "./worker-protocol-primitives.js";
 
+export * from "./worker-session-tools.js";
 export {
   WORKER_PUBLIC_INGRESS_PATH,
   WORKER_PROTOCOL_MAX_FRAME_ID_LENGTH,
@@ -28,6 +34,10 @@ export {
   WORKER_PROTOCOL_MAX_PAYLOAD_BYTES,
   WorkerAdmissionFailureReasonSchema,
   WorkerProtocolCloseReasonSchema,
+  WorkerProviderReplayStateSchema,
+  WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+  WORKER_TRANSCRIPT_MAX_JSON_DEPTH,
+  WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES,
 } from "./worker-protocol-primitives.js";
 
 // Additive RPCs require exact build-bound features; bump only for an incompatible base set.
@@ -38,12 +48,9 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.heartbeat",
   "worker.transcript.commit",
   "worker.live-event",
-  "worker.sessions.spawn",
-  "worker.sessions.send",
-  "worker.portal",
   "worker.computer",
-  "worker.skill-workshop",
-  "worker.presence",
+  WORKER_GATEWAY_TOOL_METHODS.invoke,
+  WORKER_GATEWAY_TOOL_METHODS.cancel,
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
@@ -51,12 +58,10 @@ export const WORKER_LAUNCH_V2_PROTOCOL_FEATURE = "worker-launch-v2";
 export const WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE = "worker-execution-context-v2";
 export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-authority-v1";
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
-export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
-export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
-export const WORKER_PRESENCE_PROTOCOL_FEATURE = "worker-presence-v1";
+export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-process-owner-v1";
+export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
 export const WORKER_PROTOCOL_FEATURES = [
   "skill-resources-v1",
-  "worker-skill-workshop-v1",
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -65,24 +70,16 @@ export const WORKER_PROTOCOL_FEATURES = [
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_LINEAGE_START_PROTOCOL_FEATURE,
-  WORKER_SESSION_TOOLS_PROTOCOL_FEATURE,
-  WORKER_PORTAL_PROTOCOL_FEATURE,
-  WORKER_PRESENCE_PROTOCOL_FEATURE,
+  WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE,
+  NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE,
   WORKER_COMPUTER_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   "worker-inference-v1",
 ] as const;
 export const WORKER_PROTOCOL_MAX_METHOD_LENGTH = 64;
 export const WORKER_PROTOCOL_MAX_FEATURES = 64;
 export const WORKER_PROTOCOL_MAX_FEATURE_LENGTH = 128;
 export const WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES = 64;
-export const WORKER_TRANSCRIPT_MAX_CONTENT_PARTS = 128;
-export const WORKER_TRANSCRIPT_MAX_JSON_DEPTH = 32;
-// Keep the largest valid nested-session request below the frame ceiling even
-// when every bounded string requires six-byte JSON escaping.
-export const WORKER_SESSION_TOOL_MAX_TEXT_LENGTH = 8 * 1024;
-// Replay is opaque and cannot be truncated. Transcript projection separately
-// verifies that the complete commit frame fits the protocol payload ceiling.
-export const WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES = WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
 
 const WorkerCredentialSchema = Type.String({ minLength: 16, maxLength: 256 });
 const WorkerProtocolFeatureSchema = Type.String({
@@ -144,12 +141,10 @@ const WorkerConnectParamsSchema = closedObject({
   admission: WorkerConnectAdmissionSchema,
 });
 
-export const WorkerConnectRequestFrameSchema = closedObject({
-  type: Type.Literal("req"),
-  id: WorkerFrameIdSchema,
-  method: Type.Literal("connect"),
-  params: WorkerConnectParamsSchema,
-});
+export const WorkerConnectRequestFrameSchema = workerRequestSchema(
+  "connect",
+  WorkerConnectParamsSchema,
+);
 
 /** Minimal admission response; workers never receive the general gateway snapshot. */
 const WorkerHelloOkSchema = closedObject({
@@ -163,23 +158,14 @@ const WorkerHelloOkSchema = closedObject({
     uniqueItems: true,
   }),
   credentialExpiresAtMs: Type.Integer({ minimum: 0 }),
+  toolSurface: Type.Optional(WorkerToolSurfaceSchema),
   policy: closedObject({
     heartbeatIntervalMs: Type.Integer({ minimum: 1 }),
     maxPayload: Type.Integer({ minimum: 1 }),
   }),
 });
 
-const WorkerAdmissionSuccessResponseFrameSchema = closedObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(true),
-  payload: WorkerHelloOkSchema,
-});
-
-export const WorkerAdmissionResponseFrameSchema = Type.Union([
-  WorkerAdmissionSuccessResponseFrameSchema,
-  WorkerErrorResponseFrameSchema,
-]);
+export const WorkerAdmissionResponseFrameSchema = workerResponseSchema(WorkerHelloOkSchema);
 
 const WorkerStatusSchema = Type.Union([
   Type.Literal("ready"),
@@ -198,192 +184,67 @@ const WorkerHeartbeatResultSchema = closedObject({
   ownerEpoch: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
 });
 
-export const WorkerHeartbeatRequestFrameSchema = closedObject({
-  type: Type.Literal("req"),
-  id: WorkerFrameIdSchema,
-  method: Type.Literal(WORKER_PROTOCOL_METHODS[0]),
-  params: WorkerHeartbeatParamsSchema,
-});
+export const WorkerHeartbeatRequestFrameSchema = workerRequestSchema(
+  WORKER_PROTOCOL_METHODS[0],
+  WorkerHeartbeatParamsSchema,
+);
 
-const WorkerHeartbeatSuccessResponseFrameSchema = closedObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(true),
-  payload: WorkerHeartbeatResultSchema,
-});
+export const WorkerHeartbeatResponseFrameSchema = workerResponseSchema(WorkerHeartbeatResultSchema);
 
-export const WorkerHeartbeatResponseFrameSchema = Type.Union([
-  WorkerHeartbeatSuccessResponseFrameSchema,
-  WorkerErrorResponseFrameSchema,
-]);
-
-const WorkerSessionToolCallIdSchema = Type.String({ minLength: 1, maxLength: 256 });
-
-export const WorkerSessionsSpawnParamsSchema = closedObject({
-  toolCallId: WorkerSessionToolCallIdSchema,
-  task: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
-  label: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  agentId: Type.Optional(WorkerIdentifierSchema),
-  model: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
-});
-
-export const WorkerSessionsSendParamsSchema = closedObject({
-  toolCallId: WorkerSessionToolCallIdSchema,
-  sessionKey: Type.String({ minLength: 1, maxLength: 1_024 }),
-  message: Type.String({ minLength: 1, maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH }),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0, maximum: 86_400 })),
-});
-
-export const WorkerPortalParamsSchema = closedObject({
-  toolCallId: WorkerSessionToolCallIdSchema,
-  action: Type.Union([Type.Literal("open"), Type.Literal("list"), Type.Literal("close")]),
-  port: Type.Optional(Type.Integer({ minimum: 1, maximum: 65_535 })),
-  title: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  description: Type.Optional(Type.String({ maxLength: WORKER_SESSION_TOOL_MAX_TEXT_LENGTH })),
-  path: Type.Optional(Type.String({ maxLength: 1_024, pattern: "^/" })),
-  id: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-});
-
-export const WorkerPresenceParamsSchema = closedObject({
-  toolCallId: WorkerSessionToolCallIdSchema,
-  ...PresenceQueryParamsSchema.properties,
-});
-
-export const WorkerSessionToolResultSchema = closedObject({
-  resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-});
-
-export const WorkerSessionToolResponseFrameSchema = Type.Union([
-  closedObject({
-    type: Type.Literal("res"),
-    id: WorkerFrameIdSchema,
-    ok: Type.Literal(true),
-    payload: WorkerSessionToolResultSchema,
-  }),
-  WorkerErrorResponseFrameSchema,
-]);
-
-export const WorkerSessionsSpawnResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
-export const WorkerSessionsSendResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
-export const WorkerPortalResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
-export const WorkerPresenceResponseFrameSchema = WorkerSessionToolResponseFrameSchema;
-
-const WorkerTranscriptTextContentSchema = closedObject({
-  type: Type.Literal("text"),
-  text: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-  textSignature: Type.Optional(
-    Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-  ),
-});
-
-const WorkerTranscriptThinkingContentSchema = closedObject({
-  type: Type.Literal("thinking"),
-  thinking: Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-  thinkingSignature: Type.Optional(
-    Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-  ),
-  redacted: Type.Optional(Type.Boolean()),
-});
-
-const WorkerTranscriptImageContentSchema = closedObject({
-  type: Type.Literal("image"),
-  data: Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_MEDIA_PAYLOAD_BYTES }),
-  mimeType: Type.String({ minLength: 1, maxLength: 256 }),
-});
-
-const WorkerTranscriptToolCallSchema = closedObject({
-  type: Type.Literal("toolCall"),
-  id: WorkerIdentifierSchema,
-  name: WorkerIdentifierSchema,
-  arguments: Type.Record(Type.String({ minLength: 1, maxLength: 256 }), Type.Unknown()),
-  thoughtSignature: Type.Optional(
-    Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
-  ),
-  executionMode: Type.Optional(Type.Union([Type.Literal("sequential"), Type.Literal("parallel")])),
-});
-const WorkerReplayHashSchema = Type.String({
-  minLength: 2,
-  maxLength: 16,
-  pattern: "^[a-z0-9]+$",
-});
-
-export const WorkerProviderReplayStateSchema = closedObject({
-  v: Type.Literal(1),
-  type: WorkerIdentifierSchema,
-  id: Type.Optional(Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-  data: Type.String({ minLength: 1, maxLength: WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES }),
-  replayIndex: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
-  provider: WorkerIdentifierSchema,
-  api: WorkerIdentifierSchema,
-  model: WorkerIdentifierSchema,
-  baseUrlHash: Type.Optional(WorkerReplayHashSchema),
-  sessionHash: Type.Optional(WorkerReplayHashSchema),
-  authProfileHash: Type.Optional(WorkerReplayHashSchema),
-});
+const transcriptSchemas = workerMessageSchemas(
+  LiveTextSchema,
+  Type.String({ minLength: 1, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
+  Type.Integer({ minimum: 0 }),
+);
 
 export const WorkerTranscriptUserMessageSchema = closedObject({
   role: Type.Literal("user"),
-  content: Type.Array(
-    Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
-    { minItems: 1, maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
-  ),
+  content: transcriptSchemas.userContent,
   timestamp: Type.Integer({ minimum: 0 }),
+  operatorMessage: Type.Optional(transcriptSchemas.operatorMessage),
 });
 
-const WorkerTranscriptAssistantMessageSchema = closedObject({
-  role: Type.Literal("assistant"),
-  content: Type.Array(
-    Type.Union([
-      WorkerTranscriptTextContentSchema,
-      WorkerTranscriptThinkingContentSchema,
-      WorkerTranscriptToolCallSchema,
-    ]),
-    { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
-  ),
-  api: WorkerIdentifierSchema,
-  provider: WorkerIdentifierSchema,
-  model: WorkerIdentifierSchema,
-  responseModel: Type.Optional(WorkerIdentifierSchema),
-  responseId: Type.Optional(WorkerIdentifierSchema),
-  providerReplay: Type.Optional(WorkerProviderReplayStateSchema),
-  diagnostics: Type.Optional(
-    Type.Array(WorkerTranscriptAssistantDiagnosticSchema, {
-      maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
+export const WorkerRuntimeContextFragmentsSchema = Type.Array(
+  closedObject({
+    kind: Type.Enum(["runtime-instruction", "conversation-data", "heartbeat-outcome"]),
+    text: Type.String(),
+  }),
+);
+
+const workerRuntimeContextFields = {
+  role: Type.Literal("custom"),
+  content: Type.Union([Type.String(), transcriptSchemas.userContent]),
+  display: Type.Literal(false),
+  timestamp: Type.Integer({ minimum: 0 }),
+};
+export const WorkerRuntimeContextMessageSchema = Type.Union([
+  closedObject({
+    ...workerRuntimeContextFields,
+    customType: Type.Literal("openclaw.runtime-context"),
+    details: Type.Partial(
+      closedObject({
+        source: Type.Literal("openclaw-runtime-context"),
+        runtimeContextCarrier: Type.Literal(true),
+        fragments: WorkerRuntimeContextFragmentsSchema,
+      }),
+      { anyOf: [{ required: ["source"] }, { required: ["runtimeContextCarrier"] }] },
+    ),
+  }),
+  closedObject({
+    ...workerRuntimeContextFields,
+    customType: Type.Literal("openclaw.system-update"),
+    details: closedObject({
+      kind: Type.Enum(["prompt-update", "runtime-context"]),
+      turnScoped: Type.Boolean(),
     }),
-  ),
-  usage: WorkerTranscriptUsageSchema,
-  stopReason: Type.Union([
-    Type.Literal("stop"),
-    Type.Literal("length"),
-    Type.Literal("toolUse"),
-    Type.Literal("error"),
-    Type.Literal("aborted"),
-  ]),
-  errorMessage: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-  errorCode: Type.Optional(Type.String({ maxLength: 256 })),
-  errorType: Type.Optional(Type.String({ maxLength: 256 })),
-  errorBody: Type.Optional(Type.String({ maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES })),
-  timestamp: Type.Integer({ minimum: 0 }),
-});
-
-const WorkerTranscriptToolResultMessageSchema = closedObject({
-  role: Type.Literal("toolResult"),
-  toolCallId: WorkerIdentifierSchema,
-  toolName: WorkerIdentifierSchema,
-  content: Type.Array(
-    Type.Union([WorkerTranscriptTextContentSchema, WorkerTranscriptImageContentSchema]),
-    { maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS },
-  ),
-  details: Type.Optional(Type.Unknown()),
-  isError: Type.Boolean(),
-  timestamp: Type.Integer({ minimum: 0 }),
-});
+  }),
+]);
 
 export const WorkerTranscriptMessageSchema = Type.Union([
   WorkerTranscriptUserMessageSchema,
-  WorkerTranscriptAssistantMessageSchema,
-  WorkerTranscriptToolResultMessageSchema,
+  WorkerRuntimeContextMessageSchema,
+  transcriptSchemas.contextAssistant,
+  transcriptSchemas.toolResult,
 ]);
 
 export const WorkerTranscriptCommitParamsSchema = closedObject({
@@ -404,11 +265,11 @@ export const WorkerTranscriptCommitResultSchema = closedObject({
   newLeafId: WorkerIdentifierSchema,
 });
 
-export const WorkerTranscriptCommitErrorReasonSchema = Type.Union([
-  Type.Literal("stale-base-leaf"),
-  Type.Literal("epoch-mismatch"),
-  Type.Literal("invalid-batch"),
-  Type.Literal("session-not-attached"),
+export const WorkerTranscriptCommitErrorReasonSchema = Type.Enum([
+  "stale-base-leaf",
+  "epoch-mismatch",
+  "invalid-batch",
+  "session-not-attached",
 ]);
 
 export const WorkerTranscriptCommitErrorShapeSchema = closedObject({
@@ -417,36 +278,15 @@ export const WorkerTranscriptCommitErrorShapeSchema = closedObject({
   details: closedObject({ reason: WorkerTranscriptCommitErrorReasonSchema }),
 });
 
-export const WorkerTranscriptCommitRequestFrameSchema = closedObject({
-  type: Type.Literal("req"),
-  id: WorkerFrameIdSchema,
-  method: Type.Literal(WORKER_PROTOCOL_METHODS[1]),
-  params: WorkerTranscriptCommitParamsSchema,
-});
+export const WorkerTranscriptCommitRequestFrameSchema = workerRequestSchema(
+  WORKER_PROTOCOL_METHODS[1],
+  WorkerTranscriptCommitParamsSchema,
+);
 
-const WorkerTranscriptCommitSuccessResponseFrameSchema = closedObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(true),
-  payload: WorkerTranscriptCommitResultSchema,
-});
-
-const WorkerTranscriptCommitErrorResponseFrameSchema = closedObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(false),
-  error: WorkerTranscriptCommitErrorShapeSchema,
-});
-
-export const WorkerTranscriptCommitResponseFrameSchema = Type.Union([
-  WorkerTranscriptCommitSuccessResponseFrameSchema,
-  WorkerTranscriptCommitErrorResponseFrameSchema,
-  WorkerErrorResponseFrameSchema,
-]);
-
-function workerLiveObject<const Properties extends TProperties>(properties: Properties) {
-  return closedObject(properties);
-}
+export const WorkerTranscriptCommitResponseFrameSchema = workerResponseSchema(
+  WorkerTranscriptCommitResultSchema,
+  workerErrorResponseSchema(WorkerTranscriptCommitErrorShapeSchema),
+);
 
 const OptionalLiveTextSchema = Type.Optional(LiveTextSchema);
 const OptionalLiveIntegerSchema = Type.Optional(LiveIntegerSchema);
@@ -457,7 +297,7 @@ const LiveIdentifierSchema = Type.String({
   pattern: "^\\S(?:.*\\S)?$",
 });
 
-const WorkerLiveAssistantPayloadSchema = workerLiveObject({
+const WorkerLiveAssistantPayloadSchema = closedObject({
   text: LiveTextSchema,
   delta: LiveTextSchema,
   replace: Type.Optional(Type.Literal(true)),
@@ -466,11 +306,11 @@ const WorkerLiveAssistantPayloadSchema = workerLiveObject({
       maxItems: WORKER_TRANSCRIPT_MAX_CONTENT_PARTS,
     }),
   ),
-  phase: Type.Optional(Type.Union([Type.Literal("commentary"), Type.Literal("final_answer")])),
+  phase: Type.Optional(Type.Enum(["commentary", "final_answer"])),
   itemId: Type.Optional(WorkerIdentifierSchema),
 });
 
-const WorkerLiveThinkingPayloadSchema = workerLiveObject({
+const WorkerLiveThinkingPayloadSchema = closedObject({
   text: LiveTextSchema,
   delta: LiveTextSchema,
 });
@@ -482,17 +322,17 @@ const WorkerLiveToolCommonProperties = {
 };
 
 const WorkerLiveToolPayloadSchema = Type.Union([
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveToolCommonProperties,
     phase: Type.Literal("start"),
     args: Type.Unknown(),
   }),
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveToolCommonProperties,
     phase: Type.Literal("update"),
     partialResult: Type.Unknown(),
   }),
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveToolCommonProperties,
     phase: Type.Literal("result"),
     meta: OptionalLiveTextSchema,
@@ -503,7 +343,7 @@ const WorkerLiveToolPayloadSchema = Type.Union([
 ]);
 
 const WorkerLiveApprovalCommonProperties = {
-  kind: Type.Union([Type.Literal("exec"), Type.Literal("plugin"), Type.Literal("unknown")]),
+  kind: Type.Enum(["exec", "plugin", "unknown"]),
   title: LiveTextSchema,
   itemId: Type.Optional(WorkerIdentifierSchema),
   toolCallId: Type.Optional(WorkerIdentifierSchema),
@@ -512,29 +352,29 @@ const WorkerLiveApprovalCommonProperties = {
   command: OptionalLiveTextSchema,
   host: OptionalLiveTextSchema,
   reason: OptionalLiveTextSchema,
-  scope: Type.Optional(Type.Union([Type.Literal("turn"), Type.Literal("session")])),
+  scope: Type.Optional(Type.Enum(["turn", "session"])),
   message: OptionalLiveTextSchema,
 };
 
 const WorkerLiveApprovalPayloadSchema = Type.Union([
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveApprovalCommonProperties,
     phase: Type.Literal("requested"),
-    status: Type.Union([Type.Literal("pending"), Type.Literal("unavailable")]),
+    status: Type.Enum(["pending", "unavailable"]),
   }),
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveApprovalCommonProperties,
     phase: Type.Literal("resolved"),
-    status: Type.Union([Type.Literal("approved"), Type.Literal("denied"), Type.Literal("failed")]),
+    status: Type.Enum(["approved", "denied", "failed"]),
   }),
 ]);
 
-const WorkerLiveLifecycleStartPayloadSchema = workerLiveObject({
+const WorkerLiveLifecycleStartPayloadSchema = closedObject({
   phase: Type.Literal("start"),
   startedAt: LiveIntegerSchema,
 });
 
-const WorkerLiveFallbackAttemptSchema = workerLiveObject({
+const WorkerLiveFallbackAttemptSchema = closedObject({
   provider: LiveIdentifierSchema,
   model: LiveIdentifierSchema,
   error: LiveTextSchema,
@@ -551,7 +391,7 @@ const WorkerLiveFallbackCommonProperties = {
   activeModel: LiveIdentifierSchema,
 };
 
-const WorkerLiveLifecycleFallbackPayloadSchema = workerLiveObject({
+const WorkerLiveLifecycleFallbackPayloadSchema = closedObject({
   ...WorkerLiveFallbackCommonProperties,
   phase: Type.Literal("fallback"),
   reasonSummary: LiveTextSchema,
@@ -563,13 +403,13 @@ const WorkerLiveLifecycleFallbackPayloadSchema = workerLiveObject({
   }),
 });
 
-const WorkerLiveLifecycleFallbackClearedPayloadSchema = workerLiveObject({
+const WorkerLiveLifecycleFallbackClearedPayloadSchema = closedObject({
   ...WorkerLiveFallbackCommonProperties,
   phase: Type.Literal("fallback_cleared"),
   previousActiveModel: Type.Optional(LiveIdentifierSchema),
 });
 
-const WorkerLiveLifecycleFallbackStepPayloadSchema = workerLiveObject({
+const WorkerLiveLifecycleFallbackStepPayloadSchema = closedObject({
   phase: Type.Literal("fallback_step"),
   fallbackStepType: Type.Literal("fallback_step"),
   fallbackStepFromModel: LiveIdentifierSchema,
@@ -577,11 +417,7 @@ const WorkerLiveLifecycleFallbackStepPayloadSchema = workerLiveObject({
   fallbackStepFromFailureReason: Type.Optional(FailoverReasonSchema),
   fallbackStepFromFailureDetail: OptionalLiveTextSchema,
   fallbackStepChainPosition: OptionalLiveIntegerSchema,
-  fallbackStepFinalOutcome: Type.Union([
-    Type.Literal("next_fallback"),
-    Type.Literal("succeeded"),
-    Type.Literal("chain_exhausted"),
-  ]),
+  fallbackStepFinalOutcome: Type.Enum(["next_fallback", "succeeded", "chain_exhausted"]),
 });
 
 const WorkerLiveLifecycleTerminalCommonProperties = {
@@ -590,39 +426,26 @@ const WorkerLiveLifecycleTerminalCommonProperties = {
   stopReason: Type.Optional(WorkerIdentifierSchema),
   yielded: Type.Optional(Type.Literal(true)),
   timeoutPhase: Type.Optional(
-    Type.Union([
-      Type.Literal("queue"),
-      Type.Literal("preflight"),
-      Type.Literal("provider"),
-      Type.Literal("post_turn"),
-      Type.Literal("gateway_draining"),
-    ]),
+    Type.Enum(["queue", "preflight", "provider", "post_turn", "gateway_draining"]),
   ),
   providerStarted: Type.Optional(Type.Boolean()),
   aborted: Type.Optional(Type.Boolean()),
   toolErrorSummary: OptionalLiveTextSchema,
-  livenessState: Type.Optional(
-    Type.Union([
-      Type.Literal("working"),
-      Type.Literal("paused"),
-      Type.Literal("blocked"),
-      Type.Literal("abandoned"),
-    ]),
-  ),
+  livenessState: Type.Optional(Type.Enum(["working", "paused", "blocked", "abandoned"])),
   replayInvalid: Type.Optional(Type.Literal(true)),
 };
 
 const WorkerLiveLifecycleTerminalPayloadSchema = Type.Union([
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveLifecycleTerminalCommonProperties,
     phase: Type.Literal("finishing"),
     error: OptionalLiveTextSchema,
   }),
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveLifecycleTerminalCommonProperties,
     phase: Type.Literal("end"),
   }),
-  workerLiveObject({
+  closedObject({
     ...WorkerLiveLifecycleTerminalCommonProperties,
     phase: Type.Literal("error"),
     error: LiveTextSchema,
@@ -639,20 +462,14 @@ const WorkerLiveLifecyclePayloadSchema = Type.Union([
 ]);
 
 export const WorkerLiveEventSchema = Type.Union([
-  workerLiveObject({ kind: Type.Literal("assistant"), payload: WorkerLiveAssistantPayloadSchema }),
-  workerLiveObject({ kind: Type.Literal("thinking"), payload: WorkerLiveThinkingPayloadSchema }),
-  workerLiveObject({ kind: Type.Literal("tool"), payload: WorkerLiveToolPayloadSchema }),
-  workerLiveObject({ kind: Type.Literal("approval"), payload: WorkerLiveApprovalPayloadSchema }),
-  workerLiveObject({ kind: Type.Literal("lifecycle"), payload: WorkerLiveLifecyclePayloadSchema }),
+  closedObject({ kind: Type.Literal("assistant"), payload: WorkerLiveAssistantPayloadSchema }),
+  closedObject({ kind: Type.Literal("thinking"), payload: WorkerLiveThinkingPayloadSchema }),
+  closedObject({ kind: Type.Literal("tool"), payload: WorkerLiveToolPayloadSchema }),
+  closedObject({ kind: Type.Literal("approval"), payload: WorkerLiveApprovalPayloadSchema }),
+  closedObject({ kind: Type.Literal("lifecycle"), payload: WorkerLiveLifecyclePayloadSchema }),
 ]);
 
-export const WorkerLiveEventParamsSchema: Type.TObject<{
-  readonly runEpoch: typeof LiveIntegerSchema;
-  readonly lastAckedSeq: typeof LiveIntegerSchema;
-  readonly seq: typeof LiveSequenceSchema;
-  readonly runId: typeof WorkerIdentifierSchema;
-  readonly event: typeof WorkerLiveEventSchema;
-}> = workerLiveObject({
+export const WorkerLiveEventParamsSchema = closedObject({
   runEpoch: LiveIntegerSchema,
   lastAckedSeq: LiveIntegerSchema,
   seq: LiveSequenceSchema,
@@ -660,63 +477,41 @@ export const WorkerLiveEventParamsSchema: Type.TObject<{
   event: WorkerLiveEventSchema,
 });
 
-export const WorkerLiveEventResultSchema = workerLiveObject({
+export const WorkerLiveEventResultSchema = closedObject({
   ackedSeq: LiveIntegerSchema,
 });
 
 export const WorkerLiveEventErrorDetailsSchema = Type.Union([
-  workerLiveObject({
-    reason: Type.Union([
-      Type.Literal("epoch-mismatch"),
-      Type.Literal("session-not-attached"),
-      Type.Literal("invalid-event"),
-      Type.Literal("capacity-exceeded"),
+  closedObject({
+    reason: Type.Enum([
+      "epoch-mismatch",
+      "session-not-attached",
+      "invalid-event",
+      "capacity-exceeded",
     ]),
   }),
-  workerLiveObject({
+  closedObject({
     reason: Type.Literal("resync-required"),
     ackedSeq: LiveIntegerSchema,
     expectedSeq: LiveSequenceSchema,
   }),
 ]);
 
-export const WorkerLiveEventErrorShapeSchema = workerLiveObject({
+export const WorkerLiveEventErrorShapeSchema = closedObject({
   code: Type.Literal("INVALID_REQUEST"),
   message: Type.String({ minLength: 1, maxLength: 256 }),
   details: WorkerLiveEventErrorDetailsSchema,
 });
 
-export const WorkerLiveEventRequestFrameSchema: Type.TObject<{
-  readonly type: Type.TLiteral<"req">;
-  readonly id: typeof WorkerFrameIdSchema;
-  readonly method: Type.TLiteral<(typeof WORKER_PROTOCOL_METHODS)[2]>;
-  readonly params: typeof WorkerLiveEventParamsSchema;
-}> = workerLiveObject({
-  type: Type.Literal("req"),
-  id: WorkerFrameIdSchema,
-  method: Type.Literal(WORKER_PROTOCOL_METHODS[2]),
-  params: WorkerLiveEventParamsSchema,
-});
+export const WorkerLiveEventRequestFrameSchema = workerRequestSchema(
+  WORKER_PROTOCOL_METHODS[2],
+  WorkerLiveEventParamsSchema,
+);
 
-const WorkerLiveEventSuccessResponseFrameSchema = workerLiveObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(true),
-  payload: WorkerLiveEventResultSchema,
-});
-
-const WorkerLiveEventErrorResponseFrameSchema = workerLiveObject({
-  type: Type.Literal("res"),
-  id: WorkerFrameIdSchema,
-  ok: Type.Literal(false),
-  error: WorkerLiveEventErrorShapeSchema,
-});
-
-export const WorkerLiveEventResponseFrameSchema = Type.Union([
-  WorkerLiveEventSuccessResponseFrameSchema,
-  WorkerLiveEventErrorResponseFrameSchema,
-  WorkerErrorResponseFrameSchema,
-]);
+export const WorkerLiveEventResponseFrameSchema = workerResponseSchema(
+  WorkerLiveEventResultSchema,
+  workerErrorResponseSchema(WorkerLiveEventErrorShapeSchema),
+);
 
 export type WorkerAdmissionHandshake = Static<typeof WorkerAdmissionHandshakeSchema>;
 export type WorkerConnectParams = Static<typeof WorkerConnectParamsSchema>;
@@ -730,17 +525,6 @@ export type WorkerHeartbeatParams = Static<typeof WorkerHeartbeatParamsSchema>;
 export type WorkerHeartbeatResult = Static<typeof WorkerHeartbeatResultSchema>;
 export type WorkerHeartbeatRequestFrame = Static<typeof WorkerHeartbeatRequestFrameSchema>;
 export type WorkerHeartbeatResponseFrame = Static<typeof WorkerHeartbeatResponseFrameSchema>;
-export type WorkerSessionsSpawnParams = Static<typeof WorkerSessionsSpawnParamsSchema>;
-export type WorkerSessionsSendParams = Static<typeof WorkerSessionsSendParamsSchema>;
-export type WorkerPortalParams = Static<typeof WorkerPortalParamsSchema>;
-export type WorkerPresenceParams = Static<typeof WorkerPresenceParamsSchema>;
-export type WorkerSessionToolResult = Static<typeof WorkerSessionToolResultSchema>;
-export type WorkerSessionsSpawnResponseFrame = Static<
-  typeof WorkerSessionsSpawnResponseFrameSchema
->;
-export type WorkerSessionsSendResponseFrame = Static<typeof WorkerSessionsSendResponseFrameSchema>;
-export type WorkerPortalResponseFrame = Static<typeof WorkerPortalResponseFrameSchema>;
-export type WorkerPresenceResponseFrame = Static<typeof WorkerPresenceResponseFrameSchema>;
 export type WorkerTranscriptMessage = Static<typeof WorkerTranscriptMessageSchema>;
 export type WorkerProviderReplayState = Static<typeof WorkerProviderReplayStateSchema>;
 export type WorkerTranscriptCommitParams = Static<typeof WorkerTranscriptCommitParamsSchema>;

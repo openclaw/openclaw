@@ -2,25 +2,20 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import {
-  GATEWAY_CLIENT_IDS,
-  GATEWAY_CLIENT_MODES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { REQUEST } from "./placement-dispatch-test-fixtures.js";
-import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import {
+  bindProviderReplayNodeAvailability,
+  createProviderReplayDispatch,
+  createProviderReplayNodeTunnel,
+} from "./provider-replay.test-support.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
-import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
-import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
 
@@ -213,7 +208,7 @@ describe("worker environment service provision replay", () => {
     const placement = await placements.startDispatch(REQUEST);
     const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
     const intent = deriveEnvironmentIntent(idempotencyKey);
-    placements.transition({
+    await placements.transition({
       sessionId: placement.sessionId,
       from: "requested",
       to: "provisioning",
@@ -253,27 +248,7 @@ describe("worker environment service provision replay", () => {
       database: support.testState.stateDb,
       now: () => support.testState.nowMs,
     });
-    const syncWorkspace = vi.fn(async () => ({
-      mode: "git" as const,
-      remoteWorkspaceDir: "/worker/workspace",
-      manifestRef: `sha256:${"b".repeat(64)}`,
-    }));
-    const nodeTunnelManager = {
-      status: () => "stopped" as const,
-      start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
-        environmentId,
-        ownerEpoch,
-        measureLaunchTurn,
-        launchTurn: vi.fn(),
-        runWorkspaceCommand: vi.fn(),
-        quiesceWorkspace: vi.fn(),
-        syncWorkspace,
-        reconcileWorkspace: vi.fn(),
-        stop: vi.fn(),
-      })),
-      stop: vi.fn(async () => {}),
-      stopAll: vi.fn(async () => {}),
-    };
+    const { nodeTunnelManager, syncWorkspace } = createProviderReplayNodeTunnel();
     const restarted = support.createService(provider, {
       ensureNodeWorkerBundle: async () => ({
         ...support.BOOTSTRAP_RECEIPT,
@@ -294,26 +269,9 @@ describe("worker environment service provision replay", () => {
           waitForDeviceId: async () => await enrollmentConnected.promise,
         };
       },
-      nodeTunnelManager: nodeTunnelManager as never,
+      nodeTunnelManager,
     });
-    bindDeviceWorkerAvailability(restarted, async (nodeId) => ({
-      available: true,
-      node: {
-        nodeId,
-        connId: `conn-${nodeId}`,
-        pairingIdentity: `identity-${nodeId}`,
-        pairingGeneration: `generation-${nodeId}`,
-        clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-        clientMode: GATEWAY_CLIENT_MODES.NODE,
-        protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-        workerHost: {
-          enabled: true,
-          capacity: { total: 1, available: 1 },
-          capturedExecPolicy: true,
-        },
-        commands: [],
-      },
-    }));
+    bindProviderReplayNodeAvailability(restarted);
     const recoveryBarrier = vi.fn(async ({ expectedGeneration, environmentId, run }) => {
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "provisioning",
@@ -325,28 +283,16 @@ describe("worker environment service provision replay", () => {
     const activationBarrier = vi.fn(async ({ activate }) => activate());
     const onActivated = vi.fn();
     const attachSession = vi.spyOn(restarted, "attachSession");
-    const dispatch = createWorkerPlacementDispatchService({
+    const dispatch = createProviderReplayDispatch({
       placements,
       environments: restarted,
-      runnerAvailability: { read: () => undefined, version: () => 0 },
       resolveDevicePlacementRequirement: async () => ({
         requiredNodeCommands: [],
         consumesWorkerSlot: true,
       }),
       isCurrentNodePlacement: () => true,
-      workspaceOperations: createWorkerWorkspaceOperationCoordinator(),
-      runLocalBarrier: async ({ startDispatch }) => startDispatch(),
       runRecoveryBarrier: recoveryBarrier,
       runActivationBarrier: activationBarrier,
-      runMoveBarrier: async ({ begin }) => begin(),
-      resolveMoveDestination: async () => undefined,
-      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
-      runReclaimBarrier: async ({ begin, reclaim }) =>
-        await reclaim({ kind: "local", path: "/gateway/workspace" }, begin()),
-      runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
-      ...createWorkerWorkspaceRecoveryFixture({
-        resolveWorkspace: async () => ({ kind: "local", path: "/gateway/workspace" }),
-      }),
       onActivated,
     });
     const uninstallReconcileGuard = restarted.installReconcileEnvironmentGuard(

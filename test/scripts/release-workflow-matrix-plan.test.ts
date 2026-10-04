@@ -51,6 +51,7 @@ type MatrixEntry = {
 };
 
 type WorkflowJob = {
+  "timeout-minutes"?: string | number;
   env: Record<string, string>;
   if?: string;
   needs: string[];
@@ -113,10 +114,9 @@ const PACKAGE_UPDATE_CHUNKS = [
   "package-update-openai",
   "package-update-onboarding",
   "package-update-migrations",
-  "package-update-self-upgrade",
 ];
 
-const STABLE_DOCKER_CHUNKS = [
+const FULL_DOCKER_CHUNKS = [
   "core",
   ...PACKAGE_UPDATE_CHUNKS,
   "plugins-runtime-plugins",
@@ -144,12 +144,12 @@ const PROFILE_EXPECTATIONS = [
   },
   {
     profile: "stable",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: ["anthropic", "google", "minimax", "openai"],
   },
   {
     profile: "full",
-    dockerE2eChunks: STABLE_DOCKER_CHUNKS,
+    dockerE2eChunks: FULL_DOCKER_CHUNKS,
     liveModelProviders: [
       "anthropic",
       "google",
@@ -617,6 +617,11 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       expect(plan.dockerE2e.matrix.include.map((entry: MatrixEntry) => entry.chunk_id)).toEqual(
         dockerE2eChunks,
       );
+      expect(
+        plan.dockerE2e.matrix.include.find(
+          (entry: MatrixEntry) => entry.chunk_id === "package-update-openai",
+        ),
+      ).toMatchObject({ timeout_minutes: 160 });
       expect(plan.liveModels.matrix.include.map((entry: MatrixEntry) => entry.providers)).toEqual(
         liveModelProviders,
       );
@@ -825,6 +830,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       liveImage.steps.find((step) => step.name === "Resolve shared live-test image tag")?.env
         ?.LIVE_IMAGE_EXTENSIONS,
     ).toBe("${{ needs.plan_release_workflow_matrices.outputs.live_image_extensions }}");
+    expect(dockerE2e["timeout-minutes"]).toBe("${{ matrix.timeout_minutes }}");
     expect(dockerE2e.needs).toContain("plan_release_workflow_matrices");
     expect(liveModels.needs).toContain("plan_release_workflow_matrices");
     expect(liveDocker.needs).toContain("plan_release_workflow_matrices");

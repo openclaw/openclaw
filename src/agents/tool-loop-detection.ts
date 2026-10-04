@@ -13,6 +13,7 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import { getCodeModeToolOutcome } from "./code-mode-tool-outcome.js";
 import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import {
   buildArgumentChurnWarning,
@@ -20,8 +21,10 @@ import {
 } from "./tool-loop-argument-churn.js";
 import { isKnownPollToolCall } from "./tool-loop-call-kind.js";
 import { getNoProgressStreak } from "./tool-loop-no-progress.js";
+import { digestToolOutcome } from "./tool-loop-outcome-hash.js";
 import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { isWriteNoProgressOutcome } from "./tool-loop-write-outcome.js";
+import { getComputerToolOutcome } from "./tools/computer-tool-outcome.js";
 import { getProgressCardToolOutcome } from "./tools/progress-card-tool-outcome.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
@@ -64,33 +67,13 @@ function selectHistoryForScope(
   return history.filter((record) => normalizeRunId(record.runId) === runId);
 }
 
-/**
- * Hash a tool call for pattern matching.
- * Uses tool name + deterministic JSON serialization digest of params.
- */
 export function hashToolCall(toolName: string, params: unknown): string {
+  // Execution titles describe presentation, not a different command or program.
+  if (toolName === "exec" && isPlainObject(params)) {
+    const { title: _title, ...execution } = params;
+    return `${toolName}:${sha256Hex(stableStringify(execution))}`;
+  }
   return `${toolName}:${sha256Hex(stableStringify(params))}`;
-}
-
-function digestToolOutcome(value: unknown): string {
-  // Canonical IDs retain valid envelope syntax; malformed markers and JSON field
-  // boundaries remain meaningful. Literal/copied envelopes share this syntax rule;
-  // it grants no trust and never changes arguments or delivered content.
-  const canonicalMarkerId = "0000000000000000";
-  const serialized = stableStringify(value, (text) =>
-    text.replace(
-      /(<<<EXTERNAL_UNTRUSTED_CONTENT id=(\\*)")([a-f0-9]{16})(\2">>>(?:(?!<<<(?:END_)?EXTERNAL_UNTRUSTED_CONTENT)[\s\S])*<<<END_EXTERNAL_UNTRUSTED_CONTENT id=\2")\3(\2">>>)/g,
-      // Repeated JSON encoding produces 2^n - 1 backslashes before marker quotes.
-      (match, start: string, escapes: string, _id: string, middle: string, end: string) =>
-        (escapes.length & (escapes.length + 1)) !== 0 ||
-        [...middle.matchAll(/(?<!\\)\\*"/g)].some(
-          (quote) => quote[0].length % (escapes.length + 1) !== 0,
-        )
-          ? match
-          : start + canonicalMarkerId + middle + canonicalMarkerId + end,
-    ),
-  );
-  return sha256Hex(serialized);
 }
 
 function extractTextContent(result: unknown): string {
@@ -281,12 +264,6 @@ function isVolatileSendResult(toolName: string, params: unknown): boolean {
   return isMessagingToolSendAction(toolName, args);
 }
 
-// Only the loop detector's own veto must not reset the streak; other blocked results
-// (plugin/approval vetoes) keep a hash so repeated identical denials still escalate.
-function isLoopVetoResult(details: Record<string, unknown>): boolean {
-  return details.status === "blocked" && details.deniedReason === "tool-loop";
-}
-
 type ToolCallOutcome = Pick<
   ToolCallRecord,
   "failureIdentityHash" | "outcomeKind" | "resultHash" | "noProgress" | "unknownToolName"
@@ -312,15 +289,27 @@ function hashToolOutcome(
 
   const details = isPlainObject(result.details) ? result.details : {};
   const text = extractTextContent(result);
-  // A loop veto extends the prior no-progress streak but is not a real tool outcome.
-  // Keep it typed so it cannot reset the streak or collide with plugin/approval denials.
-  if (isLoopVetoResult(details)) {
+  // Only our own veto extends the prior streak without a hash. Other blocked
+  // outcomes retain hashes so repeated plugin/approval denials still escalate.
+  if (details.status === "blocked" && details.deniedReason === "tool-loop") {
     return { outcomeKind: "tool-loop-veto" };
+  }
+  if (toolName === "computer" && result.isError !== true) {
+    const outcome = getComputerToolOutcome(result);
+    if (outcome !== undefined) {
+      return { resultHash: digestToolOutcome(outcome) };
+    }
   }
   if (toolName === "progress_card" && result.isError !== true) {
     const outcome = getProgressCardToolOutcome(result);
     if (outcome !== undefined) {
       return { resultHash: digestToolOutcome(outcome) };
+    }
+  }
+  if (toolName === "exec" || toolName === "wait") {
+    const resultHash = getCodeModeToolOutcome(result);
+    if (resultHash !== undefined) {
+      return { resultHash };
     }
   }
   if (toolName === "exec") {
@@ -431,31 +420,14 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  let otherSignature: string | undefined;
-  let otherToolName: string | undefined;
-  for (let i = history.length - 2; i >= 0; i -= 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    if (call.argsHash !== last.argsHash) {
-      otherSignature = call.argsHash;
-      otherToolName = call.toolName;
-      break;
-    }
-  }
-
-  if (!otherSignature || !otherToolName) {
+  const other = history.findLast((call) => call.argsHash !== last.argsHash);
+  if (!other?.argsHash || !other.toolName || currentSignature !== other.argsHash) {
     return { count: 0, noProgressEvidence: false };
   }
 
   let alternatingTailCount = 0;
-  for (let i = history.length - 1; i >= 0; i -= 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : otherSignature;
+  for (const call of history.toReversed()) {
+    const expected = alternatingTailCount % 2 === 0 ? last.argsHash : other.argsHash;
     if (call.argsHash !== expected) {
       break;
     }
@@ -466,40 +438,22 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
-  if (currentSignature !== otherSignature) {
-    return { count: 0, noProgressEvidence: false };
-  }
-
-  const tailStart = Math.max(0, history.length - alternatingTailCount);
   const resultHashes = new Map<string, string>();
-  let noProgressEvidence = true;
-  for (let i = tailStart; i < history.length; i += 1) {
-    const call = history[i];
-    if (!call) {
-      continue;
-    }
-    if (!call.resultHash || (call.argsHash !== last.argsHash && call.argsHash !== otherSignature)) {
-      noProgressEvidence = false;
-      break;
-    }
+  const stableOutcomes = history.slice(-alternatingTailCount).every((call) => {
     const previousHash = resultHashes.get(call.argsHash);
-    if (previousHash && previousHash !== call.resultHash) {
-      noProgressEvidence = false;
-      break;
+    if (!call.resultHash || (previousHash && previousHash !== call.resultHash)) {
+      return false;
     }
     resultHashes.set(call.argsHash, call.resultHash);
-  }
-
-  // Need repeated stable outcomes on both sides before treating ping-pong as no-progress.
-  if (resultHashes.size !== 2) {
-    noProgressEvidence = false;
-  }
+    return true;
+  });
 
   return {
     count: alternatingTailCount + 1,
     pairedToolName: last.toolName,
     pairedSignature: last.argsHash,
-    noProgressEvidence,
+    // Both sides must have a stable outcome before alternation counts as no progress.
+    noProgressEvidence: stableOutcomes && resultHashes.size === 2,
   };
 }
 
@@ -507,10 +461,6 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
-/**
- * Detect if an agent is stuck in a repetitive tool call loop.
- * Checks if the same tool+params combination has been called excessively.
- */
 export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
@@ -657,10 +607,6 @@ export function detectToolCallLoop(
   return { stuck: false };
 }
 
-/**
- * Record a tool call in the session's history for loop detection.
- * Maintains sliding window of last N calls.
- */
 export function recordToolCall(
   state: SessionState,
   toolName: string,
@@ -687,9 +633,6 @@ export function recordToolCall(
   }
 }
 
-/**
- * Record a completed tool call outcome so loop detection can identify no-progress repeats.
- */
 export function recordToolCallOutcome(
   state: SessionState,
   params: {
@@ -713,52 +656,34 @@ export function recordToolCallOutcome(
   }
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
-  let recordedOutcome: ToolCallRecord | undefined;
-  for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
-    const call = state.toolCallHistory[i];
-    if (!call) {
-      continue;
-    }
-    if (normalizeRunId(call.runId) !== runId) {
-      continue;
-    }
-    if (params.toolCallId && call.toolCallId !== params.toolCallId) {
-      continue;
-    }
-    if (call.toolName !== params.toolName || call.argsHash !== argsHash) {
-      continue;
-    }
-    if (call.resultHash !== undefined || call.outcomeKind !== undefined) {
-      continue;
-    }
-    call.outcomeKind = outcome.outcomeKind;
-    call.resultHash = outcome.resultHash;
-    call.failureIdentityHash = outcome.failureIdentityHash;
-    if (outcome.noProgress) {
-      call.noProgress = true;
-    } else {
-      delete call.noProgress;
-    }
-    call.unknownToolName = outcome.unknownToolName;
-    recordedOutcome = call;
-    break;
-  }
-
+  let recordedOutcome = state.toolCallHistory.findLast(
+    (call) =>
+      call &&
+      normalizeRunId(call.runId) === runId &&
+      (!params.toolCallId || call.toolCallId === params.toolCallId) &&
+      call.toolName === params.toolName &&
+      call.argsHash === argsHash &&
+      call.resultHash === undefined &&
+      call.outcomeKind === undefined,
+  );
   if (!recordedOutcome) {
-    const record: ToolCallRecord = {
+    recordedOutcome = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
       ...(runId && { runId }),
-      outcomeKind: outcome.outcomeKind,
-      resultHash: outcome.resultHash,
-      failureIdentityHash: outcome.failureIdentityHash,
-      ...(outcome.noProgress ? { noProgress: true as const } : {}),
-      unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
     };
-    state.toolCallHistory.push(record);
-    recordedOutcome = record;
+    state.toolCallHistory.push(recordedOutcome);
+  }
+  recordedOutcome.outcomeKind = outcome.outcomeKind;
+  recordedOutcome.resultHash = outcome.resultHash;
+  recordedOutcome.failureIdentityHash = outcome.failureIdentityHash;
+  recordedOutcome.unknownToolName = outcome.unknownToolName;
+  if (outcome.noProgress) {
+    recordedOutcome.noProgress = true;
+  } else {
+    delete recordedOutcome.noProgress;
   }
 
   if (state.toolCallHistory.length > TOOL_CALL_HISTORY_SIZE) {

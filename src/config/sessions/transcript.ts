@@ -1,8 +1,8 @@
-// Session transcript facade appends mirror messages and reads tails.
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   normalizeAgentId,
@@ -33,7 +33,6 @@ import {
   isSessionTranscriptProjectionUnavailableError,
   persistSessionTranscriptTurn,
   readActiveTranscriptEntryAnchor,
-  readLatestSessionTranscriptMessageEvent,
   readLatestTranscriptAssistantText,
   readSessionTranscriptMessageEventPage,
   resolveSessionEntrySelection,
@@ -46,6 +45,7 @@ import {
   type TranscriptEvent,
 } from "./session-accessor.js";
 import type { LatestTranscriptAssistantText } from "./session-accessor.types.js";
+import { prepareSessionTranscriptHydration } from "./session-transcript-hydration.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnLifecyclePatch,
@@ -58,7 +58,10 @@ import {
   applyBeforeMessageWriteToAssistant,
   type AssistantBeforeMessageWrite,
 } from "./transcript-assistant-message.js";
-import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
+import {
+  resolveMirroredTranscriptText,
+  type SessionTranscriptDeliveryMirror,
+} from "./transcript-mirror.js";
 import {
   isWithinTranscriptWindow,
   normalizeRecentTranscriptLimit,
@@ -89,17 +92,6 @@ export type SessionTranscriptAppendResult =
     };
 
 export type SessionTranscriptUpdateMode = "inline" | "file-only" | "none";
-export type SessionTranscriptDeliveryMirror =
-  | {
-      kind: "channel-final";
-      sourceMessageId?: string;
-    }
-  | {
-      kind: "channel-final-suppressed";
-      reason: "stale-foreground";
-      sourceMessageId?: string;
-    };
-
 type InternalSessionTranscriptDeliveryMirror =
   | SessionTranscriptDeliveryMirror
   | {
@@ -156,32 +148,16 @@ class SessionTranscriptAgentScopeMismatchError extends Error {
 
 export type LatestAssistantTranscriptText = LatestTranscriptAssistantText;
 
-function parseAssistantTranscriptText(
-  line: string,
-  options?: { excludeTranscriptOnlyOpenClawAssistant?: boolean },
-): LatestAssistantTranscriptText | undefined {
-  const parsed = JSON.parse(line) as {
+function parseAssistantTranscriptText(line: string): LatestAssistantTranscriptText | undefined {
+  const { id, message } = JSON.parse(line) as {
     id?: unknown;
     message?: unknown;
   };
-  const message = parsed.message as
-    | { role?: unknown; timestamp?: unknown; provider?: unknown; model?: unknown }
-    | undefined;
-  if (!message || message.role !== "assistant") {
+  if (isTranscriptOnlyOpenClawAssistantMessage(message)) {
     return undefined;
   }
-  if (
-    options?.excludeTranscriptOnlyOpenClawAssistant &&
-    isTranscriptOnlyOpenClawAssistantMessage(message)
-  ) {
-    return undefined;
-  }
-  return projectAssistantTranscriptText(message, parsed.id);
+  return projectAssistantTranscriptText(message, id);
 }
-
-type SessionConversationTranscriptTarget = {
-  sqliteScope?: SqliteSessionFileMarker;
-};
 
 function extractRecentConversationText(
   event: TranscriptEvent,
@@ -298,14 +274,14 @@ async function readRecentUserAssistantTextFromSqliteTranscript(
   }
 }
 
-function resolveSessionConversationTranscriptTarget(params: {
+function resolveSessionConversationTranscriptScope(params: {
   agentId?: string;
   sessionKey: string;
   storePath?: string;
-}): SessionConversationTranscriptTarget {
+}): SqliteSessionFileMarker | undefined {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey) {
-    return {};
+    return undefined;
   }
   const explicitAgentId = params.agentId?.trim() ? normalizeAgentId(params.agentId) : undefined;
   const sessionKeyAgentId = parseAgentSessionKey(sessionKey)?.agentId;
@@ -321,25 +297,20 @@ function resolveSessionConversationTranscriptTarget(params: {
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
   const entry = loadSessionEntryReadOnly({ agentId, sessionKey: scopedSessionKey, storePath });
   if (!entry?.sessionId) {
-    return {};
+    return undefined;
   }
   return {
-    sqliteScope: {
-      agentId,
-      sessionId: entry.sessionId,
-      storePath,
-    },
+    agentId,
+    sessionId: entry.sessionId,
+    storePath,
   };
 }
 
 export async function readRecentUserAssistantTextForSession(
   params: ReadRecentSessionConversationTextParams,
 ): Promise<SessionRecentConversationText[]> {
-  const target = resolveSessionConversationTranscriptTarget(params);
-  if (target.sqliteScope) {
-    return await readRecentUserAssistantTextFromSqliteTranscript(target.sqliteScope, params);
-  }
-  return [];
+  const scope = resolveSessionConversationTranscriptScope(params);
+  return scope ? await readRecentUserAssistantTextFromSqliteTranscript(scope, params) : [];
 }
 
 export async function readLatestAssistantTextFromSessionTranscript(
@@ -368,9 +339,7 @@ export async function readLatestAssistantTextFromSessionTranscript(
 
   for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
-      const assistantText = parseAssistantTranscriptText(line, {
-        excludeTranscriptOnlyOpenClawAssistant: true,
-      });
+      const assistantText = parseAssistantTranscriptText(line);
       if (assistantText) {
         return assistantText;
       }
@@ -397,6 +366,7 @@ type SessionTranscriptAssistantAppendOptions = {
   updateMode?: SessionTranscriptUpdateMode;
   config?: OpenClawConfig;
   beforeMessageWrite?: AssistantBeforeMessageWrite;
+  assertCurrent?: () => void;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
 };
 
@@ -428,25 +398,9 @@ export async function appendAssistantMessageToSessionTranscript(
   }
 
   return appendExactAssistantMessageToSessionTranscript({
-    agentId: params.agentId,
+    ...params,
     sessionKey,
-    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-    ...(params.expectedLifecycleRevision !== undefined
-      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-      : {}),
-    ...(params.expectedWriterRunId ? { expectedWriterRunId: params.expectedWriterRunId } : {}),
-    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-    ...(params.sessionLifecyclePatch
-      ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-      : {}),
-    storePath: params.storePath,
-    ...(params.eventId ? { eventId: params.eventId } : {}),
-    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-    ...(params.runId ? { runId: params.runId } : {}),
-    updateMode: params.updateMode,
-    onMessageCommitted: params.onMessageCommitted,
-    config: params.config,
-    ...(params.beforeMessageWrite ? { beforeMessageWrite: params.beforeMessageWrite } : {}),
+    expectedWriterRunId: params.expectedWriterRunId || undefined,
     message: {
       ...recordAssistantManagedMediaUrls(
         { role: "assistant" as const, openclawDelivery: { mediaUrls: [] } },
@@ -457,20 +411,7 @@ export async function appendAssistantMessageToSessionTranscript(
       api: OPENCLAW_TRANSCRIPT_ARTIFACT_API,
       provider: OPENCLAW_TRANSCRIPT_ARTIFACT_PROVIDER,
       model: OPENCLAW_DELIVERY_MIRROR_MODEL,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
+      usage: makeZeroUsageSnapshot(),
       stopReason: "stop" as const,
       timestamp: Date.now(),
       ...(params.deliveryMirror ? { openclawDeliveryMirror: params.deliveryMirror } : {}),
@@ -561,38 +502,33 @@ export async function appendExactAssistantMessageToSessionTranscript(
   let latestEquivalentAssistantId: string | undefined;
   // Keyed mirrors use strict replay identity; text-only suppression must not
   // hide conflicting media or collapse distinct source messages.
-  const turn = await persistSessionTranscriptTurn(
-    {
-      sessionId: entry.sessionId,
-      sessionKey: resolved.normalizedKey,
-      storePath,
-      ...(transcriptAgentId ? { agentId: transcriptAgentId } : {}),
-    },
-    {
-      cwd: entry.spawnedCwd,
-      ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
-      ...(params.expectedLifecycleRevision !== undefined
-        ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
-        : {}),
-      ...(params.expectedWriterRunId !== undefined
-        ? { expectedWriterRunId: params.expectedWriterRunId }
-        : {}),
-      ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
-      ...(params.sessionLifecyclePatch
-        ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
-        : {}),
-      ...(params.config ? { config: params.config } : {}),
-      ...(params.runId ? { runId: params.runId } : {}),
-      updateMode: params.updateMode ?? "inline",
-      onMessageCommitted: params.onMessageCommitted,
-      touchSessionEntry: true,
-      messages: [
-        {
-          message: preparedUnkeyedMessage,
-          ...(params.eventId ? { eventId: params.eventId } : {}),
-          ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
-          ...(explicitIdempotencyKey && params.beforeMessageWrite
-            ? {
+  const turn = await persistSessionTranscriptTurn(target, {
+    assertCurrent: params.assertCurrent,
+    cwd: entry.spawnedCwd,
+    ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
+    ...(params.expectedLifecycleRevision !== undefined
+      ? { expectedLifecycleRevision: params.expectedLifecycleRevision }
+      : {}),
+    ...(params.expectedWriterRunId !== undefined
+      ? { expectedWriterRunId: params.expectedWriterRunId }
+      : {}),
+    ...(params.expectedSessionState ? { expectedSessionState: params.expectedSessionState } : {}),
+    ...(params.sessionLifecyclePatch
+      ? { sessionLifecyclePatch: params.sessionLifecyclePatch }
+      : {}),
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.runId ? { runId: params.runId } : {}),
+    updateMode: params.updateMode ?? "inline",
+    onMessageCommitted: params.onMessageCommitted,
+    touchSessionEntry: true,
+    messages: [
+      {
+        message: preparedUnkeyedMessage,
+        ...(params.eventId ? { eventId: params.eventId } : {}),
+        ...(explicitIdempotencyKey ? { idempotencyLookup: "scan" } : {}),
+        ...(explicitIdempotencyKey && params.beforeMessageWrite
+          ? {
+              workerPreparation: {
                 prepareMessageAfterIdempotencyCheck: (candidate: unknown) =>
                   applyBeforeMessageWriteToAssistant({
                     message: candidate as Parameters<SessionManager["appendMessage"]>[0],
@@ -601,23 +537,23 @@ export async function appendExactAssistantMessageToSessionTranscript(
                     agentId: transcriptAgentId,
                     sessionKey: resolved.normalizedKey,
                   }),
-              }
-            : {}),
-          shouldAppend: async (appendTarget) => {
-            latestEquivalentAssistantId =
-              isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
-                ? await findLatestEquivalentAssistantMessageId(
-                    appendTarget,
-                    preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
-                    params.config,
-                  )
-                : undefined;
-            return !latestEquivalentAssistantId;
-          },
+              },
+            }
+          : {}),
+        shouldAppend: async (appendTarget) => {
+          latestEquivalentAssistantId =
+            isRedundantDeliveryMirror(params.message) && !explicitIdempotencyKey
+              ? await findLatestEquivalentAssistantMessageId(
+                  appendTarget,
+                  preparedUnkeyedMessage as SessionTranscriptAssistantMessage,
+                  params.config,
+                )
+              : undefined;
+          return !latestEquivalentAssistantId;
         },
-      ],
-    },
-  );
+      },
+    ],
+  });
   if (turn.rejectedReason === "session-rebound") {
     return {
       ok: false,
@@ -671,10 +607,6 @@ async function touchSqliteAssistantAppendSessionEntry(params: {
   storePath: string;
 }): Promise<void> {
   const now = Date.now();
-  const buildPatch = (entry: SessionEntry | undefined): Partial<SessionEntry> => ({
-    updatedAt: Math.max(entry?.updatedAt ?? 0, now),
-    sessionStartedAt: entry?.sessionStartedAt ?? params.currentEntry.sessionStartedAt ?? now,
-  });
   await updateSessionEntry(
     {
       agentId: params.agentId,
@@ -685,7 +617,10 @@ async function touchSqliteAssistantAppendSessionEntry(params: {
       if (entry.sessionId !== params.currentEntry.sessionId) {
         return null;
       }
-      return buildPatch(entry);
+      return {
+        updatedAt: Math.max(entry.updatedAt ?? 0, now),
+        sessionStartedAt: entry.sessionStartedAt ?? params.currentEntry.sessionStartedAt ?? now,
+      };
     },
   );
 }
@@ -698,13 +633,13 @@ function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): 
 }
 
 async function readLatestVisibleTranscriptMessage(scope: {
-  agentId?: string;
+  agentId: string;
   sessionId: string;
-  sessionKey?: string;
+  sessionKey: string;
   storePath: string;
 }): Promise<{ id?: string; message: unknown } | undefined> {
   try {
-    const event = readLatestSessionTranscriptMessageEvent(scope)?.event;
+    const event = (await prepareSessionTranscriptHydration(scope).readLatestActiveMessage())?.event;
     if (!event || typeof event !== "object" || Array.isArray(event)) {
       return undefined;
     }
@@ -751,11 +686,11 @@ async function findLatestEquivalentAssistantMessageId(
     return undefined;
   }
 
-  if (target.storePath && target.sessionId) {
+  if (target.storePath && target.sessionId && target.agentId && target.sessionKey) {
     const latest = await readLatestVisibleTranscriptMessage({
-      ...(target.agentId ? { agentId: target.agentId } : {}),
+      agentId: target.agentId,
       sessionId: target.sessionId,
-      ...(target.sessionKey ? { sessionKey: target.sessionKey } : {}),
+      sessionKey: target.sessionKey,
       storePath: target.storePath,
     });
     const latestMessage = latest?.message as { role?: unknown } | undefined;
@@ -770,4 +705,3 @@ async function findLatestEquivalentAssistantMessageId(
 
   return undefined;
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

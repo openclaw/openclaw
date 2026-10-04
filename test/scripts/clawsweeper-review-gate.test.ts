@@ -59,12 +59,17 @@ describe("ClawSweeper review completion gate", () => {
     ["duplicate attribute", [reviewComment({ attributes: " sha=" + head })]],
     ["malformed source revision", [reviewComment({ sourceRevision: "not-a-revision" })]],
     ["missing lease", [reviewComment({ leaseOwner: "unknown" })]],
-    ["expired boundary", [reviewComment({ reviewedAt: ago(12 * 60 * 60_000) })]],
     ["future dated", [reviewComment({ reviewedAt: ago(-6 * 60_000) })]],
   ])("rejects %s evidence", (_name, comments) => {
     const result = run(comments);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("ClawSweeper review gate failed:");
+  });
+
+  it("accepts a completion older than twelve hours", () => {
+    const result = run([reviewComment({ reviewedAt: ago(36 * 60 * 60_000) })]);
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ commentId: 1, reviewedSha: head });
   });
 
   it("selects the newest valid completion and ignores a queued refresh", () => {

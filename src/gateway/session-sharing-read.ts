@@ -22,7 +22,24 @@ import {
   type SessionSharingRoleParams,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
-import { loadCachedSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
+import {
+  loadCachedSessionSharingSnapshot,
+  type SessionSharingSnapshot,
+} from "./session-sharing-snapshot-cache.js";
+
+function sharingSnapshot(
+  target: SessionSharingTarget | null,
+  sessionKey: string,
+): SessionSharingSnapshot {
+  // Deleted rows fail closed; their unscoped catalog invalidation still refreshes readers.
+  return {
+    visibility: target ? resolveSessionVisibility(target.entry) : "draft",
+    incognito: target
+      ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
+      : isIncognitoSessionKey(sessionKey),
+    ...(target ? { createdActor: target.entry.createdActor } : {}),
+  };
+}
 
 function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarget>[0]) {
   const { sessionKey, agentId } = params;
@@ -34,15 +51,7 @@ function loadSharingSnapshot(params: Parameters<typeof resolveSessionSharingTarg
       return {
         canonicalKey: target?.canonicalKey ?? sessionKey,
         canonicalAgentId: target?.agentId ?? agentId,
-        snapshot: {
-          // Missing rows occur after deletion. Fail closed here; the delete path also
-          // emits an unscoped catalog invalidation so identified readers still refresh.
-          visibility: target ? resolveSessionVisibility(target.entry) : "draft",
-          incognito: target
-            ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
-            : isIncognitoSessionKey(sessionKey),
-          ...(target ? { createdActor: target.entry.createdActor } : {}),
-        },
+        snapshot: sharingSnapshot(target, sessionKey),
       };
     },
   });
@@ -100,15 +109,8 @@ export function canReceiveSessionEvent(params: {
       ? params.prepared.target(sessionKey, params.agentId)
       : resolveSessionSharingTarget({ cfg, ...lookup, sessionKey });
   const visible = sessionKeys.every((sessionKey) => {
-    const target = params.prepared ? resolveTarget(sessionKey) : undefined;
     const snapshot = params.prepared
-      ? {
-          visibility: target ? resolveSessionVisibility(target.entry) : "draft",
-          incognito: target
-            ? target.entry.incognito === true || isIncognitoSessionKey(target.canonicalKey)
-            : isIncognitoSessionKey(sessionKey),
-          createdActor: target?.entry.createdActor,
-        }
+      ? sharingSnapshot(resolveTarget(sessionKey), sessionKey)
       : loadSharingSnapshot({ cfg, ...lookup, sessionKey });
     const isCreator = sharing.isCreator(snapshot.createdActor);
     if (snapshot.incognito || (hidesForeignSessions && !isCreator)) {
@@ -189,35 +191,23 @@ export function prepareProjectedSessionSharing(params: {
   const profile = identity && retained?.aliases.has(identity.id) ? retained : undefined;
   const roleProfile =
     actor?.kind === "operator" && retained?.aliases.has(actor.profileId) ? retained : undefined;
-  const sessionCap =
+  const policy =
     actor?.kind === "system"
       ? undefined
       : resolveOperatorRolePolicyForAssignment(
           roleProfile?.profileId,
           roleProfile?.role ?? null,
           cfg,
-        )?.sessions.others;
-  return prepareSessionSharing(params, {
-    aliases: profile?.aliases ?? new Set(),
-    sessionCap,
-    isMember,
-  });
-}
-
-/** Deleted metadata cannot establish a profile's child-session entitlement. */
-export function canReadSessionWithoutSharingMetadata(params: {
-  cfg: OpenClawConfig;
-  client: GatewayClient | null;
-  sessionKey: string;
-}): boolean {
-  const sharing = prepareProjectedSessionSharing({ ...params, isMember: () => false });
-  // Match the existing missing-row event policy: no creator and draft visibility.
-  return (
-    sharing.entryFilter?.(params.sessionKey, {
-      visibility: "draft",
-      incognito: isIncognitoSessionKey(params.sessionKey) ? true : undefined,
-    }) ?? true
-  );
+          roleProfile?.githubLogin ?? null,
+        );
+  return {
+    ...prepareSessionSharing(params, {
+      aliases: profile?.aliases ?? new Set(),
+      sessionCap: policy?.sessions.others,
+      isMember,
+    }),
+    policy,
+  };
 }
 
 export function createSessionListEntryFilter(

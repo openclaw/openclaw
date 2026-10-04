@@ -55,18 +55,8 @@ public enum OpenClawChatWidgetURLResolver {
     private static let documentsPath = "/__openclaw__/canvas/documents"
 
     public static func resolve(surfaceURL rawSurfaceURL: String?, target rawTarget: String) -> URL? {
-        guard let target = self.relativeWidgetTarget(rawTarget),
-              var surface = self.capabilitySurface(rawSurfaceURL)
-        else { return nil }
-
-        var surfacePath = surface.percentEncodedPath
-        while surfacePath.hasSuffix("/") {
-            surfacePath.removeLast()
-        }
-        surface.percentEncodedPath = surfacePath + target.percentEncodedPath
-        surface.percentEncodedQuery = target.percentEncodedQuery
-        surface.fragment = target.fragment
-        return surface.url
+        guard let target = self.relativeWidgetTarget(rawTarget) else { return nil }
+        return GatewayPluginSurfaceURL.appendingTarget(target, toCapabilitySurface: rawSurfaceURL)
     }
 
     public static func supportsTarget(_ rawTarget: String) -> Bool {
@@ -170,27 +160,6 @@ public enum OpenClawChatWidgetURLResolver {
         return components
     }
 
-    private static func capabilitySurface(_ rawSurfaceURL: String?) -> URLComponents? {
-        let raw = rawSurfaceURL?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !raw.isEmpty,
-              let components = URLComponents(string: raw),
-              self.isWebURL(components),
-              components.user == nil,
-              components.password == nil,
-              components.percentEncodedQuery == nil,
-              components.fragment == nil
-        else { return nil }
-
-        let segments = components.percentEncodedPath.split(separator: "/", omittingEmptySubsequences: true)
-        guard segments.count >= 3,
-              segments[segments.count - 3] == "__openclaw__",
-              segments[segments.count - 2] == "cap",
-              let capability = String(segments[segments.count - 1]).removingPercentEncoding,
-              !capability.isEmpty
-        else { return nil }
-        return components
-    }
-
     private static func resolve(
         surface: GatewayCanvasHostRoute,
         role: OpenClawChatWidgetSurfaceRole,
@@ -245,11 +214,6 @@ public enum OpenClawChatWidgetURLResolver {
         }
         return candidate.url != failedResource.url ||
             candidate.tlsFingerprintSHA256 != failedResource.tlsFingerprintSHA256
-    }
-
-    private static func isWebURL(_ components: URLComponents) -> Bool {
-        let scheme = components.scheme?.lowercased()
-        return (scheme == "http" || scheme == "https") && components.host?.isEmpty == false
     }
 
     private static func isCanonicalPath(_ path: String) -> Bool {
@@ -463,15 +427,15 @@ struct ChatInlineWidgetView: View {
     }
 
     #if os(iOS)
-    private func copySnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func copySnapshot(_ image: OpenClawPlatformImage) {
         UIPasteboard.general.image = image
     }
 
-    private func saveSnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func saveSnapshot(_ image: OpenClawPlatformImage) {
         self.sharedImage = ChatInlineWidgetSharedImage(image: image)
     }
     #elseif os(macOS)
-    private func copySnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func copySnapshot(_ image: OpenClawPlatformImage) {
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()
         guard pasteboard.writeObjects([image]) else {
@@ -480,7 +444,7 @@ struct ChatInlineWidgetView: View {
         }
     }
 
-    private func saveSnapshot(_ image: ChatInlineWidgetSnapshotImage) {
+    private func saveSnapshot(_ image: OpenClawPlatformImage) {
         guard let pngData = image.chatInlineWidgetPNGData else {
             self.exportErrorMessage = String(localized: "The widget image could not be encoded as PNG.")
             return
@@ -754,23 +718,6 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
 }
 
 @MainActor
-private func makeChatInlineWidgetWebView(
-    resource: OpenClawChatWidgetResource,
-    allowsScripts: Bool,
-    coordinator: ChatInlineWidgetNavigationDelegate) -> WKWebView
-{
-    let configuration = WKWebViewConfiguration()
-    configuration.websiteDataStore = .nonPersistent()
-    configuration.defaultWebpagePreferences.allowsContentJavaScript = allowsScripts
-    configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
-    let webView = WKWebView(frame: .zero, configuration: configuration)
-    webView.navigationDelegate = coordinator
-    webView.allowsLinkPreview = false
-    webView.load(URLRequest(url: resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
-    return webView
-}
-
-@MainActor
 private struct ChatInlineWidgetWebView {
     let resource: OpenClawChatWidgetResource
     let loadGeneration: UUID
@@ -787,10 +734,15 @@ private struct ChatInlineWidgetWebView {
     }
 
     func makeWebView(coordinator: ChatInlineWidgetNavigationDelegate) -> WKWebView {
-        makeChatInlineWidgetWebView(
-            resource: self.resource,
-            allowsScripts: self.allowsScripts,
-            coordinator: coordinator)
+        let configuration = WKWebViewConfiguration()
+        configuration.websiteDataStore = .nonPersistent()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = self.allowsScripts
+        configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        let webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = coordinator
+        webView.allowsLinkPreview = false
+        webView.load(URLRequest(url: self.resource.url, cachePolicy: .reloadIgnoringLocalCacheData))
+        return webView
     }
 
     func updateWebView(_ webView: WKWebView, coordinator: ChatInlineWidgetNavigationDelegate) {

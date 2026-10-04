@@ -52,9 +52,9 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   sessionTarget?: SessionTranscriptRuntimeTarget;
   assertCommitAllowed?: () => void;
 }): {
-  describeFlushState(): string | undefined;
-  flush(): Promise<void>;
-  write(event: TrajectoryEvent, line: string): void;
+  describeFlushState: () => string | undefined;
+  flush: () => Promise<void>;
+  write: (event: TrajectoryEvent, line: string) => void;
 } | null {
   const target = params.sessionTarget
     ? {
@@ -123,51 +123,61 @@ export function createSqliteTrajectoryRuntimeSink(params: {
   const env = { ...params.env };
   env.OPENCLAW_STATE_DIR = resolveStateDir(env);
   const databaseOptions = toDatabaseOptions(resolveSqliteReadScope({ ...marker, env }));
-  const pendingEvents: TrajectoryEvent[] = [];
+  let pendingEvents = new Map<TrajectoryEvent, number>();
   let queuedBytes = 0;
+  let discardPrevious = false;
+  let inFlight:
+    | { events: Map<TrajectoryEvent, number>; bytes: number; discardPrevious: boolean }
+    | undefined;
   let unsettledAppend: SqliteWorkerError | undefined;
-  return {
-    describeFlushState: () =>
-      pendingEvents.length > 0
-        ? `pendingRows=${pendingEvents.length} queuedBytes=${queuedBytes} activeOperation=sqlite-append`
-        : undefined,
-    flush: async () => {
-      if (unsettledAppend) {
-        throw unsettledAppend;
-      }
-      if (pendingEvents.length === 0) {
-        return;
-      }
-      await runOpenClawAgentWriteAdmission(
-        databaseOptions,
-        async () => {
-          if (unsettledAppend) {
-            throw unsettledAppend;
-          }
-          if (pendingEvents.length === 0) {
-            return;
-          }
-          await withOpenClawAgentDatabaseAsync(databaseOptions, async (database) => {
-            // Capture the prefix inside the FIFO turn; new events remain queued during the write.
-            const events = pendingEvents.slice();
-            const bytes = queuedBytes;
-            const retire = () => {
-              pendingEvents.splice(0, events.length);
-              queuedBytes -= bytes;
-            };
+  const trimPending = () => {
+    // Keep an oversized newest event so its append still expires the disk window.
+    while (queuedBytes > params.maxRuntimeFileBytes && pendingEvents.size > 1) {
+      const [oldest, oldestBytes] = pendingEvents.entries().next().value!;
+      pendingEvents.delete(oldest);
+      queuedBytes -= oldestBytes;
+      discardPrevious = true;
+    }
+  };
+  const flushPending = async () => {
+    if (unsettledAppend) {
+      throw unsettledAppend;
+    }
+    if (pendingEvents.size === 0 && !inFlight) {
+      return;
+    }
+    await runOpenClawAgentWriteAdmission(
+      databaseOptions,
+      async () => {
+        if (unsettledAppend) {
+          throw unsettledAppend;
+        }
+        if (pendingEvents.size === 0) {
+          return;
+        }
+        await withOpenClawAgentDatabaseAsync(databaseOptions, async (database) => {
+          // Admission transfers the batch; later arrivals cannot evict accepted rows.
+          const batch = { events: pendingEvents, bytes: queuedBytes, discardPrevious };
+          inFlight = batch;
+          pendingEvents = new Map();
+          queuedBytes = 0;
+          discardPrevious = false;
+          const events = [...batch.events.keys()];
+          try {
             if (isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions)) {
               await appendSqliteTrajectoryRuntimeEventsInWorker(
                 databaseOptions,
                 database,
                 {
                   events,
+                  discardPrevious: batch.discardPrevious,
                   maxRuntimeBytes: params.maxRuntimeFileBytes,
                   sessionId: marker.sessionId,
                 },
                 params.assertCommitAllowed,
                 (outcome) => {
                   if (outcome === "committed") {
-                    retire();
+                    inFlight = undefined;
                   } else {
                     unsettledAppend = new SqliteWorkerError(
                       "Trajectory append outcome is unknown; pending events cannot be replayed",
@@ -180,6 +190,7 @@ export function createSqliteTrajectoryRuntimeSink(params: {
               appendSqliteTrajectoryRuntimeEvents(
                 {
                   agentId: marker.agentId,
+                  discardPrevious: batch.discardPrevious,
                   env: databaseOptions.env,
                   maxRuntimeBytes: params.maxRuntimeFileBytes,
                   sessionId: marker.sessionId,
@@ -188,16 +199,65 @@ export function createSqliteTrajectoryRuntimeSink(params: {
                 },
                 events,
               );
-              retire();
+              inFlight = undefined;
             }
-          });
-        },
-        true,
-      );
+          } finally {
+            if (inFlight === batch && !unsettledAppend) {
+              inFlight = undefined;
+              // A newer overflow already expires this failed prefix. Otherwise put
+              // it back before the newer queue and apply the same rolling window.
+              if (!discardPrevious) {
+                for (const [event, bytes] of pendingEvents) {
+                  batch.events.set(event, bytes);
+                }
+                pendingEvents = batch.events;
+                queuedBytes += batch.bytes;
+                discardPrevious = batch.discardPrevious;
+                trimPending();
+              }
+            }
+          }
+        });
+      },
+      true,
+    );
+  };
+  let backgroundFlush: Promise<void> | undefined;
+  let backgroundFailed = false;
+  const scheduleFlush = () => {
+    if (
+      backgroundFlush ||
+      backgroundFailed ||
+      unsettledAppend ||
+      (pendingEvents.size < 32 && queuedBytes < 256 * 1024)
+    ) {
+      return;
+    }
+    backgroundFlush = flushPending()
+      .catch(() => {
+        backgroundFailed = true;
+      })
+      .finally(() => {
+        backgroundFlush = undefined;
+        scheduleFlush();
+      });
+  };
+  return {
+    describeFlushState: () =>
+      pendingEvents.size > 0 || inFlight
+        ? `pendingRows=${pendingEvents.size + (inFlight?.events.size ?? 0)} queuedBytes=${queuedBytes + (inFlight?.bytes ?? 0)} activeOperation=sqlite-append`
+        : undefined,
+    flush: async () => {
+      await backgroundFlush;
+      backgroundFailed = false;
+      await flushPending();
     },
     write: (event, line) => {
-      pendingEvents.push(event);
-      queuedBytes += Buffer.byteLength(line, "utf8") + 1;
+      const bytes = Buffer.byteLength(line, "utf8") + 1;
+      pendingEvents.set(event, bytes);
+      queuedBytes += bytes;
+      trimPending();
+      scheduleFlush();
     },
   };
 }

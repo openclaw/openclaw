@@ -105,27 +105,6 @@ function createPromotedToolCallBlocks(
   return toolCalls;
 }
 
-function createPromotedToolCallBlocksFromTextParts(
-  textParts: readonly string[],
-  options: PlainTextToolCallPromotionOptions,
-): Record<string, unknown>[] | undefined {
-  const text = textParts.join("");
-  if (!text.trim()) {
-    return [];
-  }
-  let offset = 0;
-  const lineBreakOffsets = new Set(
-    textParts.slice(0, -1).map((part) => {
-      offset += part.length;
-      return offset;
-    }),
-  );
-  if (lineBreakOffsets.has(text.length)) {
-    lineBreakOffsets.delete(text.length);
-  }
-  return createPromotedToolCallBlocks(text, options, lineBreakOffsets);
-}
-
 /** Promotes text calls and maps source blocks retained in the projected message. */
 export function projectStandalonePlainTextToolCallMessage(
   options: PlainTextToolCallPromotionOptions,
@@ -165,7 +144,18 @@ export function projectStandalonePlainTextToolCallMessage(
   let promotedTextBlock = false;
   let textParts: string[] = [];
   const flushTextParts = (): boolean => {
-    const toolCalls = createPromotedToolCallBlocksFromTextParts(textParts, options);
+    const text = textParts.join("");
+    let offset = 0;
+    const lineBreakOffsets = new Set(
+      textParts.slice(0, -1).map((part) => {
+        offset += part.length;
+        return offset;
+      }),
+    );
+    lineBreakOffsets.delete(text.length);
+    const toolCalls = text.trim()
+      ? createPromotedToolCallBlocks(text, options, lineBreakOffsets)
+      : [];
     textParts = [];
     if (!toolCalls) {
       return false;
@@ -198,10 +188,7 @@ export function projectStandalonePlainTextToolCallMessage(
     return undefined;
   }
 
-  if (!flushTextParts()) {
-    return undefined;
-  }
-  if (!promotedTextBlock) {
+  if (!flushTextParts() || !promotedTextBlock) {
     return undefined;
   }
 

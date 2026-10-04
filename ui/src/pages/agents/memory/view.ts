@@ -11,8 +11,14 @@ import { i18n, t } from "../../../i18n/index.ts";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
 import { registerSettingsEnglish } from "../../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { pathDisplayName } from "../../../lib/path-display.ts";
 import "../../../styles/dreams.css";
-import type { DreamingEntry, WikiImportInsights, WikiOverview } from "./dreaming.ts";
+import type {
+  DreamingEntry,
+  WikiImportInsights,
+  WikiOverview,
+  WikiPagePreview,
+} from "./dreaming.ts";
 
 registerSettingsEnglish();
 registerDreamingEnglish();
@@ -104,7 +110,6 @@ type DreamingProps = {
   };
   shortTermEntries: DreamingEntry[];
   promotedEntries: DreamingEntry[];
-  dreamingOf: string | null;
   nextCycle: string | null;
   timezone: string | null;
   statusError: string | null;
@@ -126,14 +131,7 @@ type DreamingProps = {
   onRefreshImports: () => void;
   onRefreshWikiOverview: () => void;
   onOpenConfig: () => void;
-  onOpenWikiPage: (lookup: string) => Promise<{
-    title: string;
-    path: string;
-    content: string;
-    totalLines?: number;
-    truncated?: boolean;
-    updatedAt?: string;
-  } | null>;
+  onOpenWikiPage: (lookup: string) => Promise<WikiPagePreview | null>;
   onBackfillDiary: () => void;
   onCopyDreamingArchivePath: () => void;
   onDedupeDreamDiary: () => void;
@@ -262,7 +260,7 @@ function renderDreamsCameo(agentId: string) {
 export function renderDreaming(props: DreamingProps) {
   const state = props.viewState;
   const idle = !props.active;
-  const dreamText = props.dreamingOf ?? currentDreamPhrase(state);
+  const dreamText = currentDreamPhrase(state);
 
   return html`
     <div class="dreams-page">
@@ -449,15 +447,6 @@ function formatCompactDateTime(value: string): string {
   });
 }
 
-function basename(value: string): string {
-  const normalized = value.replace(/\\/g, "/");
-  return normalized.split("/").findLast(Boolean) ?? value;
-}
-
-function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "report"): string {
-  return t(`dreaming.wiki.pageTypes.${kind}`);
-}
-
 function formatWikiCount(
   kind: "page" | "claimRow" | "openQuestion" | "contradiction",
   count: number,
@@ -536,16 +525,12 @@ function toggleExpandedCard(bucket: Set<string>, key: string, onChange: () => vo
 
 async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
   const state = props.viewState;
-  const requestId = ++state.wikiPreviewRequestId;
+  resetWikiPreview(state);
+  const requestId = state.wikiPreviewRequestId;
   state.wikiPreviewOpen = true;
   state.wikiPreviewLoading = true;
-  state.wikiPreviewTitle = basename(lookup);
+  state.wikiPreviewTitle = pathDisplayName(lookup);
   state.wikiPreviewPath = lookup;
-  state.wikiPreviewUpdatedAt = null;
-  state.wikiPreviewContent = "";
-  state.wikiPreviewTotalLines = null;
-  state.wikiPreviewTruncated = false;
-  state.wikiPreviewError = null;
   props.onViewStateChange();
   try {
     const preview = await props.onOpenWikiPage(lookup);
@@ -684,15 +669,6 @@ function compareWaitingEntryBySignals(a: DreamingEntry, b: DreamingEntry): numbe
   return compareWaitingEntryByRecency(a, b);
 }
 
-function sortWaitingEntries(
-  entries: DreamingEntry[],
-  sort: DreamingViewState["advancedWaitingSort"],
-): DreamingEntry[] {
-  return sort === "signals"
-    ? entries.toSorted(compareWaitingEntryBySignals)
-    : entries.toSorted(compareWaitingEntryByRecency);
-}
-
 function describeWaitingEntryOrigin(entry: DreamingEntry): string {
   const hasGroundedReplay = entry.groundedCount > 0;
   const hasLiveSupport = entry.recallCount > 0 || entry.dailyCount > 0;
@@ -731,19 +707,11 @@ function renderAdvancedEntryList(params: {
           ? html`<div class="dreams-advanced__empty">${t(params.emptyKey)}</div>`
           : html`
               <div class="dreams-advanced__list">
-                ${params.entries.map(
-                  (entry) => html`
+                ${params.entries.map((entry) => {
+                  const badge = params.badge?.(entry);
+                  return html`
                     <article class="dreams-advanced__item" data-entry-key=${entry.key}>
-                      ${
-                        params.badge
-                          ? (() => {
-                              const label = params.badge?.(entry);
-                              return label
-                                ? html`<span class="dreams-advanced__badge">${label}</span>`
-                                : nothing;
-                            })()
-                          : nothing
-                      }
+                      ${badge ? html`<span class="dreams-advanced__badge">${badge}</span>` : nothing}
                       <div class="dreams-advanced__snippet">${entry.snippet}</div>
                       <div class="dreams-advanced__source">
                         ${formatRange(entry.path, entry.startLine, entry.endLine)}
@@ -755,8 +723,8 @@ function renderAdvancedEntryList(params: {
                           .join(" · ")}
                       </div>
                     </article>
-                  `,
-                )}
+                  `;
+                })}
               </div>
             `
       }
@@ -767,7 +735,11 @@ function renderAdvancedEntryList(params: {
 function renderAdvancedSection(props: DreamingProps) {
   const state = props.viewState;
   const groundedEntries = props.shortTermEntries.filter((entry) => entry.groundedCount > 0);
-  const waitingEntries = sortWaitingEntries(props.shortTermEntries, state.advancedWaitingSort);
+  const waitingEntries = props.shortTermEntries.toSorted(
+    state.advancedWaitingSort === "signals"
+      ? compareWaitingEntryBySignals
+      : compareWaitingEntryByRecency,
+  );
   const description = t("dreaming.advanced.description");
   const summary = [
     `${groundedEntries.length} ${t("dreaming.advanced.summaryFromDailyLog")}`,
@@ -1058,7 +1030,9 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
   const expanded = expandedCards.has(item.pagePath);
   const badgeClass = card.kind === "import" ? card.item.riskLevel : "wiki";
   const badgeLabel =
-    card.kind === "import" ? formatImportBadge(card.item) : formatKindLabel(card.item.kind);
+    card.kind === "import"
+      ? formatImportBadge(card.item)
+      : t(`dreaming.wiki.pageTypes.${card.item.kind}`);
   const metadata =
     card.kind === "import"
       ? card.item.activeBranchMessages > 0
@@ -1089,7 +1063,7 @@ function renderWikiInsightCard(props: DreamingProps, card: WikiInsightCard) {
       </div>
       <div class="dreams-diary__insight-meta">
         ${
-          item.updatedAt ? formatCompactDateTime(item.updatedAt) : basename(item.pagePath)
+          item.updatedAt ? formatCompactDateTime(item.updatedAt) : pathDisplayName(item.pagePath)
         }${metadata}
       </div>
       ${renderWikiInsightBody(card, expanded)}

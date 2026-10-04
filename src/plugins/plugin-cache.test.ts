@@ -10,6 +10,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
@@ -227,34 +228,6 @@ describe("plugin package facts", () => {
     });
   });
 
-  it("proves aliased root containment by physical directory identity", () => {
-    const { parent, alias, source } = createWindowsRootAliasFixture(
-      "plugin-identity-containment-",
-      path.join("nested", "plugin.js"),
-    );
-    const external = path.join(parent, "external.js");
-    fs.writeFileSync(external, "export default {};\n");
-
-    expect(isPathInside(alias, source)).toBe(true);
-    expect(isPathInside(alias, external)).toBe(false);
-  });
-
-  it("opens a runtime entry when Windows reports the child through another root alias", () => {
-    const { alias, source } = createWindowsRootAliasFixture("plugin-runtime-alias-open-");
-
-    const opened = openPluginRootFileSync({
-      rootPath: alias,
-      filePath: source,
-      rejectHardlinks: false,
-    });
-
-    expect(opened.ok).toBe(true);
-    if (opened.ok) {
-      expect(opened.path).toBe(source);
-      fs.closeSync(opened.fd);
-    }
-  });
-
   it.each(["entry check", "file read"] as const)(
     "rejects a retargeted observed root during plugin cache %s",
     (operation) => {
@@ -290,6 +263,18 @@ describe("plugin package facts", () => {
     const external = path.join(parent, "external.js");
     fs.writeFileSync(external, "external\n");
     fs.symlinkSync(external, path.join(root, "external-link.js"));
+    expect(isPathInside(alias, source)).toBe(true);
+    expect(isPathInside(alias, external)).toBe(false);
+    const opened = openPluginRootFileSync({
+      rootPath: alias,
+      filePath: source,
+      rejectHardlinks: false,
+    });
+    expect(opened.ok).toBe(true);
+    if (opened.ok) {
+      expect(opened.path).toBe(source);
+      fs.closeSync(opened.fd);
+    }
 
     withPluginCache(createPluginCache(), () => {
       const file = readPluginCacheFile({
@@ -309,37 +294,22 @@ describe("plugin package facts", () => {
     });
   });
 
-  it("preserves a trusted Windows junction at the plugin root", () => {
-    const { root, alias } = createWindowsRootAliasFixture("plugin-junction-root-");
-
-    withPluginCache(createPluginCache(), () => {
-      expect(
-        checkPluginCacheEntry({
-          rootDir: alias,
-          rootRealPath: root,
-          relativePath: "plugin.js",
-          rejectHardlinks: true,
-        }),
-      ).toMatchObject({ ok: true, exists: true });
-    });
-  });
-
-  it("reopens a long-spelled child beneath an admitted short Windows root", () => {
-    const { root, alias } = createWindowsRootAliasFixture("plugin-short-root-entry-");
-
-    withPluginCache(createPluginCache(), () => {
-      expect(
-        checkPluginCacheEntry({
-          // Mirrors Windows discovery retaining the long child spelling while
-          // native realpath preserves the trusted root's 8.3 alias.
-          rootDir: root,
-          rootRealPath: alias,
-          relativePath: "plugin.js",
-          rejectHardlinks: true,
-        }),
-      ).toMatchObject({ ok: true, exists: true });
-    });
-  });
+  it.each(["junction", "short root"] as const)(
+    "checks a Windows entry with an admitted %s alias",
+    (kind) => {
+      const { root, alias } = createWindowsRootAliasFixture("plugin-root-alias-entry-");
+      withPluginCache(createPluginCache(), () => {
+        expect(
+          checkPluginCacheEntry({
+            rootDir: kind === "junction" ? alias : root,
+            rootRealPath: kind === "junction" ? root : alias,
+            relativePath: "plugin.js",
+            rejectHardlinks: true,
+          }),
+        ).toMatchObject({ ok: true, exists: true });
+      });
+    },
+  );
 
   it.each(["native", "javascript"] as const)(
     "reuses the provider catalog source resolved by the %s filesystem path",
@@ -396,26 +366,31 @@ describe("plugin package facts", () => {
   it("withPluginLifecycleLease refreshes enclosing operation facts while retaining its callbacks", async () => {
     const root = tempDirs.make("plugin-lease-parent-");
     const filePath = path.join(root, "catalog.json");
+    const databasePath = path.join(root, "state.sqlite");
     fs.writeFileSync(filePath, '{"name":"before-install"}');
-    await using cache = createPluginCache();
-    const instance = new PluginInstance("setup-owner");
-    cache.instances.add(instance);
-    const afterWrite = instance.wrap(() => "post-write usable");
-    await withPluginCache(cache, async () => {
-      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-        ok: true,
-        value: { name: "before-install" },
+    try {
+      await using cache = createPluginCache();
+      const instance = new PluginInstance("setup-owner");
+      cache.instances.add(instance);
+      const afterWrite = instance.wrap(() => "post-write usable");
+      await withPluginCache(cache, async () => {
+        expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+          ok: true,
+          value: { name: "before-install" },
+        });
+        await withPluginLifecycleLease({ path: databasePath }, async () => {
+          fs.writeFileSync(filePath, '{"name":"after-install"}');
+          clearPluginMetadataLifecycleCaches();
+        });
+        expect(readPluginCacheJsonFile(filePath)).toMatchObject({
+          ok: true,
+          value: { name: "after-install" },
+        });
+        expect(afterWrite()).toBe("post-write usable");
       });
-      await withPluginLifecycleLease({ path: path.join(root, "state.sqlite") }, async () => {
-        fs.writeFileSync(filePath, '{"name":"after-install"}');
-        clearPluginMetadataLifecycleCaches();
-      });
-      expect(readPluginCacheJsonFile(filePath)).toMatchObject({
-        ok: true,
-        value: { name: "after-install" },
-      });
-      expect(afterWrite()).toBe("post-write usable");
-    });
+    } finally {
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    }
   });
 
   it.each(["regular", "boundary"] as const)(

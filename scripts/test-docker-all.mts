@@ -8,9 +8,14 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
+import { Readable } from "node:stream";
 import { finished } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import {
+  clampPositiveTimerTimeoutMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   DEFAULT_E2E_BARE_IMAGE,
@@ -64,7 +69,6 @@ const SHELL_POST_FORCE_KILL_WAIT_MS = 1_000;
 // Private QA subprocess contract. Ordinary lane/CLI failures remain 1; 130/143
 // acknowledge joined signal cleanup. Only failed owner cleanup uses 2.
 const CLEANUP_FAILURE_EXIT_CODE = 2;
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const CANDIDATE_ENV_KEYS =
@@ -110,6 +114,7 @@ type ShellCommandOptions = {
   env: NodeJS.ProcessEnv;
   label: string;
   logFile?: string;
+  captureUpgradeFailure?: boolean;
   noOutputTimeoutMs?: number;
   timeoutKillGraceMs?: number;
   timeoutMs?: number;
@@ -252,38 +257,8 @@ function parseBool(raw: string | undefined, fallback: boolean) {
   return !/^(?:0|false|no)$/i.test(raw);
 }
 
-function normalizeReleaseProfileEnv(raw: string | undefined) {
-  const profile = raw?.trim();
-  if (!profile) {
-    return normalizeReleaseProfile(undefined);
-  }
-  if (profile === "minimum" || profile === "beta" || profile === "stable" || profile === "full") {
-    return normalizeReleaseProfile(profile);
-  }
-  throw new Error(
-    `release profile must be one of: beta, stable, full. Got: ${JSON.stringify(raw)}`,
-  );
-}
-
-function numericTimerValueMs(valueMs: unknown) {
-  const value = Number(valueMs);
-  return Number.isFinite(value) ? Math.floor(value) : undefined;
-}
-
-function resolveDockerSchedulerTimeoutMs(
-  valueMs: unknown,
-  fallbackMs: unknown = MAX_TIMER_TIMEOUT_MS,
-) {
-  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
-  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
-}
-
 function resolveOptionalTimerTimeoutMs(valueMs: unknown) {
-  const value = numericTimerValueMs(valueMs);
-  if (value === undefined || value <= 0) {
-    return undefined;
-  }
-  return resolveDockerSchedulerTimeoutMs(value);
+  return clampPositiveTimerTimeoutMs(Math.floor(Number(valueMs)));
 }
 
 function resourceLimitsSummary(resourceLimits: Record<string, number>) {
@@ -920,6 +895,7 @@ export function runShellCommand({
   env,
   label,
   logFile,
+  captureUpgradeFailure = false,
   timeoutMs,
   noOutputTimeoutMs,
   timeoutKillGraceMs = SHELL_TIMEOUT_KILL_GRACE_MS,
@@ -930,17 +906,36 @@ export function runShellCommand({
   return new Promise<ShellCommandResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
     const resolvedNoOutputTimeoutMs = resolveOptionalTimerTimeoutMs(noOutputTimeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
-    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs);
+    const pipeOutput = Boolean(logFile || resolvedNoOutputTimeoutMs || captureUpgradeFailure);
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
       detached: process.platform !== "win32",
-      env,
-      stdio: pipeOutput ? ["ignore", "pipe", "pipe"] : "inherit",
+      env: captureUpgradeFailure ? { ...env, OPENCLAW_DOCKER_FAILURE_METADATA_FD: "3" } : env,
+      stdio: captureUpgradeFailure
+        ? ["ignore", "pipe", "pipe", "pipe"]
+        : pipeOutput
+          ? ["ignore", "pipe", "pipe"]
+          : "inherit",
     });
+    // Host publication has a private pipe, never parsed from candidate stdout or
+    // stderr. Drain it through child close; emit only after process and log cleanup.
+    let failureMetadata: Buffer | undefined = Buffer.alloc(0);
+    const metadataPipe = captureUpgradeFailure ? child.stdio[3] : undefined;
+    if (metadataPipe instanceof Readable) {
+      metadataPipe.on("data", (chunk: Buffer) => {
+        failureMetadata =
+          failureMetadata && failureMetadata.length + chunk.length <= 1024
+            ? Buffer.concat([failureMetadata, chunk])
+            : undefined;
+      });
+      metadataPipe.on("error", () => {
+        failureMetadata = undefined;
+      });
+    }
     activeChildren.set(child, resolvedTimeoutKillGraceMs);
     let timedOut = false;
     let noOutputTimedOut = false;
@@ -1075,6 +1070,9 @@ export function runShellCommand({
                 cause: errors[0],
               });
         }
+        if (exitCode !== 0 && env.GITHUB_ACTIONS === "true") {
+          printUpgradeFailureMetadata(failureMetadata);
+        }
         resolve({
           signal,
           status: exitCode,
@@ -1119,7 +1117,7 @@ export function runShellCaptureCommand({
   }
   return new Promise<ShellCaptureResult>((resolve, reject) => {
     const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(timeoutMs);
-    const resolvedTimeoutKillGraceMs = resolveDockerSchedulerTimeoutMs(
+    const resolvedTimeoutKillGraceMs = resolveTimerTimeoutMs(
       timeoutKillGraceMs,
       SHELL_TIMEOUT_KILL_GRACE_MS,
     );
@@ -1534,6 +1532,8 @@ async function runLane(
     env,
     label: name,
     logFile,
+    captureUpgradeFailure:
+      env.GITHUB_ACTIONS === "true" && lane.stateScenario === "upgrade-survivor",
     timeoutMs,
     noOutputTimeoutMs,
   });
@@ -1773,9 +1773,47 @@ export async function tailFile(file: string, lines: number, maxBytes = LOG_TAIL_
   return tail.trimEnd();
 }
 
+function printUpgradeFailureMetadata(bytes: Buffer | undefined) {
+  if (!bytes?.length) {
+    return;
+  }
+  let failure: unknown;
+  try {
+    failure = JSON.parse(bytes.toString("utf8"));
+  } catch {
+    return;
+  }
+  if (
+    !isRecord(failure) ||
+    Object.keys(failure).length !== 3 ||
+    typeof failure.phase !== "string" ||
+    !/^[a-z0-9-]{1,80}$/u.test(failure.phase) ||
+    typeof failure.exitStatus !== "number" ||
+    !Number.isInteger(failure.exitStatus) ||
+    failure.exitStatus < 0 ||
+    failure.exitStatus > 255 ||
+    (failure.signal !== null &&
+      failure.signal !== "SIGHUP" &&
+      failure.signal !== "SIGINT" &&
+      failure.signal !== "SIGTERM")
+  ) {
+    return;
+  }
+  console.error(
+    `::error title=Upgrade survivor failure::phase=${failure.phase}; exitStatus=${failure.exitStatus}; signal=${failure.signal ?? "none"}`,
+  );
+}
+
 async function printFailureSummary(failures: LaneResult[], tailLines: number) {
   console.error(`ERROR: ${failures.length} Docker lane(s) failed.`);
   for (const failure of failures) {
+    // Keep commands, paths, and captured output out of check annotations.
+    if (process.env.GITHUB_ACTIONS === "true") {
+      const status = Number.isInteger(failure.status) ? failure.status : "unknown";
+      console.error(
+        `::error title=Docker lane failure::status=${status}; timedOut=${failure.timedOut}; noOutputTimedOut=${failure.noOutputTimedOut}`,
+      );
+    }
     console.error(`---- ${failure.name} failed (status=${failure.status}): ${failure.logFile}`);
     const tail = await tailFile(failure.logFile, tailLines);
     if (tail) {
@@ -2034,7 +2072,7 @@ async function main() {
     cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
-  const releaseProfile = normalizeReleaseProfileEnv(
+  const releaseProfile = normalizeReleaseProfile(
     process.env.OPENCLAW_DOCKER_ALL_RELEASE_PROFILE || process.env.OPENCLAW_RELEASE_PROFILE,
   );
   const releaseChunk = process.env.OPENCLAW_DOCKER_ALL_CHUNK || process.env.DOCKER_E2E_CHUNK || "";

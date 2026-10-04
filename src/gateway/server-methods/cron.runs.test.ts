@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -6,11 +8,13 @@ import { cronRunLogEntryToDetail, cronRunStorageStatus } from "../../cron/run-hi
 import type { CronRunLogEntry } from "../../cron/run-log-types.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
+import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
-import type { TaskRecord } from "../../tasks/task-registry.types.js";
+import { recordCronRunInDatabase } from "../../cron/store/run-history.kernel.js";
+import type { CronRunHistoryWrite } from "../../cron/store/run-history.types.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import * as sharingPreparation from "../session-sharing-preparation.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
@@ -22,21 +26,28 @@ async function withCronHistory(
     jobId: string;
     foreignJobId: string;
     cron: CronService;
-    rows: TaskRecord[];
+    rows: CronRunHistoryWrite[];
     storePath: string;
     query: (
       params: Record<string, unknown>,
       client?: GatewayClient,
-      method?: "cron.runs" | "cron.list",
+      method?: "cron.runs" | "cron.list" | "cron.get",
     ) => Promise<ReturnType<typeof vi.fn<RespondFn>>>;
     viewer: GatewayClient;
     owner: GatewayClient;
   }) => Promise<void>,
+  options: { unresolvedDefault?: boolean } = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg = {
       ...rolePolicyConfig(),
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
+      agents: {
+        entries: {
+          main: { workspace: state.workspaceDir },
+          ...(options.unresolvedDefault ? { ops: {} } : {}),
+        },
+        ...(options.unresolvedDefault ? { ownership: "explicit" as const } : {}),
+      },
     };
     await state.writeConfig(cfg);
     const owner = roleClient("none", "history-owner");
@@ -66,7 +77,7 @@ async function withCronHistory(
       scheduler: createTestGatewayScheduler(),
       nowMs: () => Date.now(),
       storePath,
-      defaultAgentId: "main",
+      resolveDefaultAgentId: () => (options.unresolvedDefault ? undefined : "main"),
       cronEnabled: false,
       log: createNoopLogger(),
       enqueueSystemEvent: vi.fn(),
@@ -100,16 +111,10 @@ async function withCronHistory(
         { jobId, status: "error", summary: "needle second" },
         { jobId, sessionKey: ownKey, status: "ok", summary: "other third" },
         { jobId: foreignJobId, sessionKey: ownKey, status: "error", summary: "needle foreign job" },
-        {
-          jobId: foreignJobId,
-          agentId: "ops",
-          sessionKey: "agent:ops:foreign-run",
-          status: "error",
-          summary: "foreign agent run",
-        },
       ];
       const now = Date.now();
-      const tasks = rows.map((row, index): TaskRecord => {
+      const storeKey = cronStoreKey(storePath);
+      const records = rows.map((row, index): CronRunHistoryWrite => {
         const entry: CronRunLogEntry = {
           ...row,
           action: "finished",
@@ -118,24 +123,23 @@ async function withCronHistory(
           deliveryStatus: row.status === "error" ? "not-delivered" : "delivered",
         };
         return {
-          taskId: `history-task-${index}`,
-          runtime: "cron",
-          sourceId: entry.jobId,
-          requesterSessionKey: "",
-          ownerKey: "",
-          scopeKind: "system",
-          childSessionKey: entry.sessionKey,
+          storeKey,
+          jobId: entry.jobId,
+          runId: `cron:${entry.jobId}:${entry.ts}:history`,
           agentId: row.agentId ?? "main",
-          task: "history fixture",
-          status: cronRunStorageStatus(entry),
-          deliveryStatus: "not_applicable",
-          notifyPolicy: "silent",
-          createdAt: entry.ts,
+          sessionKey: entry.sessionKey,
+          startedAt: entry.ts,
           endedAt: entry.ts,
-          detail: cronRunLogEntryToDetail(entry, { storeKey: cronStoreKey(storePath) }),
+          status: cronRunStorageStatus(entry),
+          summary: entry.summary,
+          detail: cronRunLogEntryToDetail(entry, { storeKey }),
         };
       });
-      seedTaskRegistryRowsForTests(new Map(tasks.map((task) => [task.taskId, task])).values());
+      runOpenClawStateWriteTransaction(({ db }) => {
+        for (const record of records) {
+          recordCronRunInDatabase(db, record);
+        }
+      });
       const context = createDirectChatContext({
         cron,
         cronStorePath: storePath,
@@ -144,7 +148,7 @@ async function withCronHistory(
       const query = async (
         params: Record<string, unknown>,
         client = owner,
-        method: "cron.runs" | "cron.list" = "cron.runs",
+        method: "cron.runs" | "cron.list" | "cron.get" = "cron.runs",
       ) => {
         const respond = vi.fn<RespondFn>();
         await expectDefined(
@@ -160,7 +164,7 @@ async function withCronHistory(
         });
         return respond;
       };
-      await run({ jobId, foreignJobId, cron, query, viewer, owner, rows: tasks, storePath });
+      await run({ jobId, foreignJobId, cron, query, viewer, owner, rows: records, storePath });
     } finally {
       cron.stop();
     }
@@ -168,6 +172,123 @@ async function withCronHistory(
 }
 
 describe("cron.runs session visibility", () => {
+  it.each([
+    { sessionTarget: "main", agentId: "main", explicitOwner: true, sqlOwner: null },
+    {
+      sessionTarget: "session:custom-target",
+      agentId: "main",
+      explicitOwner: true,
+      sqlOwner: null,
+    },
+    { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: null },
+    { sessionTarget: "main", agentId: "ops", explicitOwner: false, sqlOwner: "main" },
+  ] as const)(
+    "uses canonical sharing for $sessionTarget without a fleet default (explicit=$explicitOwner, SQL owner=$sqlOwner)",
+    async ({ sessionTarget, agentId, explicitOwner, sqlOwner }) => {
+      await withCronHistory(
+        async ({ cron, query, jobId, storePath, owner, viewer }) => {
+          const store = await loadCronStore(storePath);
+          const job = expectDefined(
+            store.jobs.find((entry) => entry.id === jobId),
+            "fixture job",
+          );
+          job.sessionKey = explicitOwner
+            ? expectDefined(job.owner?.sessionKey, "authored session owner")
+            : "main";
+          delete job.agentId;
+          delete job.owner;
+          job.sessionTarget = sessionTarget;
+          if (sessionTarget === "main") {
+            job.payload = { kind: "systemEvent", text: "visibility fixture" };
+          }
+          await saveCronStore(storePath, store);
+          const persisted = runOpenClawStateWriteTransaction(({ db }) => {
+            if (sqlOwner) {
+              db.prepare(
+                "UPDATE cron_jobs SET agent_id = ? WHERE store_key = ? AND job_id = ?",
+              ).run(sqlOwner, cronStoreKey(storePath), jobId);
+            }
+            return db
+              .prepare(
+                "SELECT agent_id, job_json FROM cron_jobs WHERE store_key = ? AND job_id = ?",
+              )
+              .get(cronStoreKey(storePath), jobId);
+          });
+          if (!explicitOwner) {
+            if (typeof persisted?.job_json !== "string") {
+              throw new Error("Expected persisted cron definition JSON");
+            }
+            const definition = JSON.parse(persisted.job_json);
+            expect(definition).toMatchObject({ sessionKey: "main" });
+            expect(definition).not.toHaveProperty("agentId");
+            expect(definition).not.toHaveProperty("owner");
+            expect(persisted.agent_id).toBe(sqlOwner);
+          }
+          const targetKey = sessionTarget === "main" ? "main" : "custom-target";
+          await upsertSessionEntryCore(
+            { agentId, sessionKey: targetKey },
+            {
+              sessionId: `visibility-${targetKey}`,
+              updatedAt: Date.now(),
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: expectDefined(owner.authenticatedUserProfile, "fixture profile").profileId,
+              },
+            },
+          );
+          const loaded = await cron.readJob(jobId);
+          expect(loaded).toMatchObject({
+            sessionKey: job.sessionKey,
+            sessionTarget,
+          });
+          if (!explicitOwner) {
+            expect(loaded?.agentId).toBeUndefined();
+            expect(loaded?.owner).toBeUndefined();
+          }
+          for (const method of ["cron.get", "cron.runs"] as const) {
+            const inspected = await query({ id: jobId }, owner, method);
+            if (explicitOwner) {
+              expect(inspected).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+            } else {
+              expect(inspected).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+              expect(await query({ id: jobId }, viewer, method)).toHaveBeenCalledWith(
+                true,
+                expect.any(Object),
+                undefined,
+              );
+            }
+            expect(
+              await query({ id: jobId }, roleClient("none", "visibility-foreign"), method),
+            ).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+          }
+          if (!explicitOwner) {
+            expect(
+              await query(
+                { includeDisabled: true, includeDeliveryPreviews: false },
+                owner,
+                "cron.list",
+              ),
+            ).toHaveBeenCalledWith(true, expect.objectContaining({ jobs: [] }), undefined);
+            expect(
+              await query(
+                { includeDisabled: true, includeDeliveryPreviews: false },
+                viewer,
+                "cron.list",
+              ),
+            ).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                jobs: expect.arrayContaining([expect.objectContaining({ id: jobId })]),
+              }),
+              undefined,
+            );
+          }
+        },
+        { unresolvedDefault: true },
+      );
+    },
+  );
   it.each(["cron.list", "cron.runs"] as const)(
     "%s filters jobs before preparing unavailable foreign sessions",
     async (method) => {
@@ -227,6 +348,45 @@ describe("cron.runs session visibility", () => {
             }),
           );
           await cron.remove(unavailableId);
+          const historicalEntry: CronRunLogEntry = {
+            action: "finished",
+            jobId,
+            runId: "historical-ops-run",
+            status: "ok",
+            summary: "run before the job changed agents",
+            ts: Date.now(),
+          };
+          runOpenClawStateWriteTransaction(({ db }) => {
+            recordCronRunInDatabase(db, {
+              ...expectDefined(rows[0], "fixture run"),
+              jobId,
+              runId: `cron:${jobId}:${historicalEntry.ts}:historical-ops-run`,
+              agentId: "ops",
+              sessionKey: undefined,
+              startedAt: historicalEntry.ts,
+              endedAt: historicalEntry.ts,
+              status: cronRunStorageStatus(historicalEntry),
+              summary: historicalEntry.summary,
+              detail: cronRunLogEntryToDetail(historicalEntry, {
+                storeKey: cronStoreKey(storePath),
+              }),
+            });
+          });
+          for (const [selector, total] of [
+            [{ scope: "all" }, 1],
+            [{ scope: "all", agentId: "MAIN" }, 0],
+            [{ id: jobId, agentId: "MAIN" }, 1],
+          ] as const) {
+            expect(await query({ ...selector, runId: historicalEntry.runId })).toHaveBeenCalledWith(
+              true,
+              expect.objectContaining({
+                total,
+                entries:
+                  total === 0 ? [] : [expect.objectContaining({ runId: "historical-ops-run" })],
+              }),
+              undefined,
+            );
+          }
           for (const [id, runId] of [
             [foreignJobId, "hidden-unavailable"],
             [jobId, "filtered-unavailable"],
@@ -239,17 +399,20 @@ describe("cron.runs session visibility", () => {
               status: "error",
               ts: Date.now(),
             };
-            seedTaskRegistryRowsForTests([
-              {
+            runOpenClawStateWriteTransaction(({ db }) => {
+              recordCronRunInDatabase(db, {
                 ...expectDefined(rows[0], "fixture run"),
-                taskId: runId,
-                sourceId: entry.jobId,
-                runId,
+                jobId: entry.jobId,
+                runId: `cron:${entry.jobId}:${entry.ts}:${runId}`,
                 agentId: "broken",
-                childSessionKey: entry.sessionKey,
+                sessionKey: entry.sessionKey,
+                startedAt: entry.ts,
+                endedAt: entry.ts,
+                status: cronRunStorageStatus(entry),
+                summary: entry.summary,
                 detail: cronRunLogEntryToDetail(entry, { storeKey: cronStoreKey(storePath) }),
-              },
-            ]);
+              });
+            });
           }
           const selected = await Promise.allSettled([
             query({ scope: "all", runId: "history-run-1" }),
@@ -365,13 +528,17 @@ describe("cron.runs session visibility", () => {
             },
           );
         }
-        seedTaskRegistryRowsForTests(
-          rows.map((row, index) =>
-            index === 1 || index === 4
-              ? { ...row, childSessionKey: index === 1 ? firstKey : laterKey }
-              : row,
-          ),
-        );
+        runOpenClawStateWriteTransaction(({ db }) => {
+          for (const [index, sessionKey] of [
+            [1, firstKey],
+            [4, laterKey],
+          ] as const) {
+            recordCronRunInDatabase(db, {
+              ...expectDefined(rows[index], "fixture run"),
+              sessionKey,
+            });
+          }
+        });
         const name = newlyMatches ? "needle renamed job" : "renamed away";
         const prepare = sharingPreparation.prepareSessionMutationFacts;
         let renamed = false;
@@ -504,5 +671,3 @@ describe("cron.runs session visibility", () => {
     });
   });
 });
-import fs from "node:fs";
-import path from "node:path";

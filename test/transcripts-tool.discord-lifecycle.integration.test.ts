@@ -110,12 +110,12 @@ defineDiscordVoiceTests(
         const admission = vi
           .spyOn(workerAdmission, "createSqliteWorkerWriteAdmission")
           .mockImplementation((assertCurrent, locations) =>
-            createAdmission(() => {
+            createAdmission((request) => {
               // Grant the replacement transaction before its predecessor's finalizer contends.
               if (resumeFinalizer) {
                 queueMicrotask(() => resumeFinalizer?.());
               }
-              assertCurrent();
+              assertCurrent(request);
             }, locations),
           );
 

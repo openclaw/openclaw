@@ -1,36 +1,16 @@
 /** Managed node-host install plan builder. */
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
-import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonRuntimeBinDir,
+  type GatewayInstallPlan,
 } from "./daemon-install-plan.shared.js";
 import {
   emitNodeRuntimeWarning,
   type DaemonInstallWarnFn,
 } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
-
-type NodeInstallPlan = {
-  programArguments: string[];
-  workingDirectory?: string;
-  environment: Record<string, string | undefined>;
-  environmentValueSources?: Record<string, GatewayServiceEnvironmentValueSource | undefined>;
-  description?: string;
-};
-
-function buildNodeInstallEnvironmentValueSources(): Record<
-  string,
-  GatewayServiceEnvironmentValueSource | undefined
-> {
-  return {
-    OPENCLAW_GATEWAY_TOKEN: "file",
-    OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
-    CF_ACCESS_CLIENT_ID: "file",
-    CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
-  };
-}
 
 /** Builds launch arguments, environment, and metadata for a managed node-host service install. */
 export async function buildNodeInstallPlan(params: {
@@ -46,20 +26,23 @@ export async function buildNodeInstallPlan(params: {
   commands?: string[];
   allCommands?: boolean;
   runtime: GatewayDaemonRuntime;
+  runtimeExplicit?: boolean;
   devMode?: boolean;
   runtimePath?: string;
   pinnedRuntimePath?: string;
   wrapperPath?: string;
   warn?: DaemonInstallWarnFn;
-}): Promise<NodeInstallPlan> {
+}): Promise<Omit<GatewayInstallPlan, "runtime"> & { description?: string }> {
   const wrapperPath = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtime, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
+    runtimeExplicit: params.runtimeExplicit,
     devMode: params.devMode,
     runtimePath: params.runtimePath,
     pinnedRuntimePath: params.pinnedRuntimePath,
     wrapperPath,
+    warn: params.warn,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
@@ -73,14 +56,14 @@ export async function buildNodeInstallPlan(params: {
     commands: params.commands,
     allCommands: params.allCommands,
     dev: devMode,
-    runtime: params.runtime,
+    runtime,
     runtimePath,
     wrapperPath,
   });
 
   await emitNodeRuntimeWarning({
     env: params.env,
-    runtime: params.runtime,
+    runtime,
     nodeProgram: programArguments[0],
     warn: params.warn,
     title: "Node daemon runtime",
@@ -88,7 +71,7 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
-    runtime: params.runtime,
+    runtime,
     // Match the Gateway install path so supervised services keep the chosen
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
@@ -97,7 +80,12 @@ export async function buildNodeInstallPlan(params: {
     programArguments,
     workingDirectory,
     environment,
-    environmentValueSources: buildNodeInstallEnvironmentValueSources(),
+    environmentValueSources: {
+      OPENCLAW_GATEWAY_TOKEN: "file",
+      OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+      CF_ACCESS_CLIENT_ID: "file",
+      CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
+    },
     description: "OpenClaw Node Host",
   };
 }

@@ -1,5 +1,5 @@
 // CLI startup presentation and config-before-plugin bootstrap.
-import type { ConfigFileSnapshot } from "../config/types.js";
+import type { StartupConfigPreflightOptions } from "../commands/startup-config-preflight.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -19,13 +19,12 @@ const hasVersionFlag = (argv: readonly string[]) =>
 
 export async function applyCliExecutionStartupPresentation(params: {
   argv?: string[];
-  routeLogsToStderrOnSuppress?: boolean;
   startupPolicy: CliStartupPolicy;
   showBanner?: boolean;
   version?: string;
 }) {
   // Machine-readable commands must route diagnostics away before startup can print.
-  if (params.startupPolicy.suppressDoctorStdout && params.routeLogsToStderrOnSuppress !== false) {
+  if (params.startupPolicy.suppressDoctorStdout) {
     routeLogsToStderr();
   }
   if (params.startupPolicy.hideBanner || params.showBanner === false || !params.version) {
@@ -47,7 +46,7 @@ export async function ensureCliExecutionBootstrap(params: {
   commandPath: string[];
   startupPolicy: CliStartupPolicy;
   allowInvalid?: boolean;
-  beforeStatePreparation?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
+  beforeStatePreparation?: StartupConfigPreflightOptions["beforeStatePreparation"];
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
   validateConfigOnly?: boolean;

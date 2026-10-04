@@ -146,6 +146,8 @@ function closeContext(
     return;
   }
   switch (context.kind) {
+    case "root":
+      return;
     case "anchor":
       parent.parts.push(
         context.href && label ? `[${label}](${context.href})` : label || context.href || "",
@@ -164,9 +166,6 @@ function closeContext(
         parent.hasText ||= Boolean(label);
       }
       parent.parts.push(`\n- ${label}`);
-      return;
-    case "root":
-      parent.parts.push(label);
   }
 }
 
@@ -361,8 +360,8 @@ export function markdownToText(markdown: string): string {
   text = unfenced;
   text = text.replace(/`([^`]+)`/g, "$1");
   text = text.replace(/^#{1,6}\s+/gm, "");
-  text = text.replace(/^\s*[-*+]\s+/gm, "");
-  text = text.replace(/^\s*\d+\.\s+/gm, "");
+  text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
+  text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
   return normalizeWhitespace(text);
 }
 

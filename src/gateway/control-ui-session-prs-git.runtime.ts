@@ -3,61 +3,98 @@ import nodePath from "node:path";
 import { readRegularFile } from "@openclaw/fs-safe/advanced";
 import { runGit } from "../agents/worktrees/git.js";
 import type { GitReadOperations } from "../infra/git-read-operations.js";
-import { readGitHead, readGitRefs, resolveGitRefsBase } from "../infra/git-root.js";
+import { readGitHead, readGitMetadataPrefix, readGitRefs } from "../infra/git-root.js";
 import { canReadGitFilesystemRefs } from "../infra/git-worker-context.js";
 import {
   gitOutput,
   readCheckoutHead,
+  readRemoteRevisions,
   resolveBranchLanding,
 } from "./control-ui-session-prs-landing.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
 
-/** File-backed Git metadata is checked in the worker, never by spawning Git. */
-export function readCheckoutGitRevision({
+/** Observe only this checkout's refs; snapshot publication does not change PR facts. */
+export async function readCheckoutGitRevision({
   root,
   includeIndex,
-}: GitReadOperations["checkout.revision"]["input"]): string | null {
+  branch,
+  defaultBranch,
+}: GitReadOperations["checkout.revision"]["input"]): Promise<string | null> {
   if (!canReadGitFilesystemRefs()) {
     return null;
   }
   try {
     const head = readGitHead(root, { maxDepth: 1 });
-    if (!head) {
+    const checkout = readCheckoutHead(root);
+    const defaultRef = readDefaultRef(checkout);
+    if (
+      !head ||
+      !checkout ||
+      checkout.branch === undefined ||
+      (!includeIndex && defaultRef === undefined)
+    ) {
       return null;
     }
     const gitDir = nodePath.dirname(head.headPath);
-    const common = resolveGitRefsBase(head.headPath);
-    if (fs.existsSync(nodePath.join(common, "reftable"))) {
-      return null;
-    }
     const paths = [
       nodePath.join(root, ".git"),
-      head.headPath,
-      nodePath.join(gitDir, "commondir"),
-      nodePath.join(common, "config"),
+      nodePath.join(checkout.refsBase, "config"),
       nodePath.join(gitDir, "config.worktree"),
-      nodePath.join(common, "packed-refs"),
     ];
+    const replacements = nodePath.join(checkout.refsBase, "refs/replace");
+    let packedReplacements: string[] = [];
     if (includeIndex) {
-      paths.push(nodePath.join(gitDir, "index"));
-    }
-    const refs = nodePath.join(common, "refs");
-    if (fs.existsSync(refs)) {
       paths.push(
-        ...fs
-          .readdirSync(refs, { recursive: true, encoding: "utf8" })
-          .map((name) => nodePath.join(refs, name)),
+        nodePath.join(gitDir, "index"),
+        nodePath.join(checkout.refsBase, "shallow"),
+        nodePath.join(checkout.refsBase, "info/grafts"),
       );
+      if (fs.existsSync(replacements)) {
+        paths.push(
+          ...fs
+            .readdirSync(replacements, { recursive: true, encoding: "utf8" })
+            .map((name) => nodePath.join(replacements, name)),
+        );
+      }
+      const packed = nodePath.join(checkout.refsBase, "packed-refs");
+      if (fs.existsSync(packed)) {
+        packedReplacements = fs
+          .readFileSync(packed, "utf8")
+          .split("\n")
+          .filter((line) => /\srefs\/replace\//u.test(line))
+          .toSorted();
+      }
     }
-    return JSON.stringify(
+    const selectedBranch = branch ?? checkout.branch;
+    const selectedDefault = defaultBranch ? `origin/${defaultBranch}` : defaultRef;
+    const tips = await readRemoteRevisions(
+      root,
+      [
+        ...(selectedBranch ? [`refs/remotes/origin/${selectedBranch}`] : []),
+        ...(selectedDefault ? [`refs/remotes/${selectedDefault}`] : []),
+      ],
+      checkout,
+    );
+    return JSON.stringify([
+      checkout,
+      defaultRef,
+      [...tips],
+      packedReplacements,
       paths.toSorted().map((file) => {
         const stat = fs.lstatSync(file, { throwIfNoEntry: false });
-        if (stat?.isSymbolicLink()) {
+        if (
+          stat?.isSymbolicLink() ||
+          (stat?.isFile() &&
+            file.startsWith(`${replacements}${nodePath.sep}`) &&
+            readGitMetadataPrefix(file).startsWith("ref:"))
+        ) {
           throw new Error("Symbolic Git metadata requires Git discovery");
         }
-        return [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
+        return stat?.isDirectory()
+          ? [file, stat.dev, stat.ino]
+          : [file, stat?.ino, stat?.size, stat?.mtimeMs, stat?.ctimeMs];
       }),
-    );
+    ]);
   } catch {
     return null;
   }
@@ -110,6 +147,7 @@ function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | nul
 
 export async function readCheckoutGitContext(
   root: string,
+  githubHost = "github.com",
 ): Promise<GitReadOperations["checkout.context"]["output"]> {
   const head = readCheckoutHead(root);
   const branch =
@@ -120,7 +158,8 @@ export async function readCheckoutGitContext(
     return null;
   }
   const remoteUrl = await gitOutput(root, ["remote", "get-url", "origin"]);
-  const remote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const publicRemote = remoteUrl ? parseGitHubRemoteUrl(remoteUrl) : null;
+  const remote = publicRemote ?? (remoteUrl ? parseGitHubRemoteUrl(remoteUrl, githubHost) : null);
   if (!remote) {
     return null;
   }
@@ -132,6 +171,7 @@ export async function readCheckoutGitContext(
   const defaultBranch = defaultRef?.replace(/^origin\//, "");
   return {
     ...remote,
+    ...(!publicRemote ? { host: githubHost } : {}),
     branch: branch === "HEAD" ? null : branch,
     root,
     ...(defaultBranch ? { defaultBranch } : {}),
@@ -174,8 +214,11 @@ async function untrackedFileAdditions(root: string, filePath: string): Promise<n
 }
 
 async function untrackedStats(root: string): Promise<{ additions: number; files: number }> {
-  const listing = await gitOutput(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
-  const paths = (listing ?? "").split("\0").filter(Boolean);
+  const listing = await runGit(root, ["ls-files", "--others", "--exclude-standard", "-z"]).catch(
+    () => null,
+  );
+  // NUL-delimited filenames retain leading whitespace, unlike scalar Git output.
+  const paths = listing?.code === 0 ? listing.stdout.split("\0").filter(Boolean) : [];
   let additions = 0;
   for (const filePath of paths.slice(0, MAX_UNTRACKED_STAT_FILES)) {
     additions += await untrackedFileAdditions(root, filePath);

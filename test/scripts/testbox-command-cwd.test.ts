@@ -105,10 +105,14 @@ function fixture(profileText = unrelated + legacy + "\n", repair = true) {
 }
 
 describe("Testbox command working directory", () => {
-  it("preserves the exact selected checkout, patch, and explicit subdirectory across login shells", () => {
-    const f = fixture();
+  it.each(["legacy", "upstream"])("preserves command cwd with a %s profile", (profile) => {
+    const f = profile === "legacy" ? fixture() : fixture(unrelated);
     const prepared = f.run();
     expect(prepared.status, prepared.stderr).toBe(0);
+    if (profile === "upstream") {
+      expect(readFileSync(f.profile, "utf8")).toBe(unrelated);
+      return;
+    }
     const syncRoot = readFileSync(f.state, "utf8").trim();
     expect(syncRoot).not.toBe(f.workspace);
     expect(realpathSync(join(syncRoot, ".git/crabbox-artifact-root"))).toBe(f.workspace);
@@ -162,12 +166,5 @@ describe("Testbox command working directory", () => {
     expect(result.stderr).toContain("Testbox login shell changed checkout: expected");
     expect(readFileSync(f.state, "utf8")).toBe(f.workspace + "\n");
     expect(readFileSync(f.profile, "utf8")).toBe(profile);
-  });
-
-  it("accepts an upstream profile that already preserves command cwd without rewriting it", () => {
-    const f = fixture(unrelated);
-    const result = f.run();
-    expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(f.profile, "utf8")).toBe(unrelated);
   });
 });

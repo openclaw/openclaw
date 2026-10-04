@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expect, it, vi } from "vitest";
+import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import {
   captureRuntimeWorkerSource,
   withRuntimeWorkerGeneration,
@@ -24,9 +25,10 @@ const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
   "openclaw-sqlite-worker-generation-",
 );
 
-const nodeIt = process.versions.bun ? it.skip : it;
+const { explicitSqliteCloseReleasesNativeResources } = await initializeSqliteRuntimeCapabilities();
+const poolIt = explicitSqliteCloseReleasesNativeResources ? it : it.skip;
 
-nodeIt("borrows only one carrier at capacity and never crosses retained generations", async () => {
+poolIt("borrows only one carrier at capacity and never crosses retained generations", async () => {
   const ordinary = await Promise.all(Array.from({ length: 4 }, () => open(databasePath())));
   const ordinaryThreads = new Set(
     await Promise.all(ordinary.map(async (store) => (await append(store, "ordinary")).threadId)),

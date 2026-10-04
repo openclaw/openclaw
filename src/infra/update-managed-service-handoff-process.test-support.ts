@@ -1,6 +1,5 @@
 import type { ChildProcess } from "node:child_process";
 import { vi } from "vitest";
-import { waitForChildClose } from "../../test/helpers/process-wait.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 
@@ -65,7 +64,13 @@ export function createManagedServiceBoundaryCleanup(
         }
       }
     }
-    const closed = active.map((child) => waitForChildClose(child));
+    // These handles are still live; subscribe before SIGKILL so cleanup joins their reaping.
+    const closed = active.map(
+      (child) =>
+        new Promise<void>((resolve) => {
+          child.once("close", () => resolve());
+        }),
+    );
     for (const { pid, identity } of descendants.toReversed()) {
       if (identity !== null && getFileLockProcessStartTime(pid) === identity) {
         try {

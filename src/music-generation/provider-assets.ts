@@ -1,4 +1,3 @@
-// Validates and normalizes provider asset attachments for music generation.
 import { canonicalizeBase64 } from "@openclaw/media-core/base64";
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
@@ -32,7 +31,7 @@ type GeneratedMusicResponseFactory = (params: {
  * helpers normalize those shapes into bounded in-memory GeneratedMusicAsset values.
  */
 /** Candidate audio file returned by a provider before download. */
-export type GeneratedMusicFileCandidate = {
+type GeneratedMusicFileCandidate = {
   url: string;
   mimeType?: string;
   fileName?: string;

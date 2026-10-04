@@ -133,9 +133,7 @@ export function resolveRestartRecoverySteeringBlockReason(
     ) {
       return "unknown-source-with-terminal-history";
     }
-    return hasRestartRecoveryTerminalRun(entry, normalizedSourceTurnId)
-      ? "already-delivered"
-      : undefined;
+    return undefined;
   }
   return disposition === "already-delivered" || disposition === "delivery-ambiguous"
     ? disposition
@@ -192,11 +190,14 @@ export async function beginRestartRecoveryTerminalDelivery(
   return disposition;
 }
 
-/** Resolves a pre-send ambiguity only after the provider confirms delivery. */
-export async function completeRestartRecoveryTerminalDelivery(
+function updatePendingTerminalDelivery(
   scope: RestartRecoveryTerminalDeliveryScope,
-): Promise<"recorded" | "stale"> {
-  const updated = await updateSessionEntry(
+  patch: Pick<
+    SessionEntry,
+    "restartRecoveryDeliveryReceiptState" | "restartRecoveryDeliveryToolCallId"
+  >,
+) {
+  return updateSessionEntry(
     { sessionKey: scope.sessionKey, storePath: scope.storePath },
     (entry) => {
       if (
@@ -205,13 +206,19 @@ export async function completeRestartRecoveryTerminalDelivery(
       ) {
         return null;
       }
-      return {
-        restartRecoveryDeliveryReceiptState: "delivered-terminal",
-        updatedAt: Date.now(),
-      };
+      return { ...patch, updatedAt: Date.now() };
     },
     { skipMaintenance: true, takeCacheOwnership: true },
   );
+}
+
+/** Resolves a pre-send ambiguity only after the provider confirms delivery. */
+export async function completeRestartRecoveryTerminalDelivery(
+  scope: RestartRecoveryTerminalDeliveryScope,
+): Promise<"recorded" | "stale"> {
+  const updated = await updatePendingTerminalDelivery(scope, {
+    restartRecoveryDeliveryReceiptState: "delivered-terminal",
+  });
   if (
     updated !== null &&
     hasExactDeliveryClaim(updated, scope) &&
@@ -236,23 +243,10 @@ export async function completeRestartRecoveryTerminalDelivery(
 export async function cancelRestartRecoveryTerminalDelivery(
   scope: RestartRecoveryTerminalDeliveryScope,
 ): Promise<"cleared" | "stale"> {
-  const updated = await updateSessionEntry(
-    { sessionKey: scope.sessionKey, storePath: scope.storePath },
-    (entry) => {
-      if (
-        !hasExactDeliveryClaim(entry, scope) ||
-        entry.restartRecoveryDeliveryReceiptState !== "terminal-pending"
-      ) {
-        return null;
-      }
-      return {
-        restartRecoveryDeliveryReceiptState: undefined,
-        restartRecoveryDeliveryToolCallId: undefined,
-        updatedAt: Date.now(),
-      };
-    },
-    { skipMaintenance: true, takeCacheOwnership: true },
-  );
+  const updated = await updatePendingTerminalDelivery(scope, {
+    restartRecoveryDeliveryReceiptState: undefined,
+    restartRecoveryDeliveryToolCallId: undefined,
+  });
   if (
     updated !== null &&
     hasActiveClaim(updated, scope) &&

@@ -70,7 +70,7 @@ internal class WearProxyException(
   override val message: String,
 ) : IllegalStateException(message)
 
-internal class WearProxyClient private constructor(
+internal class WearProxyClient(
   private val nodeResolver: WearNodeResolver,
   private val transport: WearMessageTransport,
 ) : WearRpcRequester {
@@ -149,11 +149,8 @@ internal class WearProxyClient private constructor(
               WearMessage.Request(requestId = requestId, method = method, params = params),
             ),
         )
-      } catch (_: CancellationException) {
-        currentCoroutineContext().ensureActive()
-        invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
-        throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-      } catch (_: Throwable) {
+      } catch (error: Throwable) {
+        if (error is CancellationException) currentCoroutineContext().ensureActive()
         invalidatePreferredPhone(preferredPhone?.takeIf { it.nodeId == nodeId })
         throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
       }
@@ -224,12 +221,10 @@ internal class WearProxyClient private constructor(
   private suspend fun resolvePhoneNode(): String =
     try {
       nodeResolver.reachablePhoneNodeId()
-    } catch (_: CancellationException) {
+    } catch (error: Throwable) {
       // Play Services can cancel its Task while this request remains active.
       // Preserve actual caller cancellation; map transport cancellation below.
-      currentCoroutineContext().ensureActive()
-      throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
-    } catch (_: Throwable) {
+      if (error is CancellationException) currentCoroutineContext().ensureActive()
       throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
     } ?: throw WearProxyException("phone_unavailable", "Paired phone is unavailable")
 
@@ -364,11 +359,6 @@ internal class WearProxyClient private constructor(
           },
       )
     }
-
-    internal fun createForTests(
-      nodeResolver: WearNodeResolver,
-      transport: WearMessageTransport,
-    ): WearProxyClient = WearProxyClient(nodeResolver, transport)
   }
 }
 

@@ -5,20 +5,7 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadUsageResultCached, type UsageCacheEntry } from "./usage-cache.js";
 
 function createSummary(totalTokens = 1) {
-  return {
-    updatedAt: Date.now(),
-    startDate: "2026-02-01",
-    endDate: "2026-02-02",
-    daily: [],
-    totals: {
-      totalTokens,
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalCost: 0,
-    },
-  };
+  return { totals: { totalTokens } };
 }
 
 type Summary = ReturnType<typeof createSummary> & { complete?: boolean };
@@ -28,8 +15,6 @@ let cache: Map<string, UsageCacheEntry<Summary>>;
 let now = 1_000;
 
 describe("usage result cache", () => {
-  const DAY_MS = 24 * 60 * 60 * 1000;
-
   beforeEach(() => {
     cache = new Map();
     now = 1_000;
@@ -42,11 +27,64 @@ describe("usage result cache", () => {
     vi.restoreAllMocks();
   });
 
+  it("replaces previous usage revisions without retaining historical query results", async () => {
+    const params = { cache, cacheKey: "all-sessions", configRef: {}, load: loadSummary };
+    for (let revision = 1; revision <= 32; revision++) {
+      loadSummary.mockResolvedValueOnce(createSummary(revision));
+      const revisionParams = { ...params, revision };
+      expect((await loadUsageResultCached(revisionParams)).totals.totalTokens).toBe(revision);
+      expect(cache.size).toBe(1);
+    }
+    expect(loadSummary).toHaveBeenCalledTimes(32);
+  });
+
+  it("does not let a displaced revision overwrite the current result", async () => {
+    const pending = createDeferredCore<Summary>();
+    const params = { cache, cacheKey: "all-sessions", configRef: {}, load: loadSummary };
+    loadSummary.mockReturnValueOnce(pending.promise).mockResolvedValueOnce(createSummary(2));
+    const oldRevision = { ...params, revision: 1 };
+    const currentRevision = { ...params, revision: 2 };
+    const oldResult = loadUsageResultCached(oldRevision);
+    const currentResult = loadUsageResultCached(currentRevision);
+    try {
+      pending.resolve(createSummary(1));
+      expect((await currentResult).totals.totalTokens).toBe(2);
+      expect((await oldResult).totals.totalTokens).toBe(1);
+      expect((await loadUsageResultCached(currentRevision)).totals.totalTokens).toBe(2);
+      expect(cache.size).toBe(1);
+      expect(loadSummary).toHaveBeenCalledTimes(2);
+    } finally {
+      pending.resolve(createSummary(1));
+      await Promise.allSettled([oldResult, currentResult]);
+    }
+  });
+
+  it.each([true, false])(
+    "reclaims expired query variants before the count cap is reached (complete=%s)",
+    async (complete) => {
+      const configRef = {};
+      for (let index = 0; index < 32; index++) {
+        const params = {
+          cache,
+          cacheKey: `date-range-${index}`,
+          configRef,
+          revision: 0,
+          load: loadSummary,
+          isComplete: () => complete,
+        };
+        await loadUsageResultCached(params);
+        expect(cache.size).toBe(1);
+        now += 30_001;
+      }
+      expect(loadSummary).toHaveBeenCalledTimes(32);
+    },
+  );
+
   it("retains a stale refresh after its cache entry is replaced", async () => {
     const owner = new AsyncWorkScope();
     const replacementOwner = new AsyncWorkScope();
     const gate = createDeferredCore<Summary>();
-    const params = { cache, cacheKey: "stale", configRef: {}, load: loadSummary };
+    const params = { cache, cacheKey: "stale", configRef: {}, revision: 0, load: loadSummary };
     const first = await owner.track(() => loadUsageResultCached(params));
     expect(cache.get(params.cacheKey)?.updatedAt).toBe(now);
     now = 31_000;
@@ -77,50 +115,31 @@ describe("usage result cache", () => {
     expect(drained).toBe(true);
   });
 
-  it("does not grow without bound when (startMs, endMs) varies across day rollover and range switches", async () => {
-    const configRef = {};
-    const ITERATIONS = 600;
-    for (let i = 0; i < ITERATIONS; i++) {
-      const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-      const endMs = startMs + (i % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-      await loadUsageResultCached({
-        cache,
-        cacheKey: `${startMs}-${endMs}`,
-        configRef,
-        load: loadSummary,
-      });
-    }
-    // Observe retained entries as well as lookup behavior; empty-key leaks must fail.
-    expect(cache.size).toBeLessThan(ITERATIONS);
-    const lastStartMs = Date.UTC(2026, 0, 1) + (ITERATIONS - 1) * DAY_MS;
-    const lastEndMs = lastStartMs + ((ITERATIONS - 1) % 3 === 0 ? DAY_MS : 7 * DAY_MS) - 1;
-    expect(cache.has(`${lastStartMs}-${lastEndMs}`)).toBe(true);
-    const firstStartMs = Date.UTC(2026, 0, 1);
-    const firstEndMs = firstStartMs + DAY_MS - 1;
-    expect(cache.has(`${firstStartMs}-${firstEndMs}`)).toBe(false);
-  });
-
-  it("evicts settled entries before in-flight entries when possible", async () => {
+  it("bounds the cache by evicting the oldest settled entry before an in-flight entry", async () => {
     const configRef = {};
     const pending = createDeferredCore<Summary>();
     loadSummary.mockReturnValueOnce(pending.promise);
-    const params = { cache, cacheKey: "active", configRef, load: loadSummary };
+    const params = { cache, cacheKey: "active", configRef, revision: 0, load: loadSummary };
     const inFlight = loadUsageResultCached(params);
     let repeated: typeof inFlight | undefined;
     try {
       await Promise.resolve();
+      now += 30_001;
       for (let i = 0; i < 256; i++) {
-        const startMs = Date.UTC(2026, 0, 1) + i * DAY_MS;
-        const endMs = startMs + DAY_MS - 1;
-        await loadUsageResultCached({
+        const settledParams = {
           cache,
-          cacheKey: `${startMs}-${endMs}`,
+          cacheKey: String(i),
           configRef,
+          revision: 0,
           load: loadSummary,
-        });
+        };
+        await loadUsageResultCached(settledParams);
       }
       repeated = loadUsageResultCached(params);
       await Promise.resolve();
+      expect(cache.size).toBe(256);
+      expect(cache.has("0")).toBe(false);
+      expect(cache.has("255")).toBe(true);
       expect(cache.has(params.cacheKey)).toBe(true);
       expect(loadSummary).toHaveBeenCalledTimes(257);
     } finally {
@@ -134,6 +153,7 @@ describe("usage result cache", () => {
       cache,
       cacheKey: "partial",
       configRef: {},
+      revision: 0,
       load: loadSummary,
       isComplete: (summary: Summary) => summary.complete !== false,
     };

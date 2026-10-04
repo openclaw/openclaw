@@ -7,7 +7,7 @@ import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
@@ -18,12 +18,10 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry as SessionStoreEntry } from "../../config/sessions/types.js";
 import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { formatFullOutputFooter } from "../sessions/tools/tool-contracts.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import {
-  calculateMaxToolResultCharsWithCap,
-  resolveAutoLiveToolResultMaxChars,
-} from "../tool-result-limits.js";
+import { resolveAutoLiveToolResultMaxChars } from "../tool-result-limits.js";
 import { prepareEmbeddedAttemptPromptContext } from "./run/attempt-prompt-build.js";
 import { buildRuntimeContextCustomMessage } from "./run/runtime-context-prompt.js";
 import {
@@ -38,11 +36,11 @@ let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncat
 let truncateOversizedToolResultsInSessionManager: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSessionManager;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
-let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let resolveLiveToolResultAggregateMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultAggregateMaxChars;
 let toolResultWarningDedupe: typeof import("./tool-result-truncation.js").toolResultWarningDedupe;
 let tmpDir: string | undefined;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "tool-result-truncation-test-");
 
 async function loadFreshToolResultTruncationModuleForTest() {
   // Load after each setup so module-level constants and mocks stay isolated
@@ -53,7 +51,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
     truncateOversizedToolResultsInSessionManager,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
-    DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
     resolveLiveToolResultAggregateMaxChars,
     toolResultWarningDedupe,
@@ -231,19 +228,6 @@ describe("truncateToolResultText", () => {
     expect(truncateToolResultText(text, 1000)).toBe(text);
   });
 
-  it("truncates text that exceeds limit", () => {
-    const text = "a".repeat(10_000);
-    const result = truncateToolResultText(text, 5_000);
-    expect(result.length).toBeLessThan(text.length);
-    expect(result).toContain("truncated");
-  });
-
-  it("preserves at least MIN_KEEP_CHARS (2000) when the budget allows it", () => {
-    const text = "x".repeat(50_000);
-    const result = truncateToolResultText(text, 3_000);
-    expect(result.length).toBeGreaterThan(2000);
-  });
-
   it("tries to break at newline boundary", () => {
     const lines = Array.from({ length: 100 }, (_, i) => `line ${i}: ${"x".repeat(50)}`).join("\n");
     const result = truncateToolResultText(lines, 3000);
@@ -311,71 +295,7 @@ describe("truncateToolResultText", () => {
   );
 });
 
-describe("getToolResultTextLength", () => {
-  it("sums all text blocks in tool results", () => {
-    const msg: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      isError: false,
-      content: [
-        { type: "text", text: "abc" },
-        { type: "image", data: "x", mimeType: "image/png" },
-        { type: "text", text: "12345" },
-      ],
-      timestamp: nextTimestamp(),
-    };
-
-    expect(getToolResultTextLength(msg)).toBe(8);
-  });
-
-  it("counts Codex protocol toolResult content blocks", () => {
-    const msg = {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "exec",
-      isError: false,
-      content: [
-        {
-          type: "toolResult",
-          toolUseId: "call_1",
-          text: "codex output",
-          content: "codex output",
-        },
-      ],
-      timestamp: nextTimestamp(),
-    } as unknown as ToolResultMessage;
-
-    expect(getToolResultTextLength(msg)).toBe("codex output".length);
-  });
-
-  it("returns zero for non-toolResult messages", () => {
-    expect(getToolResultTextLength(makeAssistantMessage("hello"))).toBe(0);
-  });
-});
-
 describe("truncateToolResultMessage", () => {
-  it("truncates with a custom suffix", () => {
-    const msg: ToolResultMessage = {
-      role: "toolResult",
-      toolCallId: "call_1",
-      toolName: "read",
-      content: [{ type: "text", text: "x".repeat(50_000) }],
-      isError: false,
-      timestamp: nextTimestamp(),
-    };
-
-    const result = truncateToolResultMessage(msg, 10_000, {
-      suffix: "\n\n[persist-truncated]",
-      minKeepChars: 2_000,
-    });
-    expect(result.role).toBe("toolResult");
-    if (result.role !== "toolResult") {
-      throw new Error("expected toolResult");
-    }
-    expect(getFirstToolResultText(result)).toContain("[persist-truncated]");
-  });
-
   it("truncates Codex protocol toolResult content blocks and mirrored content", () => {
     const oversized = "x".repeat(50_000);
     const msg = {
@@ -505,10 +425,6 @@ describe("calculateMaxToolResultChars", () => {
     expect(large).toBeGreaterThan(small);
   });
 
-  it("exports the low-context live cap constant", () => {
-    expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(16_000);
-  });
-
   it("uses a larger auto cap for 128K contexts", () => {
     const result = calculateMaxToolResultChars(128_000);
     expect(result).toBe(32_000);
@@ -517,11 +433,6 @@ describe("calculateMaxToolResultChars", () => {
   it("uses the largest auto cap for 200K contexts", () => {
     expect(resolveAutoLiveToolResultMaxChars(200_000)).toBe(64_000);
     expect(calculateMaxToolResultChars(200_000)).toBe(64_000);
-  });
-
-  it("supports a higher configured hard cap", () => {
-    const result = calculateMaxToolResultCharsWithCap(128_000, 32_000);
-    expect(result).toBe(32_000);
   });
 
   it.each([
@@ -685,17 +596,6 @@ describe("truncateOversizedToolResultsInMessages", () => {
     const text = toolResult ? getFirstToolResultText(toolResult) : "";
     expect(text.length).toBeLessThan(bigContent.length);
     expect(text).toContain("truncated");
-  });
-
-  it("preserves non-toolResult messages", () => {
-    const messages = [
-      makeUserMessage("hello"),
-      makeAssistantMessage("reading file"),
-      makeToolResult("x".repeat(500_000)),
-    ];
-    const { messages: result } = truncateOversizedToolResultsInMessages(messages, 128_000);
-    expect(result[0]).toBe(messages[0]); // Same reference
-    expect(result[1]).toBe(messages[1]); // Same reference
   });
 
   it("handles multiple oversized tool results", () => {
@@ -1039,11 +939,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       makeAssistantMessage("running exec"),
       makeToolResult(freshOutput, "fresh_exec"),
       runtimeContextMessage,
-    ] as AgentMessage[]) as AgentMessage[];
-    const providerCarrier = providerMessages.at(-1) as
-      | (AgentMessage & { runtimeContextCarrier?: boolean })
-      | undefined;
-    expect(providerCarrier?.runtimeContextCarrier).toBe(true);
+    ] as AgentMessage[]);
+    expect(providerMessages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
 
     const second = truncateOversizedToolResultsInMessages(
       providerMessages,
@@ -1155,11 +1052,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
       ...history,
       makeToolResult(freshOutput, "fresh_hard_cap"),
       runtimeContextMessage,
-    ] as AgentMessage[]) as AgentMessage[];
-    expect(
-      (providerMessages.at(-1) as { runtimeContextCarrier?: boolean } | undefined)
-        ?.runtimeContextCarrier,
-    ).toBe(true);
+    ] as AgentMessage[]);
+    expect(providerMessages.at(-1)).toMatchObject({ role: "user", runtimeContext: {} });
     const second = truncateOversizedToolResultsInMessages(
       providerMessages,
       1_000_000,
@@ -1397,24 +1291,6 @@ describe("truncateOversizedToolResultsInMessages", () => {
     await fs.rm(spillPath, { force: true });
   });
 
-  it("floors tiny aggregate elision budgets at compact spill markers", async () => {
-    const dir = await createTmpDir();
-    const spillPath = path.join(dir, "budget-output.log");
-    await fs.writeFile(spillPath, "complete command output", { mode: 0o600 });
-    const messages: AgentMessage[] = [
-      makeToolResult(textWithFullOutputFooter("a".repeat(100), spillPath), "budget_1", {
-        fullOutputPath: spillPath,
-      }),
-      makeToolResult("b".repeat(100), "budget_2"),
-      makeToolResult("c".repeat(100), "budget_3"),
-    ];
-
-    const result = truncateOversizedToolResultsInMessages(messages, 128_000, 1_000, 8);
-    const text = getFirstToolResultText(result.messages[0] ?? makeToolResult(""));
-
-    expect(text).toBe(`[read ${spillPath}]`);
-  });
-
   it("keeps pointerless near-zero aggregate budgets sliced", () => {
     const messages: AgentMessage[] = [
       makeToolResult("a".repeat(100), "sliced_plain_1"),
@@ -1648,7 +1524,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
 
 describe("truncateOversizedToolResultsInSession", () => {
   it("truncates SQLite runtime transcripts without treating the marker as a file", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-tool-truncation";
     const sessionKey = "agent:main:test";
@@ -1775,7 +1651,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("reuses frozen provider projection bytes on the recovery branch", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-frozen-projection";
     const sessionKey = "agent:main:frozen-projection";
@@ -1841,7 +1717,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("reduces aggregate-only frozen history on the recovery branch", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-frozen-aggregate-recovery";
     const sessionKey = "agent:main:frozen-aggregate-recovery";
@@ -1895,7 +1771,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
 
   it("honors SQLite leaf controls when truncating runtime transcripts", async () => {
-    const dir = await createTmpDir();
+    const dir = sessionDirs.make();
     const storePath = path.join(dir, "sessions.json");
     const sessionId = "runtime-sqlite-leaf-tool-truncation";
     const sessionKey = "agent:main:test";

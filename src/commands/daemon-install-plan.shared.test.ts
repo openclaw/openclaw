@@ -3,9 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonRuntimeBinDir,
   resolveDaemonServicePathDirs,
 } from "./daemon-install-plan.shared.js";
 
@@ -16,7 +16,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemon-pin-")));
       const pinned = path.join(root, "node");
       try {
-        fs.symlinkSync(process.execPath, pinned);
+        fs.symlinkSync(resolveTestNodeExecPath(), pinned);
         await expect(
           resolveDaemonInstallRuntimeInputs({
             env: {},
@@ -24,7 +24,7 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
             runtime: "node",
             devMode: false,
           }),
-        ).resolves.toEqual({ devMode: false, runtimePath: pinned });
+        ).resolves.toEqual({ devMode: false, runtime: "node", runtimePath: pinned });
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
@@ -74,18 +74,9 @@ describe("resolveDaemonInstallRuntimeInputs", () => {
       }),
     ).resolves.toEqual({
       devMode: false,
+      runtime: "node",
       runtimePath: "/custom/node",
     });
-  });
-});
-
-describe("resolveDaemonRuntimeBinDir", () => {
-  it("returns the absolute runtime bin directory", () => {
-    expect(resolveDaemonRuntimeBinDir("/custom/runtime/bin/bun")).toEqual(["/custom/runtime/bin"]);
-  });
-
-  it("ignores bare executable names", () => {
-    expect(resolveDaemonRuntimeBinDir("bun")).toBeUndefined();
   });
 });
 

@@ -1,5 +1,4 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-// Control UI chat domain owns pure slash command rules.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
@@ -161,19 +160,19 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
   },
 ];
 
-const COMMAND_DESCRIPTION_KEYS: Partial<Record<string, string>> = {
-  steer: "chat.commands.steerDescription",
-  "export-session": "chat.commands.exportDescription",
-};
-
-const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "Inject a message into the active run",
-  "export-session": "Download this conversation as Markdown",
-};
-
-const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "<message>",
-  "export-session": undefined,
+const COMMAND_OVERRIDES: Partial<
+  Record<string, Pick<SlashCommandDef, "description" | "descriptionKey" | "args">>
+> = {
+  steer: {
+    description: registerCommandPaletteEnglish.catalog.chat.commands.steerDescription,
+    descriptionKey: "chat.commands.steerDescription",
+    args: "<message>",
+  },
+  "export-session": {
+    description: registerCommandPaletteEnglish.catalog.chat.commands.exportDescription,
+    descriptionKey: "chat.commands.exportDescription",
+    args: undefined,
+  },
 };
 
 function getSlashAliases(command: CommandLike): string[] {
@@ -187,12 +186,7 @@ function formatArgs(command: CommandLike): string | undefined {
   if (!command.args?.length) {
     return undefined;
   }
-  return command.args
-    .map((arg) => {
-      const token = `<${arg.name}>`;
-      return arg.required ? token : `[${arg.name}]`;
-    })
-    .join(" ");
+  return command.args.map((arg) => (arg.required ? `<${arg.name}>` : `[${arg.name}]`)).join(" ");
 }
 
 function choiceToValue(command: CommandLike, argName: string, choice: LocalArgChoice): string {
@@ -233,13 +227,9 @@ function toSlashCommand(
     key: command.key,
     name,
     aliases: getSlashAliases(command).filter((alias) => alias !== name),
-    description: COMMAND_DESCRIPTION_OVERRIDES[command.key] ?? command.description,
-    ...(COMMAND_DESCRIPTION_KEYS[command.key]
-      ? { descriptionKey: COMMAND_DESCRIPTION_KEYS[command.key] }
-      : {}),
-    args: Object.hasOwn(COMMAND_ARGS_OVERRIDES, command.key)
-      ? COMMAND_ARGS_OVERRIDES[command.key]
-      : formatArgs(command),
+    description: command.description,
+    args: formatArgs(command),
+    ...COMMAND_OVERRIDES[command.key],
     icon: presentation?.icon ?? "terminal",
     category:
       presentation?.category ??
@@ -272,8 +262,7 @@ function normalizeSlashIdentifier(raw: string): string | null {
 }
 
 function clampText(value: unknown, maxLength: number): string {
-  const text = typeof value === "string" ? value : "";
-  return text.length > maxLength ? truncateUtf16Safe(text, maxLength) : text;
+  return truncateUtf16Safe(typeof value === "string" ? value : "", maxLength);
 }
 
 function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
@@ -298,12 +287,9 @@ function getArgChoices(arg: Record<string, unknown>): LocalArgChoice[] {
         label: clampText(record.label, MAX_REMOTE_NAME_LENGTH),
       };
     })
-    .filter((choice): choice is LocalArgChoice => {
-      if (!choice) {
-        return false;
-      }
-      return typeof choice === "string" ? Boolean(choice) : Boolean(choice.value);
-    });
+    .filter((choice): choice is LocalArgChoice =>
+      Boolean(typeof choice === "string" ? choice : choice?.value),
+    );
 }
 
 function normalizeClientPresentation(
@@ -391,14 +377,7 @@ function normalizeCommandEntry(
       required: arg.required === true,
       choices: getArgChoices(arg).slice(0, MAX_REMOTE_CHOICES),
     }))
-    .filter((arg) => arg.name.length > 0)
-    .map((arg) =>
-      Object.assign(
-        { name: arg.name },
-        arg.required ? { required: true } : {},
-        arg.choices.length > 0 ? { choices: arg.choices } : {},
-      ),
-    );
+    .filter((arg) => arg.name.length > 0);
   return {
     key: primaryName,
     name: primaryName,
@@ -516,7 +495,6 @@ export function getSlashCommandCompletions(
       )
     : commands;
 
-  // When no filter text and not explicitly showing all, hide "power" tier commands
   if (!lower && !showAll) {
     commands = commands.filter((cmd) => (cmd.tier ?? "standard") !== "power");
   }

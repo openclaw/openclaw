@@ -1,6 +1,15 @@
 /** Owns each admitted turn from actor admission through final settlement. */
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { AcpRunTurnInput, ActiveTurnState, WithManagerSessionActor } from "./manager.types.js";
+import type {
+  AcpSessionRuntimeLocator,
+  AcpSessionControlConstraint,
+} from "../runtime/session-meta-control.types.js";
+import type {
+  AcpRunTurnInput,
+  ActiveTurnState,
+  RevalidateManagerSessionControl,
+  WithManagerSessionActor,
+} from "./manager.types.js";
 import { acpSessionActorKey } from "./manager.utils.js";
 
 export type AcceptedTurnState = Pick<
@@ -8,9 +17,13 @@ export type AcceptedTurnState = Pick<
   "requestId" | "instanceId" | "abortController"
 > & {
   activeTurn?: ActiveTurnState;
+  runtimeHandle?: ActiveTurnState["handle"];
+  isCurrentActor: () => boolean;
   settled: Promise<void>;
   cancelReason?: string;
-  revalidateCancel?: () => void;
+  revalidateCancel?: RevalidateManagerSessionControl;
+  assertCancelCurrent?: (phase?: "publication", expectedLocator?: AcpSessionRuntimeLocator) => void;
+  cancelConstraint?: AcpSessionControlConstraint;
 };
 
 export type AcceptedTurns = Map<string, Set<AcceptedTurnState>>;
@@ -21,13 +34,18 @@ export async function runAcceptedManagerTurn(params: {
   agentId: string;
   stopping: boolean;
   turns: AcceptedTurns;
+  captureSessionActor: () => { isCurrent: () => boolean; release: () => void };
   withSessionActor: WithManagerSessionActor;
   run: (
     input: AcpRunTurnInput,
     acceptedTurn: AcceptedTurnState,
     isCurrentActor: () => boolean,
   ) => Promise<void>;
-  onQueuedCancellation: (assertCurrent: () => void) => Promise<void>;
+  onQueuedCancellation: (
+    assertCurrent: () => void,
+    acpControl?: AcpSessionControlConstraint,
+    revalidateCancel?: RevalidateManagerSessionControl,
+  ) => Promise<void>;
 }): Promise<void> {
   const { input } = params;
   const instance = input.admittedRunContext.operationalRunInstance;
@@ -35,12 +53,14 @@ export async function runAcceptedManagerTurn(params: {
     throw new Error("ACP operational run instance disagrees with the admitted request");
   }
   const completion = createDeferredCore();
+  const actor = params.captureSessionActor();
   // Only cancellation joins this promise. Ordinary failed turns may have no joiner.
   void completion.promise.catch(() => {});
   const turn: AcceptedTurnState = {
     requestId: input.requestId,
     instanceId: instance.instanceId,
     abortController: new AbortController(),
+    isCurrentActor: actor.isCurrent,
     settled: completion.promise,
   };
   const actorKey = acpSessionActorKey(params);
@@ -71,15 +91,28 @@ export async function runAcceptedManagerTurn(params: {
       // The actor still owns its queued callback, which will observe the abort.
       // Finish only this accepted instance; never write idle over its predecessor.
       const assertCancellationCurrent = () => {
-        if (started || params.turns.get(actorKey) !== turns || !turns.has(turn)) {
+        if (
+          started ||
+          !turn.isCurrentActor() ||
+          params.turns.get(actorKey) !== turns ||
+          !turns.has(turn)
+        ) {
           throw new Error("ACP queued cancellation no longer owns its accepted turn", {
             cause: error,
           });
         }
-        turn.revalidateCancel?.();
+        turn.assertCancelCurrent?.("publication");
       };
+      const constraint = await turn.revalidateCancel?.("publication");
+      if (constraint) {
+        turn.cancelConstraint = constraint;
+      }
       assertCancellationCurrent();
-      await params.onQueuedCancellation(assertCancellationCurrent);
+      await params.onQueuedCancellation(
+        assertCancellationCurrent,
+        turn.cancelConstraint,
+        turn.revalidateCancel,
+      );
     }
     completion.resolve();
   } catch (error) {
@@ -90,5 +123,6 @@ export async function runAcceptedManagerTurn(params: {
     if (turns.size === 0 && params.turns.get(actorKey) === turns) {
       params.turns.delete(actorKey);
     }
+    actor.release();
   }
 }

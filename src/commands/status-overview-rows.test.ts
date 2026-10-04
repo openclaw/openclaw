@@ -1,5 +1,7 @@
 // Status overview row tests cover status-all overview values, update metadata, and display rows.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import * as memoryStatus from "../memory-host-sdk/status.js";
 import { VERSION } from "../version.js";
 import {
   buildStatusAllOverviewRows,
@@ -10,11 +12,53 @@ import {
   createStatusCommandOverviewRowsParams,
 } from "./status.test-support.ts";
 
+beforeEach(() => {
+  vi.spyOn(theme, "success").mockImplementation((value) => `ok(${String(value)})`);
+  vi.spyOn(theme, "warn").mockImplementation((value) => `warn(${String(value)})`);
+  vi.spyOn(theme, "muted").mockImplementation((value) => `muted(${String(value)})`);
+  vi.spyOn(memoryStatus, "resolveMemoryVectorState").mockReturnValue({
+    state: "ready",
+    tone: "ok",
+  });
+  vi.spyOn(memoryStatus, "resolveMemoryFtsState").mockReturnValue({ state: "ready", tone: "warn" });
+  vi.spyOn(memoryStatus, "resolveMemoryCacheSummary").mockReturnValue({
+    text: "cache warm",
+    tone: "muted",
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
 function findRowValue(rows: Array<{ Item: string; Value: string }>, item: string) {
   return rows.find((row) => row.Item === item)?.Value;
 }
 
 describe("status-overview-rows", () => {
+  it("shows the latest offsite attempt beside a newer local backup", () => {
+    vi.spyOn(Date, "now").mockReturnValue(3_600_000);
+    const rows = buildStatusCommandOverviewRows({
+      ...createStatusCommandOverviewRowsParams(),
+      backupFreshness: {
+        latest: {
+          id: "local",
+          createdAt: 3_000_000,
+          archivePath: "/backup/local",
+          kind: "git",
+          status: "ok",
+        },
+        latestOffsite: {
+          id: "remote",
+          createdAt: 1,
+          archivePath: "",
+          kind: "archive",
+          status: "failed",
+          target: "offsite",
+        },
+      },
+    });
+    expect(findRowValue(rows, "Backups")).toContain("last ok");
+    expect(findRowValue(rows, "Offsite backup")).toContain("offsite: last attempt failed");
+  });
+
   it.each(["default", "all"])("preserves service inspection failures in %s output", (mode) => {
     const params = createStatusCommandOverviewRowsParams();
     const service = {
@@ -219,6 +263,16 @@ describe("status-overview-rows", () => {
             secretDiagnosticsCount: 0,
           });
     expect(findRowValue(rows, label)).toContain(params.summary[field]);
+  });
+
+  it("surfaces a deleted Gateway Node path in the overview", () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const params = createStatusCommandOverviewRowsParams();
+    params.summary.childRuntime = { execPath, available: false };
+    const rows = buildStatusCommandOverviewRows(params);
+    expect(findRowValue(rows, "Gateway runtime")).toBe(
+      `warn(Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.)`,
+    );
   });
 
   it("builds status-all overview rows from the shared surface", () => {

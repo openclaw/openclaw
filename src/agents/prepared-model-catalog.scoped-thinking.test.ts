@@ -2,10 +2,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { PreparedModelCatalogConfigReplacedError } from "./prepared-model-catalog.errors.js";
 import { setPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
-import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
+import { withPreparedModelRuntimePluginGenerationScope } from "./prepared-model-runtime-generation-scope.js";
+import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  PreparedModelRuntimeOwnerNotPublishedError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import type {
   PreparedModelRuntimeInput,
   PreparedModelRuntimeSnapshot,
@@ -49,6 +54,7 @@ vi.mock("./prepared-model-runtime.scoped-catalog.js", () => ({
 function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedModelRuntimeSnapshot {
   return {
     agentDir: "/tmp/model-catalog-passive-test",
+    inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
     activeProjectKeys: [],
     catalogOwner: undefined,
     config,
@@ -70,13 +76,26 @@ function owner(config: OpenClawConfig, entries: ModelCatalogEntry[]): PreparedMo
   };
 }
 
-const entry: ModelCatalogEntry = {
+function withAdmitted<T>(snapshot: PreparedModelRuntimeSnapshot, run: () => T, active = true): T {
+  return withPreparedModelRuntimePluginGenerationScope(
+    {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: snapshot.metadataSnapshot,
+      inlineProviderModels: [],
+      configuredCatalogEntries: snapshot.modelCatalog.entries,
+    },
+    run,
+    () => (active ? snapshot : undefined),
+  );
+}
+
+const entry = {
   provider: "acme",
   id: "selected",
   name: "Selected",
   api: "openai-responses",
   baseUrl: "https://provider.invalid/v1",
-};
+} satisfies ModelCatalogEntry;
 
 describe("loadProviderScopedThinkingCatalog", () => {
   beforeEach(() => {
@@ -94,38 +113,6 @@ describe("loadProviderScopedThinkingCatalog", () => {
     acquireSnapshotMock.mockImplementation(async (input) => owner(input.config, []));
     augmentCatalogMock.mockImplementation(async ({ snapshot }) => snapshot);
   });
-
-  it.each(["thinking", "input"] as const)(
-    "keeps missing published %s facts passive",
-    async (capability) => {
-      const config = {};
-      const missingEntry = entry;
-      const snapshot = owner(config, [missingEntry]);
-      publishedSnapshotMock.mockReturnValue(snapshot);
-      preparedSnapshotMock.mockResolvedValue(snapshot);
-      scopedCatalogMock.mockResolvedValue({
-        entries: [{ ...missingEntry, reasoning: true, input: ["text", "image"] }],
-        routeVariants: [],
-      });
-      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-      const catalog = await loadProviderScopedThinkingCatalog({
-        config,
-        provider: missingEntry.provider,
-        model: missingEntry.id,
-        ...(capability === "input"
-          ? { requiredInputRoute: { api: missingEntry.api, baseUrl: missingEntry.baseUrl } }
-          : {}),
-      });
-
-      if (capability === "input") {
-        expect(catalog).toEqual([]);
-      } else {
-        expect(catalog).toEqual([missingEntry]);
-      }
-      expect(manifestCatalogMock).not.toHaveBeenCalled();
-      expect(scopedCatalogMock).not.toHaveBeenCalled();
-    },
-  );
 
   it.each(["thinking", "input"] as const)(
     "reuses paired completed catalogs for %s capabilities",
@@ -147,12 +134,14 @@ describe("loadProviderScopedThinkingCatalog", () => {
       });
       const loadFullModelCatalog = vi.fn(async () => completed);
       const snapshot = {
-        ...owner(config, []),
+        ...owner(config, [entry]),
         readFullModelCatalog: () => completed,
         loadFullModelCatalog,
       };
       publishedSnapshotMock.mockReturnValue(snapshot);
-      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const { getPreparedModelCatalogSnapshot, loadProviderScopedThinkingCatalog } =
+        await import("./prepared-model-catalog.js");
+      expect(getPreparedModelCatalogSnapshot({ config })).toBe(completed);
       const catalog = await loadProviderScopedThinkingCatalog({
         config,
         provider: entry.provider,
@@ -169,45 +158,281 @@ describe("loadProviderScopedThinkingCatalog", () => {
     },
   );
 
-  it("leaves facts absent when no published owner exists", async () => {
-    const config = {};
-    const staticEntry = { ...entry, reasoning: true };
-    acquireSnapshotMock.mockResolvedValue(owner(config, [staticEntry]));
+  it.each([false, true])(
+    "keeps ownerless reads passive (native observations: %s)",
+    async (native) => {
+      const config = {};
+      const staticEntry = { ...entry, reasoning: true };
+      acquireSnapshotMock.mockResolvedValue(owner(config, [staticEntry]));
+      const entries = native ? [{ ...staticEntry, nativeRuntime: "test-harness" }] : [];
+      augmentCatalogMock.mockResolvedValue({ entries, routeVariants: entries });
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      expect(
+        await loadProviderScopedThinkingCatalog({
+          config,
+          provider: entry.provider,
+          model: entry.id,
+        }),
+      ).toEqual(entries);
+      expect(acquireSnapshotMock).not.toHaveBeenCalled();
+      expect(releaseSnapshotMock).not.toHaveBeenCalled();
+      expect(manifestCatalogMock).not.toHaveBeenCalled();
+      expect(scopedCatalogMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    { name: "same-account refresh", replacementKey: "fixture-account-a", native: false },
+    { name: "same-route account switch", replacementKey: "fixture-account-b", native: false },
+    { name: "route-free native observation", replacementKey: "fixture-account-b", native: true },
+  ])("retains admitted capabilities across $name", async ({ replacementKey, native }) => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: { acme: { baseUrl: entry.baseUrl, apiKey: "fixture-account-a", models: [] } },
+      },
+    };
+    const replaced: OpenClawConfig = {
+      ...config,
+      models: {
+        providers: { acme: { baseUrl: entry.baseUrl, apiKey: replacementKey, models: [] } },
+      },
+      skills: { entries: { marker: { enabled: false } } },
+    };
+    const admittedEntry: ModelCatalogEntry = native
+      ? {
+          provider: entry.provider,
+          id: entry.id,
+          name: entry.name,
+          nativeRuntime: "native-one",
+          reasoning: true,
+        }
+      : { ...entry, reasoning: true, input: ["text", "image"] };
+    const completed = { entries: [admittedEntry], routeVariants: [admittedEntry] };
+    const readFullModelCatalog = vi.fn(() => completed);
+    const source = { ...owner(config, [entry]), readFullModelCatalog };
+    const admitted = capturePreparedModelRuntimeCatalog(source, source);
+    readFullModelCatalog.mockImplementation(() => {
+      throw new Error("retired owner");
+    });
+    publishedSnapshotMock.mockReturnValue(
+      owner(replaced, [{ ...entry, reasoning: false, input: ["text"] }]),
+    );
     const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-    expect(
-      await loadProviderScopedThinkingCatalog({
+    const result = await withAdmitted(admitted, () =>
+      loadProviderScopedThinkingCatalog({
         config,
+        agentDir: admitted.agentDir,
         provider: entry.provider,
         model: entry.id,
+        ...(native
+          ? { agentRuntime: "native-one" }
+          : { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } }),
       }),
-    ).toEqual([]);
-    expect(acquireSnapshotMock).not.toHaveBeenCalled();
-    expect(releaseSnapshotMock).not.toHaveBeenCalled();
-    expect(manifestCatalogMock).not.toHaveBeenCalled();
-    expect(scopedCatalogMock).not.toHaveBeenCalled();
+    );
+    expect(result).toEqual([admittedEntry]);
+    expect(preparedSnapshotMock).not.toHaveBeenCalled();
+    expect(augmentCatalogMock).not.toHaveBeenCalled();
+    expect(readFullModelCatalog).toHaveBeenCalledOnce();
   });
 
-  it("rejects an owner whose configuration was replaced", async () => {
-    const config = { skills: { entries: { marker: { enabled: true } } } };
-    const replaced = { skills: { entries: { marker: { enabled: false } } } };
-    publishedSnapshotMock.mockReturnValue(owner(replaced, [{ ...entry, reasoning: true }]));
+  it.each([
+    {
+      label: "same-id physical route",
+      nativeId: entry.id,
+      runtime: "openclaw",
+      publishedSelected: false,
+    },
+    {
+      label: "distinct configured model",
+      nativeId: "native-only",
+      runtime: "openclaw",
+      publishedSelected: false,
+    },
+    { label: "native route", nativeId: entry.id, runtime: "native-one", publishedSelected: false },
+    {
+      label: "published physical facts",
+      nativeId: "native-only",
+      runtime: "openclaw",
+      publishedSelected: true,
+    },
+  ])(
+    "retains native and physical capture facts: $label",
+    async ({ nativeId, runtime, publishedSelected }) => {
+      const config = {};
+      const configured: ModelCatalogEntry = publishedSelected
+        ? entry
+        : { ...entry, reasoning: false, input: ["text", "image"] };
+      const discovered: ModelCatalogEntry = {
+        ...entry,
+        id: publishedSelected ? entry.id : "discovered",
+        name: "Discovered",
+        reasoning: true,
+        input: ["text", "image"],
+      };
+      const native: ModelCatalogEntry = {
+        provider: entry.provider,
+        id: nativeId,
+        name: entry.name,
+        nativeRuntime: "native-one",
+        reasoning: true,
+        input: ["text"],
+      };
+      let current = true;
+      const readFullModelCatalog = vi.fn(() => ({
+        entries: [native, discovered],
+        routeVariants: [native, discovered],
+      }));
+      const loadNativeModelCatalog = vi.fn(async () => {
+        throw new Error("A retired owner cannot supply new native observations");
+      });
+      const source = {
+        ...owner(config, [configured]),
+        isCurrent: () => current,
+        readFullModelCatalog,
+        loadNativeModelCatalog,
+      };
+      const admitted = capturePreparedModelRuntimeCatalog(source, source);
+      current = false;
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const result = await withAdmitted(admitted, () =>
+        loadProviderScopedThinkingCatalog({
+          config,
+          agentDir: admitted.agentDir,
+          provider: entry.provider,
+          model: entry.id,
+          agentRuntime: runtime,
+          ...(runtime === "openclaw"
+            ? { requiredInputRoute: { api: entry.api, baseUrl: entry.baseUrl } }
+            : {}),
+        }),
+      );
+      const physical = publishedSelected ? discovered : configured;
+      expect(result).toContainEqual(runtime === "openclaw" ? physical : native);
+      expect(result).toContainEqual(discovered);
+      expect(readFullModelCatalog).toHaveBeenCalledOnce();
+      expect(loadNativeModelCatalog).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["ready", "retired", "failure"] as const)(
+    "preserves admitted native observations: %s",
+    async (outcome) => {
+      const config = {};
+      const native: ModelCatalogEntry = {
+        provider: entry.provider,
+        id: entry.id,
+        name: entry.name,
+        nativeRuntime: "native-one",
+        reasoning: true,
+      };
+      let current = true;
+      const failure = new Error("native observation unavailable");
+      const loadNativeModelCatalog = vi.fn(async () => {
+        if (outcome === "retired") {
+          current = false;
+          throw new PreparedModelRuntimePublicationSupersededError("retired during observation");
+        }
+        if (outcome === "failure") {
+          throw failure;
+        }
+        return { entries: [native], routeVariants: [native] };
+      });
+      const admitted = {
+        ...owner(config, outcome === "retired" ? [native] : [{ ...entry, reasoning: false }]),
+        isCurrent: () => current,
+        loadNativeModelCatalog,
+      };
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const result = withAdmitted(admitted, () =>
+        loadProviderScopedThinkingCatalog({
+          config,
+          agentDir: admitted.agentDir,
+          provider: entry.provider,
+          model: entry.id,
+          agentRuntime: "native-one",
+        }),
+      );
+      if (outcome === "failure") {
+        await expect(result).rejects.toBe(failure);
+      } else {
+        await expect(result).resolves.toEqual([native]);
+      }
+      expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
+      expect(preparedSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    {
+      name: "a capability change",
+      configured: [entry],
+      firstEntries: [{ ...entry, reasoning: true }],
+      secondEntries: [{ ...entry, reasoning: false }],
+    },
+    {
+      name: "empty to populated inventory",
+      configured: [],
+      firstEntries: [],
+      secondEntries: [entry],
+    },
+    {
+      name: "populated to empty inventory",
+      configured: [],
+      firstEntries: [entry],
+      secondEntries: [],
+    },
+    {
+      name: "configured facts followed by empty inventory",
+      configured: [entry],
+      firstEntries: undefined,
+      secondEntries: [],
+    },
+  ])("keeps earlier captures across $name", async ({ configured, firstEntries, secondEntries }) => {
+    const config = {};
+    const readFullModelCatalog = vi
+      .fn<() => ModelCatalogSnapshot | undefined>()
+      .mockReturnValue(
+        firstEntries ? { entries: firstEntries, routeVariants: firstEntries } : undefined,
+      );
+    const source = { ...owner(config, configured), readFullModelCatalog };
+    const first = capturePreparedModelRuntimeCatalog(source, source);
+    readFullModelCatalog.mockReturnValue({ entries: secondEntries, routeVariants: secondEntries });
+    const second = capturePreparedModelRuntimeCatalog(source, source);
     const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-    await expect(
-      loadProviderScopedThinkingCatalog({ config, provider: entry.provider, model: entry.id }),
-    ).rejects.toBeInstanceOf(PreparedModelCatalogConfigReplacedError);
-    expect(scopedCatalogMock).not.toHaveBeenCalled();
+    const read = () =>
+      loadProviderScopedThinkingCatalog({
+        config,
+        agentDir: source.agentDir,
+        provider: entry.provider,
+        model: entry.id,
+      });
+    await expect(withAdmitted(first, read)).resolves.toEqual(firstEntries ?? configured);
+    await expect(withAdmitted(second, read)).resolves.toEqual(secondEntries);
   });
 
-  it("keeps native harness observations available without a published owner", async () => {
-    const nativeEntry = { ...entry, nativeRuntime: "test-harness", reasoning: true };
-    augmentCatalogMock.mockResolvedValue({ entries: [nativeEntry], routeVariants: [nativeEntry] });
-    const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
-    await expect(
-      loadProviderScopedThinkingCatalog({ config: {}, provider: entry.provider, model: entry.id }),
-    ).resolves.toEqual([nativeEntry]);
-    expect(acquireSnapshotMock).not.toHaveBeenCalled();
-    expect(scopedCatalogMock).not.toHaveBeenCalled();
-  });
+  it.each(["missing admission", "closed lease", "other agent", "other workspace"])(
+    "cannot borrow replacement facts with %s",
+    async (mismatch) => {
+      const config = { skills: { entries: { marker: { enabled: true } } } };
+      const replaced = { skills: { entries: { marker: { enabled: false } } } };
+      const admitted = owner(config, [{ ...entry, reasoning: true }]);
+      publishedSnapshotMock.mockReturnValue(owner(replaced, [{ ...entry, reasoning: false }]));
+      const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
+      const read = () =>
+        loadProviderScopedThinkingCatalog({
+          config,
+          agentDir: mismatch === "other agent" ? "/tmp/other-agent" : admitted.agentDir,
+          ...(mismatch === "other workspace" ? { workspaceDir: "/tmp/other-workspace" } : {}),
+          provider: entry.provider,
+          model: entry.id,
+        });
+      const result = await (mismatch === "missing admission"
+        ? read()
+        : withAdmitted(admitted, read, mismatch !== "closed lease"));
+      expect(result).toEqual([]);
+      expect(scopedCatalogMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { agentRuntime: "openclaw", expectedRuntime: undefined },
@@ -266,61 +491,52 @@ describe("loadProviderScopedThinkingCatalog", () => {
   });
 
   it.each([
+    { name: "missing thinking", model: entry, route: undefined, visible: true },
+    {
+      name: "text-only",
+      model: { ...entry, reasoning: true, input: ["text"] },
+      route: entry,
+      visible: true,
+    },
     {
       name: "vision",
-      input: ["text", "image"],
-      expected: ["text", "image"],
-      baseUrl: entry.baseUrl,
+      model: { ...entry, reasoning: true, input: ["text", "image"] },
+      route: entry,
+      visible: true,
     },
-    { name: "text only", input: ["text"], expected: ["text"], baseUrl: entry.baseUrl },
-    { name: "missing input", input: undefined, expected: undefined, baseUrl: entry.baseUrl },
+    {
+      name: "missing input despite reasoning",
+      model: { ...entry, reasoning: true },
+      route: entry,
+      visible: false,
+    },
     {
       name: "different route",
-      input: ["text", "image"],
-      expected: undefined,
-      baseUrl: "https://custom.invalid/v1",
+      model: { ...entry, reasoning: true, input: ["text", "image"] },
+      route: { ...entry, baseUrl: "https://custom.invalid/v1" },
+      visible: false,
     },
   ] satisfies Array<{
     name: string;
-    input: ModelCatalogEntry["input"];
-    expected: ModelCatalogEntry["input"];
-    baseUrl: string | undefined;
-  }>)("keeps input independent of reasoning: $name", async (testCase) => {
+    model: ModelCatalogEntry;
+    route: Pick<ModelCatalogEntry, "api" | "baseUrl"> | undefined;
+    visible: boolean;
+  }>)("reads only published capabilities: $name", async ({ model, route, visible }) => {
     const config = {};
-    publishedSnapshotMock.mockReturnValue(
-      owner(config, [{ ...entry, reasoning: true, input: testCase.input }]),
-    );
+    publishedSnapshotMock.mockReturnValue(owner(config, [model]));
+    scopedCatalogMock.mockResolvedValue({
+      entries: [{ ...entry, reasoning: true, input: ["text", "image"] }],
+      routeVariants: [],
+    });
     const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
     const catalog = await loadProviderScopedThinkingCatalog({
       config,
       provider: entry.provider,
       model: entry.id,
-      requiredInputRoute: { api: entry.api, baseUrl: testCase.baseUrl },
+      requiredInputRoute: route,
     });
-    if (testCase.expected) {
-      expect(catalog[0]?.input).toEqual(testCase.expected);
-    } else {
-      expect(catalog).toEqual([]);
-    }
+    expect(catalog).toEqual(visible ? [model] : []);
     expect(manifestCatalogMock).not.toHaveBeenCalled();
     expect(scopedCatalogMock).not.toHaveBeenCalled();
-  });
-
-  it("returns the completed catalog to nonblocking readers without a refresh", async () => {
-    const config = {};
-    const completed: ModelCatalogSnapshot = {
-      entries: [{ ...entry, reasoning: true }],
-      routeVariants: [],
-    };
-    const loadFullModelCatalog = vi.fn(async () => completed);
-    publishedSnapshotMock.mockReturnValue({
-      ...owner(config, [entry]),
-      readFullModelCatalog: () => completed,
-      loadFullModelCatalog,
-    });
-    const { getPreparedModelCatalogSnapshot } = await import("./prepared-model-catalog.js");
-    expect(getPreparedModelCatalogSnapshot({ config })).toBe(completed);
-    expect(loadFullModelCatalog).not.toHaveBeenCalled();
-    expect(acquireSnapshotMock).not.toHaveBeenCalled();
   });
 });

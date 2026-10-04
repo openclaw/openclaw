@@ -10,71 +10,26 @@ type Logger = { info?: (msg: string) => void };
 type DocxDescendantCreatePayload = NonNullable<
   Parameters<Lark.Client["docx"]["documentBlockDescendant"]["create"]>[0]
 >;
-type DocxDescendantCreateBlock = NonNullable<
+export type DocxDescendantCreateBlock = NonNullable<
   NonNullable<DocxDescendantCreatePayload["data"]>["descendants"]
 >[number];
 
-function normalizeChildIds(children: string[] | string | undefined): string[] | undefined {
-  if (Array.isArray(children)) {
-    return children;
-  }
-  const child = readStringValue(children);
-  return child ? [child] : undefined;
-}
-
 function toDescendantBlock(block: FeishuDocxBlock): DocxDescendantCreateBlock {
-  const children = normalizeChildIds(block.children);
+  const child = readStringValue(block.children);
   return {
     ...block,
-    ...(children ? { children } : {}),
+    ...(child ? { children: [child] } : {}),
   } as DocxDescendantCreateBlock;
 }
 
-function collectDescendants(
-  blockMap: Map<string, FeishuDocxBlock>,
-  rootId: string,
-): FeishuDocxBlock[] {
-  const result: FeishuDocxBlock[] = [];
-  const visited = new Set<string>();
-
-  function collect(blockId: string) {
-    if (visited.has(blockId)) {
-      return;
-    }
-    visited.add(blockId);
-
-    const block = blockMap.get(blockId);
-    if (!block) {
-      return;
-    }
-
-    result.push(block);
-
-    const children = block.children;
-    if (Array.isArray(children)) {
-      for (const childId of children) {
-        collect(childId);
-      }
-    } else if (typeof children === "string") {
-      collect(children);
-    }
-  }
-
-  collect(rootId);
-
-  return result;
-}
-
-async function insertBatch(
+export async function insertDocxDescendants(
   client: Lark.Client,
   docToken: string,
-  blocks: FeishuDocxBlock[],
+  descendants: DocxDescendantCreateBlock[],
   firstLevelBlockIds: string[],
   parentBlockId: string = docToken,
   index = -1,
 ): Promise<FeishuDocxBlockChild[]> {
-  const descendants = cleanBlocksForDescendant(blocks);
-
   if (descendants.length === 0) {
     return [];
   }
@@ -83,7 +38,7 @@ async function insertBatch(
     path: { document_id: docToken, block_id: parentBlockId },
     data: {
       children_id: firstLevelBlockIds,
-      descendants: descendants.map(toDescendantBlock),
+      descendants,
       index,
     },
   });
@@ -104,7 +59,7 @@ export async function insertBlocksInBatches(
   logger?: Logger,
   parentBlockId: string = docToken,
   startIndex = -1,
-): Promise<{ children: FeishuDocxBlockChild[]; skipped: string[] }> {
+): Promise<FeishuDocxBlockChild[]> {
   const allChildren: FeishuDocxBlockChild[] = [];
 
   const batches: Array<{ firstLevelIds: string[]; blocks: FeishuDocxBlock[] }> = [];
@@ -121,8 +76,20 @@ export async function insertBlocksInBatches(
   }
 
   for (const firstLevelId of firstLevelBlockIds) {
-    const descendants = collectDescendants(blockMap, firstLevelId);
-    const newBlocks = descendants.filter((b) => b.block_id && !usedBlockIds.has(b.block_id));
+    const newBlocks: FeishuDocxBlock[] = [];
+    const collect = (blockId: string) => {
+      const block = blockMap.get(blockId);
+      if (!block || usedBlockIds.has(blockId)) {
+        return;
+      }
+      usedBlockIds.add(blockId);
+      newBlocks.push(block);
+      const children = block.children;
+      for (const childId of typeof children === "string" ? [children] : (children ?? [])) {
+        collect(childId);
+      }
+    };
+    collect(firstLevelId);
 
     // A single block whose subtree exceeds the API limit cannot be split
     // (a table or other compound block must be inserted atomically).
@@ -143,12 +110,7 @@ export async function insertBlocksInBatches(
     }
 
     currentBatch.firstLevelIds.push(firstLevelId);
-    for (const block of newBlocks) {
-      currentBatch.blocks.push(block);
-      if (block.block_id) {
-        usedBlockIds.add(block.block_id);
-      }
-    }
+    currentBatch.blocks.push(...newBlocks);
   }
 
   if (currentBatch.blocks.length > 0) {
@@ -161,10 +123,10 @@ export async function insertBlocksInBatches(
       `feishu_doc: Inserting batch ${i + 1}/${batches.length} (${batch.blocks.length} blocks)...`,
     );
 
-    const children = await insertBatch(
+    const children = await insertDocxDescendants(
       client,
       docToken,
-      batch.blocks,
+      cleanBlocksForDescendant(batch.blocks).map(toDescendantBlock),
       batch.firstLevelIds,
       parentBlockId,
       currentIndex,
@@ -177,5 +139,5 @@ export async function insertBlocksInBatches(
     }
   }
 
-  return { children: allChildren, skipped: [] };
+  return allChildren;
 }

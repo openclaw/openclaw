@@ -1,4 +1,3 @@
-// Collects configured startup channels, slots, paths, and validation references.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
@@ -19,14 +18,16 @@ import {
 import { readBundledDiscoveryMode } from "./bundled-discovery-state.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "./channel-presence-policy.js";
 import { collectPluginConfigContractMatches } from "./config-contracts.js";
-import { normalizePluginsConfigWithResolverCore } from "./config-normalization-shared.js";
 import {
   resolveEffectivePluginActivationState,
   resolveSelectedContextEnginePluginIdFromConfig,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { NormalizedPluginsConfig } from "./gateway-startup-plugin-contracts.js";
-import { sortUniquePluginIds } from "./gateway-startup-plugin-contracts.js";
+import {
+  isConfigActivationValueEnabled,
+  sortUniquePluginIds,
+} from "./gateway-startup-plugin-contracts.js";
 import {
   collectConfiguredGenerationProviderIds,
   collectConfiguredMemoryEmbeddingProviderIds,
@@ -40,7 +41,7 @@ import type {
   InstalledPluginIndexScopeLookup,
 } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
-import { normalizePluginsConfigWithRegistry } from "./plugin-registry-contributions.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 
 export function readStartupBundledDiscoveryMode(
   config: OpenClawConfig,
@@ -58,22 +59,6 @@ export function readStartupBundledDiscoveryMode(
     return legacyMode;
   }
   return undefined;
-}
-export function normalizePluginsConfigForInstalledIndex(
-  config: OpenClawConfig["plugins"] | undefined,
-  lookup: InstalledPluginIndexScopeLookup,
-) {
-  return normalizePluginsConfigWithResolverCore(config, lookup.normalizePluginId);
-}
-
-function isConfigActivationValueEnabled(value: unknown): boolean {
-  if (value === false) {
-    return false;
-  }
-  if (isRecord(value) && value.enabled === false) {
-    return false;
-  }
-  return true;
 }
 
 function listPotentialEnabledChannelIds(
@@ -108,22 +93,14 @@ function listPotentialEnabledChannelIds(
   return sortUniquePluginIds([...enabledSignals, ...persistedSignals]);
 }
 
-function isGatewayStartupMemoryPlugin(plugin: InstalledPluginIndexRecord): boolean {
-  return plugin.startup.memory;
-}
-
 function resolveGatewayStartupDreamingEngineId(config: OpenClawConfig): string | undefined {
   const dreamingConfig = resolveMemoryDreamingConfig({
     pluginConfig: resolveMemoryDreamingPluginConfig(config),
     cfg: config,
   });
-  if (!dreamingConfig.enabled) {
-    return undefined;
-  }
-  if (!resolveGatewayStartupDreamingSelectedPluginId(config)) {
-    return undefined;
-  }
-  return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
+  return dreamingConfig.enabled && resolveGatewayStartupDreamingSelectedPluginId(config)
+    ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID
+    : undefined;
 }
 
 function resolveGatewayStartupDreamingSelectedPluginId(config: OpenClawConfig): string | undefined {
@@ -138,11 +115,12 @@ export function blocksPluginStartup(params: {
   pluginsConfig: NormalizedPluginsConfig;
   activationSourcePlugins: NormalizedPluginsConfig;
 }): boolean {
+  const policyId = normalizePluginPolicyId(params.pluginId);
   return (
-    params.pluginsConfig.deny.includes(params.pluginId) ||
-    params.activationSourcePlugins.deny.includes(params.pluginId) ||
-    params.pluginsConfig.entries[params.pluginId]?.enabled === false ||
-    params.activationSourcePlugins.entries[params.pluginId]?.enabled === false
+    params.pluginsConfig.deny.includes(policyId) ||
+    params.activationSourcePlugins.deny.includes(policyId) ||
+    params.pluginsConfig.entries[policyId]?.enabled === false ||
+    params.activationSourcePlugins.entries[policyId]?.enabled === false
   );
 }
 
@@ -196,7 +174,7 @@ export function resolveAuthorizedGatewayStartupDreamingPluginIds(params: {
 
 export function resolveMemorySlotStartupPluginId(params: {
   activationSourceConfig: OpenClawConfig;
-  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSourcePlugins: NormalizedPluginsConfig;
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
@@ -222,7 +200,7 @@ export function resolveMemorySlotStartupPluginId(params: {
 
 export function resolveContextEngineSlotStartupPluginId(params: {
   activationSourceConfig: OpenClawConfig;
-  activationSourcePlugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSourcePlugins: NormalizedPluginsConfig;
   normalizePluginId: (pluginId: string) => string;
 }): string | undefined {
   const { activationSourceConfig, activationSourcePlugins, normalizePluginId } = params;
@@ -243,19 +221,13 @@ export function shouldConsiderForGatewayStartup(params: {
   memorySlotStartupPluginId?: string;
   contextEngineSlotStartupPluginId?: string;
 }): boolean {
-  if (params.manifest?.activation?.onStartup === true) {
-    return true;
-  }
-  if (params.contextEngineSlotStartupPluginId === params.plugin.pluginId) {
-    return true;
-  }
-  if (!isGatewayStartupMemoryPlugin(params.plugin)) {
-    return false;
-  }
-  if (params.startupDreamingPluginIds.has(params.plugin.pluginId)) {
-    return true;
-  }
-  return params.memorySlotStartupPluginId === params.plugin.pluginId;
+  return (
+    params.manifest?.activation?.onStartup === true ||
+    params.contextEngineSlotStartupPluginId === params.plugin.pluginId ||
+    (params.plugin.startup.memory &&
+      (params.startupDreamingPluginIds.has(params.plugin.pluginId) ||
+        params.memorySlotStartupPluginId === params.plugin.pluginId))
+  );
 }
 
 export function hasConfiguredActivationPath(params: {
@@ -308,11 +280,12 @@ export function addConfiguredActivationPathPluginIds(
 
 export function addPluginConfigEntryIds(
   target: Set<string>,
-  plugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>,
+  plugins: NormalizedPluginsConfig,
+  normalizePluginId: (pluginId: string) => string,
 ): void {
   for (const [pluginId, entry] of Object.entries(plugins.entries)) {
     if (entry?.enabled !== false) {
-      target.add(pluginId);
+      target.add(normalizePluginId(pluginId));
     }
   }
 }
@@ -321,25 +294,22 @@ export function addConfiguredSlotPluginIds(
   target: Set<string>,
   params: {
     activationSourceConfig: OpenClawConfig;
-    activationSourcePlugins: ReturnType<typeof normalizePluginsConfigForInstalledIndex>;
+    activationSourcePlugins: NormalizedPluginsConfig;
     lookup: InstalledPluginIndexScopeLookup;
   },
 ): void {
-  const memorySlot = resolveMemorySlotStartupPluginId({
-    activationSourceConfig: params.activationSourceConfig,
-    activationSourcePlugins: params.activationSourcePlugins,
-    normalizePluginId: params.lookup.normalizePluginId,
-  });
-  if (memorySlot) {
-    target.add(memorySlot);
-  }
-  const contextEngineSlot = resolveContextEngineSlotStartupPluginId({
-    activationSourceConfig: params.activationSourceConfig,
-    activationSourcePlugins: params.activationSourcePlugins,
-    normalizePluginId: params.lookup.normalizePluginId,
-  });
-  if (contextEngineSlot) {
-    target.add(contextEngineSlot);
+  for (const resolveSlot of [
+    resolveMemorySlotStartupPluginId,
+    resolveContextEngineSlotStartupPluginId,
+  ]) {
+    const pluginId = resolveSlot({
+      activationSourceConfig: params.activationSourceConfig,
+      activationSourcePlugins: params.activationSourcePlugins,
+      normalizePluginId: params.lookup.normalizePluginId,
+    });
+    if (pluginId) {
+      target.add(pluginId);
+    }
   }
 }
 
@@ -379,9 +349,6 @@ export function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
 export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   const providerIds: string[] = [];
   const pushProviderId = (value: unknown) => {
-    if (typeof value !== "string") {
-      return;
-    }
     const normalized = normalizeOptionalLowercaseString(value);
     if (normalized) {
       providerIds.push(normalized);

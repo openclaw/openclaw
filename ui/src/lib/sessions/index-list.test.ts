@@ -455,6 +455,8 @@ describe("session list requests", () => {
     await sessions.list({ ...options, spawnedBy: "  agent:main:parent  " });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       ...options,
+      rowMode: "compact",
+      source: "chat-pane",
       configuredAgentsOnly: true,
       spawnedBy: "agent:main:parent",
     });
@@ -481,6 +483,8 @@ describe("session list requests", () => {
     const { sessions } = sessionHarness(request);
     await sessions.list({ boardFace: "dashboard" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
+      rowMode: "compact",
+      source: "chat-pane",
       configuredAgentsOnly: true,
       boardFace: "dashboard",
       includeGlobal: true,
@@ -776,6 +780,8 @@ describe("session list requests", () => {
       "agent:main:sidebar-result",
     );
     expect(request.mock.calls[0]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "chat-pane",
       includeGlobal: true,
       includeUnknown: true,
       configuredAgentsOnly: true,
@@ -820,6 +826,8 @@ describe("session list requests", () => {
     expect(sessions.state.result).toBe(primaryResult);
     expect(sessions.listSnapshot(pageQuery).result?.sessions[0]?.key).toBe("agent:main:page");
     expect(request.mock.calls[1]?.[1]).toEqual({
+      rowMode: "compact",
+      source: "chat-pane",
       agentId: "main",
       configuredAgentsOnly: true,
       includeGlobal: true,

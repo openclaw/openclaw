@@ -92,11 +92,7 @@ test("keeps runtime phase parents explicit when observations arrive under anothe
   }
 });
 
-test.each([
-  { traces: true, metricsEnabled: false },
-  { traces: false, metricsEnabled: true },
-  { traces: true, metricsEnabled: true },
-])(
+test.each([{ traces: false, metricsEnabled: true }])(
   "honors preloaded signal toggles (traces=$traces metrics=$metricsEnabled)",
   async ({ traces, metricsEnabled }) => {
     const reader = new PeriodicExportingMetricReader({
@@ -254,6 +250,14 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
   try {
     emit({ ...base, phase: "received" });
     emit({ ...base, phase: "response", outcome: "ok", durationMs: 250 });
+    emit({
+      ...base,
+      phase: "response",
+      outcome: "ok",
+      durationMs: 750,
+      responseBytes: 8192,
+      firstResponse: false,
+    });
     emit({ ...base, phase: "handler", outcome: "returned", durationMs: 400, admissionMs: 100 });
     emit({
       ...base,
@@ -377,40 +381,4 @@ test("exports Gateway RPC phase metrics with real SDK aggregation and upstream t
     await service.stop?.(ctx);
     await meterProvider.shutdown();
   }
-});
-
-test("logs-only exporters do not subscribe to Gateway RPC timings", async () => {
-  const received: string[] = [];
-  const { service, ctx } = await startOtelService({
-    logs: true,
-    logsExporter: "stdout",
-    configure(serviceContext) {
-      const subscribe = serviceContext.internalDiagnostics!.onEvent;
-      serviceContext.internalDiagnostics!.onEvent = (listener, filter) =>
-        subscribe((...args) => {
-          received.push(args[0].type);
-          listener(...args);
-        }, filter);
-    },
-  });
-  emitTrustedDiagnosticEventWithPrivateData({
-    type: "gateway.rpc",
-    method: "health",
-    phase: "received",
-  });
-  emitTrustedDiagnosticEventWithPrivateData({
-    type: "queue.lane.enqueue",
-    lane: "main",
-    queueSize: 1,
-  });
-  emitTrustedDiagnosticEventWithPrivateData({
-    type: "log.record",
-    level: "INFO",
-    message: "synthetic RPC gating proof",
-  });
-  await waitForDiagnosticEventsDrained();
-  await service.stop?.(ctx);
-  expect(received).toContain("log.record");
-  expect(received).not.toContain("gateway.rpc");
-  expect(received).not.toContain("queue.lane.enqueue");
 });

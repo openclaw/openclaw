@@ -1,4 +1,3 @@
-// Codex plugin module implements periodic Computer Use health probes.
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { defineCodexBuildState } from "../build-state.js";
 import type { CodexAppServerClient } from "./client.js";
@@ -7,7 +6,6 @@ import type { ResolvedCodexComputerUseConfig } from "./config.js";
 
 type ComputerUseHealthMonitor = {
   fingerprint: string;
-  intervalMs: number;
   timer: ReturnType<typeof setInterval>;
   disposeCloseHandler: () => void;
   running: boolean;
@@ -38,7 +36,14 @@ export function startCodexComputerUseHealthMonitor(params: {
       reason: params.config.enabled ? "health_disabled" : "disabled",
     };
   }
-  const fingerprint = buildComputerUseHealthMonitorFingerprint(params.config, params.tools);
+  const fingerprint = JSON.stringify({
+    autoRepair: params.config.autoRepair,
+    healthCheckIntervalMinutes: params.config.healthCheckIntervalMinutes,
+    liveTestTimeoutMs: params.config.liveTestTimeoutMs,
+    mcpServerName: params.config.mcpServerName,
+    toolCallTimeoutMs: params.config.toolCallTimeoutMs,
+    tools: params.tools?.toSorted(),
+  });
   const intervalMs = params.config.healthCheckIntervalMinutes * 60_000;
   if (existing?.fingerprint === fingerprint) {
     return { started: false, intervalMs, reason: "already_started" };
@@ -48,7 +53,6 @@ export function startCodexComputerUseHealthMonitor(params: {
   }
   const monitor: ComputerUseHealthMonitor = {
     fingerprint,
-    intervalMs,
     timer: setInterval(() => {
       void runCodexComputerUseHealthProbe(params.client, params.config, monitor, params.tools);
     }, intervalMs),
@@ -64,20 +68,6 @@ export function startCodexComputerUseHealthMonitor(params: {
   });
   state.monitors.set(params.client, monitor);
   return { started: true, intervalMs };
-}
-
-function buildComputerUseHealthMonitorFingerprint(
-  config: ResolvedCodexComputerUseConfig,
-  tools?: readonly string[],
-): string {
-  return JSON.stringify({
-    autoRepair: config.autoRepair,
-    healthCheckIntervalMinutes: config.healthCheckIntervalMinutes,
-    liveTestTimeoutMs: config.liveTestTimeoutMs,
-    mcpServerName: config.mcpServerName,
-    toolCallTimeoutMs: config.toolCallTimeoutMs,
-    tools: tools?.toSorted(),
-  });
 }
 
 async function runCodexComputerUseHealthProbe(

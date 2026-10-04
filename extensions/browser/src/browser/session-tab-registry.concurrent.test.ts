@@ -8,6 +8,7 @@ const processStateSymbols = [
   "openclaw.browser.session-tabs.volatile-cleanup",
   "openclaw.browser.session-tabs.volatile-aliases",
   "openclaw.browser.session-tabs.exact-volatile-aliases",
+  "openclaw.browser.session-tabs.deferred-diagnostics",
 ];
 
 function clearProcessLocalTabState(): void {
@@ -30,6 +31,44 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
 
   beforeEach(clearProcessLocalTabState);
   afterEach(clearProcessLocalTabState);
+
+  it("preserves volatile tabs when an untyped caller omits native-check preparation", async () => {
+    const registry = await freshRegistry("unpaired-current");
+    const sessionKey = "agent:main:main";
+    await registry.trackSessionBrowserTab({
+      sessionKey,
+      targetId: "unpaired-tab",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
+    });
+    const closeTab = vi.fn<CloseTab>(async () => {});
+    const onWarn = vi.fn();
+    await expect(
+      Reflect.apply(registry.closeTrackedBrowserTabsForSessions.bind(registry), undefined, [
+        {
+          sessionKeys: [sessionKey],
+          sessionEntryCurrent: {
+            source: {
+              agentId: "main",
+              path: "/synthetic/agent.sqlite",
+              sessionKey,
+              databaseIdentity: "synthetic-source",
+            },
+            assertCurrent: vi.fn(),
+          },
+          closeTab,
+          onWarn,
+        },
+      ]),
+    ).resolves.toBe(0);
+    expect(closeTab).not.toHaveBeenCalled();
+    expect(onWarn).toHaveBeenCalledExactlyOnceWith(
+      "browser cleanup unavailable: sessionEntryCurrent requires prepareCurrent",
+    );
+    await expect(
+      registry.closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab }),
+    ).resolves.toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+  });
 
   it("keeps a replacement registration when a waiting cleanup caller becomes stale", async () => {
     const first = await freshRegistry("first-owner");

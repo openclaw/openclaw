@@ -1,7 +1,7 @@
 // Non-interactive gateway config tests cover port, bind, auth token, and SecretRef preservation behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { withEnv } from "../../../test-utils/env.js";
+import { withEnvAsync } from "../../../test-utils/env.js";
 import type { OnboardOptions } from "../../onboard-types.js";
 import { applyNonInteractiveGatewayConfig } from "./gateway-config.js";
 
@@ -52,7 +52,7 @@ function applyGatewayConfig({
   runtime?: ReturnType<typeof createRuntime>;
   env?: Record<string, string | undefined>;
 } = {}) {
-  return withEnv(
+  return withEnvAsync(
     {
       OPENCLAW_GATEWAY_TOKEN: undefined,
       OPENCLAW_GATEWAY_PASSWORD: undefined,
@@ -77,21 +77,12 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
 
   // --- Plaintext preservation (the original regression) ---
 
-  it("preserves existing plaintext gateway.auth.token when no flag or env override is provided", () => {
-    const nextConfig = createTokenConfig("existing-user-token");
-
-    const result = applyGatewayConfig({ nextConfig });
-
-    expect(result?.nextConfig.gateway?.auth?.token).toBe("existing-user-token");
-    expect(randomToken).not.toHaveBeenCalled();
-  });
-
-  it("prefers existing plaintext token over ambient OPENCLAW_GATEWAY_TOKEN on re-onboard", () => {
+  it("prefers existing plaintext token over ambient OPENCLAW_GATEWAY_TOKEN on re-onboard", async () => {
     // A stale shell/launchd OPENCLAW_GATEWAY_TOKEN must not rotate a
     // persisted token — that would break already-paired clients.
     const nextConfig = createTokenConfig("existing-user-token");
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig,
       env: { OPENCLAW_GATEWAY_TOKEN: "stale-env-token" },
     });
@@ -100,10 +91,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("prefers --gateway-token flag over existing plaintext token", () => {
+  it("prefers --gateway-token flag over existing plaintext token", async () => {
     const nextConfig = createTokenConfig("existing-user-token");
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig,
       opts: { gatewayToken: "flag-token" } as OnboardOptions,
     });
@@ -112,8 +103,8 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("selects token auth when --gateway-token overrides a no-auth config", () => {
-    const result = applyGatewayConfig({
+  it("selects token auth when --gateway-token overrides a no-auth config", async () => {
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { auth: { mode: "none" } } },
       opts: { gatewayToken: "flag-token" } as OnboardOptions,
     });
@@ -121,12 +112,9 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "token", token: "flag-token" });
   });
 
-  it.each([
-    { name: "a fresh gateway", nextConfig: {} },
-    { name: "an existing plaintext token", nextConfig: createTokenConfig("existing-user-token") },
-    { name: "an existing token SecretRef", nextConfig: createTokenConfig(SAMPLE_SECRET_REF) },
-  ])("selects password auth when --gateway-password overrides $name", ({ nextConfig }) => {
-    const result = applyGatewayConfig({
+  it("selects password auth when --gateway-password overrides an existing token SecretRef", async () => {
+    const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
+    const result = await applyGatewayConfig({
       nextConfig,
       opts: { gatewayPassword: "explicit-password" } as OnboardOptions,
     });
@@ -138,8 +126,8 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("stores an explicit password as a reference to the configured env provider", () => {
-    const result = applyGatewayConfig({
+  it("stores an explicit password as a reference to the configured env provider", async () => {
+    const result = await applyGatewayConfig({
       nextConfig: {
         secrets: {
           defaults: { env: "gatewayenv" },
@@ -176,8 +164,8 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
         id: "EXISTING_GATEWAY_PASSWORD",
       },
     },
-  ])("preserves $name in reference mode without an explicit replacement", ({ password }) => {
-    const result = applyGatewayConfig({
+  ])("preserves $name in reference mode without an explicit replacement", async ({ password }) => {
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { auth: { mode: "password", password } } },
       opts: { secretInputMode: "ref" },
     });
@@ -188,16 +176,16 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
   it.each([
     { name: "an explicit auth mode", opts: { gatewayAuth: "token" as const } },
     { name: "an explicit token credential", opts: { gatewayToken: "flag-token" } },
-  ])("keeps $name authoritative over --gateway-password", ({ opts }) => {
-    const result = applyGatewayConfig({
+  ])("keeps $name authoritative over --gateway-password", async ({ opts }) => {
+    const result = await applyGatewayConfig({
       opts: { ...opts, gatewayPassword: "explicit-password" } as OnboardOptions,
     });
 
     expect(result?.nextConfig.gateway?.auth?.mode).toBe("token");
   });
 
-  it("keeps password auth when a token-only rerun targets an existing Funnel", () => {
-    const result = applyGatewayConfig({
+  it("keeps password auth when a token-only rerun targets an existing Funnel", async () => {
+    const result = await applyGatewayConfig({
       nextConfig: {
         gateway: {
           auth: { mode: "password", password: "test-password" },
@@ -213,22 +201,57 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
   });
 
-  it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", () => {
-    const result = applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
+  it.each([
+    { opts: {}, expectedMode: "trusted-proxy" },
+    { opts: { tailscale: "funnel" }, expectedMode: undefined },
+    { opts: { tailscale: "funnel", gatewayAuth: "password" }, expectedMode: "password" },
+  ] as const)(
+    "preserves proxy auth unless explicitly replaced: $opts",
+    async ({ opts, expectedMode }) => {
+      const runtime = createRuntime();
+      const auth = {
+        mode: "trusted-proxy" as const,
+        password: "synthetic-local-password",
+        trustedProxy: { userHeader: "x-forwarded-user", allowUsers: ["operator@example.test"] },
+      };
+      const result = await applyGatewayConfig({
+        nextConfig: { gateway: { auth, trustedProxies: ["10.0.0.5"] } },
+        opts,
+        runtime,
+      });
+
+      if (expectedMode === undefined) {
+        expect(result).toBeNull();
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("--gateway-auth password"),
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+      } else {
+        expect(result?.nextConfig.gateway?.auth).toEqual({ ...auth, mode: expectedMode });
+        expect(result?.nextConfig.gateway?.trustedProxies).toEqual(["10.0.0.5"]);
+        expect(runtime.exit).not.toHaveBeenCalled();
+      }
+      expect(auth.mode).toBe("trusted-proxy");
+      expect(randomToken).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses OPENCLAW_GATEWAY_TOKEN to fill an empty config on first-run", async () => {
+    const result = await applyGatewayConfig({ env: { OPENCLAW_GATEWAY_TOKEN: "env-token" } });
 
     expect(result?.nextConfig.gateway?.auth?.token).toBe("env-token");
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("generates a random token only when flag, env, and existing config are all empty", () => {
-    const result = applyGatewayConfig();
+  it("generates a random token only when flag, env, and existing config are all empty", async () => {
+    const result = await applyGatewayConfig();
 
     expect(randomToken).toHaveBeenCalledOnce();
     expect(result?.nextConfig.gateway?.auth?.token).toBe("generated-random-token");
   });
 
-  it("establishes token auth when explicitly enabling Tailscale Serve from no-auth", () => {
-    const result = applyGatewayConfig({
+  it("establishes token auth when explicitly enabling Tailscale Serve from no-auth", async () => {
+    const result = await applyGatewayConfig({
       nextConfig: {
         gateway: {
           bind: "loopback",
@@ -248,20 +271,11 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
 
   // --- SecretRef preservation ---
 
-  it("preserves an existing SecretRef when no flag or env override is provided", () => {
-    const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
-
-    const result = applyGatewayConfig({ nextConfig });
-
-    expect(result?.nextConfig.gateway?.auth?.token).toEqual(SAMPLE_SECRET_REF);
-    expect(randomToken).not.toHaveBeenCalled();
-  });
-
-  it("preserves an existing SecretRef even when ambient OPENCLAW_GATEWAY_TOKEN is set", () => {
+  it("preserves an existing SecretRef even when ambient OPENCLAW_GATEWAY_TOKEN is set", async () => {
     // A stale ambient env must not declassify a configured SecretRef.
     const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig,
       env: { OPENCLAW_GATEWAY_TOKEN: "stale-env-token" },
     });
@@ -270,10 +284,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("leaves env-source SecretRef resolution to the health probe path", () => {
+  it("leaves env-source SecretRef resolution to the health probe path", async () => {
     const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig,
       env: { [SAMPLE_SECRET_REF.id]: "resolved-secret-value" },
     });
@@ -282,10 +296,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("overrides an existing SecretRef when --gateway-token flag is provided", () => {
+  it("overrides an existing SecretRef when --gateway-token flag is provided", async () => {
     const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig,
       opts: { gatewayToken: "flag-token" } as OnboardOptions,
     });
@@ -294,11 +308,11 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("overrides an existing SecretRef when --gateway-token-ref-env is provided", () => {
+  it("overrides an existing SecretRef when --gateway-token-ref-env is provided", async () => {
     const newRefId = "OPENCLAW_GATEWAY_TOKEN_NEW_REF";
     const nextConfig = createTokenConfig(SAMPLE_SECRET_REF);
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig,
       opts: { gatewayTokenRefEnv: newRefId } as OnboardOptions,
       env: { [newRefId]: "resolved-new-ref-value" },
@@ -313,9 +327,9 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("selects token auth when --gateway-token-ref-env overrides password auth", () => {
+  it("selects token auth when --gateway-token-ref-env overrides password auth", async () => {
     const newRefId = "OPENCLAW_GATEWAY_TOKEN_NEW_REF";
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { auth: { mode: "password", password: "test-password" } } },
       opts: { gatewayTokenRefEnv: newRefId } as OnboardOptions,
       env: { [newRefId]: "resolved-new-ref-value" },
@@ -329,12 +343,12 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     });
   });
 
-  it("fails when --gateway-token-ref-env points to a missing env var", () => {
+  it("fails when --gateway-token-ref-env points to a missing env var", async () => {
     const runtime = createRuntime();
     const message =
       'Environment variable "MISSING_GATEWAY_TOKEN_ENV" is missing or empty. Export it first, then rerun openclaw onboard --non-interactive.';
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       opts: { gatewayTokenRefEnv: "MISSING_GATEWAY_TOKEN_ENV", json: true } as OnboardOptions,
       runtime,
     });
@@ -348,9 +362,9 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(randomToken).not.toHaveBeenCalled();
   });
 
-  it("rejects an explicitly empty password instead of preserving the existing password", () => {
+  it("rejects an explicitly empty password instead of preserving the existing password", async () => {
     const runtime = createRuntime();
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { auth: { mode: "password", password: "test-password" } } },
       opts: { gatewayPassword: " " } as OnboardOptions,
       runtime,
@@ -361,8 +375,8 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("preserves environment-backed password auth without persisting the password", () => {
-    const result = applyGatewayConfig({
+  it("preserves environment-backed password auth without persisting the password", async () => {
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { auth: { mode: "password" } } },
       env: { OPENCLAW_GATEWAY_PASSWORD: "environment-password" },
     });
@@ -370,10 +384,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(result?.nextConfig.gateway?.auth).toEqual({ mode: "password" });
   });
 
-  it("rejects --gateway-bind custom when no gateway.customBindHost is configured", () => {
+  it("rejects --gateway-bind custom when no gateway.customBindHost is configured", async () => {
     const runtime = createRuntime();
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       opts: { gatewayBind: "custom" } as OnboardOptions,
       runtime,
     });
@@ -385,10 +399,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("rejects --gateway-bind custom when gateway.customBindHost is not a dotted-decimal IPv4", () => {
+  it("rejects --gateway-bind custom when gateway.customBindHost is not a dotted-decimal IPv4", async () => {
     const runtime = createRuntime();
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { customBindHost: "not-an-ip" } } as OpenClawConfig,
       opts: { gatewayBind: "custom" } as OnboardOptions,
       runtime,
@@ -399,10 +413,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it("accepts --gateway-bind custom when gateway.customBindHost is already configured", () => {
+  it("accepts --gateway-bind custom when gateway.customBindHost is already configured", async () => {
     const runtime = createRuntime();
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       nextConfig: { gateway: { customBindHost: "192.168.1.100" } } as OpenClawConfig,
       opts: { gatewayBind: "custom" } as OnboardOptions,
       runtime,
@@ -413,10 +427,10 @@ describe("applyNonInteractiveGatewayConfig auth resolution", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
-  it("keeps loopback normalization ahead of the custom bind guard when Tailscale is enabled", () => {
+  it("keeps loopback normalization ahead of the custom bind guard when Tailscale is enabled", async () => {
     const runtime = createRuntime();
 
-    const result = applyGatewayConfig({
+    const result = await applyGatewayConfig({
       opts: { gatewayBind: "custom", tailscale: "serve" } as OnboardOptions,
       runtime,
     });

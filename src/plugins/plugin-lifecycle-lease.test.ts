@@ -1,10 +1,11 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createPluginLifecycleLeaseTestClock } from "../gateway/config-reload.test-support.js";
 import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease.js";
@@ -20,13 +21,14 @@ import {
 } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
 import {
+  hasPluginLifecycleLeaseDemand,
   runOutsidePluginLifecycleLease,
   withPluginLifecycleLease,
   type PluginLifecycleLeaseContext,
 } from "./plugin-lifecycle-lease.js";
 import { seedInstalledPluginIndex } from "./test-helpers/installed-plugin-index.js";
 
-type LeaseChild = ChildProcessByStdio<null, Readable, Readable>;
+type LeaseChild = ChildProcessByStdio<Writable, Readable, Readable>;
 type LeaseChildRun = {
   child: LeaseChild;
   ready: Promise<void>;
@@ -81,7 +83,7 @@ function runLeaseChild(
   env?: NodeJS.ProcessEnv,
 ): LeaseChildRun {
   const child = spawn(process.execPath, ["--import", "tsx", scriptPath, ...args], {
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: ["pipe", "pipe", "pipe"],
     env,
   });
   child.stdout.setEncoding("utf8");
@@ -108,6 +110,11 @@ function runLeaseChild(
   });
 
   const completed = new Promise<void>((resolve, reject) => {
+    child.stdin.once("error", (error) => {
+      reject(
+        new Error(`failed to signal lease child ${args[0]}: ${error.message}`, { cause: error }),
+      );
+    });
     child.once("error", (error) => {
       reject(
         new Error(`failed to start lease child ${args[0]}: ${error.message}`, {
@@ -150,6 +157,62 @@ function runLeaseChild(
 }
 
 describe("plugin lifecycle lease", () => {
+  it("clears process demand after a waiter aborts or acquires and its holder releases", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-demand" }, async (state) => {
+      vi.useFakeTimers();
+      const clock = createPluginLifecycleLeaseTestClock();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const cancelled = new AbortController();
+      const operations: Promise<unknown>[] = [];
+      try {
+        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+        const holder = withPluginLifecycleLease({ env: state.env, signal }, async () => {
+          await withPluginLifecycleLease({}, async () => {
+            expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+          });
+          entered.resolve();
+          await release.promise;
+        });
+        operations.push(holder);
+        await Promise.race([entered.promise, holder]);
+        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+
+        const aborted = withPluginLifecycleLease(
+          { env: state.env, signal: cancelled.signal },
+          async () => {
+            throw new Error("aborted waiter acquired");
+          },
+        );
+        operations.push(aborted);
+        expect(hasPluginLifecycleLeaseDemand()).toBe(true);
+        cancelled.abort(new Error("test cancellation"));
+        await expect(aborted).rejects.toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
+        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+
+        const acquired = vi.fn(async () => {
+          expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+        });
+        const waiter = withPluginLifecycleLease({ env: state.env, signal }, acquired);
+        operations.push(waiter);
+        expect(hasPluginLifecycleLeaseDemand()).toBe(true);
+        release.resolve();
+        await holder;
+        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+        await clock.waitFor(waiter);
+        expect(acquired).toHaveBeenCalledOnce();
+        expect(hasPluginLifecycleLeaseDemand()).toBe(false);
+      } finally {
+        cancelled.abort();
+        release.resolve();
+        await clock.waitFor(Promise.allSettled(operations));
+        vi.useRealTimers();
+      }
+    });
+  });
+
   it.each([
     [false, false],
     [true, false],
@@ -343,10 +406,38 @@ describe("plugin lifecycle lease", () => {
     });
   });
 
+  it("reclaims process-bound lifecycle work after its process is killed", async () => {
+    await withOpenClawTestState({ label: "plugin-lifecycle-killed-owner" }, async (state) => {
+      await withLeaseChildren(async (children) => {
+        const leaseModuleUrl = pathToFileURL(
+          path.resolve("src/plugins/plugin-lifecycle-lease.ts"),
+        ).href;
+        const script = await state.writeText(
+          "killed-lease.mts",
+          `
+          import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
+          const env = { ...process.env, OPENCLAW_STATE_DIR: process.argv[2] };
+          await withPluginLifecycleLease({ env, processBound: true }, async () => {
+            process.stdout.write("ready\\n");
+            await new Promise(() => {});
+          });
+        `,
+        );
+        const holder = runLeaseChild(children, script, [state.stateDir]);
+        await holder.ready;
+        await terminateLeaseChild(holder.child);
+        // SIGKILL is the expected result, already joined above.
+        children.delete(holder);
+        await expect(
+          withPluginLifecycleLease({ env: state.env, waitMs: 0 }, async () => "recovered"),
+        ).resolves.toBe("recovered");
+      });
+    });
+  });
+
   it("serializes lifecycle work across processes", async () => {
     await withOpenClawTestState({ label: "plugin-lifecycle-processes" }, async (state) => {
       await withLeaseChildren(async (children) => {
-        const releaseMarker = state.path("release-first");
         const secondMarker = state.path("second-entered");
         const secondResult = state.path("second-result");
         const leaseModuleUrl = pathToFileURL(
@@ -356,42 +447,50 @@ describe("plugin lifecycle lease", () => {
           "lease-child.mts",
           `
           import fs from "node:fs/promises";
+          import { createInterface } from "node:readline";
           import { withPluginLifecycleLease } from ${JSON.stringify(leaseModuleUrl)};
-          const [role, stateDir, releaseMarker, secondMarker, secondResult] = process.argv.slice(2);
+          const [role, stateDir, secondMarker, secondResult] = process.argv.slice(2);
           const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-          if (role === "second") {
+          const input = createInterface({ input: process.stdin });
+          const commands = input[Symbol.asyncIterator]();
+          try {
+            // Complete cold database/worker admission before either contested lease starts.
+            await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {});
             process.stdout.write("ready\\n");
-            try {
-              await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 0 }, async () => {
-                await fs.writeFile(secondMarker, "entered");
-              });
-              await fs.writeFile(secondResult, "acquired");
-            } catch (error) {
-              await fs.writeFile(secondResult, error?.code ?? String(error));
+            if ((await commands.next()).value !== "go") {
+              throw new Error("expected go command");
             }
-          } else {
-            await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
-              process.stdout.write("ready\\n");
-              while (true) {
-                try {
-                  await fs.access(releaseMarker);
-                  break;
-                } catch {
-                  await new Promise((resolve) => {
-                    setTimeout(resolve, 25);
-                  });
-                }
+            if (role === "second") {
+              try {
+                await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 0 }, async () => {
+                  await fs.writeFile(secondMarker, "entered");
+                });
+                await fs.writeFile(secondResult, "acquired");
+              } catch (error) {
+                await fs.writeFile(secondResult, error?.code ?? String(error));
               }
-            });
+            } else {
+              await withPluginLifecycleLease({ env, leaseMs: 1_000, waitMs: 5_000 }, async () => {
+                process.stdout.write("acquired\\n");
+                if ((await commands.next()).value !== "release") {
+                  throw new Error("expected release command");
+                }
+              });
+            }
+          } finally {
+            input.close();
           }
         `,
         );
 
-        const childArgs = [state.stateDir, releaseMarker, secondMarker, secondResult];
+        const childArgs = [state.stateDir, secondMarker, secondResult];
         const first = runLeaseChild(children, childScript, ["first", ...childArgs]);
         await first.ready;
         const second = runLeaseChild(children, childScript, ["second", ...childArgs]);
         await second.ready;
+        first.child.stdin.write("go\n");
+        await first.waitForPhase("acquired");
+        second.child.stdin.end("go\n");
         // Wait for the child to close so its result write is fully flushed before
         // reading; file existence alone can race with the write after open().
         await second.completed;
@@ -405,7 +504,7 @@ describe("plugin lifecycle lease", () => {
         } catch (error) {
           assertionError = error;
         } finally {
-          await fs.writeFile(releaseMarker, "release");
+          first.child.stdin.end("release\n");
         }
         await Promise.all([first.completed, second.completed]);
         if (assertionError) {
@@ -436,9 +535,21 @@ describe("plugin lifecycle lease", () => {
         const betaGoMarker = state.path("beta-go");
         const releaseAlphaMarker = state.path("release-alpha");
         // Both processes and their SQLite workers share the lease clock for this cache handoff.
+        // Bun's explicit worker env skips inherited preloads in these non-Vitest children.
         const clockPreload = await state.writeText(
           "lease-clock.cjs",
-          `Date.now = () => ${Date.now()};\n`,
+          `Date.now = () => ${Date.now()};
+if (process.versions.bun) {
+  const threads = require("node:worker_threads");
+  const Worker = threads.Worker;
+  threads.Worker = class extends Worker {
+    constructor(url, options) {
+      super(url, { ...options, execArgv: [...(options?.execArgv ?? process.execArgv), "--preload", __filename] });
+    }
+  };
+  require("node:module").syncBuiltinESMExports();
+}
+`,
         );
         const childEnv = { ...process.env };
         for (const [key, value] of Object.entries(sqliteWorkerPreloadEnv(clockPreload))) {

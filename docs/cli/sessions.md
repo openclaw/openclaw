@@ -1,8 +1,9 @@
 ---
-summary: "CLI reference for listing, archiving, deleting, and maintaining stored sessions"
+summary: "CLI reference for listing, importing, archiving, deleting, and maintaining stored sessions"
 read_when:
   - You want to list stored sessions and see recent activity
   - You want to archive or delete sessions from a headless Gateway
+  - You want to preserve native tool transcripts in OpenClaw
 title: "Sessions"
 ---
 
@@ -103,6 +104,60 @@ skipped.
   ]
 }
 ```
+
+## Import transcripts
+
+Preserve native session catalog transcripts in the running Gateway's durable
+session store:
+
+```bash
+openclaw sessions import claude <thread-id>
+openclaw sessions import codex <thread-id> --source-home <home-id>
+openclaw sessions import claude <thread-id> --host <host-id> --agent work
+openclaw sessions import --all --json
+openclaw sessions import --all --catalog claude --limit 20 --dry-run
+openclaw sessions import --all --host <host-id>
+```
+
+The catalog IDs for Claude Code and Codex are `claude` and `codex`. Other
+catalogs with transcript reads use the same command. For one transcript without
+`--host`, the CLI discovers Gateway hosts in that catalog: it prefers
+`gateway:local` when present, otherwise uses the only Gateway host. If no
+unambiguous Gateway host exists, pass `--host <host-id>` explicitly. Use the
+catalog row's host and `sourceHomeId` to select another machine or native tool
+home. `--agent` chooses
+the destination agent. Imports support Gateway-local, paired-node, macOS app,
+and Linux app sources that the caller may read.
+
+Import creates an ordinary OpenClaw session containing untrusted reference
+material. Imported copies start as [drafts](/concepts/multi-user#drafts), visible
+only to their creator and Gateway admins. Publish the copy through the session
+sharing controls to share it; re-importing preserves its current visibility.
+When drafts are disabled, imported copies follow the Gateway's default visibility.
+It preserves the catalog's projected messages independently of native
+tool cleanup; it does not resume the native session or bind the copy to its
+model or machine. Repeating the same import reuses the copy and appends only new
+items. Each import reads up to 50,000 items and 64 MiB, keeping the newest history
+when the bound is reached. Existing per-item text limits still apply. An
+incomplete result warns that older history was omitted. See
+[Session catalogs](/nodes/session-catalogs#import-transcripts).
+
+`--all` pages through visible catalog rows and imports them sequentially.
+New copies use the catalog row name as their title; re-importing preserves an
+existing copy's title. Names are trimmed and limited to 500 UTF-16 code units.
+`--catalog` and `--host` filter sources; `--limit <n>` caps the total number of
+sessions attempted. `--dry-run` lists selected sources without importing them
+and does not predict item counts or run write authorization checks. A failure
+for one source does not stop the remaining sources. The command exits non-zero
+if any import or catalog page fails.
+
+Connection overrides are `--url`, `--token`, `--password`, and `--timeout <ms>`
+(default five minutes per request). Human output reports imported, updated, or
+unchanged sessions with item counts and a final summary. `--json` emits one
+envelope with `ok`, `operation: "import"`, `dryRun`, `results`, and `summary`.
+Successful results include the source locator, `status`, `sessionKey`,
+`importedItems`, `totalItems`, `complete`, and `created`; dry-run results have
+`status: "would_import"`. Failed results include `status: "failed"` and `error`.
 
 ## Archive sessions
 
@@ -233,6 +288,11 @@ A fully qualified `--session-key` selects its agent only when `--agent`, `--stor
 and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
 is rejected instead of selecting an inferred agent.
 
+An explicit `--session-key` that matches no stored session exits non-zero with
+guidance for listing valid keys, and an empty or whitespace-only `--session-key`
+is rejected. Without a key, an empty selection prints
+`No sessions found.` and exits successfully, including with `--follow`.
+
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
@@ -272,10 +332,9 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores,
   transcripts, trajectory rows, and legacy trajectory sidecars. It does not
-  prune cron run history. Task maintenance retains terminal cron history for 7
+  prune cron run history. Cron retains terminal run history for 7
   days (`lost` rows for 24 hours) and enforces the newest 2000 rows per job and
-  history class as an additional ceiling ([Task maintenance](/automation/tasks#automatic-maintenance),
-  [Cron configuration](/automation/cron-jobs#configuration)).
+  history class as an additional ceiling ([Cron configuration](/automation/cron-jobs#configuration)).
 - Cleanup also prunes unreferenced legacy/archive transcript artifacts,
   compaction checkpoints, and trajectory sidecars older than
   `session.maintenance.pruneAfter`; artifacts still referenced by SQLite
@@ -459,6 +518,8 @@ openclaw sessions compact "agent:work:main" --agent work --json
 
 The command exits non-zero when the Gateway reports a failed compaction or is
 unreachable, so crons and scripts never mistake a silent no-op for success.
+A missing session is an error in both modes. An existing session with no history
+or nothing to truncate remains an explicit no-op.
 
 <Note>
 `openclaw agent --message '/compact ...'` is **not** a compaction path. Slash

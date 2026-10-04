@@ -1,13 +1,18 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import {
   readQaScenarioById,
   readQaScenarioExecutionConfig,
-  validateQaScenarioExecutionConfig,
+  readQaScenarioFile,
 } from "./scenario-catalog.js";
 import { requireFlowScenario } from "./scenario-catalog.test-utils.js";
 import { runLoadedScenarioFlow } from "./scenario-flow-runner.test-support.js";
 import { recentOutboundSummary } from "./suite-runtime-transport.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const telegramStreamingFinalScenarios = [
   {
@@ -300,27 +305,28 @@ describe("qa scenario catalog channel contracts", () => {
     expect(matrixProgress.execution.isolationReason).toContain("streaming progress configuration");
   });
 
-  it("uses public parent history and durable task records before accepting fanout", () => {
+  it("uses public parent history and native delivery records before accepting fanout", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-fanout-synthesis"));
     const flow = JSON.stringify(scenario.execution.flow);
 
     expect(flow).toContain('"call":"startAgentRun"');
     expect(flow).not.toContain('"call":"runAgentPrompt"');
-    expect(flow).toContain('"taskTracking":false');
+    expect(flow).not.toContain("taskTracking");
     expect(flow).toContain('"saveAs":"parentOutbound"');
     expect(flow).toContain("waitForAgentHistoryReply");
     expect(flow).not.toContain('"call":"waitForOutboundMessage"');
     expect(flow).not.toContain("childCompletionMarker");
-    expect(flow).toContain("['tasks', 'list', '--json', '--runtime', 'subagent']");
-    expect(flow).toContain("task.requesterSessionKey === sessionKey");
-    expect(flow).toContain("task?.status === 'succeeded'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
+    expect(flow).toContain("readNativeQaSubagentRuns(env, sessionKey)");
+    expect(flow).toContain("run.requesterSessionKey === sessionKey");
+    expect(flow).toContain("run?.execution.status === 'terminal'");
+    expect(flow).toContain("run.execution.outcome?.status === 'ok'");
+    expect(flow).toContain("run.delivery?.status === 'delivered'");
     expect(flow).not.toContain("readRawQaSessionStore");
     expect(flow).not.toContain("readSessionTranscriptSummary");
     expect(flow).not.toContain('"value":"subagent-1: ok\\nsubagent-2: ok"');
   });
 
-  it("settles terminal-reply scenarios from durable task facts instead of sleeps", () => {
+  it("settles terminal-reply scenarios from native run facts instead of sleeps", () => {
     const scenario = requireFlowScenario(readQaScenarioById("subagent-completion-direct-fallback"));
     const flow = JSON.stringify(scenario.execution.flow);
     const config = scenario.execution.config as
@@ -349,32 +355,16 @@ describe("qa scenario catalog channel contracts", () => {
         expectedSendCount: 1,
       },
     ]);
-    expect(flow).toContain("env.gateway.call('tasks.list'");
-    expect(flow).toContain("task.title === `qa-terminal-${caseName}`");
-    expect(flow).toContain("terminalTask.status === 'completed'");
-    expect(flow).toContain("task.deliveryStatus === 'delivered'");
-    expect(flow).toContain("readSettledTerminalTask('restart')");
+    expect(flow).toContain("readNativeQaSubagentRuns(env)");
+    expect(flow).not.toContain("tasks.list");
+    expect(flow).toContain("run.label === `qa-terminal-${caseName}`");
+    expect(flow).toContain("terminalRun.execution.status === 'terminal'");
+    expect(flow).toContain("run.delivery?.status === 'delivered'");
+    expect(flow).toContain("readSettledTerminalRun('restart')");
     expect(flow).toContain("postRestartUnexpectedPayloads.length === 0");
     expect(flow).toContain("env.providerMode === config.requiredProviderMode");
     expect(flow).not.toContain("interrupted by a gateway restart");
     expect(flow).toContain("verdicts.length === 5");
-    expect(flow).not.toContain('"call":"sleep"');
-  });
-
-  it("proves empty subagent completion from durable non-delivery state", () => {
-    const scenario = requireFlowScenario(
-      readQaScenarioById("subagent-empty-completion-non-delivery"),
-    );
-    const flow = JSON.stringify(scenario.execution.flow);
-
-    expect(scenario.execution.providerMode).toBe("mock-openai");
-    expect(flow).toContain("task.deliveryStatus === 'not_applicable'");
-    expect(flow).toContain("task.terminalOutcome === 'succeeded'");
-    expect(flow).toContain("emptyTerminalOutbound.length === 0");
-    expect(flow).toContain('"saveAs":"requesterAcknowledgements"');
-    expect(flow).toContain("requesterAcknowledgements.length === 1");
-    expect(flow).toContain("request.plannedToolName === 'write'");
-    expect(flow).toContain("postRestartCompletionRequests.length === 0");
     expect(flow).not.toContain('"call":"sleep"');
   });
 
@@ -504,12 +494,26 @@ describe("qa scenario catalog channel contracts", () => {
     expect(config?.requiredChannelDriver).toBe("crabline");
   });
 
-  it("rejects malformed string matcher lists before running a flow", () => {
-    expect(() =>
-      validateQaScenarioExecutionConfig({
-        gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }],
+  it("rejects malformed string matcher lists before running a flow", async () => {
+    const filePath = path.join(tempDirs.make("qa-catalog-"), "scenario.yaml");
+    await fs.writeFile(
+      filePath,
+      JSON.stringify({
+        title: "Malformed matcher",
+        scenario: {
+          id: "malformed-matcher",
+          surface: "qa",
+          execution: {
+            kind: "flow",
+            config: { gracefulFallbackAny: [{ confirmed: "the hidden fact is present" }] },
+          },
+        },
+        flow: { steps: [{ name: "validate", actions: [{ assert: "true" }] }] },
       }),
-    ).toThrow(/gracefulFallbackAny entries must be strings/);
+    );
+    expect(() => readQaScenarioFile(filePath)).toThrow(
+      /gracefulFallbackAny entries must be strings/,
+    );
   });
 
   it("returns undefined execution config for an unknown scenario id", () => {

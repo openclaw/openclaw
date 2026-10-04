@@ -81,11 +81,11 @@ it("projects ordinary startup as active before execution starts", () => {
   registration.cleanup();
 });
 
-it("projects direct subagent activity only for its own current-lifecycle session", () => {
+it("projects direct subagent activity only for its own current-lifecycle session", async () => {
   const parentKey = "agent:main:main";
   const childKey = "agent:main:subagent:attachment-fix";
-  resetSubagentRegistryForTests({ persist: false });
-  addSubagentRunForTests({
+  await resetSubagentRegistryForTests({ persist: false });
+  await addSubagentRunForTests({
     runId: "run-attachment-fix",
     childSessionKey: childKey,
     controllerSessionKey: parentKey,
@@ -135,7 +135,7 @@ it("projects direct subagent activity only for its own current-lifecycle session
   } finally {
     releaseAgentRunContext("run-attachment-fix", claim);
     clearAgentRunContext("run-attachment-fix");
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
   }
 });
 

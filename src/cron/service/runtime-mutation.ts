@@ -10,14 +10,20 @@ import type {
 } from "../../infra/sqlite-worker-operation-settlement.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
+import {
+  withCronReceiptAuthorityMutation,
+  type CronReceiptAuthorityMutation,
+} from "../store/receipt-authority-owner.js";
+import type { CronRunReceipt } from "../store/run-receipt.types.js";
 import type { CronRuntimeMutationContracts } from "../store/runtime-mutation.types.js";
 import type {
+  CronReceiptRevisionRefusal,
+  CronJobMutationRefusal,
   CronRuntimeMutationType,
   CronRuntimeWorkerOperations,
 } from "../store/runtime-worker.types.js";
 
-/** One settlement owner serves typed cron mutations; callbacks and database handles stay local. */
-export async function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(params: {
+type CronRuntimeMutationParams<Type extends CronRuntimeMutationType> = {
   context: OpenClawStateWorkerContext;
   type: Type;
   input: CronRuntimeMutationContracts[Type]["input"];
@@ -28,13 +34,39 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
   };
   publish: (outcome: CronRuntimeMutationContracts[Type]["outcome"]) => void;
   onSettled?: (outcome: "committed" | "not-committed" | "unknown") => void;
-}): Promise<void> {
+  onRolledBackConflict?: (receipt: CronRunReceipt) => void;
+  onRolledBackReceiptRevision?: (refusal: CronReceiptRevisionRefusal) => never;
+  onRolledBackMutation?: (refusal: CronJobMutationRefusal) => never;
+};
+
+/** One settlement owner serves typed cron mutations; callbacks and database handles stay local. */
+export function runCronRuntimeMutation<Type extends CronRuntimeMutationType>(
+  params: CronRuntimeMutationParams<Type>,
+): Promise<void> {
+  return withCronReceiptAuthorityMutation(
+    params.context,
+    (authority) => runEnrolledCronRuntimeMutation(params, authority),
+    {
+      settlement:
+        params.type === "cron.finishReceipt" || params.type === "cron.releaseReservations",
+    },
+  );
+}
+
+async function runEnrolledCronRuntimeMutation<Type extends CronRuntimeMutationType>(
+  params: CronRuntimeMutationParams<Type>,
+  authority: CronReceiptAuthorityMutation,
+): Promise<void> {
   const nonce = randomUUID();
   let settlement: Promise<SqliteWorkerOperationSettlement> | undefined;
   let native: SqliteWorkerNativeSettlementOwner | undefined;
   let bytes: Uint8Array | undefined;
   let published = false;
+  let conflict: CronRunReceipt | undefined;
+  let receiptRevision: CronReceiptRevisionRefusal | undefined;
+  let mutationRefusal: CronJobMutationRefusal | undefined;
   const assertCurrent = () => {
+    authority.assertCurrent();
     params.context.admission.assertCurrent();
     params.assertCurrent();
   };
@@ -54,7 +86,7 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
   };
   try {
     await runOpenClawStateWorkerOperation(
-      params.context,
+      authority.context,
       async (scope) => {
         try {
           const command = {
@@ -65,6 +97,24 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
           const result = await scope.execute(command);
           if (result.nonce !== nonce) {
             throw new Error("Cron mutation returned a different operation nonce");
+          }
+          if ("conflict" in result) {
+            if (params.type !== "cron.reserveRuns" || !params.onRolledBackConflict) {
+              throw new Error("Cron mutation returned an unexpected reservation conflict");
+            }
+            conflict = result.conflict;
+          }
+          if ("receiptRevision" in result) {
+            if (params.type !== "cron.finalizeRuns" || !params.onRolledBackReceiptRevision) {
+              throw new Error("Cron mutation returned an unexpected receipt revision refusal");
+            }
+            receiptRevision = result.receiptRevision;
+          }
+          if ("mutationRefusal" in result) {
+            if (params.type !== "cron.mutateJobs" || !params.onRolledBackMutation) {
+              throw new Error("Cron mutation returned an unexpected job mutation refusal");
+            }
+            mutationRefusal = result.mutationRefusal;
           }
         } finally {
           await settlement;
@@ -112,13 +162,44 @@ export async function runCronRuntimeMutation<Type extends CronRuntimeMutationTyp
             if (!grant()) {
               throw new Error("Cron mutation admission expired");
             }
-          });
+          }, authority.attachment);
+          authority.observe(admission, retained);
           native = admission;
           return { nativeLocations: [params.context.admission.databasePath], admission };
         },
       },
     );
-    if (!published) {
+    if (conflict) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron reservation conflict has no confirmed native rollback");
+      }
+      params.onRolledBackConflict!(conflict);
+    } else if (receiptRevision) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron receipt revision refusal has no confirmed native rollback");
+      }
+      params.onRolledBackReceiptRevision!(receiptRevision);
+    } else if (mutationRefusal) {
+      const settled = await settlement;
+      if (
+        native?.committed ||
+        native?.settlement?.kind !== "completed" ||
+        settled?.kind !== "completed"
+      ) {
+        throw new Error("Cron job mutation refusal has no confirmed native rollback");
+      }
+      params.onRolledBackMutation!(mutationRefusal);
+    } else if (!published) {
       throw new Error("Cron mutation did not publish a committed outcome");
     }
   } finally {

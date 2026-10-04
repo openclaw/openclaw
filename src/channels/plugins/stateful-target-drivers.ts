@@ -5,10 +5,7 @@ import type {
   StatefulBindingTargetDescriptor,
 } from "./binding-types.js";
 
-export type StatefulBindingTargetReadyResult = { ok: true } | { ok: false; error: string };
-export type StatefulBindingTargetSessionResult =
-  | { ok: true; sessionKey: string }
-  | { ok: false; sessionKey: string; error: string };
+type StatefulBindingTargetReadyResult = { ok: true } | { ok: false; error: string };
 export type StatefulBindingTargetResetResult =
   | { ok: true; sessionKey?: string; sessionId?: string; storePath?: string }
   | { ok: false; skipped?: boolean; error?: string };
@@ -21,10 +18,6 @@ export type StatefulBindingTargetDriver = {
     cfg: OpenClawConfig;
     bindingResolution: ConfiguredBindingResolution;
   }) => Promise<StatefulBindingTargetReadyResult>;
-  ensureSession: (params: {
-    cfg: OpenClawConfig;
-    bindingResolution: ConfiguredBindingResolution;
-  }) => Promise<StatefulBindingTargetSessionResult>;
   resolveTargetBySessionKey?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -43,10 +36,6 @@ const registeredStatefulBindingTargetDrivers = resolveGlobalMap<
   string,
   StatefulBindingTargetDriver
 >(Symbol.for("openclaw.statefulBindingTargetDrivers"), "plugin-registry");
-
-function listStatefulBindingTargetDrivers(): StatefulBindingTargetDriver[] {
-  return [...registeredStatefulBindingTargetDrivers.values()];
-}
 
 export function registerStatefulBindingTargetDriver(
   driver: StatefulBindingTargetDriver,
@@ -72,11 +61,7 @@ export function registerStatefulBindingTargetDriver(
 }
 
 export function getStatefulBindingTargetDriver(id: string): StatefulBindingTargetDriver | null {
-  const normalizedId = id.trim();
-  if (!normalizedId) {
-    return null;
-  }
-  return registeredStatefulBindingTargetDrivers.get(normalizedId) ?? null;
+  return registeredStatefulBindingTargetDrivers.get(id.trim()) ?? null;
 }
 
 export async function resolveStatefulBindingTargetBySessionKey(params: {
@@ -93,7 +78,9 @@ export async function resolveStatefulBindingTargetBySessionKey(params: {
   }
   // Session keys are globally opaque to callers. Ask each registered driver so
   // channel-specific encodings stay private to their owner.
-  for (const driver of listStatefulBindingTargetDrivers()) {
+  // Freeze the candidates before awaiting drivers that may change the registry.
+  const drivers = [...registeredStatefulBindingTargetDrivers.values()];
+  for (const driver of drivers) {
     const bindingTarget = await driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,
       sessionKey,

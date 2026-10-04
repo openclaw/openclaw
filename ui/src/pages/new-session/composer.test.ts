@@ -46,6 +46,22 @@ afterEach(() => {
 });
 
 describe("new-session submission preview", () => {
+  it("removes new-session file inputs and blocks dropped files under the Gateway upload policy", () => {
+    const context = composerContext({ client: null });
+    context.config.current.uploadsEnabled = false;
+    const { container, composer, attachmentDraft } = renderComposer({
+      context,
+      message: "Keep typing",
+    });
+    expect(container.querySelector("input[type=file]")).toBeNull();
+    expect(container.querySelector(".agent-chat__attach-menu-option")).toBeNull();
+    const drop = createDragEvent("drop", [new File(["notes"], "notes.txt")]);
+    composer.dispatchEvent(drop);
+    expect(drop.defaultPrevented).toBe(true);
+    expect(attachmentDraft.attachments).toEqual([]);
+    expect(attachmentDraft.reads.pendingReads).toBe(0);
+  });
+
   it.each([
     { userId: "profile-alex", placement: "gutter" },
     { userId: null, placement: "footer" },

@@ -134,7 +134,8 @@ export async function resolveQuestionOverGateway(
     }
     return { status: "custom-input", questionId: question.questionId };
   }
-  const optionValue = params.optionValue ?? question.options[params.optionIndex as number]?.label;
+  const option = question.options[params.optionIndex as number];
+  const optionValue = params.optionValue ?? option?.value ?? option?.label;
   if (!optionValue) {
     throw new Error("question resolution index does not match a declared option");
   }

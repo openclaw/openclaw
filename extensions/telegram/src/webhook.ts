@@ -3,12 +3,7 @@ import { InputFile } from "grammy";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticsEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
-import {
-  classifyGatewayProbePath,
-  isProtectedPluginRoutePathFromContext,
-  resolvePluginRoutePathContext,
-  resolveGatewayPort,
-} from "openclaw/plugin-sdk/gateway-config-runtime";
+import { resolveGatewayPort } from "openclaw/plugin-sdk/gateway-config-runtime";
 import {
   logWebhookError,
   logWebhookProcessed,
@@ -26,6 +21,7 @@ import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { extractErrorCode, safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 import {
   applyBasicWebhookRequestGuards,
   createFixedWindowRateLimiter,
@@ -53,6 +49,11 @@ import { isRetryableTelegramApiError, isTelegramAuthenticationError } from "./ne
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { createTelegramStatusPublisher } from "./transport-status.js";
 import { createTelegramLegacyWebhookAuthLimiter } from "./webhook-legacy.js";
+import {
+  DEFAULT_TELEGRAM_WEBHOOK_PATH,
+  resolveTelegramGatewayWebhookUrl,
+  resolveTelegramWebhookPathConflict,
+} from "./webhook-route.js";
 
 const TELEGRAM_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const TELEGRAM_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
@@ -71,24 +72,6 @@ function formatWebhookStartupError(error: unknown): string {
   const message = formatErrorMessage(error);
   const code = extractErrorCode(error);
   return code && !message.includes(code) ? `${message} (${code})` : message;
-}
-
-async function waitForWebhookIngressStop(task: Promise<void> | undefined): Promise<void> {
-  if (!task) {
-    return;
-  }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    await Promise.race([
-      task,
-      new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 async function initializeTelegramWebhookBot(params: {
@@ -236,21 +219,14 @@ export async function startTelegramWebhook(opts: {
   const { targets: webhookTargets, rateLimiter } = state;
   const readConfig = createRuntimeConfigReader(opts.config ?? {});
   const legacyListener = resolveTelegramLegacyWebhookListener(opts.legacyWebhook);
-  const path = opts.path ?? "/telegram-webhook";
-  if (path === "/healthz") {
+  const path = opts.path ?? DEFAULT_TELEGRAM_WEBHOOK_PATH;
+  const pathConflict = resolveTelegramWebhookPathConflict(path);
+  if (pathConflict?.kind === "health") {
     throw new Error(`Telegram webhook path "${path}" conflicts with the health path.`);
   }
-  const pathname = URL.parse(path, "http://localhost")?.pathname ?? path;
-  const probe = classifyGatewayProbePath(pathname);
-  const pathConflict =
-    probe === "live" || probe === "ready" || probe === "startup"
-      ? "is reserved for Gateway probes"
-      : isProtectedPluginRoutePathFromContext(resolvePluginRoutePathContext(pathname))
-        ? "requires Gateway authentication"
-        : undefined;
   if (pathConflict && !legacyListener) {
     throw new Error(
-      `Telegram webhook path "${path}" ${pathConflict}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping before restarting.`,
+      `Telegram webhook path "${path}" ${pathConflict.message}. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping before restarting.`,
     );
   }
   const secret = normalizeOptionalString(opts.secret) ?? "";
@@ -260,7 +236,11 @@ export async function startTelegramWebhook(opts: {
         "Set channels.telegram.webhookSecret in your config.",
     );
   }
-  const publicUrl = normalizeOptionalString(opts.publicUrl);
+  const publicUrl =
+    normalizeOptionalString(opts.publicUrl) ??
+    (opts.legacyWebhook === undefined
+      ? resolveTelegramGatewayWebhookUrl(opts.config, path)
+      : undefined);
   if (!publicUrl) {
     throw new Error(
       "Telegram webhook mode requires webhookUrl pointing to the Gateway webhook route.",
@@ -269,7 +249,7 @@ export async function startTelegramWebhook(opts: {
   const runtime = opts.runtime ?? defaultRuntime;
   if (pathConflict) {
     runtime.log?.(
-      `Telegram webhook path "${path}" ${pathConflict} on the Gateway port; its legacy listener remains available. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping before setting legacyWebhook: false.`,
+      `Telegram webhook path "${path}" ${pathConflict.message} on the Gateway port; its legacy listener remains available. Set webhookPath to /telegram-webhook and update webhookUrl or its reverse-proxy mapping before setting legacyWebhook: false.`,
     );
   }
   const status = createTelegramStatusPublisher("webhook", opts.setStatus);
@@ -327,7 +307,18 @@ export async function startTelegramWebhook(opts: {
       // The webhook owns this transport because it resolved and injected it into
       // createTelegramBot; close once so abort/startup-failure paths cannot leak sockets.
       await runShutdownPhase("transport close", () => telegramTransport.close());
-      await runShutdownPhase("ingress drain", () => waitForWebhookIngressStop(ingressStopTask));
+      await runShutdownPhase("ingress drain", () =>
+        ingressStopTask
+          ? raceWithTimeout(
+              ingressStopTask,
+              TELEGRAM_WEBHOOK_INGRESS_STOP_GRACE_MS,
+              () => undefined,
+              {
+                ref: false,
+              },
+            )
+          : undefined,
+      );
       await runShutdownPhase("ingress settlement", () => ingressMonitor?.waitForDeferredClaims());
       await runShutdownPhase("status update", () => status.noteStop());
     });
@@ -439,7 +430,8 @@ export async function startTelegramWebhook(opts: {
       // re-posted update_ids map to the same spool row and still ack fast.
       res.setHeader(TELEGRAM_WEBHOOK_ACCEPTED_HEADER, TELEGRAM_WEBHOOK_ACCEPTED_VALUE);
       respondText(200);
-      status.noteReady();
+      // Admission cannot release the previous listener while setWebhook is still retrying.
+      status.noteActivity();
       if (isDiagnosticsEnabled(readConfig())) {
         logWebhookProcessed({
           channel: "telegram",
@@ -461,28 +453,25 @@ export async function startTelegramWebhook(opts: {
     }
   };
   await runStartupPhase(() => {
-    const registered = registerWebhookTarget(
-      webhookTargets,
-      {
-        path,
-        requestPath: path,
-        secret,
-        legacyListener,
-        legacyAuthGuard: legacyListener
-          ? createTelegramLegacyWebhookAuthLimiter(opts.config)
-          : undefined,
-        handle,
-        diagnosticsEnabled: () => isDiagnosticsEnabled(readConfig()),
-        isActive: () => !shutDown && !opts.abortSignal?.aborted,
+    const target: TelegramWebhookTarget = {
+      path,
+      requestPath: path,
+      secret,
+      legacyListener,
+      legacyAuthGuard: legacyListener
+        ? createTelegramLegacyWebhookAuthLimiter(opts.config)
+        : undefined,
+      handle,
+      diagnosticsEnabled: () => isDiagnosticsEnabled(readConfig()),
+      isActive: () => !shutDown && !opts.abortSignal?.aborted,
+    };
+    const registered = registerWebhookTarget(webhookTargets, target, {
+      onLastPathTargetRemoved: () => {
+        if (webhookTargets.size === 0) {
+          rateLimiter.clear();
+        }
       },
-      {
-        onLastPathTargetRemoved: () => {
-          if (webhookTargets.size === 0) {
-            rateLimiter.clear();
-          }
-        },
-      },
-    );
+    });
     unregisterTarget = registered.unregister;
     unregisterRoute = registerPluginHttpRoute({
       path,
@@ -586,7 +575,7 @@ export async function startTelegramWebhook(opts: {
   runtime.log?.(
     legacyListener
       ? `Telegram legacy webhook listener ${legacyListener.host}:${legacyListener.port} forwards to the Gateway route. Point the reverse proxy for ${publicUrl} at Gateway port ${gatewayPort}${path}, verify delivery, then set legacyWebhook: false to disable legacy forwarding for this account.`
-      : `Telegram legacy forwarding for this account is disabled by legacyWebhook: false. Route ${publicUrl} to Gateway port ${gatewayPort}${path}.`,
+      : `Telegram uses only the Gateway webhook route. Route ${publicUrl} to Gateway port ${gatewayPort}${path}.`,
   );
 
   if (!shutDown) {

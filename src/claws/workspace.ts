@@ -1,5 +1,4 @@
 // Creates Claw-owned bootstrap and supporting files inside the new agent workspace.
-import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -20,6 +19,7 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { digestClawBytes } from "./digest.js";
 import { clawContainedRelativePath } from "./path-containment.js";
 import { parseClawMarkdown } from "./reader.js";
 import type { ClawAddPlan, ClawAddPlanAction, ClawDiagnostic } from "./types.js";
@@ -112,10 +112,6 @@ function diagnostic(action: ClawAddPlanAction, code: string, message: string): C
     path: `$.workspace[${JSON.stringify(action.id)}]`,
     message,
   };
-}
-
-function contentDigest(content: Uint8Array): string {
-  return `sha256:${createHash("sha256").update(content).digest("hex")}`;
 }
 
 export async function readClawWorkspaceActionSource(params: {
@@ -359,7 +355,7 @@ export async function createClawWorkspaceFiles(
         packageRoot,
         sourceRoot: source,
       });
-      const digest = contentDigest(resolvedSource.content);
+      const digest = digestClawBytes(resolvedSource.content);
       if (digest !== action.digest) {
         throw writeError(
           "workspace_source_changed",
@@ -400,7 +396,7 @@ export async function createClawWorkspaceFiles(
           maxBytes: MAX_CLAW_WORKSPACE_FILE_BYTES,
           symlinks: "reject",
         });
-        if (contentDigest(existingTarget.buffer) !== expectedRecord.contentDigest) {
+        if (digestClawBytes(existingTarget.buffer) !== expectedRecord.contentDigest) {
           throw writeError(
             "workspace_file_drift",
             `Claw-owned workspace destination ${JSON.stringify(targetRelative)} no longer matches its recorded content.`,

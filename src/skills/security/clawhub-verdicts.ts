@@ -37,34 +37,18 @@ function projectClawHubVerdictItem(
     requestedSlug: target.slug,
     requestedVersion: target.version,
     ...(target.ownerHandle ? { requestedOwnerHandle: target.ownerHandle } : {}),
+    ...(item.slug !== undefined ? { slug: item.slug } : {}),
+    ...(item.version !== undefined ? { version: item.version } : {}),
+    ...(item.displayName !== undefined ? { displayName: item.displayName } : {}),
+    ...(item.publisherHandle !== undefined ? { publisherHandle: item.publisherHandle } : {}),
+    ...(item.publisherDisplayName !== undefined
+      ? { publisherDisplayName: item.publisherDisplayName }
+      : {}),
+    ...(item.createdAt !== undefined ? { createdAt: item.createdAt } : {}),
+    ...(item.checkedAt !== undefined ? { checkedAt: item.checkedAt } : {}),
+    ...(item.skillUrl !== undefined ? { skillUrl: item.skillUrl } : {}),
+    ...(item.securityAuditUrl !== undefined ? { securityAuditUrl: item.securityAuditUrl } : {}),
   };
-  if (item.slug !== undefined) {
-    projected.slug = item.slug;
-  }
-  if (item.version !== undefined) {
-    projected.version = item.version;
-  }
-  if (item.displayName !== undefined) {
-    projected.displayName = item.displayName;
-  }
-  if (item.publisherHandle !== undefined) {
-    projected.publisherHandle = item.publisherHandle;
-  }
-  if (item.publisherDisplayName !== undefined) {
-    projected.publisherDisplayName = item.publisherDisplayName;
-  }
-  if (item.createdAt !== undefined) {
-    projected.createdAt = item.createdAt;
-  }
-  if (item.checkedAt !== undefined) {
-    projected.checkedAt = item.checkedAt;
-  }
-  if (item.skillUrl !== undefined) {
-    projected.skillUrl = item.skillUrl;
-  }
-  if (item.securityAuditUrl !== undefined) {
-    projected.securityAuditUrl = item.securityAuditUrl;
-  }
   const security = item.security;
   if (security && typeof security === "object") {
     if ("status" in security && typeof security.status === "string") {
@@ -90,13 +74,8 @@ function projectClawHubVerdictItem(
 }
 
 function normalizeAutoVerdictRegistryBase(registry: string): string | null {
-  try {
-    const url = new URL(registry);
-    const normalizedPath = url.pathname.replace(/\/+$/, "");
-    return `${url.origin}${normalizedPath}`;
-  } catch {
-    return null;
-  }
+  const url = URL.parse(registry);
+  return url ? `${url.origin}${url.pathname.replace(/\/+$/, "")}` : null;
 }
 
 function canAutoFetchVerdictRegistry(registry: string): boolean {

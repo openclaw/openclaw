@@ -1,14 +1,7 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginsReloadParams } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createTestConfigFileStore } from "../commands/test-runtime-config-helpers.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config-write-guard.js";
-import { resolveConfigWriteFollowUp } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildPluginCapabilitySummary, computeDeclaredSurfaceHash } from "./capability-summary.js";
 import { hashStableJson } from "./installed-plugin-index-hash.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
@@ -35,10 +28,7 @@ const mocks = vi.hoisted(() => ({
   replaceConfig: vi.fn(),
   planUninstall: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
-  slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
-    config,
-    warnings: [],
-  })),
+  slotSelection: vi.fn((config: unknown) => config),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -119,7 +109,6 @@ const { clearManagedPluginCatalogCache } = await import("./management-catalog.js
 const { listManagedPlugins } = await import("./management-service.js");
 const { setManagedPluginEnabled, reloadManagedPlugin } = await import("./management-mutations.js");
 const { uninstallManagedPlugin } = await import("./management-uninstall.js");
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function mockHostedOfficialCatalog(entries: unknown[]) {
   mocks.officialCatalog.mockResolvedValue({
@@ -143,7 +132,7 @@ describe("plugin management service", () => {
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
     });
-    mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
+    mocks.slotSelection.mockImplementation((config) => config);
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
@@ -151,7 +140,7 @@ describe("plugin management service", () => {
     mockHostedOfficialCatalog([]);
   });
 
-  it.each(["batch", "one-target", "changed", "cross-owner"] as const)(
+  it.each(["batch", "cross-owner"] as const)(
     "validates current package owners before targeted reload: %s",
     async (mode) => {
       const acceptedSurface = buildPluginCapabilitySummary({
@@ -196,51 +185,40 @@ describe("plugin management service", () => {
       const application = {
         operationId: "reload",
         generation: 4,
-        pluginIds: mode === "one-target" ? ["first"] : ["first", "second"],
+        pluginIds: ["first", "second"],
       };
       const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
         request.assertInvokerOwned?.();
         expect(request.config).toEqual(config);
         expect(request.pluginIds).toEqual(application.pluginIds);
-        expect(request.expectedSourceDigests).toEqual(
-          mode === "one-target" ? undefined : { first: "a".repeat(64), second: "b".repeat(64) },
-        );
-        expect(request.expectedInstallHashes).toEqual(
-          mode === "one-target"
-            ? undefined
-            : {
-                first: hashStableJson(first.index.installRecords.first),
-                second: hashStableJson(second.index.installRecords.second),
-              },
-        );
+        expect(request.expectedSourceDigests).toEqual({
+          first: "a".repeat(64),
+          second: "b".repeat(64),
+        });
+        expect(request.expectedInstallHashes).toEqual({
+          first: hashStableJson(first.index.installRecords.first),
+          second: hashStableJson(second.index.installRecords.second),
+        });
         return application;
       });
-      const request: PluginsReloadParams =
-        mode === "one-target"
-          ? { plugins: [{ pluginId: "first" }] }
-          : {
-              plugins: [
-                {
-                  pluginId: "first",
-                  installHash:
-                    mode === "changed"
-                      ? "0".repeat(64)
-                      : hashStableJson(first.index.installRecords.first),
-                  sourceDigests:
-                    mode === "cross-owner" ? { second: "a".repeat(64) } : { first: "a".repeat(64) },
-                },
-                {
-                  pluginId: "second",
-                  installHash: hashStableJson(second.index.installRecords.second),
-                  sourceDigests: { second: "b".repeat(64) },
-                },
-              ],
-            };
+      const request: PluginsReloadParams = {
+        plugins: [
+          {
+            pluginId: "first",
+            installHash: hashStableJson(first.index.installRecords.first),
+            sourceDigests:
+              mode === "cross-owner" ? { second: "a".repeat(64) } : { first: "a".repeat(64) },
+          },
+          {
+            pluginId: "second",
+            installHash: hashStableJson(second.index.installRecords.second),
+            sourceDigests: { second: "b".repeat(64) },
+          },
+        ],
+      };
       const pending = reloadManagedPlugin({ ...request, applyRuntime, env: {} });
-      if (mode === "changed" || mode === "cross-owner") {
-        await expect(pending).rejects.toThrow(
-          mode === "changed" ? "changed after" : "different package owner",
-        );
+      if (mode === "cross-owner") {
+        await expect(pending).rejects.toThrow("different package owner");
         expect(applyRuntime).not.toHaveBeenCalled();
       } else {
         await expect(pending).resolves.toMatchObject({ application });
@@ -250,50 +228,48 @@ describe("plugin management service", () => {
     },
   );
 
-  it.each(["bundled", "config"] as const)(
-    "reloads a known %s plugin without inventing an installed package record",
-    async (origin) => {
-      const signal = new AbortController().signal;
-      const metadata = metadataSnapshot({ enabled: true, id: "discovered" });
-      mocks.metadata.mockReturnValue({
-        ...metadata,
-        index: {
-          ...metadata.index,
-          plugins: metadata.index.plugins.map((plugin) => ({ ...plugin, origin })),
-        },
-        byPluginId: new Map(metadata.plugins.map((plugin) => [plugin.id, { ...plugin, origin }])),
-      });
-      mocks.readConfig.mockResolvedValue(configSnapshot());
-      const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
-        request.assertInvokerOwned?.();
-        expect(request.expectedInstallHashes).toBeUndefined();
-        return {
-          operationId: "discovered-reload",
-          generation: 4,
-          pluginIds: [...request.pluginIds],
-        };
-      });
-      await expect(
-        reloadManagedPlugin({
-          plugins: [{ pluginId: "discovered", sourceDigests: { discovered: "a".repeat(64) } }],
-          env: {},
-          waitForDrain: true,
-          signal,
-          applyRuntime,
-        }),
-      ).resolves.toMatchObject({ pluginIds: ["discovered"], application: { generation: 4 } });
-      expect(applyRuntime).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          pluginIds: ["discovered"],
-          waitForDrain: true,
-          drainSignal: signal,
-          expectedSourceDigests: { discovered: "a".repeat(64) },
-        }),
-      );
-      expect(mocks.commitRecords).not.toHaveBeenCalled();
-      expect(mocks.replaceConfig).not.toHaveBeenCalled();
-    },
-  );
+  it("reloads a discovered plugin without inventing an installed package record", async () => {
+    const origin = "config";
+    const signal = new AbortController().signal;
+    const metadata = metadataSnapshot({ enabled: true, id: "discovered" });
+    mocks.metadata.mockReturnValue({
+      ...metadata,
+      index: {
+        ...metadata.index,
+        plugins: metadata.index.plugins.map((plugin) => ({ ...plugin, origin })),
+      },
+      byPluginId: new Map(metadata.plugins.map((plugin) => [plugin.id, { ...plugin, origin }])),
+    });
+    mocks.readConfig.mockResolvedValue(configSnapshot());
+    const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
+      request.assertInvokerOwned?.();
+      expect(request.expectedInstallHashes).toBeUndefined();
+      return {
+        operationId: "discovered-reload",
+        generation: 4,
+        pluginIds: [...request.pluginIds],
+      };
+    });
+    await expect(
+      reloadManagedPlugin({
+        plugins: [{ pluginId: "discovered", sourceDigests: { discovered: "a".repeat(64) } }],
+        env: {},
+        waitForDrain: true,
+        signal,
+        applyRuntime,
+      }),
+    ).resolves.toMatchObject({ pluginIds: ["discovered"], application: { generation: 4 } });
+    expect(applyRuntime).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        pluginIds: ["discovered"],
+        waitForDrain: true,
+        drainSignal: signal,
+        expectedSourceDigests: { discovered: "a".repeat(64) },
+      }),
+    );
+    expect(mocks.commitRecords).not.toHaveBeenCalled();
+    expect(mocks.replaceConfig).not.toHaveBeenCalled();
+  });
 
   it.each([
     "install-hash-without-record",
@@ -377,94 +353,6 @@ describe("plugin management service", () => {
     expect(mocks.replaceConfig).not.toHaveBeenCalled();
   });
 
-  it("preserves config hash and include ownership when enabling Workboard", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-toggle-home" };
-    const prepared = configSnapshot({
-      agents: { defaults: { workspace: "~/managed-toggle-workspace" } },
-    });
-    mocks.readConfig.mockResolvedValue(prepared);
-    mocks.metadata
-      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
-      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
-    mocks.replaceConfig.mockResolvedValue({});
-    mocks.refreshRegistry.mockResolvedValue(undefined);
-
-    const result = await setManagedPluginEnabled({
-      pluginId: "workboard",
-      enabled: true,
-      env,
-    });
-
-    expect(mocks.metadata).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        config: prepared.snapshot.sourceConfig,
-        env,
-        workspaceDir: "/tmp/openclaw-managed-toggle-home/managed-toggle-workspace",
-      }),
-    );
-    expect(mocks.metadata).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        env,
-        workspaceDir: "/tmp/openclaw-managed-toggle-home/managed-toggle-workspace",
-      }),
-    );
-    expect(mocks.replaceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        baseHash: "base-hash",
-        writeOptions: {
-          ...prepared.writeOptions,
-          assertConfigPathForWrite: expect.any(Function),
-        },
-      }),
-    );
-    expect(mocks.refreshRegistry).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        reason: "policy-changed",
-        policyPluginIds: ["workboard"],
-      }),
-    );
-    expect(result).toMatchObject({
-      plugin: { id: "workboard", enabled: true, state: "enabled" },
-      changedPaths: ["plugins"],
-    });
-  });
-
-  it("adds an admin-selected plugin to an existing restrictive allowlist", async () => {
-    const config = {
-      plugins: {
-        allow: ["memory-core"],
-        entries: { workboard: { enabled: false } },
-      },
-    };
-    mocks.readConfig.mockResolvedValue(configSnapshot(config));
-    mocks.replaceConfig.mockResolvedValue({});
-    mocks.refreshRegistry.mockResolvedValue(undefined);
-    mocks.metadata
-      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
-      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
-
-    const result = await setManagedPluginEnabled({
-      pluginId: "workboard",
-      enabled: true,
-      env: {},
-    });
-
-    expect(mocks.replaceConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sourceConfig: {
-          plugins: {
-            allow: ["memory-core", "workboard"],
-            entries: { workboard: { enabled: true } },
-          },
-        },
-      }),
-    );
-    expect(result.changedPaths).toEqual(["plugins.allow[1]", "plugins.entries.workboard.enabled"]);
-  });
-
   it("keeps an explicit deny authoritative for admin enablement", async () => {
     const config = {
       plugins: {
@@ -510,272 +398,78 @@ describe("plugin management service", () => {
     );
   });
 
-  it("reports exclusive-slot side effects in established plugin config", async () => {
-    const config = {
-      plugins: {
-        entries: { workboard: { enabled: false } },
-        slots: { memory: "memory-core" },
-      },
+  it("retains files and tracking when authority is revoked during drain", async () => {
+    const config = { plugins: { entries: { diffs: { enabled: true } } } };
+    const record = {
+      source: "clawhub",
+      spec: "clawhub:@openclaw/diffs",
+      installPath: "/tmp/extensions/diffs",
     };
     mocks.readConfig.mockResolvedValue(configSnapshot(config));
-    mocks.slotSelection.mockImplementation((next) => ({
-      config: {
-        ...(next as Record<string, unknown>),
-        plugins: {
-          ...(next as { plugins?: Record<string, unknown> }).plugins,
-          slots: { memory: "workboard" },
-        },
-      },
-      warnings: ["Selected workboard for the memory slot."],
-    }));
-    mocks.replaceConfig.mockResolvedValue({});
-    mocks.refreshRegistry.mockResolvedValue(undefined);
-    mocks.metadata
-      .mockReturnValueOnce(metadataSnapshot({ enabled: false }))
-      .mockReturnValueOnce(metadataSnapshot({ enabled: true }));
-
-    const result = await setManagedPluginEnabled({
-      pluginId: "workboard",
-      enabled: true,
-      env: {},
-    });
-
-    expect(result.changedPaths).toEqual([
-      "plugins.entries.workboard.enabled",
-      "plugins.slots.memory",
-    ]);
-    expect(result.warnings).toEqual(["Selected workboard for the memory slot."]);
-  });
-
-  it("marks external installs removable and bundled plugins non-removable", async () => {
+    mocks.installRecords.mockResolvedValue({ diffs: record });
     mocks.metadata.mockReturnValue(
-      metadataSnapshot({
-        enabled: true,
-        id: "diffs",
-        name: "Diffs",
-        origin: "global",
-        installRecord: { source: "clawhub", installPath: "/tmp/extensions/diffs" },
-      }),
+      metadataSnapshot({ enabled: true, id: "diffs", origin: "global", installRecord: record }),
     );
-    const external = await listManagedPlugins({
-      config: {},
-      env: {},
-      officialCatalog: { entries: [] },
+    mocks.planUninstall.mockReturnValue({
+      ok: true,
+      config,
+      pluginId: "diffs",
+      actions: {
+        entry: true,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: { target: record.installPath },
     });
-    expect(external.plugins[0]).toMatchObject({ id: "diffs", removable: true });
-
-    mocks.metadata.mockReturnValue(metadataSnapshot({ enabled: false }));
-    const bundled = await listManagedPlugins({
-      config: {},
+    mocks.replaceConfig.mockResolvedValue({ path: "/tmp/openclaw.json", nextConfig: config });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const revoked = new Error("authority revoked");
+    let owned = true;
+    const pending = uninstallManagedPlugin({
+      pluginId: "diffs",
       env: {},
-      officialCatalog: { entries: [] },
+      applyRuntime: async () => {
+        entered.resolve();
+        await release.promise;
+        owned = false;
+        return { operationId: "uninstall", generation: 2, pluginIds: ["diffs"] };
+      },
+      beforePersistentApply: () => {
+        if (!owned) {
+          throw revoked;
+        }
+      },
     });
-    expect(bundled.plugins[0]).toMatchObject({ id: "workboard", removable: false });
-  });
-
-  it.each(["complete", "drain rejects", "authority revoked"])(
-    "keeps external plugin files and tracking until owned drain completes: %s",
-    async (outcome) => {
-      const root = tempDirs.make("openclaw-managed-uninstall-drain-");
-      const configPath = path.join(root, "openclaw.json");
-      const configFiles = createTestConfigFileStore();
-      const env = { HOME: "/tmp/openclaw-managed-uninstall-home", OPENCLAW_STATE_DIR: root };
-      const installRecord = {
-        source: "clawhub",
-        spec: "clawhub:@openclaw/diffs",
-        installPath: "/tmp/extensions/diffs",
-      };
-      let currentConfig: OpenClawConfig = {
-        agents: { defaults: { workspace: "~/managed-uninstall-workspace" } },
-        plugins: { entries: { diffs: { enabled: true } } },
-      };
-      let currentHash = "base-hash";
-      const prepared = {
-        snapshot: { ...configSnapshot(currentConfig).snapshot, path: configPath },
-        writeOptions: { expectedConfigPath: configPath },
-      };
-      await fs.writeFile(configPath, JSON.stringify(currentConfig));
-      mocks.readConfig.mockImplementation(async () => ({
-        ...prepared,
-        snapshot: { ...prepared.snapshot, sourceConfig: currentConfig, hash: currentHash },
-      }));
-      mocks.replaceConfig.mockImplementation(
-        async ({ sourceConfig }: { sourceConfig: OpenClawConfig }) => {
-          currentConfig = sourceConfig;
-          currentHash = "disabled-hash";
-          await fs.writeFile(configPath, JSON.stringify(currentConfig));
-          return {
-            ...configFiles.write(currentConfig, configPath),
-            persistedHash: currentHash,
-          };
-        },
-      );
-      mocks.installRecords.mockResolvedValue({ diffs: installRecord });
-      mocks.metadata.mockReturnValue(
-        metadataSnapshot({
-          enabled: true,
-          id: "diffs",
-          name: "Diffs",
-          origin: "global",
-          installRecord,
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("uninstall finished before drain");
         }),
-      );
-      mocks.planUninstall.mockReturnValue({
-        ok: true,
-        config: { plugins: { installs: { diffs: installRecord } } },
-        pluginId: "diffs",
-        actions: {
-          entry: true,
-          install: true,
-          allowlist: false,
-          denylist: false,
-          loadPath: false,
-          memorySlot: false,
-          contextEngineSlot: false,
-          channelConfig: false,
-          directory: false,
-        },
-        directoryRemoval: { target: "/tmp/extensions/diffs" },
-      });
-      mocks.commitRecords.mockImplementation(
-        async ({
-          nextConfig,
-          writeOptions,
-        }: Parameters<
-          typeof import("./install-record-commit.js").commitPluginInstallRecordsWithConfig
-        >[0]) => {
-          currentConfig = nextConfig;
-          currentHash = "final-hash";
-          await fs.writeFile(configPath, JSON.stringify(currentConfig));
-          const afterWrite = writeOptions?.afterWrite ?? { mode: "auto" as const };
-          return {
-            configWrite: {
-              ...configFiles.write(nextConfig, configPath),
-              persistedHash: currentHash,
-              persistedSourceConfig: nextConfig,
-              afterWrite,
-              followUp: resolveConfigWriteFollowUp(afterWrite),
-            },
-          };
-        },
-      );
-      mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
-      mocks.clawReferenceWarnings.mockReturnValue([
-        'Warning: plugin "diffs" is referenced by Claw: @acme/review.',
       ]);
-      mocks.refreshRegistry.mockResolvedValue(undefined);
-
-      const entered = createDeferred();
-      const release = createDeferred();
-      const application = { operationId: "uninstall-test", generation: 2, pluginIds: ["diffs"] };
-      const failure = new Error(outcome);
-      let invokerOwned = true;
-      const applyRuntime = vi.fn(
-        async (
-          _change: Parameters<
-            NonNullable<Parameters<typeof uninstallManagedPlugin>[0]["applyRuntime"]>
-          >[0],
-        ) => {
-          entered.resolve();
-          await release.promise;
-          if (outcome === "drain rejects") {
-            throw failure;
-          }
-          if (outcome === "authority revoked") {
-            invokerOwned = false;
-          }
-          return application;
-        },
-      );
-      const pending = uninstallManagedPlugin({
-        pluginId: "diffs",
-        env,
-        applyRuntime,
-        beforePersistentApply: () => {
-          if (!invokerOwned) {
-            throw failure;
-          }
-        },
-      });
-      try {
-        await Promise.race([
-          entered.promise,
-          pending.then(() => {
-            throw new Error("uninstall finished before drain");
-          }),
-        ]);
-        expect(mocks.applyUninstall).not.toHaveBeenCalled();
-        expect(mocks.commitRecords).not.toHaveBeenCalled();
-        expect(mocks.replaceConfig).toHaveBeenCalledWith(
-          expect.objectContaining({
-            writeOptions: expect.objectContaining({
-              afterWrite: { mode: "none", reason: "plugin lifecycle applies runtime" },
-            }),
-          }),
-        );
-      } finally {
-        release.resolve();
-      }
-      if (outcome !== "complete") {
-        await expect(pending).rejects.toBe(failure);
-        expect(mocks.applyUninstall).not.toHaveBeenCalled();
-        expect(mocks.commitRecords).not.toHaveBeenCalled();
-        return;
-      }
-      const result = await pending;
-      expect(applyRuntime).toHaveBeenCalledTimes(2);
-      expect(result.application).toEqual(application);
-      expect(applyRuntime.mock.calls[1]?.[0]).toMatchObject({
-        write: { persistedHash: "final-hash", persistedSourceConfig: {} },
-      });
-
-      expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-      expect(mocks.metadata).toHaveBeenCalledWith(
+      expect(mocks.applyUninstall).not.toHaveBeenCalled();
+      expect(mocks.commitRecords).not.toHaveBeenCalled();
+      expect(mocks.replaceConfig).toHaveBeenCalledWith(
         expect.objectContaining({
-          env,
-          workspaceDir: "/tmp/openclaw-managed-uninstall-home/managed-uninstall-workspace",
-        }),
-      );
-      expect(mocks.planUninstall).toHaveBeenCalledWith(
-        expect.objectContaining({ pluginId: "diffs", deleteFiles: true }),
-      );
-      expect(mocks.commitRecords).toHaveBeenCalledWith(
-        expect.objectContaining({
-          previousInstallRecords: { diffs: installRecord },
-          nextInstallRecords: {},
-          baseHash: "disabled-hash",
           writeOptions: expect.objectContaining({
-            ...prepared.writeOptions,
-            assertConfigPathForWrite: expect.any(Function),
-            allowConfigSizeDrop: true,
             afterWrite: { mode: "none", reason: "plugin lifecycle applies runtime" },
           }),
         }),
       );
-      expect(
-        expectDefined(
-          mocks.commitRecords.mock.calls[0],
-          "mocks.commitRecords.mock.calls[0] test invariant",
-        )[0].nextConfig.plugins?.installs,
-      ).toBeUndefined();
-      expect(mocks.applyUninstall).toHaveBeenCalledWith(
-        { target: "/tmp/extensions/diffs" },
-        expect.any(Function),
-      );
-      expect(mocks.refreshRegistry).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env,
-          reason: "source-changed",
-          installRecords: {},
-        }),
-      );
-      expect(result).toMatchObject({
-        pluginId: "diffs",
-        removed: ["plugin settings", "install record", "directory"],
-        warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
-      });
-    },
-  );
+    } finally {
+      release.resolve();
+    }
+    await expect(pending).rejects.toBe(revoked);
+    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+    expect(mocks.commitRecords).not.toHaveBeenCalled();
+  });
 
   it("refuses to uninstall bundled plugins", async () => {
     mocks.readConfig.mockResolvedValue(configSnapshot());

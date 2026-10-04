@@ -38,7 +38,7 @@ existing recovery outcome.
 
 Auto-compaction is on by default. It runs when the session nears the context limit, or when the model returns a context-overflow error (in which case OpenClaw compacts and retries).
 
-If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling.
+If the provider rejects a request after tool calls have completed, the built-in runtime can compact and continue from their recorded results. It keeps the current model and account, preserves the original request, and does not replay completed actions. This recovery requires settled tool results; pending tools, approvals, cancellation, and a tool that intentionally ended the turn retain their normal handling. If a Gateway restart later interrupts that continuing run, recovery preserves the accepted input even when compaction has summarized it.
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
 
@@ -76,7 +76,13 @@ Before compacting, OpenClaw automatically reminds the agent to save important no
 
 ## Manual compaction
 
-Type `/compact` in any chat to force a compaction. Add instructions to guide the summary:
+Type `/compact` in a chat to force compaction when its runtime supports manual
+compaction. In the built-in OpenClaw runtime, add instructions to guide the
+summary, as in the example below. When manual compaction is available in native
+Codex sessions with Codex login or an API key, use bare `/compact`; focus
+instructions are not passed to Codex. Native Codex sessions using
+[Sign in with ChatGPT](/providers/openai/authentication) support automatic
+compaction, but cannot run manual `/compact`.
 
 ```text
 /compact Focus on the API design decisions
@@ -180,7 +186,9 @@ By default, compaction runs silently. Set `notifyUser` to show brief status mess
 
 ### Memory flush
 
-Before compaction, OpenClaw can run a **silent memory flush** turn to store durable notes to disk. Set `agents.defaults.compaction.memoryFlush.model` when this housekeeping turn should use a local model instead of the active conversation model:
+Before compaction, OpenClaw can run a **silent memory flush** turn to save durable context. Memory Core appends to a workspace memory file; another selected memory plugin can persist through its own tools and use declared read-only lookup tools to check existing memory first. The tools retain the source conversation's memory audience and sandbox restrictions. Missing lookup tools produce a warning but do not block persistence. If policy removes every declared persistence tool, OpenClaw skips the flush and continues compaction.
+
+Set `agents.defaults.compaction.memoryFlush.model` when this housekeeping turn should use a local model instead of the active conversation model:
 
 ```json
 {

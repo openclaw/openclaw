@@ -3,6 +3,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { summarizePluginRetirementResults } from "./host-hook-cleanup-result.js";
 import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import {
   getPluginCache,
@@ -16,7 +17,7 @@ import {
   pluginInstanceState,
   resolvePluginInstanceOwner,
 } from "./plugin-instance-scope.js";
-import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import type { PluginChannelRegistration, PluginRecord, PluginRegistry } from "./registry-types.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
 type PluginRegistryLifecycleState = {
@@ -40,6 +41,11 @@ type PluginRegistryLifecycleStore = {
   registryResourceOwners?: WeakMap<PluginRegistry, PluginRegistry>;
   registryLifetimes?: WeakMap<PluginRegistry, PluginRegistryLifetime>;
   gatewayOwners?: WeakMap<PluginRegistry, PluginRegistryGatewayOwner | null>;
+  gatewayChannels?: WeakMap<
+    PluginRegistry,
+    ReadonlyMap<string, Pick<PluginChannelRegistration, "pluginId" | "plugin">>
+  >;
+  borrowedRecords?: WeakMap<PluginRegistry, WeakSet<PluginRecord>>;
 };
 
 /** The Gateway registry owner that admitted work in a registry generation. */
@@ -66,6 +72,8 @@ const registryResourceOwners = (lifecycle.registryResourceOwners ??= new WeakMap
 const registryLifetimes = (lifecycle.registryLifetimes ??= new WeakMap());
 // Registries from a published build carry no owner link; recovery then stays strict.
 const gatewayOwners = (lifecycle.gatewayOwners ??= new WeakMap());
+const gatewayChannels = (lifecycle.gatewayChannels ??= new WeakMap());
+const borrowedRecords = (lifecycle.borrowedRecords ??= new WeakMap());
 const loadRegistryDisposer = (lifecycle.loadRegistryDisposer ??= createLazyRuntimeNamedExport(
   () => import("./runtime.js"),
   "disposePluginRegistryInstances",
@@ -99,9 +107,28 @@ export function getPluginRegistryResourceOwner(registry: PluginRegistry): Plugin
 export function bindPluginRegistryGatewayOwner(
   registry: PluginRegistry,
   owner: PluginRegistryGatewayOwner,
+  admittedFrom?: PluginRegistry,
 ): void {
   const key = getPluginRegistryResourceOwner(registry);
   const existing = gatewayOwners.get(key);
+  if (existing === undefined) {
+    // Disposal clears a retired registry's arrays. Keep its admitted registrations,
+    // not callable authority, for successor continuity checks while turns retain it.
+    const inherited =
+      admittedFrom && getPluginRegistryGatewayOwner(admittedFrom) === owner
+        ? gatewayChannels.get(getPluginRegistryResourceOwner(admittedFrom))
+        : undefined;
+    if (admittedFrom) {
+      if (inherited) {
+        gatewayChannels.set(key, inherited);
+      }
+    } else {
+      gatewayChannels.set(
+        key,
+        new Map(registry.channels.map(({ pluginId, plugin }) => [plugin.id, { pluginId, plugin }])),
+      );
+    }
+  }
   gatewayOwners.set(key, existing === undefined || existing === owner ? owner : null);
 }
 
@@ -109,6 +136,29 @@ export function getPluginRegistryGatewayOwner(
   registry: PluginRegistry,
 ): PluginRegistryGatewayOwner | undefined {
   return gatewayOwners.get(getPluginRegistryResourceOwner(registry)) ?? undefined;
+}
+
+/** Prepared views inherit the publication snapshot, not a successor generation. */
+export function isPluginRegistryGatewayViewOf(
+  registry: PluginRegistry,
+  published: PluginRegistry,
+): boolean {
+  const owner = getPluginRegistryGatewayOwner(registry);
+  const admitted = gatewayChannels.get(getPluginRegistryResourceOwner(registry));
+  return (
+    owner !== undefined &&
+    admitted !== undefined &&
+    admitted === gatewayChannels.get(getPluginRegistryResourceOwner(published)) &&
+    owner === getPluginRegistryGatewayOwner(published)
+  );
+}
+
+/** Publication-time identity survives teardown; the live Gateway owner still admits every send. */
+export function getPluginRegistryGatewayChannelRegistration(
+  registry: PluginRegistry,
+  channel: string,
+): Pick<PluginChannelRegistration, "pluginId" | "plugin"> | undefined {
+  return gatewayChannels.get(getPluginRegistryResourceOwner(registry))?.get(channel);
 }
 
 /** The creation owner lends existing custody; lookup never takes ownership of an external host. */
@@ -169,24 +219,29 @@ export function getPluginLoaderCacheState(cache = getPluginCache()) {
     const results = await Promise.allSettled(
       [...registries].map((registry) => disposePluginRegistryInstances(registry)),
     );
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(failures, "Plugin cached registry cleanup failed");
-    }
-    const completed = results.flatMap((result) =>
-      result.status === "fulfilled" ? [result.value] : [],
-    );
-    return {
-      cleanupCount: completed.reduce((count, result) => count + result.cleanupCount, 0),
-      failures: completed.flatMap((result) => result.failures),
-    };
+    return summarizePluginRetirementResults(results, "Plugin cached registry cleanup failed");
   };
   return loads;
 }
 
 export type PluginRegistryLifecycleEpoch = object;
+
+/**
+ * A borrowing registry lists another live registry's record without taking custody.
+ * Publication never adopts it, and retirement of the borrower never revokes or disposes it.
+ */
+export function markPluginRecordBorrowed(registry: PluginRegistry, record: PluginRecord): void {
+  let records = borrowedRecords.get(registry);
+  if (!records) {
+    borrowedRecords.set(registry, (records = new WeakSet()));
+  }
+  records.add(record);
+}
+
+/** Projection reads the loader's borrowing fact without inferring custody from record identity. */
+export function isPluginRecordBorrowed(registry: PluginRegistry, record: PluginRecord): boolean {
+  return borrowedRecords.get(getPluginRegistryResourceOwner(registry))?.has(record) === true;
+}
 
 /** Transfer exact instances at publication without reviving a removed or failed instance. */
 export function adoptPluginRegistryRecords(registryView: PluginRegistry | null | undefined): void {
@@ -196,7 +251,7 @@ export function adoptPluginRegistryRecords(registryView: PluginRegistry | null |
   }
   for (const record of registry.plugins) {
     const owner = resolvePluginInstanceOwner(record, registry);
-    if (!owner.revoked) {
+    if (!owner.revoked && !borrowedRecords.get(registry)?.has(record)) {
       owner.registry = registry;
     }
   }
@@ -392,6 +447,15 @@ export function capturePluginLifecycleAuthority(
   options?: { scopedRuntime?: boolean; registration?: boolean; admittedRuntime?: boolean },
 ): (() => boolean) | undefined {
   const registry = getPluginRegistryResourceOwner(registryView);
+  if (record && borrowedRecords.get(registry)?.has(record)) {
+    // A borrower mints from the lender's current custody and loses it when it retires.
+    const lent = capturePluginLifecycleAuthority(
+      getPluginRecordRegistry(registry, record),
+      record,
+      options,
+    );
+    return lent && (() => !retiredRegistries.has(registry) && lent());
+  }
   if (record) {
     const owner = resolvePluginInstanceOwner(record, registry);
     const usable = () => {

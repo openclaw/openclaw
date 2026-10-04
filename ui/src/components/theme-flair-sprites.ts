@@ -1,12 +1,9 @@
-// Theme-contributed flair artwork: composer critters that join the ledge
-// traffic beside the resident's regulars, and hats an agent avatar wears on a
-// lucky page load. Portable themes reference these by catalog id; the artwork
-// itself stays built in, so a theme definition never carries markup.
 import { svg, type TemplateResult } from "lit";
 import type {
   ThemeAvatarHatId,
   ThemeCritterId,
 } from "../../../packages/gateway-protocol/src/theme.ts";
+import { LOBSTER_HAT_SPRITES } from "./lobster-hat-sprites.ts";
 
 // A penguin in a red fedora. Faces right like the duck;
 // the scene flips it through --lob-face for right-to-left crossings.
@@ -38,8 +35,6 @@ const PENGUIN_SPRITE = svg`
   </svg>
 `;
 
-// A red fedora with nobody underneath. It crosses on its own, which is best
-// not thought about too hard.
 const FEDORA_SPRITE = svg`
   <svg
     class="lobster-pet__svg"
@@ -67,7 +62,6 @@ export const THEME_CRITTER_TITLES: Record<ThemeCritterId, string> = {
   fedora: "a hat. nobody underneath",
 };
 
-// One full ledge crossing per critter; the hat is light and in a hurry.
 export const THEME_CRITTER_CROSS_MS: Record<ThemeCritterId, number> = {
   penguin: 13_000,
   fedora: 9_000,
@@ -85,6 +79,16 @@ export function themeCritterBaseStyle(kind: ThemeCritterId, direction: 1 | -1): 
 // Avatar hats overlay the top of the circular avatar; the circle's own
 // overflow clip crops the crown, which reads as a hat worn, not held.
 // Tilted 12°, the angle of Red Hat Display's ascenders.
+function avatarLobsterHat(hat: keyof typeof LOBSTER_HAT_SPRITES, brimY: number) {
+  return svg`
+    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
+      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 ${-brimY})">
+        ${LOBSTER_HAT_SPRITES[hat]}
+      </g>
+    </svg>
+  `;
+}
+
 export const AVATAR_HAT_SPRITES: Record<ThemeAvatarHatId, TemplateResult> = {
   fedora: svg`
     <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
@@ -96,44 +100,8 @@ export const AVATAR_HAT_SPRITES: Record<ThemeAvatarHatId, TemplateResult> = {
       </g>
     </svg>
   `,
-  crown: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -11)">
-        <path d="M46 12 L46 2 L53 8 L60 0 L67 8 L74 2 L74 12 Q60 8 46 12 Z" fill="#f6c945" />
-      </g>
-    </svg>
-  `,
-  santa: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -10.5)">
-        <g>
-          <path d="M47 10 Q54 1 68 3 L72 9 Z" fill="#e0312f" />
-          <circle cx="71" cy="3.5" r="3.5" fill="#f5f7fa" />
-          <ellipse cx="59" cy="10.5" rx="15" ry="3.5" fill="#f5f7fa" />
-        </g>
-      </g>
-    </svg>
-  `,
-  party: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -11)">
-        <g>
-          <path d="M52 11 L60 0.5 L68 11 Z" fill="#7c5cff" />
-          <path d="M55.5 6.5 L64.5 6.5" stroke="#ffd166" stroke-width="2" />
-          <circle cx="60" cy="1" r="2.4" fill="#ff5c8a" />
-        </g>
-      </g>
-    </svg>
-  `,
-  pumpkin: svg`
-    <svg class="identity-avatar__hat-svg" viewBox="0 0 100 100" aria-hidden="true">
-      <g transform="translate(60 27) rotate(-12) scale(2.2) translate(-60 -12)">
-        <g>
-          <ellipse cx="60" cy="6.5" rx="8.5" ry="5.5" fill="#e8871e" />
-          <path d="M56 2.5 Q56 6.5 56 10.5 M64 2.5 Q64 6.5 64 10.5" stroke="#c96a10" stroke-width="1.5" fill="none" />
-          <path d="M60 1.5 Q60.5 0 63 0.5" stroke="#4c9a4c" stroke-width="2.5" stroke-linecap="round" fill="none" />
-        </g>
-      </g>
-    </svg>
-  `,
+  crown: avatarLobsterHat("crown", 11),
+  santa: avatarLobsterHat("santa", 10.5),
+  party: avatarLobsterHat("party", 11),
+  pumpkin: avatarLobsterHat("pumpkin", 12),
 };

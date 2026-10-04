@@ -22,6 +22,7 @@ import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { collectFeishuDoctorAgentIds } from "./doctor-agent-roster.js";
 import { legacyConfigRules, normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { collectFeishuWebhookNotes } from "./webhook-route.js";
 
@@ -206,23 +207,6 @@ function isFeishuSessionEntry(key: string, value: unknown): boolean {
   );
 }
 
-function collectConfiguredAgentIds(cfg: OpenClawConfig): string[] {
-  const ids = new Set<string>();
-  ids.add(resolveConfiguredDefaultAgentId(cfg));
-  for (const agent of cfg.agents?.list ?? []) {
-    if (typeof agent.id === "string" && agent.id.trim()) {
-      ids.add(normalizeAgentId(agent.id));
-    }
-  }
-  return [...ids].toSorted();
-}
-
-function resolveConfiguredDefaultAgentId(cfg: OpenClawConfig): string {
-  const agents = cfg.agents?.list ?? [];
-  const chosen = agents.find((agent) => agent?.default) ?? agents[0];
-  return normalizeAgentId(typeof chosen?.id === "string" && chosen.id.trim() ? chosen.id : "main");
-}
-
 function collectFeishuSessionTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -238,7 +222,7 @@ function collectFeishuSessionTargets(params: {
     });
   };
 
-  for (const agentId of collectConfiguredAgentIds(params.cfg)) {
+  for (const agentId of collectFeishuDoctorAgentIds(params.cfg)) {
     addTarget({
       agentId,
       storePath: resolveStorePath(params.cfg.session?.store, { agentId, env: params.env }),
@@ -368,38 +352,26 @@ function inspectTranscriptEntries(params: {
     }
   }
 
-  if (params.entries.length === 0) {
-    if (params.allowMissingSessionHeader) {
-      return null;
-    }
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: "empty transcript",
-    };
+  if (params.entries.length === 0 && params.allowMissingSessionHeader) {
+    return null;
   }
   const firstEntry = params.entries[0];
-  if (
-    !isSessionHeader(firstEntry) &&
-    (!params.allowMissingSessionHeader || !isUserMessage(firstEntry))
-  ) {
+  const invalidReason =
+    params.entries.length === 0
+      ? "empty transcript"
+      : !isSessionHeader(firstEntry) &&
+          (!params.allowMissingSessionHeader || !isUserMessage(firstEntry))
+        ? "invalid session header"
+        : (params.malformedLines ?? 0) > 0
+          ? `${params.malformedLines} malformed JSONL line(s)`
+          : undefined;
+  if (invalidReason) {
     return {
       kind: "invalid-session-transcript",
       sessionKey: params.sessionKey,
       storePath: params.storePath,
       path: params.transcriptPath,
-      reason: "invalid session header",
-    };
-  }
-  if ((params.malformedLines ?? 0) > 0) {
-    return {
-      kind: "invalid-session-transcript",
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-      path: params.transcriptPath,
-      reason: `${params.malformedLines} malformed JSONL line(s)`,
+      reason: invalidReason,
     };
   }
   if (maxBlankUserMessageRun >= BLANK_USER_MESSAGE_REPAIR_THRESHOLD) {
@@ -740,44 +712,33 @@ async function repairFeishuDoctorState(params: {
     }
   }
 
-  const entriesByStore = new Map<
-    string,
-    {
-      agentId: string;
-      entries: Array<{ key: string; entry: FeishuSessionEntry }>;
-    }
-  >();
+  const entriesByStore = new Map<string, FeishuDoctorSessionEntry[]>();
   for (const entry of collectRepairSessionEntries(inspection)) {
-    const existing = entriesByStore.get(entry.storePath);
-    if (existing) {
-      existing.entries.push({ key: entry.key, entry: entry.entry });
-    } else {
-      entriesByStore.set(entry.storePath, {
-        agentId: entry.agentId,
-        entries: [{ key: entry.key, entry: entry.entry }],
-      });
-    }
+    const entries = entriesByStore.get(entry.storePath) ?? [];
+    entries.push(entry);
+    entriesByStore.set(entry.storePath, entries);
   }
 
   let removedSessionEntries = 0;
   let touchedSessionStores = 0;
   let archivedSessionArtifacts = 0;
-  for (const [storePath, group] of [...entriesByStore.entries()].toSorted(([left], [right]) =>
+  for (const [storePath, entries] of [...entriesByStore.entries()].toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    const agentId = entries[0]!.agentId;
     try {
-      copyStoreBackup({ storePath, backupDir, agentId: group.agentId });
-      const keys = new Set(group.entries.map((entry) => entry.key));
-      const removedEntries: typeof group.entries = [];
-      for (const key of keys) {
-        const currentEntry = listSessionEntries({ agentId: group.agentId, storePath }).find(
+      copyStoreBackup({ storePath, backupDir, agentId });
+      const removedEntries: typeof entries = [];
+      for (const entry of entries) {
+        const { key } = entry;
+        const currentEntry = listSessionEntries({ agentId, storePath }).find(
           (candidate) => candidate.sessionKey === key,
         )?.entry;
         if (!currentEntry || isValidAgentHarnessSessionStoreEntry(key, currentEntry)) {
           continue;
         }
         const deleted = await deleteSessionEntry({
-          agentId: group.agentId,
+          agentId,
           archiveTranscript: true,
           sessionKey: key,
           storePath,
@@ -785,10 +746,7 @@ async function repairFeishuDoctorState(params: {
         if (!deleted) {
           continue;
         }
-        const entry = group.entries.find((candidate) => candidate.key === key);
-        if (entry) {
-          removedEntries.push(entry);
-        }
+        removedEntries.push(entry);
       }
       const removed = removedEntries.length;
       removedSessionEntries += removed;
@@ -797,7 +755,7 @@ async function repairFeishuDoctorState(params: {
         archivedSessionArtifacts += archiveSessionArtifacts({
           storePath,
           entries: removedEntries.map((entry) => ({
-            agentId: group.agentId,
+            agentId,
             entry: entry.entry,
           })),
           archiveTimestamp,

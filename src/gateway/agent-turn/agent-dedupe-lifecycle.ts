@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AGENT_RUN_RESTART_ABORT_STOP_REASON } from "../../agents/run-termination.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
@@ -7,6 +8,7 @@ import {
   type InputProvenance,
 } from "../../sessions/input-provenance.js";
 import { resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import { logAttachmentFailure } from "../chat-attachments.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { CommittedResetCompletion } from "../server-methods/agent-reset-phase.js";
 import {
@@ -16,6 +18,7 @@ import {
 } from "../server-methods/agent-session-reset.js";
 import { emitSessionsChanged } from "../server-methods/session-change-event.js";
 import {
+  AgentRequestReservationEndedError,
   buildAbortedAgentPayload,
   isAcceptedAgentDedupePayload,
   isPreRegistrationAbortedAgentDedupeEntryForSession,
@@ -118,7 +121,7 @@ export function createAgentDedupeLifecycle(params: {
 
   const assertReservationCurrent = () => {
     if (!ownsReservation()) {
-      throw new Error("Agent request reservation is no longer active.");
+      throw new AgentRequestReservationEndedError();
     }
   };
 
@@ -136,6 +139,15 @@ export function createAgentDedupeLifecycle(params: {
           acceptedOnly: params.privateCompletion,
         })
       ) {
+        return undefined;
+      }
+      if (error instanceof AgentRequestReservationEndedError) {
+        logAttachmentFailure(params.context.logGateway, "agent attachment parse failed", error);
+        params.io.emitAcceptance([
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, String(error)),
+        ]);
         return undefined;
       }
       throw error;
@@ -300,7 +312,6 @@ export function createAgentDedupeLifecycle(params: {
     clearUnaccepted,
     abortForLifecycleRotation,
     isReserved: () => reserved,
-    isAccepted: () => accepted,
     markAccepted: (value: boolean) => {
       accepted = value;
     },

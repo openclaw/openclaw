@@ -20,6 +20,15 @@ import {
   loadPreparedModelRuntimeAuth,
   bindPreparedModelRuntimeAuth,
 } from "./prepared-model-runtime-auth.js";
+import {
+  getPreparedModelRuntimeBorrowedSnapshot,
+  getPreparedModelRuntimePluginGeneration,
+} from "./prepared-model-runtime-generation-scope.js";
+import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  isPreparedModelRuntimeMissingOwnerError,
+  PreparedModelRuntimePublicationSupersededError,
+} from "./prepared-model-runtime.errors.js";
 import { isPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import {
   acquireAgentRunPreparedModelRuntime,
@@ -39,6 +48,7 @@ import { normalizeThinkingCatalogProviders } from "./thinking-runtime.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
+export { getPendingPreparedModelRuntimeReplacement } from "./prepared-model-runtime.js";
 
 export type LoadPreparedModelCatalogParams = {
   agentId?: string;
@@ -261,7 +271,7 @@ async function resolveReadOnlyPublishedModelCatalogOwner(
         throw new PreparedModelCatalogConfigReplacedError(candidate.agentDir);
       }
     } catch (error) {
-      if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+      if (!isPreparedModelRuntimeMissingOwnerError(error)) {
         throw error;
       }
     }
@@ -298,7 +308,7 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
     }
     await preparedExact.release?.();
   } catch (error) {
-    if (!(error instanceof PreparedModelRuntimeOwnerNotPublishedError)) {
+    if (!isPreparedModelRuntimeMissingOwnerError(error)) {
       throw error;
     }
   }
@@ -384,6 +394,25 @@ async function loadScopedReadOnlyModelCatalog(
   );
 }
 
+/** Reads only the generation retained by this exact, still-open turn. */
+function resolveAdmittedModelCatalogOwner(params: LoadPreparedModelCatalogParams) {
+  const generation = getPreparedModelRuntimePluginGeneration();
+  const owner = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
+  if (!generation || !owner || owner.metadataSnapshot !== generation.pluginMetadataSnapshot) {
+    return undefined;
+  }
+  const { full, activationFull } = resolveInputs(params);
+  const matches = [full, activationFull].some(
+    (input) =>
+      preparedModelRuntimeConfigsMatch(owner.config, input.config) &&
+      owner.agentId === input.agentId &&
+      owner.agentDir === input.agentDir &&
+      owner.inheritedAuthDir === input.inheritedAuthDir &&
+      owner.workspaceDir === input.workspaceDir,
+  );
+  return matches ? { generation, owner } : undefined;
+}
+
 /**
  * Missing turn-path capabilities do not authorize another inventory, even without a published
  * owner. Native harness observations keep their existing owner.
@@ -401,35 +430,71 @@ export async function loadProviderScopedThinkingCatalog(params: {
   requiredInputRoute?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
 }): Promise<ModelCatalogEntry[]> {
   const request = { ...params, readOnly: true };
-  const publishedOwner = getPreparedModelCatalogOwnerSnapshot(request);
-  const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "exact"))?.snapshot;
+  const admitted = resolveAdmittedModelCatalogOwner(request);
   let snapshot: ModelCatalogSnapshot;
-  if (owner?.loadNativeModelCatalog && params.agentRuntime && params.agentRuntime !== "openclaw") {
-    snapshot = await owner.loadNativeModelCatalog({
-      provider: params.provider,
-      modelId: params.model,
-      runtime: params.agentRuntime,
-    });
+  if (admitted) {
+    // Replacement inventory may belong to another account on the very same URL.
+    // A retained turn reads its captured facts without invoking retired owner callbacks.
+    snapshot =
+      readCapturedPreparedModelRuntimeCatalog(admitted.owner) ?? admitted.owner.modelCatalog;
+    if (
+      params.agentRuntime &&
+      params.agentRuntime !== "openclaw" &&
+      admitted.owner.loadNativeModelCatalog &&
+      admitted.owner.isCurrent()
+    ) {
+      try {
+        snapshot = await admitted.owner.loadNativeModelCatalog({
+          provider: params.provider,
+          modelId: params.model,
+          runtime: params.agentRuntime,
+        });
+      } catch (error) {
+        if (
+          !(error instanceof PreparedModelRuntimePublicationSupersededError) ||
+          admitted.owner.isCurrent()
+        ) {
+          throw error;
+        }
+        // Retirement during a native observation leaves only this turn's captured facts.
+      }
+    }
   } else {
-    const catalog = owner
-      ? (publishedOwner ? await materializeRequestedModelCatalog(owner, true, undefined) : owner)
-          .modelCatalog
-      : { entries: [], routeVariants: [] };
-    const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
-    const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
-    snapshot = await augmentModelCatalogWithAgentHarness({
-      cfg: params.config,
-      agentId,
-      agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
-      workspaceDir:
-        params.workspaceDir ??
-        resolveAgentWorkspaceDir(params.config, agentId) ??
-        resolveDefaultAgentWorkspaceDir(),
-      defaultProvider: params.provider,
-      defaultModel: `${params.provider}/${params.model}`,
-      agentRuntime: params.agentRuntime,
-      snapshot: catalog,
-    });
+    const owner = (await resolveReadOnlyPublishedModelCatalogOwner(request, "published"))?.snapshot;
+    if (owner && !preparedModelRuntimeConfigsMatch(owner.config, params.config)) {
+      // A caller without a matching admitted generation cannot borrow replacement facts.
+      return [];
+    }
+    if (
+      owner?.loadNativeModelCatalog &&
+      params.agentRuntime &&
+      params.agentRuntime !== "openclaw"
+    ) {
+      snapshot = await owner.loadNativeModelCatalog({
+        provider: params.provider,
+        modelId: params.model,
+        runtime: params.agentRuntime,
+      });
+    } else {
+      const catalog = owner
+        ? (await materializeRequestedModelCatalog(owner, true, undefined)).modelCatalog
+        : { entries: [], routeVariants: [] };
+      const agentId = params.agentId ?? resolveAmbientOwnerAgentId(params.config);
+      const { augmentModelCatalogWithAgentHarness } = await import("./harness/model-catalog.js");
+      snapshot = await augmentModelCatalogWithAgentHarness({
+        cfg: params.config,
+        agentId,
+        agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
+        workspaceDir:
+          params.workspaceDir ??
+          resolveAgentWorkspaceDir(params.config, agentId) ??
+          resolveDefaultAgentWorkspaceDir(),
+        defaultProvider: params.provider,
+        defaultModel: `${params.provider}/${params.model}`,
+        agentRuntime: params.agentRuntime,
+        snapshot: catalog,
+      });
+    }
   }
   let entries = snapshot.entries;
   if (params.agentRuntime) {
@@ -446,6 +511,9 @@ export async function loadProviderScopedThinkingCatalog(params: {
     }
   }
   entries = normalizeThinkingCatalogProviders(entries);
+  if (admitted && getPreparedModelRuntimeBorrowedSnapshot(admitted.generation) !== admitted.owner) {
+    return [];
+  }
   if (params.requiredInputRoute !== undefined) {
     const entry = findModelInCatalog(entries, params.provider, params.model);
     if (
@@ -480,7 +548,16 @@ export async function loadPreparedModelCatalogOwnerSnapshot(
 export async function loadPublishedPreparedModelCatalogOwnerSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): Promise<PreparedModelRuntimeSnapshot> {
-  return await withPreparedModelCatalogOwnerPolicy(params, "published", (snapshot) => snapshot);
+  return await withPreparedModelCatalogOwnerPolicy(
+    params,
+    "published",
+    (snapshot) => snapshot,
+    async (input) => ({
+      snapshot: await prepareModelRuntimeSnapshot(input, {
+        readPublished: params.readOnly !== false && params.refreshFullCatalog !== true,
+      }),
+    }),
+  );
 }
 
 /** Resolves a complete published owner for long-lived runtime consumers. */

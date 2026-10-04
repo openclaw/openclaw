@@ -195,9 +195,6 @@ function createSwarmHarness(onSpawn?: (input: SpawnSubagentParams) => void | Pro
   applyCodeModeCatalog({
     tools: [...harness.tools, spawnTool],
     config: harness.config,
-    sessionId: harness.ctx.sessionId,
-    sessionKey: harness.ctx.sessionKey,
-    runId: harness.ctx.runId,
     catalogRef: harness.catalogRef,
   });
   return { ...harness, spawnTool };
@@ -353,7 +350,7 @@ describe("Code Mode swarm guest", () => {
 
       expect(details).toMatchObject({
         status: "failed",
-        failurePhase: "bridge",
+        failurePhase: "guest",
         bridgeDispatchStarted: true,
         error: expect.stringContaining("ReferenceError: missingAfterCollector is not defined"),
       });

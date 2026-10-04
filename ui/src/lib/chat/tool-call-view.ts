@@ -8,13 +8,14 @@
 
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
 import {
   buildWriteDiffLines,
   computeLineDiff,
-  countTextLines,
   joinDiffSections,
   parseDiffDetailsString,
+  splitDiffLines,
   type DiffLine,
   type DiffStat,
 } from "./tool-call-diff.ts";
@@ -48,20 +49,27 @@ export type ToolCallView = {
 };
 
 const COMMAND_TOOL_NAMES = new Set(["bash", "exec", "shell", "run_command", "run_terminal_cmd"]);
-const READ_TOOL_NAMES = new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"]);
-const EDIT_TOOL_NAMES = new Set([
-  "edit",
-  "edit_file",
-  "multiedit",
-  "multi_edit",
-  "notebookedit",
-  "notebook_edit",
-]);
 const TEXT_EDITOR_TOOL_NAMES = new Set(["str_replace_editor", "str_replace_based_edit_tool"]);
-const WRITE_TOOL_NAMES = new Set(["write", "write_file", "create_file"]);
-const SEARCH_TOOL_NAMES = new Set(["grep", "find", "glob", "ls", "list", "codebase_search"]);
-const FETCH_TOOL_NAMES = new Set(["web_fetch", "webfetch", "fetch"]);
 const PATCH_TOOL_NAMES = new Set(["apply_patch", "applypatch", "patch"]);
+const TOOL_KINDS: ReadonlyArray<readonly [ToolCallKind, ReadonlySet<string>]> = [
+  ["command", COMMAND_TOOL_NAMES],
+  ["read", new Set(["read", "read_file", "readfile", "notebookread", "notebook_read"])],
+  [
+    "edit",
+    new Set([
+      "edit",
+      "edit_file",
+      "multiedit",
+      "multi_edit",
+      "notebookedit",
+      "notebook_edit",
+      ...PATCH_TOOL_NAMES,
+    ]),
+  ],
+  ["write", new Set(["write", "write_file", "create_file"])],
+  ["search", new Set(["grep", "find", "glob", "ls", "list", "codebase_search"])],
+  ["fetch", new Set(["web_fetch", "webfetch", "fetch"])],
+];
 
 function resolvePathArg(args: Record<string, unknown> | null): string | undefined {
   return (
@@ -217,23 +225,10 @@ function resolveToolCallKind(
         return "generic";
     }
   }
-  if (COMMAND_TOOL_NAMES.has(key)) {
-    return "command";
-  }
-  if (READ_TOOL_NAMES.has(key)) {
-    return "read";
-  }
-  if (EDIT_TOOL_NAMES.has(key) || PATCH_TOOL_NAMES.has(key)) {
-    return "edit";
-  }
-  if (WRITE_TOOL_NAMES.has(key)) {
-    return "write";
-  }
-  if (SEARCH_TOOL_NAMES.has(key)) {
-    return "search";
-  }
-  if (FETCH_TOOL_NAMES.has(key)) {
-    return "fetch";
+  for (const [kind, names] of TOOL_KINDS) {
+    if (names.has(key)) {
+      return kind;
+    }
   }
   // Arg-shape fallback for harness-specific command tools.
   if (args && typeof args.command === "string" && Object.keys(args).length <= 3) {
@@ -251,9 +246,10 @@ const toolCallViewCache = new WeakMap<
 >();
 
 export function resolveToolCallView(source: ToolCallViewSource): ToolCallView {
-  const args = asRecord(source.args);
+  const call = unwrapToolCallForDisplay(source);
+  const args = asRecord(call.args);
   const cacheKey = args ?? asRecord(source.details);
-  const name = source.name.trim().toLowerCase();
+  const name = call.name.trim().toLowerCase();
   if (cacheKey) {
     const cached = toolCallViewCache.get(cacheKey);
     if (cached && cached.details === source.details && cached.name === name) {
@@ -345,7 +341,7 @@ function buildToolCallView(
       // Present details need created=true before zero removals are authoritative.
       ...(details && details.created !== true
         ? {}
-        : { stat: { added: countTextLines(content), removed: 0 } }),
+        : { stat: { added: splitDiffLines(content).length, removed: 0 } }),
     };
   }
 

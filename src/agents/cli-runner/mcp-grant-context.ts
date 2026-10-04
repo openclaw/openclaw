@@ -19,13 +19,24 @@ export function finalizeCliMcpGrant(
   context: McpLoopbackRequestContext | undefined,
   toolsAllow: string[] | undefined,
   nativeAuthorityPending: boolean,
-  assertCurrent?: () => void,
+  source: Pick<
+    RunCliAgentParams,
+    | "admittedRunContext"
+    | "assertCurrent"
+    | "messageActionTurnCapability"
+    | "abortSignal"
+    | "toolAuthorityFingerprint"
+    | "replyOperation"
+  > = {},
 ) {
   if (!context) {
     return undefined;
   }
   const cronRequesterGrantIssuer = captureCronRequesterGrantIssuer(context.runId);
   const cronAuthorityCheck = bindActiveCronAuthorityCurrentness(context.runId);
+  const personalToolParticipants = source.toolAuthorityFingerprint
+    ? source.replyOperation?.personalToolParticipants
+    : undefined;
   return {
     context: {
       ...context,
@@ -35,7 +46,11 @@ export function finalizeCliMcpGrant(
     },
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
-    assertCurrent,
+    admittedRunContext: source.admittedRunContext,
+    messageActionTurnCapability: source.messageActionTurnCapability,
+    abortSignal: source.abortSignal,
+    assertCurrent: source.assertCurrent,
+    ...(personalToolParticipants ? { personalToolParticipants } : {}),
   };
 }
 
@@ -175,6 +190,12 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    ...(params.run.trustedInternalHandoff
+      ? {
+          trustedInternalHandoff: params.run.trustedInternalHandoff,
+          inputProvenance: params.run.inputProvenance,
+        }
+      : {}),
     runtimePolicySessionKey,
     ...(params.runtimePolicyAgentId ? { runtimePolicyAgentId: params.runtimePolicyAgentId } : {}),
     agentId: params.agentId,

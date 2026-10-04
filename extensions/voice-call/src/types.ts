@@ -73,7 +73,6 @@ const TranscriptEntrySchema = z.object({
   text: z.string(),
   isFinal: z.boolean().default(true),
 });
-export type TranscriptEntry = z.infer<typeof TranscriptEntrySchema>;
 
 export const CallRecordSchema = z.object({
   callId: z.string(),
@@ -84,7 +83,7 @@ export const CallRecordSchema = z.object({
   from: z.string(),
   to: z.string(),
   sessionKey: z.string().optional(),
-  /** Agent selected when the call was created. Optional for legacy records. */
+  /** Agent selected when the call was created; optional only for retained history. */
   agentId: z.string().optional(),
   startedAt: z.number(),
   answeredAt: z.number().optional(),
@@ -119,6 +118,11 @@ export type WebhookContext = {
   method: "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
   query?: Record<string, string | string[] | undefined>;
   remoteAddress?: string;
+};
+
+export type ToolHandlerContext = {
+  partialUserTranscript?: string;
+  abortSignal?: AbortSignal;
 };
 
 export type ProviderWebhookParseResult = {

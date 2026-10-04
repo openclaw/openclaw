@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveAgentRunAbortLifecycleFields } from "../../agents/run-termination.js";
 import type { TurnAdoptionLifecycle } from "../../auto-reply/get-reply-options.types.js";
 import type { QueuedFollowupReplyDelivery } from "../../auto-reply/reply/queue/types.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
@@ -41,6 +42,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   >;
   hasCronCreatorAuthority: boolean;
   suppressReplies?: boolean;
+  releaseSourceWorkAdmission: () => void;
   retainWorkAdmission: () => () => void;
   armOperatorRunCancellation?: () => void;
   retireOperatorRunCancellation?: () => void;
@@ -54,6 +56,8 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   let enqueued = false;
   let terminalKnown = false;
   let completed = false;
+  let adoptionStarted = false;
+  let withdrawalHold: Deferred | undefined;
   let releaseWorkAdmission: (() => void) | undefined;
   const recordQueuedTerminal = (status: "completed" | "aborted") => {
     // An active source dispatch still owns terminal recording after its work settles.
@@ -108,7 +112,13 @@ export function createChatSendTurnAdoptionLifecycle(params: {
       ? { originatingLeafEntryId: params.originatingLeafEntryId }
       : {}),
     ownerKey: params.ownerKey,
-    onAdopted: async () => {},
+    onAdopted: async () => {
+      adoptionStarted = true;
+      if (withdrawalHold) {
+        await withdrawalHold.promise;
+      }
+      params.controller.signal.throwIfAborted();
+    },
     onDeferred: () => {
       if (params.hasCronCreatorAuthority) {
         lifecycle.cronCreatorAuthorityUnavailable = "queued-local-operator";
@@ -122,10 +132,26 @@ export function createChatSendTurnAdoptionLifecycle(params: {
         agentId: params.agentId,
         ownerConnId: normalizeOptionalString(params.ownerConnId),
         ownerDeviceId: normalizeOptionalString(params.ownerDeviceId),
+        holdPendingInputWithdrawal: () => {
+          if (adoptionStarted || withdrawalHold || params.controller.signal.aborted) {
+            return undefined;
+          }
+          const hold = createDeferredCore();
+          withdrawalHold = hold;
+          return () => {
+            if (withdrawalHold === hold) {
+              withdrawalHold = undefined;
+            }
+            hold.resolve();
+          };
+        },
         // Queue cancellation supersedes the source run's earlier custody acknowledgement.
         onAborted: (reason) => {
           params.sessionBinding.abortDiagnosticReason = reason;
           recordQueuedTerminal("aborted");
+          params.releaseSourceWorkAdmission();
+          releaseWorkAdmission?.();
+          releaseWorkAdmission = undefined;
         },
       });
       if (enqueued && !releaseWorkAdmission) {

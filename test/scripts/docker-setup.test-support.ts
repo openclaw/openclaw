@@ -153,13 +153,7 @@ exec "$@"
 }
 
 export async function expectMissingPath(path: string): Promise<void> {
-  try {
-    await stat(path);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`Expected missing path: ${path}`);
+  await expect(stat(path)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
@@ -173,30 +167,17 @@ export async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   await mkdir(join(rootDir, "scripts", "docker"), { recursive: true });
   await mkdir(join(rootDir, "scripts", "lib"), { recursive: true });
   await copyFile(join(repoRoot, "scripts", "docker", "setup.sh"), scriptPath);
-  await copyFile(
-    join(repoRoot, "scripts", "lib", "docker-build.sh"),
-    join(rootDir, "scripts", "lib", "docker-build.sh"),
-  );
-  await copyFile(
-    join(repoRoot, "scripts", "lib", "build-metadata.sh"),
-    join(rootDir, "scripts", "lib", "build-metadata.sh"),
-  );
-  await copyFile(
-    join(repoRoot, "scripts", "lib", "docker-e2e-logs.sh"),
-    join(rootDir, "scripts", "lib", "docker-e2e-logs.sh"),
-  );
-  await copyFile(
-    join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
-    join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
-  );
-  await copyFile(
-    join(repoRoot, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
-    join(rootDir, "scripts", "lib", "docker-e2e-resource-diagnostics.sh"),
-  );
-  await copyFile(
-    join(repoRoot, "scripts", "lib", "host-timeout.sh"),
-    join(rootDir, "scripts", "lib", "host-timeout.sh"),
-  );
+  for (const file of [
+    "docker-build.sh",
+    "build-metadata.sh",
+    "docker-e2e-logs.sh",
+    "docker-e2e-container.sh",
+    "docker-e2e-watchdog.mjs",
+    "docker-e2e-resource-diagnostics.sh",
+    "host-timeout.sh",
+  ]) {
+    await copyFile(join(repoRoot, "scripts", "lib", file), join(rootDir, "scripts", "lib", file));
+  }
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
@@ -221,13 +202,6 @@ export const noFollowOwnershipRepair = (root: string) =>
   `/usr/bin/find -P ${root} -xdev -execdir /usr/bin/chown -h node:node {} +`;
 export const prestartSafePath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
 
-export function requireSandbox(sandbox: DockerSetupSandbox | null): DockerSetupSandbox {
-  if (!sandbox) {
-    throw new Error("sandbox missing");
-  }
-  return sandbox;
-}
-
 export async function resetDockerLog(sandbox: DockerSetupSandbox) {
   await writeFile(sandbox.logPath, "");
 }
@@ -237,26 +211,14 @@ export async function readDockerLog(sandbox: DockerSetupSandbox) {
 }
 
 export async function readDockerLogLines(sandbox: DockerSetupSandbox) {
-  const lines: string[] = [];
-  for (const line of (await readDockerLog(sandbox)).split("\n")) {
-    if (line) {
-      lines.push(line);
-    }
-  }
-  return lines;
+  return (await readDockerLog(sandbox)).split("\n").filter(Boolean);
 }
 
 export function collectMatchingLines(
   lines: string[],
   predicate: (line: string) => boolean,
 ): string[] {
-  const matches: string[] = [];
-  for (const line of lines) {
-    if (predicate(line)) {
-      matches.push(line);
-    }
-  }
-  return matches;
+  return lines.filter(predicate);
 }
 
 export function isGatewayStartLine(line: string) {

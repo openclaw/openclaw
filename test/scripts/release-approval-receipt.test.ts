@@ -9,7 +9,6 @@ import {
   awaitParentAuthorization,
   createReleaseApprovalReceipt,
   downloadReleaseApprovalReceipt,
-  releaseApprovalArtifactName,
   validateReleaseApprovalReceipt,
   verifyReleaseApprovalReceipt,
 } from "../../scripts/release-approval-receipt.mjs";
@@ -39,11 +38,7 @@ function approved(login = "octocat") {
 }
 
 function fixture() {
-  const receipt = {
-    version: 1,
-    kind: "openclaw-release-approval",
-    repository,
-    parentWorkflow: workflow,
+  const identity = {
     parentRunId: "10",
     parentRunAttempt: "2",
     toolingRef: "main",
@@ -52,23 +47,20 @@ function fixture() {
     releaseTag: "v2026.9.24-beta.1",
     targetSha,
     npmDistTag: "beta",
+  };
+  const receipt = {
+    version: 1,
+    kind: "openclaw-release-approval",
+    repository,
+    parentWorkflow: workflow,
+    ...identity,
     environment: "npm-release",
     approvalJob: "Publish plugins, then OpenClaw",
     approver: "octocat",
   };
   return {
     receipt,
-    expected: {
-      repository,
-      parentRunId: "10",
-      parentRunAttempt: "2",
-      toolingRef: "main",
-      toolingFullRef: "refs/heads/main",
-      toolingSha: sha,
-      releaseTag: "v2026.9.24-beta.1",
-      targetSha,
-      npmDistTag: "beta",
-    },
+    expected: { repository, ...identity },
     artifact: {
       id: 50,
       name: "openclaw-release-approval-v1-10-2",
@@ -107,107 +99,116 @@ function fixture() {
 }
 
 describe("release approval receipt", () => {
-  it("creates the exact receipt using the last approved npm-release reviewer", () => {
-    const receipt = createReleaseApprovalReceipt(env, (path: string) => {
-      expect(path).toBe("actions/runs/10/approvals");
-      return [
+  it.each<[string, Partial<typeof env>, ReturnType<typeof approved>[], RegExp | undefined]>([
+    [
+      "last approved npm-release reviewer",
+      {},
+      [
         approved("earlier-reviewer"),
         approved(),
         { ...approved("rejected-reviewer"), state: "rejected" },
         { ...approved("other-reviewer"), environments: [{ name: "other-environment" }] },
-      ];
-    });
-    expect(receipt).toEqual(fixture().receipt);
-    expect(Object.keys(receipt)).toEqual(Object.keys(fixture().receipt));
-    expect(releaseApprovalArtifactName({ parentRunId: "10", parentRunAttempt: "2" })).toBe(
-      "openclaw-release-approval-v1-10-2",
-    );
-    expect(validateReleaseApprovalReceipt(receipt)).toBe(receipt);
-  });
-
-  it.each(["github-actions[bot]", "reviewer[BoT]", "", " "])(
-    "rejects an invalid last approver %j",
-    (login) => {
-      expect(() => createReleaseApprovalReceipt(env, () => [approved(), approved(login)])).toThrow(
-        /human login/u,
-      );
-    },
-  );
-
-  it("rejects approval histories without an approved npm-release entry", () => {
-    expect(() =>
-      createReleaseApprovalReceipt(env, () => [
+      ],
+      undefined,
+    ],
+    ["bot reviewer", {}, [approved(), approved("reviewer[BoT]")], /human login/u],
+    ["blank reviewer", {}, [approved(), approved(" ")], /human login/u],
+    [
+      "no approved npm-release entry",
+      {},
+      [
         { ...approved(), state: "rejected" },
         { ...approved(), environments: [{ name: "clawhub-plugin-release" }] },
-      ]),
-    ).toThrow(/approved npm-release environment/u);
-  });
-
-  it.each([
-    ["GITHUB_EVENT_NAME", "push", /workflow_dispatch/u],
-    ["GITHUB_WORKFLOW_REF", `${repository}/${workflow}@refs/heads/other`, /workflow ref/u],
-    ["GITHUB_REPOSITORY", "other/repository", /repository mismatch/u],
-  ] as const)("rejects creation with wrong %s", (key, value, message) => {
-    expect(() =>
-      createReleaseApprovalReceipt({ ...env, [key]: value }, () => [approved()]),
-    ).toThrow(message);
-  });
-
-  it("accepts exact protected tooling tags and rejects branch aliases or mismatched SHA prefixes", () => {
-    const ref = "release-publish/aaaaaaaaaaaa-42";
-    const receipt = { ...fixture().receipt, toolingRef: ref, toolingFullRef: `refs/tags/${ref}` };
-    expect(validateReleaseApprovalReceipt(receipt)).toBe(receipt);
-    for (const patch of [{ toolingFullRef: `refs/heads/${ref}` }, { toolingSha: "c".repeat(40) }]) {
-      expect(() => validateReleaseApprovalReceipt({ ...receipt, ...patch })).toThrow(/protected/u);
+      ],
+      /approved npm-release environment/u,
+    ],
+    ["wrong event", { GITHUB_EVENT_NAME: "push" }, [approved()], /workflow_dispatch/u],
+    [
+      "wrong workflow",
+      { GITHUB_WORKFLOW_REF: `${repository}/${workflow}@refs/heads/other` },
+      [approved()],
+      /workflow ref/u,
+    ],
+    [
+      "wrong repository",
+      { GITHUB_REPOSITORY: "other/repository" },
+      [approved()],
+      /repository mismatch/u,
+    ],
+  ])("creates receipts only with valid authority: %s", (_label, override, approvals, message) => {
+    const create = () =>
+      createReleaseApprovalReceipt({ ...env, ...override }, (path: string) => {
+        expect(path).toBe("actions/runs/10/approvals");
+        return approvals;
+      });
+    if (message) {
+      expect(create).toThrow(message);
+    } else {
+      expect(create()).toEqual(fixture().receipt);
     }
   });
 
-  it.each([
-    ["parentRunId", "01", /parentRunId/u],
-    ["parentRunAttempt", "0", /parentRunAttempt/u],
-    ["releaseTag", "v2026.09.24", /Release tag/u],
-    ["targetSha", "invalid", /Target SHA/u],
-    ["npmDistTag", "default", /dist-tag/u],
-    ["approver", "x".repeat(8 * 1024), /8 KiB/u],
-  ] as const)("rejects malformed or oversized %s", (key, value, message) => {
-    expect(() => validateReleaseApprovalReceipt({ ...fixture().receipt, [key]: value })).toThrow(
-      message,
-    );
+  const ref = "release-publish/aaaaaaaaaaaa-42";
+  const protectedTooling = { toolingRef: ref, toolingFullRef: `refs/tags/${ref}` };
+  it.each<[Record<string, unknown>, RegExp | string | undefined]>([
+    [{ releaseTag: "v2026.9.24-alpha.1" }, "Alpha releases are retired;"],
+    [{ npmDistTag: "alpha" }, "Alpha releases are retired;"],
+    [
+      {
+        toolingRef: "tideclaw/alpha/2026-09-24-1200Z",
+        toolingFullRef: "refs/heads/tideclaw/alpha/2026-09-24-1200Z",
+      },
+      "Alpha releases are retired;",
+    ],
+    [{ parentRunId: "01" }, /parentRunId/u],
+    [{ parentRunAttempt: "0" }, /parentRunAttempt/u],
+    [{ releaseTag: "v2026.09.24" }, /Release tag/u],
+    [{ targetSha: "invalid" }, /Target SHA/u],
+    [{ npmDistTag: "default" }, /dist-tag/u],
+    [{ approver: "x".repeat(8 * 1024) }, /8 KiB/u],
+    [protectedTooling, undefined],
+    [{ ...protectedTooling, toolingFullRef: `refs/heads/${ref}` }, /protected/u],
+    [{ ...protectedTooling, toolingSha: "c".repeat(40) }, /protected/u],
+  ])("validates receipt fields and protected tooling (%#)", (override, message) => {
+    const receipt = { ...fixture().receipt, ...override };
+    if (message) {
+      expect(() => validateReleaseApprovalReceipt(receipt)).toThrow(message);
+    } else {
+      expect(validateReleaseApprovalReceipt(receipt)).toBe(receipt);
+    }
   });
 
-  it("verifies approval while the parent publish job is still running", () => {
-    const input = fixture();
-    expect(verifyReleaseApprovalReceipt(input)).toBe(input.receipt);
-  });
-
-  it("rejects extra receipt keys", () => {
-    const input = fixture();
-    expect(() =>
-      verifyReleaseApprovalReceipt({ ...input, receipt: { ...input.receipt, extra: true } }),
-    ).toThrow(/fields/u);
-  });
-
-  it.each([
-    ["parentRunId", "11"],
-    ["parentRunAttempt", "3"],
-    ["toolingSha", "c".repeat(40)],
-    ["releaseTag", "v2026.9.25-beta.1"],
-    ["targetSha", "d".repeat(40)],
-    ["npmDistTag", "latest"],
-  ] as const)("rejects a different expected %s", (key, value) => {
-    const input = fixture();
-    expect(() =>
-      verifyReleaseApprovalReceipt({ ...input, expected: { ...input.expected, [key]: value } }),
-    ).toThrow(new RegExp(`${key} does not match`, "u"));
-  });
-
-  it("rejects a tampered approver absent from approval history", () => {
-    const input = fixture();
-    input.receipt.approver = "someone-else";
-    expect(() => verifyReleaseApprovalReceipt(input)).toThrow(/approver is not in/u);
-  });
-
-  it.each([
+  it.each<[string, (input: ReturnType<typeof fixture>) => void, RegExp]>([
+    ...(
+      [
+        ["parentRunId", "11"],
+        ["parentRunAttempt", "3"],
+        ["toolingSha", "c".repeat(40)],
+        ["releaseTag", "v2026.9.25-beta.1"],
+        ["targetSha", "d".repeat(40)],
+        ["npmDistTag", "latest"],
+      ] as const
+    ).map(([key, value]): [string, (input: ReturnType<typeof fixture>) => void, RegExp] => [
+      `different expected ${key}`,
+      (input) => {
+        input.expected[key] = value;
+      },
+      new RegExp(`${key} does not match`, "u"),
+    ]),
+    [
+      "extra fields",
+      (input) => {
+        Object.assign(input.receipt, { extra: true });
+      },
+      /fields/u,
+    ],
+    [
+      "tampered approver",
+      (input) => {
+        input.receipt.approver = "someone-else";
+      },
+      /approver is not in/u,
+    ],
     [
       "another run",
       (input: ReturnType<typeof fixture>) => {
@@ -259,7 +260,7 @@ describe("release approval receipt", () => {
       },
       /job identity/u,
     ],
-  ] as const)("rejects %s", (_name, change, message) => {
+  ])("rejects %s", (_name, change, message) => {
     const input = fixture();
     change(input);
     expect(() => verifyReleaseApprovalReceipt(input)).toThrow(message);
@@ -381,10 +382,8 @@ describe("release approval artifact download", () => {
   );
 });
 
-describe.each([
-  ["ClawHub", "openclaw-clawhub-parent-authorization-v2-10-2-30-1", false],
-  ["npm", "openclaw-release-approval-v1-10-2", true],
-])("%s parent authorization wait", (_target, name, requireInProgress) => {
+describe("parent authorization wait", () => {
+  const name = "openclaw-release-approval-v1-10-2";
   const listing = `actions/runs/10/artifacts?name=${name}&per_page=100`;
   const authorization = {
     name,
@@ -395,7 +394,7 @@ describe.each([
     parentRunId: "10",
     parentRunAttempt: "2",
     expectedArtifactName: name,
-    requireInProgress,
+    requireInProgress: true,
     toolingSha: "a".repeat(40),
     sleep: async () => {},
   };
@@ -417,54 +416,67 @@ describe.each([
     };
   }
 
-  it("blocks until the expected authorization appears, then proceeds", async () => {
-    const runGhJson = api([[], [], [authorization]]);
-    await expect(awaitParentAuthorization({ ...params, runGhJson })).resolves.toEqual(
-      authorization,
-    );
-  });
-
-  it.each(["success", "cancelled", "failure"])(
-    "requires a live npm parent even when its artifact exists (%s)",
-    async (conclusion) => {
-      const runGhJson = api([[authorization]], { status: "completed", conclusion });
-      const result = awaitParentAuthorization({ ...params, runGhJson });
-      if (requireInProgress) {
-        await expect(result).rejects.toThrow(/completed\//u);
-      } else {
-        await expect(result).resolves.toEqual(authorization);
-      }
+  const completed = { status: "completed", conclusion: "failure" };
+  type AuthorizationCase = {
+    name: string;
+    pages: unknown[][];
+    parent?: typeof completed;
+    options?: { requireInProgress?: boolean; deadlineMs?: number };
+    error?: RegExp;
+  };
+  it.each<AuthorizationCase>([
+    { name: "waits for authorization", pages: [[], [], [authorization]] },
+    {
+      name: "allows detached authorization",
+      pages: [[authorization]],
+      parent: completed,
+      options: { requireInProgress: false },
     },
-  );
-
-  it("fails when the parent leaves in_progress without authorizing", async () => {
-    const runGhJson = api([[]], { status: "completed", conclusion: "failure" });
-    await expect(awaitParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
-      /completed\/failure without authorizing/u,
-    );
-  });
-
-  it("fails at the deadline while the parent is still running", async () => {
-    const runGhJson = api([[]]);
-    await expect(awaitParentAuthorization({ ...params, runGhJson, deadlineMs: 0 })).rejects.toThrow(
-      /did not appear before the deadline/u,
-    );
-  });
-
-  it.each([
-    ["another parent", { ...authorization, workflow_run: { id: 11, head_sha: "a".repeat(40) } }],
-    ["other tooling", { ...authorization, workflow_run: { id: 10, head_sha: "b".repeat(40) } }],
-    ["expired", { ...authorization, expired: true }],
-  ])("rejects an authorization from %s", async (_label, artifact) => {
-    const runGhJson = api([[artifact]]);
-    await expect(awaitParentAuthorization({ ...params, runGhJson })).rejects.toThrow(
-      /does not belong to the parent/u,
-    );
-  });
-
-  it("rejects an ambiguous authorization listing", async () => {
-    const runGhJson = api([[authorization, authorization]]);
-    await expect(awaitParentAuthorization({ ...params, runGhJson })).rejects.toThrow(/ambiguous/u);
+    {
+      name: "requires a live parent",
+      pages: [[authorization]],
+      parent: completed,
+      error: /completed\//u,
+    },
+    {
+      name: "parent exits without authorization",
+      pages: [[]],
+      parent: completed,
+      error: /completed\/failure without authorizing/u,
+    },
+    {
+      name: "deadline expires",
+      pages: [[]],
+      options: { deadlineMs: 0 },
+      error: /did not appear before the deadline/u,
+    },
+    {
+      name: "wrong parent",
+      pages: [[{ ...authorization, workflow_run: { id: 11, head_sha: sha } }]],
+      error: /does not belong to the parent/u,
+    },
+    {
+      name: "wrong tooling",
+      pages: [[{ ...authorization, workflow_run: { id: 10, head_sha: targetSha } }]],
+      error: /does not belong to the parent/u,
+    },
+    {
+      name: "expired",
+      pages: [[{ ...authorization, expired: true }]],
+      error: /does not belong to the parent/u,
+    },
+    { name: "ambiguous", pages: [[authorization, authorization]], error: /ambiguous/u },
+  ])("$name", async ({ pages, parent, options, error }) => {
+    const result = awaitParentAuthorization({
+      ...params,
+      ...options,
+      runGhJson: api(pages, parent),
+    });
+    if (error) {
+      await expect(result).rejects.toThrow(error);
+    } else {
+      await expect(result).resolves.toEqual(authorization);
+    }
   });
 });
 
@@ -472,7 +484,6 @@ describe("parent authorization CLI", () => {
   it.each([
     ["wait-npm-authorization", "in_progress", null, 0, "openclaw-release-approval-v1-10-2"],
     ["wait-npm-authorization", "completed", "success", 1, "openclaw-release-approval-v1-10-2"],
-    ["wait-npm-authorization", "completed", "cancelled", 1, "openclaw-release-approval-v1-10-2"],
     [
       "wait-clawhub-authorization",
       "completed",

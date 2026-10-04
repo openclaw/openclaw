@@ -13,9 +13,6 @@ export {
   resolveMergedAccountConfig,
 } from "../../config/channel-account-config.js";
 
-/**
- * Creates reusable account listing, default selection, and merged config helpers for a channel.
- */
 export function createAccountListHelpers<
   TConfig extends Record<string, unknown> = Record<string, unknown>,
 >(
@@ -120,9 +117,6 @@ export function createAccountListHelpers<
   };
 }
 
-/**
- * Checks whether a config/env value should count as an account being configured.
- */
 export function hasConfiguredAccountValue(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
@@ -130,27 +124,19 @@ export function hasConfiguredAccountValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
-/**
- * Combines configured, additional, implicit, and fallback account ids into stable order.
- */
 export function listCombinedAccountIds(params: {
   configuredAccountIds: Iterable<string>;
   additionalAccountIds?: Iterable<string>;
   implicitAccountId?: string | undefined;
   fallbackAccountIdWhenEmpty?: string | undefined;
 }): string[] {
-  const ids = new Set<string>();
-  for (const accountIds of [
-    params.configuredAccountIds,
-    params.additionalAccountIds ?? [],
-    params.implicitAccountId ? [params.implicitAccountId] : [],
-  ]) {
-    for (const accountId of accountIds) {
-      if (accountId) {
-        ids.add(accountId);
-      }
-    }
-  }
+  const ids = new Set(
+    [
+      ...params.configuredAccountIds,
+      ...(params.additionalAccountIds ?? []),
+      ...(params.implicitAccountId ? [params.implicitAccountId] : []),
+    ].filter(Boolean),
+  );
 
   if (ids.size === 0 && params.fallbackAccountIdWhenEmpty) {
     return [params.fallbackAccountIdWhenEmpty];
@@ -158,9 +144,6 @@ export function listCombinedAccountIds(params: {
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
-/**
- * Resolves the default account id from a listed account set and optional configured preference.
- */
 export function resolveListedDefaultAccountId(params: {
   accountIds: readonly string[];
   configuredDefaultAccountId?: string | undefined;
@@ -192,9 +175,6 @@ type AccountSnapshotInput = {
   name?: string | null | undefined;
 };
 
-/**
- * Builds a safe account snapshot for status/setup surfaces.
- */
 export function describeAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;
@@ -209,9 +189,6 @@ export function describeAccountSnapshot(params: {
   };
 }
 
-/**
- * Builds a webhook-mode account snapshot with the standard mode field.
- */
 export function describeWebhookAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;

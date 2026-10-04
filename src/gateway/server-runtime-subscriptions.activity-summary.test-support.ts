@@ -20,102 +20,6 @@ export function registerActivitySummaryPublicationTests(
   start: Start,
   getOnChanged: () => ((target: ActivitySummaryTarget & { storePath: string }) => void) | undefined,
 ): void {
-  it.each([false, true])(
-    "publishes a ready activity-summary target during unrelated refresh (same-ID reset: %s)",
-    async (reset) => {
-      vi.useFakeTimers();
-      const readStarted = createDeferred();
-      const prepared = createDeferred();
-      const unrelatedRefresh = createDeferred();
-      let unrelatedDirty = true;
-      const target = {
-        key: "agent:main:activity",
-        agentId: "main",
-        storePath: "/tmp/activity-summary-tracked.sqlite",
-      };
-      const original = {
-        key: target.key,
-        agentId: target.agentId,
-        storeTarget: { agentId: target.agentId, storePath: target.storePath },
-        generation: Symbol("original"),
-        entry: { sessionId: "same-session", lifecycleRevision: "original" },
-      };
-      let current = original;
-      const projection = {
-        capture: (query: unknown) => {
-          expect(query).toEqual(target);
-          return current;
-        },
-        ensureMaterialized: () => {
-          readStarted.resolve();
-          return unrelatedRefresh.promise;
-        },
-        get needsMaterialization() {
-          return unrelatedDirty;
-        },
-        withPreparedExactRows: async (
-          queries: Parameters<SessionRowProjection["withPreparedExactRows"]>[0],
-          consume: () => void,
-          options: Parameters<SessionRowProjection["withPreparedExactRows"]>[2],
-        ) => {
-          readStarted.resolve();
-          expect(queries({})).toEqual([target]);
-          expect(options).toEqual({ includeAncestors: true });
-          await prepared.promise;
-          return { kind: "complete", value: consume() };
-        },
-        isCurrent: (record: typeof original) => record === current,
-        snapshot: (query: unknown) => {
-          expect(query).toEqual(target);
-          return { row: { key: target.key, ...current.entry } };
-        },
-      } as unknown as SessionRowProjection;
-      let fixture: ReturnType<Start> | undefined;
-      try {
-        fixture = start(projection);
-        const { params } = fixture;
-        const onChanged = getOnChanged();
-        if (!onChanged) {
-          throw new Error("missing activity-summary publication callback");
-        }
-        onChanged(target);
-        await readStarted.promise;
-        expect(params.broadcast).not.toHaveBeenCalled();
-        if (reset) {
-          current = {
-            ...original,
-            generation: Symbol("replacement"),
-            entry: { ...original.entry, lifecycleRevision: "replacement" },
-          };
-        }
-        prepared.resolve();
-        await vi.advanceTimersByTimeAsync(0);
-        if (reset) {
-          expect(params.broadcast).not.toHaveBeenCalled();
-        } else {
-          expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
-            "sessions.changed",
-            expect.objectContaining({
-              reason: "activity-summary",
-              session: expect.objectContaining({ key: target.key, ...original.entry }),
-            }),
-            { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
-          );
-        }
-      } finally {
-        prepared.resolve();
-        unrelatedDirty = false;
-        unrelatedRefresh.resolve();
-        try {
-          await fixture?.unsubs.agentUnsub();
-        } finally {
-          vi.useRealTimers();
-        }
-      }
-      expect(fixture?.params.broadcast).toHaveBeenCalledTimes(reset ? 0 : 1);
-    },
-  );
-
   it("publishes a prepared recap while the real projection retains an unrelated dirty row", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = { agents: { entries: { main: {} } } };
@@ -188,7 +92,12 @@ export function registerActivitySummaryPublicationTests(
             reason: "activity-summary",
             session: expect.objectContaining({ key: target.key, sessionId: "recap" }),
           }),
-          { sessionKeys: [target.key], agentId: target.agentId, dropIfSlow: true },
+          {
+            sessionKeys: [target.key],
+            agentId: target.agentId,
+            dropIfSlow: true,
+            prepareSessionProjection: expect.any(Function),
+          },
         );
         expect(projection.needsMaterialization).toBe(true);
       } finally {

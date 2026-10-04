@@ -1,10 +1,13 @@
-// Android Version script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { validateAndroidStorePlan } from "./android-store-version.ts";
 import { extractChangelogSection } from "./mobile-changelog.ts";
-import { parsePinnedReleaseVersion, parseReleaseVersion } from "./release-version.mjs";
+import {
+  normalizeGatewayVersionToPinnedMobileVersion,
+  readRootPackageVersion,
+} from "./mobile-version.ts";
+import { parsePinnedReleaseVersion } from "./release-version.mjs";
 
 const ANDROID_VERSION_FILE = "apps/android/version.json";
 const ANDROID_CHANGELOG_FILE = "apps/android/CHANGELOG.md";
@@ -29,10 +32,6 @@ type ResolvedAndroidVersion = {
 
 type SyncAndroidVersioningMode = "check" | "write";
 
-function normalizeTrailingNewline(value: string): string {
-  return value.endsWith("\n") ? value : `${value}\n`;
-}
-
 export function normalizePinnedAndroidVersion(rawVersion: string): string {
   const trimmed = rawVersion.trim();
   if (!trimmed) {
@@ -47,22 +46,6 @@ export function normalizePinnedAndroidVersion(rawVersion: string): string {
   }
 
   return pinnedVersion;
-}
-
-export function normalizeGatewayVersionToPinnedAndroidVersion(rawVersion: string): string {
-  const trimmed = rawVersion.trim().replace(/^v/u, "");
-  if (!trimmed) {
-    throw new Error("Missing root package.json version.");
-  }
-
-  const parsed = parseReleaseVersion(trimmed);
-  if (!parsed) {
-    throw new Error(
-      `Invalid gateway version '${rawVersion}'. Expected YYYY.M.PATCH, YYYY.M.PATCH-alpha.N, YYYY.M.PATCH-beta.N, or YYYY.M.PATCH-N.`,
-    );
-  }
-
-  return parsed.baseVersion;
 }
 
 export function canonicalAndroidVersionCode(version: string): number {
@@ -110,33 +93,18 @@ export function normalizeAndroidVersionCode(rawVersionCode: number, version: str
   return rawVersionCode;
 }
 
-function readRootPackageVersion(rootDir = path.resolve(".")): string {
-  const packageJsonPath = path.join(rootDir, "package.json");
-  const parsed = JSON.parse(readFileSync(packageJsonPath, "utf8")) as { version?: unknown };
-  const version = typeof parsed.version === "string" ? parsed.version.trim() : "";
-  if (!version) {
-    throw new Error(`Missing package.json version in ${packageJsonPath}.`);
-  }
-  return version;
-}
-
 export function resolveGatewayVersionForAndroidRelease(rootDir = path.resolve(".")): {
   packageVersion: string;
   pinnedAndroidVersion: string;
   versionCode: number;
 } {
   const packageVersion = readRootPackageVersion(rootDir);
-  const pinnedAndroidVersion = normalizeGatewayVersionToPinnedAndroidVersion(packageVersion);
+  const pinnedAndroidVersion = normalizeGatewayVersionToPinnedMobileVersion(packageVersion);
   return {
     packageVersion,
     pinnedAndroidVersion,
     versionCode: canonicalAndroidVersionCode(pinnedAndroidVersion),
   };
-}
-
-function readAndroidVersionManifest(rootDir = path.resolve(".")): AndroidVersionManifest {
-  const versionFilePath = path.join(rootDir, ANDROID_VERSION_FILE);
-  return JSON.parse(readFileSync(versionFilePath, "utf8")) as AndroidVersionManifest;
 }
 
 export function writeAndroidVersionManifest(
@@ -164,7 +132,7 @@ export function resolveAndroidVersion(rootDir = path.resolve(".")): ResolvedAndr
   const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);
   const versionPropertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
   const releaseNotesPath = path.join(rootDir, ANDROID_RELEASE_NOTES_FILE);
-  const manifest = readAndroidVersionManifest(rootDir);
+  const manifest = JSON.parse(readFileSync(versionFilePath, "utf8")) as AndroidVersionManifest;
   const canonicalVersion = normalizePinnedAndroidVersion(manifest.version ?? "");
   const versionCode = normalizeAndroidVersionCode(manifest.versionCode, canonicalVersion);
 
@@ -230,26 +198,16 @@ export function renderAndroidReleaseNotes(
   version: Pick<ResolvedAndroidVersion, "canonicalVersion">,
   changelogContent: string,
 ): string {
-  const notes = findAndroidReleaseNotes(version.canonicalVersion, changelogContent);
-  if (notes) {
-    return notes;
-  }
-  throw new Error(
-    `Unable to find Android changelog notes for ${version.canonicalVersion}. Add a matching section to ${ANDROID_CHANGELOG_FILE}.`,
-  );
-}
-
-function findAndroidReleaseNotes(version: string, changelogContent: string): string | undefined {
-  const candidateHeadings = [version, "Unreleased"];
-
-  for (const heading of candidateHeadings) {
+  for (const heading of [version.canonicalVersion, "Unreleased"]) {
     const body = extractChangelogSection(changelogContent, heading);
     if (body) {
       return `${body}\n`;
     }
   }
 
-  return undefined;
+  throw new Error(
+    `Unable to find Android changelog notes for ${version.canonicalVersion}. Add a matching section to ${ANDROID_CHANGELOG_FILE}.`,
+  );
 }
 
 function syncFile(params: {
@@ -258,7 +216,9 @@ function syncFile(params: {
   nextContent: string;
   label: string;
 }): boolean {
-  const nextContent = normalizeTrailingNewline(params.nextContent);
+  const nextContent = params.nextContent.endsWith("\n")
+    ? params.nextContent
+    : `${params.nextContent}\n`;
   const currentContent = readFileSync(params.path, "utf8");
   if (currentContent === nextContent) {
     return false;
@@ -286,26 +246,21 @@ export function syncAndroidVersioning(params?: {
   const nextReleaseNotes = renderAndroidReleaseNotes(version, changelogContent);
   const updatedPaths: string[] = [];
 
-  if (
-    syncFile({
-      mode,
+  for (const file of [
+    {
       path: version.versionPropertiesPath,
       nextContent: nextVersionProperties,
       label: "Android version properties",
-    })
-  ) {
-    updatedPaths.push(version.versionPropertiesPath);
-  }
-
-  if (
-    syncFile({
-      mode,
+    },
+    {
       path: version.releaseNotesPath,
       nextContent: nextReleaseNotes,
       label: "Android release notes",
-    })
-  ) {
-    updatedPaths.push(version.releaseNotesPath);
+    },
+  ]) {
+    if (syncFile({ mode, ...file })) {
+      updatedPaths.push(file.path);
+    }
   }
 
   return { updatedPaths };

@@ -7,6 +7,14 @@ import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { transcriptEventJsonSql } from "../config/sessions/transcript-payload.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
+import {
+  consumeUpdatePostInstallDoctorResult,
+  createUpdatePostInstallDoctorResultPath,
+  UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
+} from "../infra/update-doctor-result.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -31,6 +39,7 @@ function seedHistoricalSharedDatabase(pathname: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
   try {
+    database.exec("BEGIN;");
     // Exact schema and metadata written by v2026.7.35, before deletion history existed.
     database.exec(
       fs.readFileSync(
@@ -42,6 +51,7 @@ function seedHistoricalSharedDatabase(pathname: string): void {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'global', 1, NULL, NULL, 1, 1)")
       .run();
+    database.exec("COMMIT;");
   } finally {
     database.close();
   }
@@ -51,6 +61,7 @@ function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
   fs.mkdirSync(path.dirname(pathname), { recursive: true });
   const database = new DatabaseSync(pathname);
   try {
+    database.exec("BEGIN;");
     // Exact schema bytes from v2026.7.35, whose agent databases used user_version=1.
     database.exec(
       fs.readFileSync(
@@ -62,6 +73,7 @@ function seedHistoricalAgentDatabase(pathname: string, agentId: string): void {
     database
       .prepare("INSERT INTO schema_meta VALUES ('primary', 'agent', 1, ?, NULL, 1, 1)")
       .run(agentId);
+    database.exec("COMMIT;");
   } finally {
     database.close();
   }
@@ -84,7 +96,10 @@ it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
     const stateDir = path.join(root, "state");
     const configPath = path.join(stateDir, "openclaw.json");
     const sharedDatabasePath = path.join(stateDir, "state", "openclaw.sqlite");
-    const sessionDir = path.join(root, "custom-sessions");
+    const sessionDir = path.join(
+      sharedState === "lost-journal" ? stateDir : root,
+      "custom-sessions",
+    );
     const customDatabasePath = path.join(sessionDir, "openclaw-agent.sqlite");
     const agentIds = ["main", "worker"];
     const agentDatabasePaths = agentIds.map((agentId) =>
@@ -112,6 +127,48 @@ it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
       "OPENCLAW_GATEWAY_PASSWORD",
     ]) {
       delete env[key];
+    }
+    const doctorResultOptions = { tmpdir: () => stateDir };
+    let doctorResultPath: string | undefined;
+    if (sharedState === "lost-journal") {
+      fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+      // These helpers are unchanged from v2026.9.8's candidate Doctor driver.
+      Object.assign(
+        env,
+        buildUpdateRehearsalPathEnv(stateDir),
+        buildUpdateDoctorEnv({
+          allowGatewayServiceRepair: false,
+          allowGatewayActivation: false,
+          serviceRepairPolicy: "external",
+          deferConfiguredPluginInstallRepair: true,
+        }),
+        { OPENCLAW_DEV_SOURCE_ROOT: runtimeRoot },
+      );
+      for (const key of [
+        ...SUPERVISOR_HINT_ENV_VARS,
+        "OPENCLAW_CONTROL_PLANE_UPDATE_SENTINEL_META",
+        "OPENCLAW_UPDATE_RUN_ID",
+        "OPENCLAW_UPDATE_RUN_HANDOFF",
+        "OPENCLAW_UPDATE_POST_CORE",
+        "OPENCLAW_UPDATE_POST_CORE_CHANNEL",
+        "OPENCLAW_UPDATE_POST_CORE_RESULT_PATH",
+        "OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH",
+        "OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS",
+        "OPENCLAW_UPDATE_POST_CORE_REQUESTED_CHANNEL",
+        "OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH",
+        "OPENCLAW_BUNDLED_PLUGINS_DIR",
+        "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+        "OPENCLAW_GATEWAY_SERVICE_PID",
+        "OPENCLAW_GATEWAY_PORT",
+        "OPENCLAW_COMPATIBILITY_HOST_VERSION",
+        "OPENCLAW_PROFILE",
+        "OPENCLAW_DIAGNOSTICS_TIMELINE_PATH",
+        "OPENCLAW_TEST_MINIMAL_GATEWAY",
+      ]) {
+        delete env[key];
+      }
+      doctorResultPath = createUpdatePostInstallDoctorResultPath(doctorResultOptions);
+      env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV] = doctorResultPath;
     }
     if (sharedState === "historical-v1") {
       seedHistoricalSharedDatabase(sharedDatabasePath);
@@ -179,6 +236,7 @@ it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
       fs.writeFileSync(
         configPath,
         JSON.stringify({
+          ...(sharedState === "lost-journal" ? { plugins: { enabled: false } } : {}),
           agents:
             sharedState === "lost-journal"
               ? { ownership: "explicit", entries: { main: {}, worker: {} } }
@@ -188,14 +246,29 @@ it.concurrent.for(["current", "historical-v1", "lost-journal"] as const)(
         }),
       );
       const agentDatabaseBytes = databasePaths.map((pathname) => fs.readFileSync(pathname));
-      const args = ["doctor", "--fix", "--non-interactive", "--yes", "--no-workspace-suggestions"];
+      const args = [
+        "doctor",
+        "--fix",
+        "--non-interactive",
+        ...(sharedState === "lost-journal" ? [] : ["--yes"]),
+        "--no-workspace-suggestions",
+      ];
       const first = await fixtures.track(
         runBuiltRuntime(runtimeRoot, env, args, CHILD_TIMEOUT_MS, { onTestFinished }),
       );
       const output = stripVTControlCharacters(`${first.stdout}\n${first.stderr}`);
       if (sharedState === "lost-journal") {
-        expect(first.code, output).toBe(1);
-        expect(output).toContain("agent-deletion-journal");
+        expect(first.code, output).toBe(0);
+        expect(doctorResultPath).toBeDefined();
+        const result = await consumeUpdatePostInstallDoctorResult(
+          doctorResultPath!,
+          doctorResultOptions,
+        );
+        expect(result, output).toMatchObject({
+          status: "ok",
+          warnings: expect.arrayContaining([expect.stringContaining("held back")]),
+        });
+        expect(output).toContain("Agent deletion journal reconstructed");
         expect(output).toContain("held back");
         expect(output).toContain("openclaw agents add");
         expect(output).toContain("--non-interactive");

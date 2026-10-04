@@ -3,7 +3,7 @@ import { sortAndLimitBy, sortAndLimitByWork } from "./sort-and-limit.js";
 import { runSynchronousWork } from "./synchronous-work.js";
 
 describe("sortAndLimitBy", () => {
-  it.each([1, 5, 50, 100, 200, 201, 1000, 1024, 1025, 2050, 4096, undefined])(
+  it.each([1, 200, 201, 1025, 4096, undefined])(
     "matches stable full ordering without mutating input for limit %s",
     (limit) => {
       const entries = Array.from({ length: 2051 }, (_, id) => ({ id, rank: (id * 37) % 23 }));

@@ -332,9 +332,9 @@ describe("runCliProcessChild", () => {
     expect(child?.stderr.closed).toBe(true);
   });
 
-  it.each(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
+  it.for(["launcher-alive", "launcher-exited", "finite", "identity-unavailable"])(
     "requires inherited output EOF before releasing a detached handoff (%s)",
-    async (shape) => {
+    async (shape, { signal }) => {
       const launcherShape = shape === "identity-unavailable" ? "launcher-alive" : shape;
       const fixture = createFixtureLifetime();
       const root = fixture.createTempDir("cli-inherited-output-");
@@ -364,7 +364,7 @@ describe("runCliProcessChild", () => {
               child = runningChild;
               runningChild.stdin.end();
               identityReady = (async () => {
-                descendantPid = await waitForPidFile(receipt, 5_000);
+                descendantPid = await waitForPidFile(receipt, signal);
                 descendantStart = getFileLockProcessStartTime(descendantPid);
                 if (descendantStart === null) {
                   throw identityFailure;

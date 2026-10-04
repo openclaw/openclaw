@@ -8,6 +8,7 @@ import {
   assertClawHubExternalInstallContract,
 } from "../clawhub-artifact-assertions.mjs";
 import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
+import { readJson } from "../fixtures/common.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
@@ -30,7 +31,6 @@ const EXPECT_FAILURE_OUTPUT_MAX_BYTES = readPositiveIntEnvWithEmptyFallback(
   1024 * 1024,
 );
 
-const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const normalizedPath = (filePath) => filePath.replaceAll("\\", "/");
 
@@ -350,24 +350,13 @@ function assertExpectedDiagnostics(surfaceMode, errorMessages) {
   const optionalErrorMessages = new Set([
     "agent event subscription registration requires id and handle",
   ]);
-  const frozenTargetErrorMessages = new Set();
-  if (process.env.OPENCLAW_FROZEN_PLUGIN_PRERELEASE_FIXTURE_DIALECT === "legacy") {
-    frozenTargetErrorMessages.add(
-      "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider",
-    );
-  }
   const allowedErrorMessages = new Set([...expectedErrorMessages, ...optionalErrorMessages]);
   if (!INVALID_PROBE_DIAGNOSTIC_SURFACE_MODES.has(surfaceMode)) {
-    const unexpected = [...errorMessages].filter(
-      (message) => !frozenTargetErrorMessages.has(message),
-    );
+    const unexpected = [...errorMessages];
     if (unexpected.length > 0) {
       throw new Error(`unexpected kitchen-sink diagnostic errors: ${unexpected.join(", ")}`);
     }
     return;
-  }
-  for (const message of frozenTargetErrorMessages) {
-    allowedErrorMessages.add(message);
   }
   for (const message of errorMessages) {
     if (!allowedErrorMessages.has(message)) {

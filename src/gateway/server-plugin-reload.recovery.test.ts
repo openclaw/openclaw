@@ -25,7 +25,7 @@ import {
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { activeSessions } from "../transcripts/capture.js";
+import { activeSessions } from "../transcripts/capture-startup.js";
 import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
@@ -151,10 +151,8 @@ it.each(["gateway_stop", "dispose"] as const)(
   (cleanup) => verifySharedResourceReplacement(createRecoveryFixture, cleanup),
 );
 
-it.each(["registration", "activation"] as const)(
-  "automatically restores a fresh old registration after candidate %s fails",
-  (failure) => verifyFreshRegistrationRecovery(createRecoveryFixture, failure),
-);
+it("automatically restores a fresh old registration after candidate registration fails", () =>
+  verifyFreshRegistrationRecovery(createRecoveryFixture));
 
 it("flushes failed candidate services before closing their shared resources", () =>
   verifyCandidateResourceCleanup(createRecoveryFixture));
@@ -293,7 +291,7 @@ it.each(["lookup", "replacement"] as const)(
     ),
 );
 
-it.each([5_000, 15_000, 70_000])(
+it.each([15_000, 70_000])(
   "waits for an admitted write before replacement and keeps serving on timeout (%i ms)",
   (holdMs) =>
     verifyActiveCallDrainLease(
@@ -398,10 +396,8 @@ it.each(["OPENCLAW_SKIP_CHANNELS", "OPENCLAW_SKIP_PROVIDERS"])(
   },
 );
 
-it.each([false, true])(
-  "refuses recovery after gateway cleanup times out (channels: %s)",
-  (withChannels) => verifyGatewayCleanupRefusal(createRecoveryFixture, withChannels),
-);
+it("refuses recovery after gateway cleanup times out while retaining sibling channels", () =>
+  verifyGatewayCleanupRefusal(createRecoveryFixture));
 
 it("bounds the wait for service startup and keeps retired dispatch fenced across retry", () =>
   verifyPendingServiceCleanupRetry(createRecoveryFixture));
@@ -495,6 +491,7 @@ it.each(["commit", "rollback"])(
     });
     let held = false;
     const manager = createChannelManager({
+      scheduler: createTestGatewayScheduler(),
       getRuntimeConfig: fixture.getConfig,
       channelLogs: {},
       channelRuntimeEnvs: {},

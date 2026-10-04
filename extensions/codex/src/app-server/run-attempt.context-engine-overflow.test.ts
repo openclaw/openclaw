@@ -129,16 +129,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                 : {}),
             },
           });
-          const compact = vi.fn(async () => ({
-            ok: true,
-            compacted: true,
-            result: {
-              summary: "summary",
-              firstKeptEntryId: "entry-1",
-              tokensBefore: 10,
-              sessionId: "session-1-compacted",
-            },
-          }));
+          const compact = vi.fn<ContextEngine["compact"]>();
           const assemble = vi.fn(
             async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
               messages: [
@@ -211,6 +202,8 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             },
             { persistedThreads: ["thread-old"] },
           );
+          // Binding ownership is independent of real worker preparation time.
+          vi.useFakeTimers({ toFake: ["Date"] });
           const run = runCodexAppServerAttempt(params, {
             bindingStore: { ...bindingStore, mutate: observedMutate },
           });
@@ -277,6 +270,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
             expect(bornBindings).toHaveLength(1);
             expect(bornBindings[0]).toMatchObject({
               threadId: "thread-fresh",
+              clientId: harness.client.getInstanceId(),
               contextEngine: {
                 engineId: "lossless-claw",
                 policyFingerprint: contextEnginePolicyFingerprint,
@@ -290,12 +284,14 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
                     {
                       kind: "patch",
                       threadId: "thread-fresh",
+                      clientId: harness.client.getInstanceId(),
                       patch: { historyCoveredThrough: expect.any(String) },
                     },
                   ],
             );
             const savedBinding = bindingStore.read(identity);
             expect(savedBinding?.threadId).toBe("thread-fresh");
+            expect(savedBinding?.clientId).toBe(harness.client.getInstanceId());
             expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
             expect(savedBinding?.contextEngine?.projection).toBeUndefined();
           } finally {
@@ -458,11 +454,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   it("preserves a newer context-engine binding when a stale resumed thread overflows", async () => {
     const { sessionFile, workspaceDir, params } = createOverflowFixture();
     await writeCodexAppServerBinding(sessionFile, bootstrapBinding(workspaceDir));
-    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
-      ok: true,
-      compacted: true,
-      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
-    }));
+    const compact = vi.fn<ContextEngine["compact"]>();
     const contextEngine = createProjectedContextEngine({ compact });
     const harness = createStartedThreadHarness(
       async (method, requestParams) => {
@@ -551,11 +543,7 @@ describe("runCodexAppServerAttempt context-engine overflow recovery", () => {
   it("fails first-turn Codex context overflow instead of falling back to OpenClaw compaction", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
-      ok: true,
-      compacted: true,
-      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
-    }));
+    const compact = vi.fn<ContextEngine["compact"]>();
     const assemble = vi.fn<ContextEngine["assemble"]>().mockResolvedValue({
       messages: [assistantMessage("large projected context", 10)],
       estimatedTokens: 100_000,

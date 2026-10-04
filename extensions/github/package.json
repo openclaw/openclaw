@@ -1,10 +1,12 @@
 {
   "name": "@openclaw/github",
-  "version": "2026.9.6",
+  "version": "2026.9.8",
   "private": true,
   "description": "OpenClaw GitHub link reader plugin",
   "type": "module",
-  "author": { "name": "OpenClaw" },
+  "author": {
+    "name": "OpenClaw"
+  },
   "homepage": "https://docs.openclaw.ai/plugins/github",
   "repository": {
     "type": "git",

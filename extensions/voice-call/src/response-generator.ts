@@ -14,8 +14,6 @@ import {
 } from "openclaw/plugin-sdk/model-session-runtime";
 import { isValidAgentHarnessSessionStoreEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
-  isRecord,
-  filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -26,9 +24,7 @@ import { resolveCallAgentId } from "./resolve-call-agent-id.js";
 import { resolveVoiceResponseModel } from "./response-model.js";
 
 type VoiceResponseParams = {
-  /** Voice call config */
   voiceConfig: VoiceCallConfig;
-  /** Core OpenClaw config */
   coreConfig: OpenClawConfig;
   /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
@@ -41,10 +37,9 @@ type VoiceResponseParams = {
   /** Caller ownership prepared by the call boundary. */
   senderIsOwner: boolean | undefined;
   /** Agent frozen on the call record. */
-  agentId?: string;
+  agentId: string;
   /** Audible call transcript, used only for bounded first-turn opening context. */
   transcript: Array<{ speaker: "user" | "bot"; text: string }>;
-  /** Latest user message */
   userMessage: string;
   /** Delivers completed reply blocks while post-turn work is still running. */
   onEarlyText?: (text: string) => Promise<boolean>;
@@ -62,26 +57,6 @@ type VoiceResponsePayload = {
   isError?: boolean;
   isReasoning?: boolean;
 };
-
-function readExplicitToolsAllow(value: unknown): string[] | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const allow = value.allow;
-  if (!Array.isArray(allow)) {
-    return undefined;
-  }
-
-  return filterStringEntries(allow);
-}
-
-function resolveVoiceAgentToolsAllow(
-  config: OpenClawConfig,
-  agentId: string,
-): string[] | undefined {
-  return readExplicitToolsAllow(resolveAgentConfig(config, agentId)?.tools);
-}
 
 const VOICE_SPOKEN_OUTPUT_CONTRACT = [
   "Output format requirements:",
@@ -204,30 +179,15 @@ function tryParseSpokenJson(text: string): string | null {
 
 function isLikelyMetaReasoningParagraph(paragraph: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(paragraph);
-  if (!lower) {
-    return false;
-  }
-
-  if (lower.startsWith("thinking process")) {
-    return true;
-  }
-  if (lower.startsWith("reasoning:") || lower.startsWith("analysis:")) {
-    return true;
-  }
-  if (
-    lower.startsWith("the user ") &&
-    (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))
-  ) {
-    return true;
-  }
-  if (
+  return (
+    lower.startsWith("thinking process") ||
+    lower.startsWith("reasoning:") ||
+    lower.startsWith("analysis:") ||
+    (lower.startsWith("the user ") &&
+      (lower.includes("i should") || lower.includes("i need to") || lower.includes("i will"))) ||
     lower.includes("this is a natural continuation of the conversation") ||
     lower.includes("keep the conversation flowing")
-  ) {
-    return true;
-  }
-
-  return false;
+  );
 }
 
 function sanitizePlainSpokenText(text: string): string | null {
@@ -319,15 +279,8 @@ export async function generateVoiceResponse(
     onEarlyText,
   } = params;
 
-  if (!coreConfig) {
-    return {
-      text: null,
-      deliveredEarly: false,
-      error: "Core config unavailable for voice response",
-    };
-  }
   const cfg = coreConfig;
-  const agentId = resolveCallAgentId({ agentId: params.agentId }, voiceConfig);
+  const agentId = resolveCallAgentId(params);
 
   const resolvedSessionKey = resolveVoiceCallSessionKey({
     config: { ...voiceConfig, agentId },
@@ -336,9 +289,8 @@ export async function generateVoiceResponse(
     explicitSessionKey: sessionKey,
     coreSession: coreConfig.session,
   });
-  const toolsAllow = resolveVoiceAgentToolsAllow(cfg, agentId);
+  const toolsAllow = resolveAgentConfig(cfg, agentId)?.tools?.allow;
 
-  // Resolve paths
   const storePath = agentRuntime.session.resolveStorePath(cfg.session?.store, { agentId });
   try {
     return await agentRuntime.session.runWithWorkAdmission(
@@ -347,17 +299,14 @@ export async function generateVoiceResponse(
         const agentDir = agentRuntime.resolveAgentDir(cfg, agentId);
         const workspaceDir = agentRuntime.resolveAgentWorkspaceDir(cfg, agentId);
 
-        // Ensure workspace exists
         await agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
-        // Load or create session entry
         const now = Date.now();
         const existingSessionEntry = agentRuntime.session.getSessionEntry({
           storePath,
           sessionKey: resolvedSessionKey,
         });
 
-        // Resolve model from config
         const { provider, model } = resolveVoiceResponseModel({ voiceConfig, agentRuntime });
         const configuredModel = resolveDefaultModelForAgent({ cfg, agentId });
 
@@ -417,10 +366,8 @@ export async function generateVoiceResponse(
           ? resolvePersistedSessionRuntimeId(sessionEntry)
           : undefined;
 
-        // Resolve thinking level
         const thinkLevel = agentRuntime.resolveThinkingDefault({ cfg, provider, model });
 
-        // Resolve agent identity for personalized prompt
         const identity = agentRuntime.resolveAgentIdentity(cfg, agentId);
         const agentName = identity?.name?.trim() || "assistant";
 
@@ -435,7 +382,6 @@ export async function generateVoiceResponse(
         ].join("\n\n");
         const prompt = buildVoiceTurnPrompt({ transcript, userMessage });
 
-        // Resolve timeout
         const timeoutMs =
           voiceConfig.responseTimeoutMs ?? agentRuntime.resolveAgentTimeoutMs({ cfg });
         const runId = `voice:${callId}:${Date.now()}`;
@@ -531,7 +477,7 @@ export async function generateVoiceResponse(
         });
 
         const text =
-          extractSpokenTextFromPayloads((result.payloads ?? []) as VoiceResponsePayload[]) ??
+          extractSpokenTextFromPayloads(result.payloads ?? []) ??
           lastFlushedText ??
           extractSpokenTextFromPayloads(blockReplyPayloads);
 

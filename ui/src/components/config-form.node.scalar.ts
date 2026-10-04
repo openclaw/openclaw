@@ -37,12 +37,7 @@ import {
   setControlValidity,
   type ScalarEditHint,
 } from "./config-form.scalar-edit.ts";
-import {
-  configFieldId,
-  hintForPath,
-  redactedPlaceholder,
-  schemaType,
-} from "./config-form.shared.ts";
+import { configFieldId, hintForPath, schemaType } from "./config-form.shared.ts";
 
 function coerceTextInputValue(
   value: string,
@@ -108,56 +103,62 @@ function numericConstraintMessage(value: number, schema: ConfigNodeRenderParams[
   return isSupportedConfigValueValid(schema, value) ? "" : t("configForm.invalidNumber");
 }
 
-type NumericInputState =
-  | { kind: "empty" }
-  | { kind: "invalid" }
-  | { kind: "value"; parsed: number; message: string };
+type NumericInputState = { parsed?: number; message: string };
 
 // Partial numeric text ("3.", "-", "1e") reports value === "" with
 // validity.badInput set. Treating it as an intentional clear committed
 // undefined mid-keystroke, wiping the stored value and the user's input.
 function resolveNumericInputState(
   target: HTMLInputElement,
-  schema: ConfigNodeRenderParams["schema"],
+  { schema, isRequired }: Pick<ConfigNodeRenderParams, "schema" | "isRequired">,
 ): NumericInputState {
   const raw = target.value;
   if (raw.trim() === "") {
-    return target.validity.badInput ? { kind: "invalid" } : { kind: "empty" };
+    return {
+      message: target.validity.badInput || isRequired === true ? t("configForm.invalidNumber") : "",
+    };
   }
   const parsed = coerceConfigFormNumberString(raw, schemaType(schema) === "integer");
-  if (typeof parsed !== "number") {
-    return { kind: "invalid" };
-  }
-  return { kind: "value", parsed, message: numericConstraintMessage(parsed, schema) };
-}
-
-function numericStateMessage(state: NumericInputState, isRequired: boolean): string {
-  if (state.kind === "value") {
-    return state.message;
-  }
-  return state.kind === "invalid" || isRequired ? t("configForm.invalidNumber") : "";
+  return typeof parsed === "number"
+    ? { parsed, message: numericConstraintMessage(parsed, schema) }
+    : { message: t("configForm.invalidNumber") };
 }
 
 function applyNumericInputState(
   target: HTMLInputElement,
   state: NumericInputState,
-  params: { isRequired?: boolean },
   commit: (candidate: unknown) => unknown,
 ): void {
-  if (!setControlValidity(target, numericStateMessage(state, params.isRequired === true))) {
-    return;
-  }
-  if (state.kind === "empty") {
-    commit(undefined);
-  } else if (state.kind === "value") {
+  if (setControlValidity(target, state.message)) {
     commit(state.parsed);
   }
+}
+
+function createScalarValueCommitter(
+  { value, path, onPatch }: Pick<ConfigNodeRenderParams, "value" | "path" | "onPatch">,
+  renderedValue: string,
+  revalidate: (target: HTMLInputElement) => void,
+) {
+  // Input and change may run before the patched draft is rendered.
+  let patchedValue = value;
+  return (target: HTMLInputElement, candidate: unknown, skipUnchanged = false): boolean => {
+    if (skipUnchanged && configValuesEqual(patchedValue, candidate)) {
+      return true;
+    }
+    if (onPatch(path, candidate) !== false) {
+      patchedValue = candidate;
+      return true;
+    }
+    target.value = renderedValue;
+    revalidate(target);
+    return false;
+  };
 }
 
 export function renderTextInput(
   params: ConfigNodeRenderParams & { inputType: "text" | "number" },
 ): TemplateResult {
-  const { schema, value, path, hints, disabled, onPatch, inputType } = params;
+  const { schema, value, path, hints, disabled, inputType } = params;
   const hint = hintForPath(path, hints);
   const field = resolveConfigFieldPresentation(params);
   const { label, helpId } = field;
@@ -177,7 +178,7 @@ export function renderTextInput(
         : t("configForm.structuredSecretFile")
       : masked
         ? "••••••••"
-        : redactedPlaceholder()
+        : t("configForm.redactedPlaceholder")
     : (hint?.placeholder ??
       (!masked && schema.default !== undefined
         ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
@@ -227,10 +228,7 @@ export function renderTextInput(
       return;
     }
     if (inputType === "number") {
-      setControlValidity(
-        target,
-        numericStateMessage(resolveNumericInputState(target, schema), params.isRequired === true),
-      );
+      setControlValidity(target, resolveNumericInputState(target, params).message);
       return;
     }
     setControlValidity(
@@ -238,27 +236,16 @@ export function renderTextInput(
       textInputState(target.value, scalarEditHintForInput(target, initialBranch)).message,
     );
   };
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
-    }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
-  };
+  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
 
   const commitChange = (target: HTMLInputElement) => {
     if (effectiveRedacted) {
       return;
     }
     // Change follows input on blur; only a newly normalized value needs another patch.
-    const commit = (candidate: unknown) =>
-      configValuesEqual(patchedValue, candidate) || commitScalarValue(target, candidate);
+    const commit = (candidate: unknown) => commitScalarValue(target, candidate, true);
     if (inputType === "number") {
-      applyNumericInputState(target, resolveNumericInputState(target, schema), params, commit);
+      applyNumericInputState(target, resolveNumericInputState(target, params), commit);
       return;
     }
     const editHint = beginScalarEdit(target, initialBranch);
@@ -307,7 +294,12 @@ export function renderTextInput(
       ?disabled=${disabled}
       ?readonly=${effectiveRedacted}
       @click=${() => {
-        if (sensitiveState.isRedacted && !isStructuredSecretRef && params.onToggleSensitivePath) {
+        if (
+          !masked &&
+          sensitiveState.isRedacted &&
+          !isStructuredSecretRef &&
+          params.onToggleSensitivePath
+        ) {
           params.onToggleSensitivePath(path);
         }
       }}
@@ -322,11 +314,8 @@ export function renderTextInput(
           return;
         }
         if (inputType === "number") {
-          applyNumericInputState(
-            target,
-            resolveNumericInputState(target, schema),
-            params,
-            (candidate) => commitScalarValue(target, candidate),
+          applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+            commitScalarValue(target, candidate),
           );
           return;
         }
@@ -359,7 +348,11 @@ export function renderTextInput(
         disabled,
         onToggleSensitivePath: params.onToggleSensitivePath,
       });
-  const wrappedInput = wrapSensitiveControl(inputControl, revealToggle);
+  const wrappedInput = wrapSensitiveControl(
+    inputControl,
+    revealToggle,
+    sensitiveState.isSensitiveField && params.onToggleSensitivePath !== undefined,
+  );
   const presentedInput = isPhonePresentation
     ? html`
         <span class="settings-phone-presentation">
@@ -398,22 +391,9 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
   );
   const renderedValue = formatConfigValueText(displayValue);
   const revalidate = (target: HTMLInputElement) => {
-    setControlValidity(
-      target,
-      numericStateMessage(resolveNumericInputState(target, schema), params.isRequired === true),
-    );
+    setControlValidity(target, resolveNumericInputState(target, params).message);
   };
-  // Input and change may run before the patched draft is rendered.
-  let patchedValue = value;
-  const commitScalarValue = (target: HTMLInputElement, candidate: unknown) => {
-    if (onPatch(path, candidate) !== false) {
-      patchedValue = candidate;
-      return true;
-    }
-    target.value = renderedValue;
-    revalidate(target);
-    return false;
-  };
+  const commitScalarValue = createScalarValueCommitter(params, renderedValue, revalidate);
 
   // Touch devices and some browsers hide native number spinners; keep explicit
   // adjust buttons so schema-sized edits stay possible without typing.
@@ -489,11 +469,8 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           revalidate(target);
           return;
         }
-        applyNumericInputState(
-          target,
-          resolveNumericInputState(target, schema),
-          params,
-          (candidate) => commitScalarValue(target, candidate),
+        applyNumericInputState(target, resolveNumericInputState(target, params), (candidate) =>
+          commitScalarValue(target, candidate),
         );
       }}
       @change=${(event: Event) => {
@@ -501,18 +478,15 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
           return;
         }
         const target = event.target as HTMLInputElement;
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind !== "value") {
-          setControlValidity(target, numericStateMessage(state, params.isRequired === true));
+        const state = resolveNumericInputState(target, params);
+        if (state.parsed === undefined) {
+          setControlValidity(target, state.message);
           return;
         }
         const normalized = normalizeNumericValue(state.parsed, schema);
         target.value = formatConfigValueText(normalized);
-        if (
-          setControlValidity(target, numericConstraintMessage(normalized, schema)) &&
-          !configValuesEqual(patchedValue, normalized)
-        ) {
-          commitScalarValue(target, normalized);
+        if (setControlValidity(target, numericConstraintMessage(normalized, schema))) {
+          commitScalarValue(target, normalized, true);
         }
       }}
       @blur=${(event: FocusEvent) => {
@@ -521,17 +495,15 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
         if (!params.commitOnBlur || target.value === renderedValue) {
           return;
         }
-        const state = resolveNumericInputState(target, schema);
-        if (state.kind === "value") {
+        const state = resolveNumericInputState(target, params);
+        if (state.parsed !== undefined) {
           state.parsed = normalizeNumericValue(state.parsed, schema);
           state.message = numericConstraintMessage(state.parsed, schema);
           target.value = formatConfigValueText(state.parsed);
         }
-        applyNumericInputState(target, state, params, (candidate) => {
-          if (!configValuesEqual(patchedValue, candidate)) {
-            commitScalarValue(target, candidate);
-          }
-        });
+        applyNumericInputState(target, state, (candidate) =>
+          commitScalarValue(target, candidate, true),
+        );
       }}
     />
     ${renderStepButton(1)}

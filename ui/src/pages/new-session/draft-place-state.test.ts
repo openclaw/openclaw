@@ -1,106 +1,88 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
-import { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import type { DraftPlaceBrowser } from "./draft-place-browser.ts";
+import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
-import type { NewSessionRouteData } from "./location.ts";
 import { renderControl } from "./model-control.test-support.ts";
-import type { NewSessionPreference } from "./preferences.ts";
-import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
 const REMOTE_PROJECT = {
   identity: "openclaw/openclaw",
   cloneUrl: "https://github.com/openclaw/openclaw.git",
+  defaultBranch: "main",
 };
 
-function createRepositoryFixture(
-  options: {
-    workspaceGit?: boolean;
-    unavailable?: boolean;
-    data?: NewSessionRouteData;
-    models?: ModelCatalogEntry[];
-  } = {},
-) {
-  const requestUpdate = vi.fn();
-  const persistPreference = vi.fn();
-  const readPreference = vi.fn<() => NewSessionPreference>(() => ({ worktree: true }));
-  const request = vi.fn<(method: string) => Promise<unknown>>(async (method) =>
-    method === "fs.listDir"
-      ? { path: "/plain", entries: [] }
-      : { repositoryStatus: options.unavailable ? "unavailable" : "not_git", branches: [] },
-  );
-  const context = {
-    gateway: {
-      connection: { gatewayUrl: "ws://gateway.example" },
-      subscribe: () => () => undefined,
-      subscribeEvents: () => () => undefined,
-      snapshot: {
-        phase: "connected",
-        client: {
-          request: async (method: string) =>
-            method === "models.list" ? { models: options.models ?? [] } : request(method),
-        },
-        hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
-      },
-    },
-    agents: {
-      state: {
-        agentsList: {
-          defaultId: "main",
-          agents: [
-            { id: "main", workspace: "/workspace", workspaceGit: options.workspaceGit ?? false },
-          ],
-        },
-      },
-    },
-    sessions: { state: { result: null } },
-  } as unknown as ApplicationContext;
-  const gateway = {
-    cloudProfiles: [{ id: "aws", providerId: "crabbox" }],
-    cloudProfilesReady: true,
-    environments: [
-      {
-        id: "node:desktop",
-        type: "node",
-        status: "available",
-        sessionHost: true,
-        workerSlots: { total: 1, available: 1 },
-      },
-    ],
-    persistPreference,
-    readPreference,
-  } as unknown as DraftGatewayState;
-  const browser = new DraftPlaceBrowser(
-    new TestReactiveControllerHost(),
-    gateway,
-    () => ({ context, isAdmin: true }),
-    {
-      requestUpdate,
-      onProjectMissing: vi.fn(),
-      onSelectProject: vi.fn(),
-      onApprovedListing: vi.fn(),
-      querySelector: () => null,
-      activeElement: () => null,
-      body: () => null,
-    },
-  );
-  const state = new DraftPlaceState(
-    gateway,
-    browser,
-    () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
-    { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
-  );
-  return { state, browser, context, persistPreference, readPreference, request, requestUpdate };
-}
-
 describe("DraftPlaceState repository selection", () => {
+  it.each(["restored", "selected"])(
+    "retires an active %s remote repository after the catalog host changes",
+    (selection) => {
+      const f = createRepositoryFixture();
+      let host = "a.ghe.example.test";
+      vi.spyOn(f.browser, "projectsReady", "get").mockReturnValue(true);
+      vi.spyOn(f.browser, "githubHost", "get").mockImplementation(() => host);
+      const remote = { ...REMOTE_PROJECT, cloneUrl: "https://a.ghe.example.test/acme/private.git" };
+      f.readPreference.mockReturnValue(selection === "restored" ? { remoteProject: remote } : {});
+      f.state.adoptAgentDefaults();
+      if (selection === "selected") {
+        f.state.selectRemoteProject(remote);
+      }
+      f.state.restorePreferenceSelections();
+      expect(f.browser.remoteProject).toEqual(remote);
+      f.state.setBaseRef("retired-host-branch");
+      f.state.setWorktreeName("retired-host-task");
+      host = "b.ghe.example.test";
+      f.state.restorePreferenceSelections();
+      expect(f.browser.remoteProject).toBeNull();
+      expect(f.state.remoteRepository).toBeUndefined();
+      expect(f.state.baseRef).toBe("");
+      expect(f.state.worktreeName).toBe("");
+      expect(f.persistPreference).toHaveBeenCalledWith("main", "/workspace", {
+        baseRef: "",
+        worktreeName: "",
+      });
+      expect(f.persistPreference).toHaveBeenCalledWith(
+        "main",
+        "/workspace",
+        expect.objectContaining({ remoteProject: null }),
+      );
+    },
+  );
+
+  it("remembers a remote project and restores its default branch", () => {
+    const selected = createRepositoryFixture();
+    selected.state.selectRemoteProject(REMOTE_PROJECT);
+    expect(selected.persistPreference).toHaveBeenCalledWith(
+      "",
+      "/workspace",
+      expect.objectContaining({ projectId: "", remoteProject: REMOTE_PROJECT }),
+    );
+    expect(selected.state.baseRef).toBe("main");
+
+    const restored = createRepositoryFixture();
+    vi.spyOn(restored.browser, "projectsReady", "get").mockReturnValue(true);
+    restored.readPreference.mockReturnValue({
+      remoteProject: REMOTE_PROJECT,
+      baseRef: "main",
+      where: { kind: "cloud", id: "aws" },
+    });
+    restored.state.adoptAgentDefaults();
+    restored.state.restorePreferenceSelections();
+
+    expect(restored.browser.remoteProject).toEqual(REMOTE_PROJECT);
+    expect(restored.state.baseRef).toBe("main");
+    expect(restored.state.cloudProfileId).toBe("aws");
+    expect(restored.state.remoteRepository).toEqual({
+      url: REMOTE_PROJECT.cloneUrl,
+      ref: "main",
+    });
+    expect(restored.state.placementPreferenceReady).toBe(true);
+  });
+
   it("leaves the worktree base to the Gateway unless a branch was selected", async () => {
     const { state, request, requestUpdate } = createRepositoryFixture({ workspaceGit: true });
     const discovered = createDeferred();
@@ -135,7 +117,6 @@ describe("DraftPlaceState repository selection", () => {
         agentId: "main",
         requestedAgentId: "main",
         requestedModel: "example/first",
-        model: "example/first",
         catalogId: "",
         catalogLabel: "",
         startTerminal: false,
@@ -341,7 +322,8 @@ describe("DraftPlaceState repository selection", () => {
       state.restorePreferenceSelections();
       expect(state.remotePlacement).toBe(true);
       expect(state.freshWorkspace).toBe(false);
-      expect(state.placementPreferenceReady).toBe(false);
+      expect(state.worktree).toBe(true);
+      expect(state.worktreeAvailable()).toBe(false);
       expect(state.baseRef).toBe("release");
       expect(state.worktreeName).toBe("saved-task");
 
@@ -515,7 +497,6 @@ describe("DraftPlaceState repository selection", () => {
           agentId: "main",
           requestedAgentId: "main",
           catalogId: "",
-          model: "",
           catalogLabel: "",
           startTerminal: false,
           group: "Notes",
@@ -557,6 +538,7 @@ describe("DraftPlaceState repository selection", () => {
       await vi.waitFor(() => expect(state.repository.kind).toBe("unavailable"));
       expect(state.worktreeAvailable()).toBe(false);
       expect(state.worktree).toBe(true);
+      expect(state.checkoutVisible).toBe(true);
       expect(state.placementPreferenceReady).toBe(true);
       expect(state.preferenceSelection().worktree).toBe(true);
       state.selectWorktree(false);
@@ -598,6 +580,7 @@ describe("DraftPlaceState repository selection", () => {
 
     expect(state.repository).toEqual({ kind: "pending-clone", cloneUrl: REMOTE_PROJECT.cloneUrl });
     expect(state.worktreeAvailable()).toBe(true);
+    expect(state.checkoutVisible).toBe(true);
     expect(state.worktree).toBe(false);
     state.selectWorktree(true);
     expect(state.worktree).toBe(true);
@@ -644,7 +627,7 @@ describe("DraftPlaceState repository selection", () => {
   );
 
   it.each(["/workspace", "/plain"])(
-    "rejects and persists worktree off for a non-git folder %s",
+    "does not admit worktree selection for a non-git folder %s",
     async (folder) => {
       const { state, persistPreference, requestUpdate } = createRepositoryFixture();
       state.adoptAgentDefaults();
@@ -655,14 +638,84 @@ describe("DraftPlaceState repository selection", () => {
 
       state.selectWorktree(true);
 
-      await vi.waitFor(() => expect(state.worktree).toBe(false));
+      expect(state.worktree).toBe(false);
       expect(state.worktreeAvailable()).toBe(false);
-      expect(persistPreference).toHaveBeenLastCalledWith("main", "/workspace", {
-        worktree: false,
-      });
-      expect(requestUpdate).toHaveBeenCalled();
+      expect(state.checkoutVisible).toBe(false);
+      expect(persistPreference).not.toHaveBeenCalled();
+      expect(requestUpdate).not.toHaveBeenCalled();
     },
   );
+
+  it("does not carry cloud isolation into a local non-Git folder", () => {
+    const { state, readPreference } = createRepositoryFixture();
+    readPreference.mockReturnValue({ worktree: false });
+    state.adoptAgentDefaults();
+    expect(state.repository.kind).toBe("direct");
+    state.selectCloudProfile("aws");
+    expect(state.freshWorkspace).toBe(true);
+    expect(state.worktree).toBe(true);
+    expect(state.checkoutVisible).toBe(false);
+    state.applyFolder("/workspace");
+    expect(state.freshWorkspace).toBe(false);
+    expect(state.checkoutVisible).toBe(false);
+
+    state.clearCloudProfile();
+
+    expect(state.worktree).toBe(false);
+    expect(state.checkoutVisible).toBe(false);
+    expect(state.preferenceSelection().worktree).toBe(false);
+    expect(
+      buildSelectedSessionCreateParams(state, { message: "notes", visibility: "normal" }),
+    ).not.toHaveProperty("worktree");
+  });
+
+  it.each([
+    { kind: "cloud", id: "aws" },
+    { kind: "device", id: "desktop" },
+    { kind: "auto-device" },
+  ] as const)("does not restore $kind isolation as a local checkout choice", async (where) => {
+    const { state, readPreference, requestUpdate } = createRepositoryFixture({
+      workspaceGit: true,
+      unavailable: true,
+    });
+    const discovered = createDeferred();
+    requestUpdate.mockImplementation(() => {
+      if (state.repository.kind === "unavailable") {
+        discovered.resolve();
+      }
+    });
+    readPreference.mockReturnValue({ where, worktree: true, worktreeName: "remote-task" });
+    state.adoptAgentDefaults();
+    await discovered.promise;
+    state.restorePreferenceSelections();
+    expect(state.worktree).toBe(true);
+    expect(state.preferenceSelection().worktree).toBe(true);
+
+    state.selectDevice("");
+
+    expect(state.worktree).toBe(false);
+    expect(state.preferenceSelection().worktree).toBe(false);
+    expect(
+      buildSelectedSessionCreateParams(state, { message: "notes", visibility: "normal" }),
+    ).not.toHaveProperty("worktree");
+  });
+
+  it("does not enable a worktree while the new folder is being checked", async () => {
+    const { state, request, readPreference } = createRepositoryFixture();
+    const discovery = createDeferred<WorktreesBranchesResult>();
+    readPreference.mockReturnValue({ worktree: false });
+    request.mockReturnValue(discovery.promise);
+    state.adoptAgentDefaults();
+    state.applyFolder("/checking");
+    expect(state.repository.kind).toBe("checking");
+
+    state.selectWorktree(true);
+
+    expect(state.worktree).toBe(false);
+    discovery.resolve({ repositoryStatus: "not_git", branches: [] });
+    await discovery.promise;
+    expect(state.worktree).toBe(false);
+  });
 
   it("restores a preferred worktree when a remote project awaits cloning", () => {
     const { state, browser } = createRepositoryFixture();

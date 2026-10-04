@@ -6,6 +6,7 @@ import {
   assertOperatorModelAllowed,
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
+import { createNativeModelOwnedRuntimeModel } from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
@@ -29,11 +30,7 @@ import { createEmptyAgentDiscoveryStores } from "../model.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import { resolveRequestStreamTransportOverrides } from "./runtime-resolution.js";
 import type { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
-import {
-  buildBeforeModelResolveAttachments,
-  createNativeModelOwnedRuntimeModel,
-  resolveHookModelSelection,
-} from "./setup.js";
+import { buildBeforeModelResolveAttachments, resolveHookModelSelection } from "./setup.js";
 
 export type PreparedNativeSessionRuntime = {
   harness: AgentHarness;
@@ -43,7 +40,7 @@ export type PreparedNativeSessionRuntime = {
 function prepareNativeSessionRuntime(
   runParams: RunEmbeddedAgentInternalParams,
   harness: AgentHarness,
-  admission: ReturnType<typeof assertAgentHarnessRunAdmission>,
+  admission: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>,
 ): PreparedNativeSessionRuntime | undefined {
   const pinnedHarnessId = resolveSessionPinnedHarnessId(admission?.entry);
   if (!admission || !pinnedHarnessId || !harness.resolveSessionRuntimeOwnership) {
@@ -124,7 +121,7 @@ function prepareNativeSessionRuntime(
 export async function resolveEmbeddedRunModelSetup(params: {
   assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
-  sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
+  sessionAdmission?: Awaited<ReturnType<typeof assertAgentHarnessRunAdmission>>;
   provider: string;
   modelId: string;
   agentDir: string;

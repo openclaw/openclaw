@@ -36,8 +36,9 @@ import {
   hasRetainedManagedNpmInstallMarker,
   resolveRetainedManagedNpmInstallPackageInfo,
 } from "./managed-npm-retention.js";
-import { listManagedPluginNpmProjectRootsSync } from "./npm-project-roots.js";
+import { listManagedPluginNpmProjectsSync } from "./npm-project-roots.js";
 import { getPluginCache } from "./plugin-cache.js";
+import { groupPluginRecords } from "./record-groups.js";
 
 export { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 
@@ -132,10 +133,10 @@ function readManagedNpmInstallTimestampMs(params: {
 
 function buildRecoveredManagedNpmInstallCandidatesForRoot(params: {
   projectRoot: string;
+  rootManifest: Record<string, unknown> | null;
   sharedLegacyRoot: boolean;
 }): RecoveredManagedNpmInstallCandidate[] {
-  const rootManifest = readJsonObjectFileSync(path.join(params.projectRoot, "package.json"));
-  const dependencies = readStringRecord(rootManifest?.dependencies);
+  const dependencies = readStringRecord(params.rootManifest?.dependencies);
   const candidates: RecoveredManagedNpmInstallCandidate[] = [];
   for (const [packageName, dependencySpec] of Object.entries(dependencies)) {
     const packageDir = path.join(params.projectRoot, "node_modules", ...packageName.split("/"));
@@ -185,11 +186,13 @@ export function listRecoveredManagedNpmInstallCandidates(
   return [
     ...buildRecoveredManagedNpmInstallCandidatesForRoot({
       projectRoot: npmRoot,
+      rootManifest: readJsonObjectFileSync(path.join(npmRoot, "package.json")),
       sharedLegacyRoot: true,
     }),
-    ...listManagedPluginNpmProjectRootsSync(npmRoot).flatMap((projectRoot) =>
+    ...listManagedPluginNpmProjectsSync(npmRoot).flatMap(({ projectRoot, manifest }) =>
       buildRecoveredManagedNpmInstallCandidatesForRoot({
         projectRoot,
+        rootManifest: manifest,
         sharedLegacyRoot: false,
       }),
     ),
@@ -256,12 +259,10 @@ function buildRecoveredManagedNpmInstallRecords(
 ): Record<string, PluginInstallRecord> {
   const npmRoot = resolveRecoveredManagedNpmRoot(options);
   const records = createPluginInstallRecordMap<PluginInstallRecord>();
-  const candidatesByPluginId = new Map<string, RecoveredManagedNpmInstallCandidate[]>();
-  for (const candidate of listRecoveredManagedNpmInstallCandidates(options)) {
-    const candidates = candidatesByPluginId.get(candidate.pluginId) ?? [];
-    candidates.push(candidate);
-    candidatesByPluginId.set(candidate.pluginId, candidates);
-  }
+  const candidatesByPluginId = groupPluginRecords(
+    listRecoveredManagedNpmInstallCandidates(options),
+    (candidate) => candidate.pluginId,
+  );
   for (const [pluginId, candidates] of candidatesByPluginId) {
     // The install ledger is the active-generation authority. Directory order,
     // version, and recency may only break ties when that authority is absent.

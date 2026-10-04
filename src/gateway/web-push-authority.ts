@@ -76,7 +76,12 @@ function resolveCurrentWebPushTarget(params: {
     return null;
   }
   const rolePolicy = userProfileId
-    ? resolveOperatorRolePolicyForAssignment(userProfileId, params.profile?.role ?? null, cfg)
+    ? resolveOperatorRolePolicyForAssignment(
+        userProfileId,
+        params.profile?.role ?? null,
+        cfg,
+        params.profile?.githubLogin ?? null,
+      )
     : undefined;
   if (cfg.gateway?.roles && !rolePolicy) {
     return null;
@@ -138,93 +143,109 @@ export function listCurrentWebPushTargets(
 }
 
 /** Keep both binding and pairing authority until the synchronous provider start. */
-export function withCurrentWebPushAuthority<T>(
+export async function withCurrentWebPushAuthority<T>(
   params: {
     stateDir?: string;
     getRuntimeConfig: () => OpenClawConfig;
     sessionKeys?: readonly string[];
     agentId?: string;
+    preparePublication?: () => Promise<void>;
   },
   prepare: (authority: WebPushAuthority) => { start: () => T | Promise<T> } | undefined,
 ): Promise<T | undefined> {
-  return withBoundWebPushSubscriptions(params.stateDir, async (subscriptions, assertCurrent) => {
-    const options = params.stateDir
-      ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
-      : {};
-    const profile = subscriptions.some((subscription) => subscription.userProfileId)
-      ? await prepareUserProfileCatalog(options)
-      : undefined;
-    const sessions = new Map<string, SessionFactsRead<PreparedSessionMutationFacts>>();
-    try {
-      for (const sessionKey of new Set(params.sessionKeys)) {
-        const cfg = params.getRuntimeConfig();
-        const { agentId } = resolveSessionStoreIdentity({
-          cfg,
-          sessionKey,
-          agentId: params.agentId,
-        });
-        sessions.set(
-          sessionKey,
-          await prepareSessionMutationFacts({ cfg, sessionKey, agentId, allowMissing: true }),
-        );
-      }
-      // Pairing preparation can yield after a profile merge or preference mutation.
-      for (;;) {
-        const profileIds = new Set(
-          subscriptions.flatMap((subscription) => {
-            const id =
-              subscription.userProfileId &&
-              profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
-            return id ? [id] : [];
-          }),
-        );
-        const preferences = await getUserPreferenceValues(
-          [...profileIds],
-          WEB_PUSH_USER_PREFERENCES_KEY,
-          options,
-        );
-        let changed = false;
-        const begun = await withCurrentDevicePairingSnapshot(params.stateDir, (pairedDevices) => {
-          assertCurrent();
-          changed =
-            !preferences.isCurrent() ||
-            subscriptions.some((subscription) => {
-              const id =
-                subscription.userProfileId &&
-                profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
-              return id && !profileIds.has(id);
-            });
-          if (changed) {
-            return undefined;
-          }
-          const cfg = params.getRuntimeConfig();
-          const action = prepare({
-            cfg,
-            subscriptions,
-            pairedDevices,
-            profile,
-            preferences: preferences.values,
-            sessions: new Map([...sessions].map(([key, facts]) => [key, facts.readCurrent(cfg)])),
-          });
-          return {
-            start: () => {
-              assertCurrent();
-              // Boxing releases storage and profile leases without retaining provider I/O.
-              return { value: action?.start() };
-            },
-          };
-        });
-        if (!changed) {
-          return begun ? { start: () => begun.value } : undefined;
-        }
-      }
-    } finally {
-      profile?.release();
-      for (const facts of sessions.values()) {
-        facts.release();
-      }
+  const sessions = new Map<string, SessionFactsRead<PreparedSessionMutationFacts>>();
+  try {
+    // Session discovery can wait on another store; keep browser registration outside that wait.
+    for (const sessionKey of new Set(params.sessionKeys)) {
+      const cfg = params.getRuntimeConfig();
+      const { agentId } = resolveSessionStoreIdentity({
+        cfg,
+        sessionKey,
+        agentId: params.agentId,
+      });
+      sessions.set(
+        sessionKey,
+        await prepareSessionMutationFacts({ cfg, sessionKey, agentId, allowMissing: true }),
+      );
     }
-  });
+    const delivery = await withBoundWebPushSubscriptions(
+      params.stateDir,
+      async (subscriptions, assertCurrent) => {
+        const options = params.stateDir
+          ? { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } }
+          : {};
+        const profile = subscriptions.some((subscription) => subscription.userProfileId)
+          ? await prepareUserProfileCatalog(options)
+          : undefined;
+        try {
+          // Pairing preparation can yield after a profile merge or preference mutation.
+          for (;;) {
+            const profileIds = new Set(
+              subscriptions.flatMap((subscription) => {
+                const id =
+                  subscription.userProfileId &&
+                  profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
+                return id ? [id] : [];
+              }),
+            );
+            const preferences = await getUserPreferenceValues(
+              [...profileIds],
+              WEB_PUSH_USER_PREFERENCES_KEY,
+              options,
+            );
+            let changed = false;
+            const begun = await withCurrentDevicePairingSnapshot(
+              params.stateDir,
+              (pairedDevices) => {
+                assertCurrent();
+                changed =
+                  !preferences.isCurrent() ||
+                  subscriptions.some((subscription) => {
+                    const id =
+                      subscription.userProfileId &&
+                      profile?.readCurrentIdentity(subscription.userProfileId)?.profileId;
+                    return id && !profileIds.has(id);
+                  });
+                if (changed) {
+                  return undefined;
+                }
+                const cfg = params.getRuntimeConfig();
+                const action = prepare({
+                  cfg,
+                  subscriptions,
+                  pairedDevices,
+                  profile,
+                  preferences: preferences.values,
+                  sessions: new Map(
+                    [...sessions].map(([key, facts]) => [key, facts.readCurrent(cfg)]),
+                  ),
+                });
+                return {
+                  start: () => {
+                    assertCurrent();
+                    // Boxing releases storage and profile leases without retaining provider I/O.
+                    return { value: action?.start() };
+                  },
+                };
+              },
+              params.preparePublication,
+            );
+            if (!changed) {
+              return begun ? { start: () => begun } : undefined;
+            }
+          }
+        } finally {
+          profile?.release();
+        }
+      },
+    );
+    // Release session facts before awaiting provider completion.
+    return delivery?.value;
+  } finally {
+    for (const facts of sessions.values()) {
+      facts.release();
+    }
+  }
 }
 
 export function webPushSessionAccess(authority: WebPushAuthority, client: GatewayClient) {

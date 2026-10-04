@@ -1,4 +1,4 @@
-import { webhookCallback, type Bot } from "grammy";
+import type { Bot } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeSessionDeliveryState,
@@ -11,6 +11,7 @@ import {
   chat,
   commandMessage,
   createBot,
+  deliverTelegramUpdate,
   from,
   harness,
 } from "./bot.create-telegram-bot.native-pipeline.test-support.js";
@@ -43,17 +44,7 @@ beforeEach(() => {
 });
 
 async function receive(bot: Bot, payload: Record<string, unknown>) {
-  const response = await webhookCallback(
-    bot,
-    "std/http",
-  )(
-    new Request("http://localhost/telegram", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ update_id: ++updateId, ...payload }),
-    }),
-  );
-  expect(response.status).toBe(200);
+  await deliverTelegramUpdate(bot, { update_id: ++updateId, ...payload });
 }
 
 function message(text: string) {
@@ -210,25 +201,6 @@ describe("registered Telegram retained history", () => {
     ).toEqual([expect.objectContaining({ body: "Already delivered", sender: "OpenClaw (you)" })]);
   });
 
-  it.each(["bot", "business", "spoof"] as const)(
-    "authenticates %s reply attribution instead of trusting display text",
-    async (kind) => {
-      cfg.channels!.telegram!.name = "Configured Agent";
-      const bot = await createBot(false, true, cfg);
-      const source =
-        kind === "bot" ? bot.botInfo : { id: 777, is_bot: false, first_name: "Alex (you)" };
-      const reply = {
-        ...message("Earlier reply"),
-        from: source,
-        ...(kind === "business" ? { sender_business_bot: bot.botInfo } : {}),
-      };
-      await receive(bot, { message: { ...message("Following up"), reply_to_message: reply } });
-      expect(lastInput().ReplyChain?.[0]?.sender).toBe(
-        kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)",
-      );
-    },
-  );
-
   it("keeps transcript context until every physical projection part is recorded, then excludes it on reset", async () => {
     const sessionKey = "agent:main:main";
     const sessionId = "native-history-projection";
@@ -299,10 +271,31 @@ describe("registered Telegram retained history", () => {
     );
   });
 
-  it("preserves selected quote bytes and reply identity while excluding binary captions", async () => {
-    const bot = await createBot(false, true, cfg);
-    await receive(bot, {
-      message: {
+  const replyCases: Array<{
+    name: string;
+    message: (bot: Bot) => Record<string, unknown>;
+    expected?: Record<string, unknown>;
+    absent?: Array<"ReplyToBody" | "ReplyToForwardedFrom">;
+    sender?: string;
+    contains?: string;
+    excludes?: string;
+    restricted?: boolean;
+  }> = [
+    ...(["bot", "business", "spoof"] as const).map((kind) => ({
+      name: `${kind} reply attribution`,
+      message: (bot: Bot) => ({
+        ...message("Following up"),
+        reply_to_message: {
+          ...message("Earlier reply"),
+          from: kind === "bot" ? bot.botInfo : { id: 777, is_bot: false, first_name: "Alex (you)" },
+          ...(kind === "business" ? { sender_business_bot: bot.botInfo } : {}),
+        },
+      }),
+      sender: kind === "spoof" ? "Alex (you) (Telegram sender)" : "Configured Agent (you)",
+    })),
+    {
+      name: "selected quote bytes and identity",
+      message: () => ({
         ...message("check this"),
         reply_to_message: { ...message("Can you summarize this?"), message_id: 9001 },
         quote: {
@@ -310,16 +303,17 @@ describe("registered Telegram retained history", () => {
           position: 8,
           entities: [{ type: "bold", offset: 1, length: 9 }],
         },
+      }),
+      expected: {
+        ReplyToId: "9001",
+        ReplyToQuoteText: " summarize this\n",
+        ReplyToQuotePosition: 8,
+        ReplyToQuoteEntities: [{ type: "bold", offset: 1, length: 9 }],
       },
-    });
-    expect(lastInput()).toMatchObject({
-      ReplyToId: "9001",
-      ReplyToQuoteText: " summarize this\n",
-      ReplyToQuotePosition: 8,
-      ReplyToQuoteEntities: [{ type: "bold", offset: 1, length: 9 }],
-    });
-    await receive(bot, {
-      message: {
+    },
+    {
+      name: "binary caption exclusion",
+      message: () => ({
         ...message("check binary caption"),
         reply_to_message: {
           message_id: 9002,
@@ -328,17 +322,14 @@ describe("registered Telegram retained history", () => {
           from,
           caption: "PK\u0000\u0003\u0004binary",
         },
-      },
-    });
-    expect(lastInput().ReplyToId).toBe("9002");
-    expect(lastInput().ReplyToBody).toBeUndefined();
-    expect(lastInput().Body).not.toContain("PK");
-  });
-
-  it("keeps an external quote when its untrusted origin timestamp is outside Date range", async () => {
-    const bot = await createBot(false, true, cfg);
-    await receive(bot, {
-      message: {
+      }),
+      expected: { ReplyToId: "9002" },
+      absent: ["ReplyToBody"],
+      excludes: "PK",
+    },
+    {
+      name: "external quote with out-of-range timestamp",
+      message: () => ({
         ...message("Thoughts?"),
         external_reply: {
           origin: {
@@ -350,24 +341,15 @@ describe("registered Telegram retained history", () => {
           message_id: 9003,
         },
         quote: { text: "selected external text", position: 0 },
-      },
-    });
-    expect(lastInput()).toMatchObject({
-      ReplyToBody: "selected external text",
-      ReplyToIsExternal: true,
-    });
-    expect(lastInput().Body).toContain("External author");
-    expect(lastInput().Body).not.toContain("+275760");
-  });
-
-  it("redacts an unallowlisted forwarded origin without dropping the authorized reply target", async () => {
-    cfg.channels!.telegram!.contextVisibility = "allowlist";
-    cfg.channels!.telegram!.groups = {
-      "*": { requireMention: false, allowFrom: [String(from.id)] },
-    };
-    const bot = await createBot(false, true, cfg);
-    await receive(bot, {
-      message: {
+      }),
+      expected: { ReplyToBody: "selected external text", ReplyToIsExternal: true },
+      contains: "External author",
+      excludes: "+275760",
+    },
+    {
+      name: "redacted forwarded origin with authorized reply target",
+      restricted: true,
+      message: () => ({
         ...message("Thoughts?"),
         chat: group,
         reply_to_message: {
@@ -380,10 +362,42 @@ describe("registered Telegram retained history", () => {
             date: 500,
           },
         },
-      },
-    });
-    expect(lastInput()).toMatchObject({ ReplyToId: "9004", ReplyToBody: "forwarded text" });
-    expect(lastInput().ReplyToForwardedFrom).toBeUndefined();
-    expect(lastInput().Body).not.toContain("Hidden origin");
-  });
+      }),
+      expected: { ReplyToId: "9004", ReplyToBody: "forwarded text" },
+      absent: ["ReplyToForwardedFrom"],
+      excludes: "Hidden origin",
+    },
+  ];
+  it.each(replyCases)(
+    "preserves $name",
+    async ({ message: incoming, expected, absent, sender, contains, excludes, restricted }) => {
+      if (sender) {
+        cfg.channels!.telegram!.name = "Configured Agent";
+      }
+      if (restricted) {
+        cfg.channels!.telegram!.contextVisibility = "allowlist";
+        cfg.channels!.telegram!.groups = {
+          "*": { requireMention: false, allowFrom: [String(from.id)] },
+        };
+      }
+      const bot = await createBot(false, true, cfg);
+      await receive(bot, { message: incoming(bot) });
+      const input = lastInput();
+      if (expected) {
+        expect(input).toMatchObject(expected);
+      }
+      for (const key of absent ?? []) {
+        expect(input[key]).toBeUndefined();
+      }
+      if (sender) {
+        expect(input.ReplyChain?.[0]?.sender).toBe(sender);
+      }
+      if (contains) {
+        expect(input.Body).toContain(contains);
+      }
+      if (excludes) {
+        expect(input.Body).not.toContain(excludes);
+      }
+    },
+  );
 });

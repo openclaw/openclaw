@@ -75,7 +75,9 @@ it.for([
       {
         ...process.env,
         // This sparse adapter exercises the historical Node contract, not the host CI policy.
+        // A prebuilt-dist CI shard must not make the copied runner prepare packages.
         OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "",
         OPENCLAW_NODE_TEST_ENV_JSON: "{}",
         OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
           { configs: ["old.config.ts"], shard_name: "frozen-proof" },

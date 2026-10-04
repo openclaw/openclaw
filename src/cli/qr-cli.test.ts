@@ -69,6 +69,7 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
   return {
     gateway: {
       ...(params?.withTailscale ? { tailscale: { mode: "serve" } } : {}),
+      publicOrigin: "https://gateway.example.test",
       remote: { url: "wss://remote.example.com:444", token: "remote-tok" },
       auth: { mode: "token", token: "local-tok" },
     },
@@ -87,6 +88,7 @@ function createRemoteQrConfig(params?: { withTailscale?: boolean }) {
 function createTailscaleRemoteRefConfig() {
   return {
     gateway: {
+      publicOrigin: "https://gateway.example.test",
       tailscale: { mode: "serve" },
       remote: {
         token: { source: "env", provider: "default", id: "REMOTE_GATEWAY_TOKEN" },
@@ -139,6 +141,24 @@ describe("registerQrCli", () => {
     const program = createProgram();
     await program.parseAsync(["qr", ...args], { from: "user" });
   }
+
+  it.each([
+    [[], "wss://gateway.example:8444/gateway"],
+    [["--url", "wss://override.example"], "wss://override.example"],
+  ])("preserves the Control UI path in configured QR URLs with overrides %j", async (args, url) => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "loopback",
+        controlUi: { basePath: "/gateway" },
+        auth: { mode: "token", token: "tok" },
+      },
+      plugins: {
+        entries: { "device-pair": { config: { publicUrl: "https://gateway.example:8444" } } },
+      },
+    });
+    await runQr(["--json", ...args]);
+    expect(parseLastLoggedQrJson().gatewayUrl).toBe(url);
+  });
 
   async function expectQrExit(args: string[]) {
     await expect(runQr(args)).rejects.toThrow("exit");
@@ -610,11 +630,12 @@ describe("registerQrCli", () => {
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   });
 
-  it("supports --remote with tailscale serve when remote token ref resolves", async () => {
+  it("preserves --remote Tailscale Serve with publicOrigin and no remote URL", async () => {
     loadConfig.mockReturnValue(createTailscaleRemoteRefConfig());
     resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
       resolvedConfig: {
         gateway: {
+          publicOrigin: "https://gateway.example.test",
           tailscale: { mode: "serve" },
           remote: {
             token: "tailscale-remote-token",

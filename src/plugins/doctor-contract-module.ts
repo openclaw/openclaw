@@ -1,4 +1,11 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { z } from "zod";
 import type { ChannelIngressQueue } from "../channels/message/ingress-queue.js";
+import type {
+  ChannelIngressLegacyImport,
+  ChannelIngressLegacyImportResult,
+} from "../channels/message/ingress-queue.migration.js";
+import type { ChannelDoctorConfigMutation } from "../channels/plugins/types.adapters.js";
 import type { LegacyConfigRule } from "../config/legacy.shared.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -78,6 +85,11 @@ export type PluginDoctorStateMigrationContext = {
     namespace: string,
     entries: readonly PluginDoctorRawStateEntry[],
   ) => { deleted: number; changed: number };
+  /** Offline repair only: verified backup, exact row comparison, and one atomic update. */
+  repairPluginStateEntries?: (
+    namespace: string,
+    replacements: readonly { entry: PluginDoctorRawStateEntry; value: unknown }[],
+  ) => Promise<{ changes: string[]; warnings: string[] }>;
   /** Owner-bound ingress queue access, one entry per manifest-declared channel;
    *  the host fixes the channel identity and doctor state directory. Older test
    *  hosts may omit it. */
@@ -102,6 +114,13 @@ export type PluginDoctorChannelIngressQueueInspection<TPayload, TMetadata = unkn
  *  the runtime proxy's accessor, minus the state-dir override the host fixes. */
 export type PluginDoctorChannelIngressQueueAccess = {
   channelId: string;
+  /** Offline migration authority, checked again immediately before filesystem effects. */
+  assertCurrent?: () => void;
+  /** Offline-only import with canonical IDs; terminal tombstones never become pending work. */
+  importLegacyEntries?: (params: {
+    accountId: string;
+    entries: readonly ChannelIngressLegacyImport[];
+  }) => ChannelIngressLegacyImportResult;
   /** Inspection-only access, available in every phase including detection. */
   openChannelIngressQueueForInspection: <TPayload, TMetadata = unknown>(options?: {
     accountId?: string;
@@ -194,6 +213,7 @@ export type PluginDoctorStateMigrationEntry = {
 };
 
 export type PluginDoctorContractModule = {
+  historicalWebhookListener?: unknown;
   legacyConfigRules?: unknown;
   normalizeCompatibilityConfig?: unknown;
   resolveSessionStoreAgentIds?: unknown;
@@ -205,10 +225,9 @@ export type PluginDoctorContractModule = {
   stateMigrations?: unknown;
 };
 
-export type PluginDoctorCompatibilityNormalizer = (params: { cfg: OpenClawConfig }) => {
-  config: OpenClawConfig;
-  changes: string[];
-};
+export type PluginDoctorCompatibilityNormalizer = (params: {
+  cfg: OpenClawConfig;
+}) => ChannelDoctorConfigMutation;
 
 type PluginDoctorSessionStoreAgentIdsResolver = (params: {
   cfg: OpenClawConfig;
@@ -218,13 +237,10 @@ function coerceLegacyConfigRules(value: unknown): LegacyConfigRule[] {
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((entry) => {
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const candidate = entry as { path?: unknown; message?: unknown };
-    return Array.isArray(candidate.path) && typeof candidate.message === "string";
-  }) as LegacyConfigRule[];
+  return value.filter((entry): entry is LegacyConfigRule => {
+    const candidate = asOptionalObjectRecord(entry);
+    return Array.isArray(candidate?.path) && typeof candidate?.message === "string";
+  });
 }
 
 function coerceNormalizeCompatibilityConfig(
@@ -242,17 +258,9 @@ function coerceSessionStoreAgentIdsResolver(
 }
 
 function isPluginDoctorStateMigration(value: unknown): value is PluginDoctorStateMigration {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const candidate = value as {
-    id?: unknown;
-    label?: unknown;
-    detectLegacyState?: unknown;
-    migrateLegacyState?: unknown;
-  };
+  const candidate = asOptionalObjectRecord(value);
   return (
-    typeof candidate.id === "string" &&
+    typeof candidate?.id === "string" &&
     candidate.id.trim().length > 0 &&
     typeof candidate.label === "string" &&
     candidate.label.trim().length > 0 &&
@@ -277,8 +285,31 @@ function coercePluginDoctorStateMigrations(value: unknown): PluginDoctorStateMig
 }
 
 /** Coerce a loaded doctor contract once for both registry use and declaration validation. */
-export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule) {
+export function coercePluginDoctorContractModule(
+  mod: PluginDoctorContractModule,
+  allowedChannels?: readonly string[],
+) {
   const defaultExport = (mod as { default?: PluginDoctorContractModule }).default;
+  const historicalWebhookListener = z
+    .object({
+      channelId: z
+        .string()
+        .trim()
+        .min(1)
+        .refine(
+          (id) => !allowedChannels || allowedChannels.includes(id),
+          "Historical webhook listener channel must belong to the plugin",
+        ),
+      port: z.number().int().min(1).max(65535),
+      host: z.string().trim().min(1).optional(),
+      preserveAuthoredActivation: z.literal(true).optional(),
+    })
+    .optional()
+    .parse(
+      mod.historicalWebhookListener === undefined
+        ? defaultExport?.historicalWebhookListener
+        : mod.historicalWebhookListener,
+    );
   const rules = coerceLegacyConfigRules(defaultExport?.legacyConfigRules ?? mod.legacyConfigRules);
   const normalizeCompatibilityConfig = coerceNormalizeCompatibilityConfig(
     mod.normalizeCompatibilityConfig ?? defaultExport?.normalizeCompatibilityConfig,
@@ -299,6 +330,7 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     stateMigrations: stateMigrations.length > 0,
   };
   return {
+    historicalWebhookListener,
     rules,
     normalizeCompatibilityConfig,
     resolveSessionStoreAgentIds,
@@ -307,3 +339,7 @@ export function coercePluginDoctorContractModule(mod: PluginDoctorContractModule
     summary,
   };
 }
+
+export type PluginDoctorHistoricalWebhookListener = NonNullable<
+  ReturnType<typeof coercePluginDoctorContractModule>["historicalWebhookListener"]
+>;

@@ -3,7 +3,7 @@
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
-import { resolveRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
+import { resolveCanonicalRequiredConfiguredSecretRefInputString } from "./resolve-configured-secret-input-string.js";
 import {
   assignResolvedGatewaySecretInput,
   readGatewaySecretInputValue,
@@ -49,11 +49,8 @@ function shouldResolveGatewayAuthSecretRef(
   if (params.mode === "trusted-proxy") {
     return !isTokenPath;
   }
-  if (params.mode === "token" || params.mode === "none") {
+  if (params.mode === "token" || params.mode === "password" || params.mode === "none") {
     return false;
-  }
-  if (params.mode === "password") {
-    return !isTokenPath;
   }
   // With implicit mode, resolve the side that does not already have a concrete
   // competing credential so token and password defaults do not both get materialized.
@@ -93,16 +90,13 @@ async function resolveGatewayAuthSecretRefValue(
   if (!shouldResolveGatewayAuthSecretRef(params, path)) {
     return undefined;
   }
-  const value = await resolveRequiredConfiguredSecretRefInputString({
+  const value = await resolveCanonicalRequiredConfiguredSecretRefInputString({
     config: params.cfg,
     env: params.env,
     value: readGatewaySecretInputValue(params.cfg, path),
     path,
   });
-  if (!value) {
-    return undefined;
-  }
-  return value;
+  return value || undefined;
 }
 
 /** Resolve the Gateway auth token ref only when token auth can use it. */

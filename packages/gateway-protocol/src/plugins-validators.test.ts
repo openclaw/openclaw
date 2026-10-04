@@ -224,7 +224,7 @@ describe("plugin lifecycle protocol validators", () => {
     expect(validatePluginsInspectParams({ pluginId: "workboard", unexpected: true })).toBe(false);
   });
 
-  it("requires inspection review tokens and complete declared contract surfaces", () => {
+  it("validates artifact reviews and tokenless catalog inspection surfaces", () => {
     const result = {
       ok: true,
       plugin: { id: "workboard", name: "Workboard", installed: true, enabled: false },
@@ -270,12 +270,30 @@ describe("plugin lifecycle protocol validators", () => {
         components: { ...result.components, unexpected: [] },
       }),
     ).toBe(false);
-    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
-    expect(Value.Check(PluginsInspectResultSchema, withoutReviewToken)).toBe(false);
     const { contracts: _contracts, ...withoutContracts } = result.declared;
     expect(Value.Check(PluginsInspectResultSchema, { ...result, declared: withoutContracts })).toBe(
       false,
     );
+
+    const { reviewToken: _reviewToken, ...withoutReviewToken } = result;
+    for (const declaredSurfaceStatus of ["partial", "unavailable"]) {
+      const catalogInspection = {
+        ...withoutReviewToken,
+        plugin: { ...result.plugin, origin: "clawhub", installed: false },
+        source: { kind: "clawhub", packageName: "workboard" },
+        declaredSurfaceStatus,
+      };
+      expect(Value.Check(PluginsInspectResultSchema, catalogInspection)).toBe(true);
+      expect(
+        Value.Check(PluginsInspectResultSchema, { ...catalogInspection, reviewToken: "" }),
+      ).toBe(false);
+      expect(
+        Value.Check(PluginsInspectResultSchema, {
+          ...catalogInspection,
+          declared: withoutContracts,
+        }),
+      ).toBe(false);
+    }
   });
 
   it("validates bounded plugin search requests", () => {
