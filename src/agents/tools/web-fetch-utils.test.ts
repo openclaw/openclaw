@@ -450,6 +450,16 @@ describe("web-fetch-utils htmlToMarkdown entity decoding", () => {
     expect(markdownToText(fenced)).toBe(`${"x\n".repeat(1_000)}after`);
   });
 
+  it("keeps blank lines between paragraphs, headings, and lists in text mode", async () => {
+    const markdown = "Intro:\n\n- one\n  - nested\n\n## Steps\n\n1. first\n2. second";
+    expect(markdownToText(markdown)).toBe("Intro:\n\none\nnested\n\nSteps\n\nfirst\nsecond");
+    const result = await extractBasicHtmlContent({
+      html: "<p>Intro:</p><ul><li>one</li><li>two</li></ul>",
+      extractMode: "text",
+    });
+    expect(result?.text).toBe("Intro:\n\none\ntwo");
+  });
+
   it("truncates without splitting a boundary emoji", () => {
     const prefix = "a".repeat(79);
     const result = truncateWebFetchText(`${prefix}${grin}tail`, 80);
