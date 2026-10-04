@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { live } from "lit/directives/live.js";
 import { t } from "../i18n/index.ts";
 import {
   workboardCardBoardId,
@@ -139,7 +140,7 @@ export function renderWorkboardCardWidget(model: WorkboardWidgetModel): Template
                 <span>${t("workboard.fieldStatus")}</span>
                 <select
                   aria-label=${`${t("workboard.fieldStatus")}: ${card.title}`}
-                  .value=${card.status}
+                  .value=${live(card.status)}
                   ?disabled=${!model.canMutate}
                   @change=${(event: Event) => void model.handleStatusChange(event)}
                 >
