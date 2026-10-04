@@ -35,9 +35,10 @@ function selectedFiles(plans: ReturnType<typeof buildVitestRunPlans>): string[] 
 describe("package directory targets", () => {
   it("routes mixed package owners once beside an explicit boundary", () => {
     const ordinary = "packages/example/src/value.test.ts";
-    const files = [ordinary, fast, worker, markdown, gateway, protocol, boundary];
+    const e2e = "packages/gateway-client/src/example.e2e.test.ts";
+    const files = [ordinary, fast, worker, markdown, gateway, protocol, boundary, e2e];
     const cwd = fixture(files);
-    const plans = buildVitestRunPlans(["packages", gateway, boundary], cwd);
+    const plans = buildVitestRunPlans(["packages", gateway, boundary, e2e], cwd);
 
     expect(selectedFiles(plans)).toEqual(files.toSorted());
     for (const [file, owner] of [
@@ -48,17 +49,22 @@ describe("package directory targets", () => {
       [gateway, "gateway-client"],
       [protocol, "gateway-client"],
       [boundary, "infra"],
+      [e2e, "e2e"],
     ] as const) {
       expect(plans.find((plan) => selectedFiles([plan]).includes(file))).toMatchObject({
         config: `test/vitest/vitest.${owner}.config.ts`,
       });
     }
+    expect(plans.find((plan) => plan.config === "test/vitest/vitest.e2e.config.ts")).toMatchObject({
+      forwardedArgs: [e2e],
+    });
   });
 
-  it.each(["relative", "absolute", "trailing slash"])(
-    "keeps a nested %s directory inside its requested subtree",
+  it.each(["relative", "absolute", "trailing slash", "watch", "glob"])(
+    "keeps %s directory selection bounded",
     (spelling) => {
-      const directory = "packages/example/src";
+      const native = spelling === "watch" || spelling === "glob";
+      const directory = native ? "packages/gateway-client" : "packages/example/src";
       const selected = [`${directory}/one.test.ts`, `${directory}/nested/two.test.ts`];
       const cwd = fixture([
         ...selected,
@@ -71,7 +77,23 @@ describe("package directory targets", () => {
           : spelling === "trailing slash"
             ? `./${directory}/`
             : directory;
-      expect(selectedFiles(buildVitestRunPlans([target], cwd))).toEqual(selected.toSorted());
+      const args =
+        spelling === "watch"
+          ? ["--watch", target]
+          : [spelling === "glob" ? `${target}/**/*.test.ts` : target];
+      const plans = buildVitestRunPlans(args, cwd);
+      if (native) {
+        expect(plans).toEqual([
+          {
+            config: "test/vitest/vitest.gateway-client.config.ts",
+            forwardedArgs: [],
+            includePatterns: [`${directory}/**/*.test.ts`],
+            watchMode: spelling === "watch",
+          },
+        ]);
+      } else {
+        expect(selectedFiles(plans)).toEqual(selected.toSorted());
+      }
     },
   );
 
@@ -122,16 +144,6 @@ describe("package directory targets", () => {
     },
   );
 
-  it("retains a separately named E2E leaf without admitting it through the directory", () => {
-    const e2e = "packages/gateway-client/src/example.e2e.test.ts";
-    const cwd = fixture([gateway, e2e]);
-    const plans = buildVitestRunPlans(["packages/gateway-client", e2e], cwd);
-    expect(selectedFiles(plans)).toEqual([gateway, e2e].toSorted());
-    expect(plans.find((plan) => plan.config === "test/vitest/vitest.e2e.config.ts")).toMatchObject({
-      forwardedArgs: [e2e],
-    });
-  });
-
   it.each([
     { target: "packages/empty", reason: "target-matched-no-test-files" },
     { target: "packages/missing", reason: "path-does-not-exist" },
@@ -147,21 +159,6 @@ describe("package directory targets", () => {
     ]);
     expect(findUnmatchedExplicitTestTargets([target], cwd)).toEqual([
       expect.objectContaining({ target, reason }),
-    ]);
-  });
-
-  it.each([
-    { args: ["--watch", "packages/gateway-client"], watchMode: true },
-    { args: ["packages/gateway-client/**/*.test.ts"], watchMode: false },
-  ])("preserves the native directory/glob selection for $args", ({ args, watchMode }) => {
-    const cwd = fixture([gateway]);
-    expect(buildVitestRunPlans(args, cwd)).toEqual([
-      {
-        config: "test/vitest/vitest.gateway-client.config.ts",
-        forwardedArgs: [],
-        includePatterns: ["packages/gateway-client/**/*.test.ts"],
-        watchMode,
-      },
     ]);
   });
 });

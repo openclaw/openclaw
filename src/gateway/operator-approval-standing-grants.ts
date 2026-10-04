@@ -17,6 +17,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { buildSystemRunApprovalEnvBinding } from "../infra/system-run-approval-binding.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -286,15 +287,17 @@ export function validateCronStandingGrant(
  */
 export function consumeCronStandingGrant(
   params: CronStandingGrantLookupParams,
+  authority?: { assertCurrent: () => void; onCommitted: () => void },
 ): ConsumeCronStandingGrantResult {
-  return lookupCronStandingGrant(params, { recordUse: true });
+  return lookupCronStandingGrant(params, { recordUse: true, authority });
 }
 
 function lookupCronStandingGrant(
   params: CronStandingGrantLookupParams,
-  opts: { recordUse: boolean },
+  opts: { recordUse: boolean; authority?: { assertCurrent: () => void; onCommitted: () => void } },
 ): ConsumeCronStandingGrantResult {
   return runOpenClawStateWriteTransaction((database) => {
+    opts.authority?.assertCurrent();
     if (!tableExists(database.db, STANDING_GRANT_TABLE)) {
       return { outcome: "no-grant" };
     }
@@ -398,6 +401,17 @@ function lookupCronStandingGrant(
     );
     if (updated.numAffectedRows !== 1n) {
       return { outcome: "no-grant" };
+    }
+    opts.authority?.assertCurrent();
+    if (
+      opts.authority &&
+      !stageSqliteTransactionState(database.db, {
+        stage() {},
+        commit: opts.authority.onCommitted,
+        rollback() {},
+      })
+    ) {
+      throw new Error("Cron standing-grant consumption requires its transaction publication owner");
     }
     return {
       outcome: "consumed",

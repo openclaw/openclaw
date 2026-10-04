@@ -1212,6 +1212,18 @@ Standalone recovery probes reuse the read worker without archive or writer admis
 Maintenance finalization takes writer admission only when its worker requests native
 access, then rechecks current entries and retains admission through commit publication.
 
+Projected durable lifecycle upserts commit their entry snapshots, inventory counts,
+and inline maintenance through the existing agent executor. Builders run before the
+synchronous transaction, which compares authoritative rows again; transaction and
+commit grants retain current host authority and prepared maintenance protection.
+Acknowledged results publish entry, identity, and reset facts before releasing the
+writer FIFO. Lost replies reconcile the native receipt without replaying the builder
+or mutation. The existing lifecycle worker reads the final inventory after maintenance
+settles. Scheduler close joins accepted lifecycle work before database teardown.
+Opaque transaction callbacks, process-held incognito, and offline maintenance keep
+their native transaction contract. Schema, retention, durability, and update behavior
+are unchanged.
+
 Maintenance planning and planner statistics updates use the existing agent database
 executor. These metadata commands carry no transcript buffers and do not reserve
 the archive queue while waiting for their database's writer. After cold native
@@ -1448,6 +1460,17 @@ The host captures the physical source before yielding and rechecks its admission
 before returning the result. Cold archives retain their existing restoration
 owner. Native transaction callbacks and process-held incognito transcripts retain
 their synchronous reader; worker failures never fall back to host disk reads.
+
+Turn completion and reply-delivery observation read durable anchors, projection
+readiness, and reply-tail identities through that same history worker. Each batch
+uses one snapshot and refuses stale projections without rebuilding them. Final
+delivery validation retains the existing writer FIFO through synchronous host
+consumption; the native connection's mutation witness also rejects an intervening
+synchronous SDK write. Source identity and current run authority are rechecked
+after reads. Native writer callbacks, shipped synchronous SDK compatibility,
+and process-held incognito retain their existing owners. Context and watermark
+validation remain separate work. Schemas, retention, durability, and update
+behavior are unchanged.
 
 Awaited full-transcript event reads use the same history worker's hydration stream.
 Compaction preflight, reset hooks, BTW context, exports, and the asynchronous SDK
@@ -1830,6 +1853,27 @@ ordinary discovery reads retain committed-state isolation. This avoids preparing
 a child-process snapshot while holding the shared-state write transaction. Agent
 database admission refusals remain with their in-memory admission owner. Schemas,
 retention, configuration, and update behavior are unchanged.
+
+Cron mutations share host-owned receipt-authority custody for the physical shared
+database, across store partitions and approval writers. Runtime mutations, raw
+saves, mutable-load repairs, native grant consumption, and agent-deletion
+authority changes suspend observations before transaction admission. Native
+COMMIT receipts install canonical facts before ordinary replies and business
+notifications. Native compatibility writes publish committed invalidation and
+rebuild through the existing reader before returning. Rollback removes only its
+own barrier; it never fabricates a committed revocation. Lost replies never
+replay writes. Reconciliation requires confirmed native settlement or worker
+exit, and failed retirement retains unavailable custody.
+
+There is one live authority host per physical database. Cron writes use the
+serving Gateway; concurrent direct SQLite mutation is unsupported. Existing
+offline routing and exclusive Doctor maintenance remain unchanged. The close
+prelude seals new work before scheduler cancellation, while accepted persistence
+and receipt finalizers retain their original source through settlement and
+publication. Stored grants survive restart; process-local observations do not.
+This publication foundation preserves receipt revisions, force-run eligibility,
+schemas, retention, and update behavior. Existing final message and execution
+SQL guards remain until their separate consumer cutovers.
 
 Cron display names are prepared through the existing shared-state and history workers.
 Live resolvers retain their physical database generation; cron's mutation owner

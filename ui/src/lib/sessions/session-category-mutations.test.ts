@@ -80,22 +80,51 @@ describe("session category mutations", () => {
     await h.sessions.refresh({ agentId: "main", force: true });
   });
 
-  it("projects a cleared category immediately and preserves its receipt when refresh fails", async () => {
-    const pending = h.sessions.patch(initial.key, { category: null }, options);
-    expect(h.category()).toBeUndefined();
-    h.confirm(0, undefined);
-    await h.listStarted.promise;
-    expect(h.category()).toBeUndefined();
-    await expect(pending).resolves.toMatchObject({ ok: true });
-    h.list.reject(new Error("injected list failure"));
-    await h.list.promise.catch(() => undefined);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(h.category()).toBeUndefined();
-    expect(h.sessions.state.error).toContain("The session move was saved");
-    expect(h.sessions.state.error).toContain("injected list failure");
-  });
+  it.each([false, true])(
+    "settles a cleared category before its list refresh (pin=%s)",
+    async (pin) => {
+      const pending = h.sessions.patch(
+        initial.key,
+        { category: null, ...(pin ? { pinned: true } : {}) },
+        options,
+      );
+      if (pin) {
+        expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true });
+      }
+      expect(h.category()).toBeUndefined();
+      if (pin) {
+        h.replies[0]!.resolve({
+          ok: true,
+          path: "",
+          key: initial.key,
+          entry: { ...initial, category: undefined, pinnedAt: 7, updatedAt: 7 },
+        });
+      } else {
+        h.confirm(0, undefined);
+      }
+      await h.listStarted.promise;
+      expect(h.category()).toBeUndefined();
+      await expect(pending).resolves.toMatchObject({ ok: true });
+      if (pin) {
+        expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 7 });
+        h.list.resolve(
+          sessionsResult(
+            [{ ...initial, category: undefined, pinned: true, pinnedAt: 7, updatedAt: 7 }],
+            7,
+          ),
+        );
+      } else {
+        h.list.reject(new Error("injected list failure"));
+        await h.list.promise.catch(() => undefined);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(h.category()).toBeUndefined();
+        expect(h.sessions.state.error).toContain("The session move was saved");
+        expect(h.sessions.state.error).toContain("injected list failure");
+      }
+    },
+  );
 
   it("keeps the latest A→B→A intent through out-of-order receipts and stale events", async () => {
     const first = h.move("Beta");
@@ -108,20 +137,32 @@ describe("session category mutations", () => {
     expect(h.category()).toBe("Alpha");
     h.categoryEvent("Beta", 2);
     expect(h.category()).toBe("Alpha");
+    h.categoryEvent("External", 9);
+    expect(h.category()).toBe("External");
   });
 
-  it("rolls back a rejected newest move to the earlier confirmed category", async () => {
-    const first = h.move("Beta");
-    const second = h.move(null);
-    h.confirm(0, "Beta");
-    await first;
-    expect(h.category()).toBeUndefined();
-    h.replies[1]!.reject(
-      new GatewayRequestError({ code: "INVALID_REQUEST", message: "move rejected" }),
-    );
-    await expect(second).rejects.toThrow("move rejected");
-    expect(h.category()).toBe("Beta");
-  });
+  it.each([
+    { rejected: 1, newest: null, code: "INVALID_REQUEST", message: "move rejected", kept: "Beta" },
+    { rejected: 0, newest: "Gamma", code: "FORBIDDEN", message: "first denied", kept: "Gamma" },
+  ] as const)(
+    "rolls back only rejected intent $rejected",
+    async ({ rejected, newest, code, message, kept }) => {
+      const moves = [h.move("Beta"), h.move(newest)];
+      if (rejected === 1) {
+        h.confirm(0, "Beta");
+        await moves[0];
+        expect(h.category()).toBeUndefined();
+      }
+      h.replies[rejected]!.reject(new GatewayRequestError({ code, message }));
+      await expect(moves[rejected]).rejects.toThrow(message);
+      expect(h.category()).toBe(kept);
+      if (rejected === 0) {
+        h.confirm(1, "Gamma");
+        await moves[1];
+        expect(h.category()).toBe("Gamma");
+      }
+    },
+  );
   it("does not roll back an uncertain transport failure and never retries the write", async () => {
     const pending = h.sessions.patch(initial.key, { category: "Beta" }, options);
     h.replies[0]!.reject(new Error("connection lost"));
@@ -132,59 +173,32 @@ describe("session category mutations", () => {
     await h.list.promise;
   });
 
-  it("keeps category and pin receipts together without waiting for the list", async () => {
-    const pending = h.sessions.patch(initial.key, { category: null, pinned: true }, options);
-    expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true });
-    expect(h.category()).toBeUndefined();
-    h.replies[0]!.resolve({
-      ok: true,
-      path: "",
-      key: initial.key,
-      entry: { ...initial, category: undefined, pinnedAt: 7, updatedAt: 7 },
-    });
-    await pending;
-    expect(h.sessions.state.result?.sessions[0]).toMatchObject({ pinned: true, pinnedAt: 7 });
-    h.list.resolve(
-      sessionsResult(
-        [{ ...initial, category: undefined, pinned: true, pinnedAt: 7, updatedAt: 7 }],
-        7,
-      ),
-    );
-  });
-
-  it("does not restore an old intent over a newer pending move", async () => {
-    const first = h.move("Beta");
-    const second = h.move("Gamma");
-    h.replies[0]!.reject(new GatewayRequestError({ code: "FORBIDDEN", message: "first denied" }));
-    await expect(first).rejects.toThrow("first denied");
-    expect(h.category()).toBe("Gamma");
-    h.confirm(1, "Gamma");
-    await second;
-    expect(h.category()).toBe("Gamma");
-  });
-
-  it("does not project a late receipt into a replacement session", async () => {
-    const pending = h.move("Beta");
-    const reading = h.sessions.refresh({ agentId: "main", force: true });
-    h.list.resolve(
-      sessionsResult(
-        [{ ...initial, sessionId: "replacement", category: "Replacement", updatedAt: 9 }],
-        9,
-      ),
-    );
-    await reading;
-    h.confirm(0, "Beta");
-    await pending;
-    expect(h.category()).toBe("Replacement");
-  });
-
-  it("retires placement intent when the connection is replaced", async () => {
-    const pending = h.move("Beta");
-    h.publish(false, null);
-    h.confirm(0, "Beta");
-    await expect(pending).resolves.toBeNull();
-    expect(h.sessions.state.error).toBeNull();
-  });
+  it.each(["session", "connection"])(
+    "retires placement intent when its %s is replaced",
+    async (owner) => {
+      const pending = h.move("Beta");
+      if (owner === "session") {
+        const reading = h.sessions.refresh({ agentId: "main", force: true });
+        h.list.resolve(
+          sessionsResult(
+            [{ ...initial, sessionId: "replacement", category: "Replacement", updatedAt: 9 }],
+            9,
+          ),
+        );
+        await reading;
+      } else {
+        h.publish(false, null);
+      }
+      h.confirm(0, "Beta");
+      if (owner === "session") {
+        await pending;
+        expect(h.category()).toBe("Replacement");
+      } else {
+        await expect(pending).resolves.toBeNull();
+        expect(h.sessions.state.error).toBeNull();
+      }
+    },
+  );
   it("keeps a confirmed category ahead of a read started before the write", async () => {
     const reading = h.sessions.refresh({ agentId: "main", force: true });
     const pending = h.move("Beta");
@@ -193,14 +207,6 @@ describe("session category mutations", () => {
     h.list.resolve(sessionsResult([{ ...initial }], 1));
     await reading;
     expect(h.category()).toBe("Beta");
-  });
-
-  it("continues admitting newer authoritative category events", async () => {
-    const pending = h.move("Beta");
-    h.confirm(0, "Beta");
-    await pending;
-    h.categoryEvent("External", 9);
-    expect(h.category()).toBe("External");
   });
 });
 
