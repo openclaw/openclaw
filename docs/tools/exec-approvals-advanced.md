@@ -338,8 +338,9 @@ Generic model:
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
 - Google Chat native approval cards handle exec and plugin approvals that originate from Google
-  Chat spaces or threads when stable `users/<id>` approvers resolve from `dm.allowFrom` or
-  `defaultTo`; they do not use reaction events for decisions
+  Chat spaces or threads when stable `users/<id>` approvers resolve from `allowFrom` or
+  `defaultTo`; only those approvers can decide a card, and they do not use reaction events for
+  decisions
 - WhatsApp and Signal reaction approval delivery are gated by `approvals.exec` and
   `approvals.plugin`; they do not have `channels.<channel>.execApprovals` blocks
 
@@ -359,7 +360,7 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 - QQ bot: `channels.qqbot.execApprovals.*`
-- Google Chat: configure stable approvers with `channels.googlechat.dm.allowFrom` or
+- Google Chat: configure stable approvers with `channels.googlechat.allowFrom` or
   `channels.googlechat.defaultTo`; no `execApprovals` block is required
 - WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp
 - Signal: use `approvals.exec` and `approvals.plugin` to route approval prompts to Signal
