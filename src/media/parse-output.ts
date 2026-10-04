@@ -115,6 +115,17 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
   if (!normalized) {
     return true;
   }
+  const strictIp = parseCanonicalIpAddress(normalized);
+  if (strictIp) {
+    if (isIpv4Address(strictIp)) {
+      return isBlockedSpecialUseIpv4Address(strictIp);
+    }
+    if (isBlockedSpecialUseIpv6Address(strictIp)) {
+      return true;
+    }
+    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
+    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
+  }
   if (!normalized.includes(".")) {
     return true;
   }
@@ -127,18 +138,6 @@ function isBlockedRemoteMediaHostname(hostname: string): boolean {
     normalized.endsWith(".internal")
   ) {
     return true;
-  }
-
-  const strictIp = parseCanonicalIpAddress(normalized);
-  if (strictIp) {
-    if (isIpv4Address(strictIp)) {
-      return isBlockedSpecialUseIpv4Address(strictIp);
-    }
-    if (isBlockedSpecialUseIpv6Address(strictIp)) {
-      return true;
-    }
-    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(strictIp);
-    return embeddedIpv4 ? isBlockedSpecialUseIpv4Address(embeddedIpv4) : false;
   }
 
   if (normalized.includes(":") && !parseLooseIpAddress(normalized)) {
