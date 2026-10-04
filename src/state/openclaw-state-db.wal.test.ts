@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { isMainThread } from "node:worker_threads";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
+import { z } from "zod";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
@@ -190,7 +191,9 @@ it("analyzes once per periodic pass, preserves retained snapshots, and admits ru
       ),
     );
   // Preserve real scheduler continuation and native command execution while exposing SQL counts.
-  walAdmission.registerSqliteWalWorkerMaintenance(database.db, async (request) => execute(request));
+  walAdmission.registerSqliteWalWorkerMaintenance(database.db, async (request) =>
+    z.object({ reclaimedPages: z.number() }).parse(execute(request)),
+  );
   const statements = vi.spyOn(database.db, "exec");
   const analyses = () =>
     statements.mock.calls.filter(([sql]) => sql.includes("ANALYZE main")).length;
