@@ -18,6 +18,8 @@ import { formatFastModeValue } from "../shared/fast-mode.js";
 import {
   formatTuiLevelCommandUsage,
   helpText,
+  isTuiBtwCommand,
+  isTuiSlashStopCommand,
   parseCommand,
   resolveTuiCommandDescriptor,
   type TuiCommandHandlerName,
@@ -51,15 +53,6 @@ import {
   type TuiChatSubmitSnapshot,
 } from "./tui-submit-state.js";
 import type { AgentSummary, GatewayStatusSummary } from "./tui-types.js";
-
-function isBtwCommand(text: string): boolean {
-  return /^\/(?:btw|side)(?::|\s|$)/i.test(text.trim());
-}
-
-function isSlashStopCommand(text: string): boolean {
-  const trimmed = text.trim();
-  return trimmed.startsWith("/") && isAbortRequestText(trimmed);
-}
 
 const TERMINAL_CHAT_SEND_FAILURE_MESSAGE = "Chat failed before the run started; try again.";
 
@@ -96,9 +89,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     boundary: null as "new" | "reset" | null,
     epoch: 0,
   };
-  type PickerRequest = { overlay?: OverlayHandle; refreshModels?: (agentId?: string) => void };
+  type PickerRequest = { overlay?: OverlayHandle; refreshModels?: TuiBackend["onModelsChanged"] };
   let pickerRequest: PickerRequest | null = null;
-  client.onModelsChanged = (agentId) => pickerRequest?.refreshModels?.(agentId);
+  client.onModelsChanged = (scope) => pickerRequest?.refreshModels?.(scope);
 
   // Hold one owner through the full identity transition so later input cannot
   // target the session being retired while create/reset awaits the backend.
@@ -127,7 +120,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       message,
       transition: sessionTransition,
       snapshot,
-      allowDuringPending: isBtwCommand(message),
+      allowDuringPending: isTuiBtwCommand(message),
     });
 
   const reportBlockedMessageSubmit = (admission: TuiChatSubmitBlock) => {
@@ -264,7 +257,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
   const openModelSelector = () => {
     const request = beginPickerRequest();
     const { selection, isCurrent } = captureSessionIncarnation();
-    let models = client.getKnownModels?.({ agentId: selection.agentId }) ?? [];
+    let models = client.getKnownModels?.(selection) ?? [];
     const selector = createSearchableSelectList([], 9);
     const update = (next: typeof models, emptyMessage = "No models available") => {
       if (request !== pickerRequest || !isCurrent()) {
@@ -279,9 +272,12 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       );
       tui.requestRender();
     };
-    request.refreshModels = (agentId) => {
-      if (agentId === selection.agentId) {
-        const known = client.getKnownModels?.({ agentId });
+    request.refreshModels = (scope) => {
+      if (
+        scope.agentId === selection.agentId &&
+        (!scope.sessionKey || scope.sessionKey === selection.sessionKey)
+      ) {
+        const known = client.getKnownModels?.(selection);
         update(known ?? [], known ? "No models available" : "Checking models...");
       }
     };
@@ -308,7 +304,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       request,
     );
     void client
-      .listModels({ agentId: selection.agentId })
+      .listModels(selection)
       .then(client.getKnownModels ? undefined : update, (err: unknown) => {
         if (request === pickerRequest && isCurrent()) {
           const message = `model list failed: ${formatTuiErrorMessage(err)}`;
@@ -861,9 +857,9 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       reportBlockedMessageSubmit(admission);
       return;
     }
-    const isBtw = isBtwCommand(text);
+    const isBtw = isTuiBtwCommand(text);
     const forgetRunId = isBtw ? forgetLocalBtwRunId : forgetLocalRunId;
-    if (isSlashStopCommand(text) || (hasTrackedAbortTarget() && isAbortRequestText(text))) {
+    if (isTuiSlashStopCommand(text) || (hasTrackedAbortTarget() && isAbortRequestText(text))) {
       await abortActive({ preferActive: true });
       return;
     }

@@ -105,6 +105,59 @@ describe("GatewayChatClient", () => {
     },
   );
 
+  it("isolates session-scoped catalogs only when the Gateway advertises them", async () => {
+    const request = mockRequest()
+      .mockResolvedValueOnce({
+        models: [{ provider: "fixture", id: "first", name: "First" }],
+      })
+      .mockResolvedValueOnce({
+        models: [{ provider: "fixture", id: "second", name: "Second" }],
+      });
+    const client = createClient();
+    client.hello = hello(["models.list"], undefined, [
+      GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG,
+      GATEWAY_SERVER_CAPS.SESSION_SCOPED_MODEL_CATALOG,
+    ]);
+
+    await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
+    await client.listModels({ agentId: "work", sessionKey: "agent:work:second" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
+      agentId: "work",
+      sessionKey: "agent:work:first",
+      includeDetails: true,
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      agentId: "work",
+      sessionKey: "agent:work:second",
+      includeDetails: true,
+    });
+    expect(
+      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:first" })?.[0]?.id,
+    ).toBe("first");
+    expect(
+      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
+    ).toBe("second");
+  });
+
+  it("keeps session keys off requests to older Gateways", async () => {
+    const request = mockRequest({
+      models: [{ provider: "fixture", id: "shared", name: "Shared" }],
+    });
+    const client = createClient();
+    client.hello = hello(["models.list"], undefined, [GATEWAY_SERVER_CAPS.PUBLISHED_MODEL_CATALOG]);
+
+    await client.listModels({ agentId: "work", sessionKey: "agent:work:first" });
+
+    expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+      agentId: "work",
+      includeDetails: true,
+    });
+    expect(
+      client.getKnownModels({ agentId: "work", sessionKey: "agent:work:second" })?.[0]?.id,
+    ).toBe("shared");
+  });
+
   it("retains agent-scoped choices during a held refresh but cannot republish after stop", async () => {
     const models = [{ provider: "fixture", id: "known", name: "Known" }];
     const held = createDeferred<{ models: typeof models }>();
