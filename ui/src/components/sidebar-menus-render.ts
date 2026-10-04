@@ -52,6 +52,8 @@ import {
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 
+export { renderSidebarPluginNavigationMenuForController } from "./app-sidebar-nav-menus.ts";
+
 export { renderSidebarPeopleFilterMenuForController } from "./app-sidebar-people-filter-menu.ts";
 
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
