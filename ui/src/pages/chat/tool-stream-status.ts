@@ -137,8 +137,16 @@ export function reconcileWaitingApprovalsFromSnapshot(
   );
   const queuedIds = new Set(matchingApprovals.map((approval) => approval.id));
   let changed = false;
-  for (const approvalId of waiting.keys()) {
-    if (!queuedIds.has(approvalId)) {
+  for (const [approvalId, status] of waiting) {
+    if (queuedIds.has(approvalId)) {
+      if (!status.observedInSnapshot) {
+        waiting.set(approvalId, { ...status, observedInSnapshot: true });
+        changed = true;
+      }
+    } else if (status.observedInSnapshot) {
+      // A list request can start before a live waiting-approval event. Its
+      // empty response does not supersede that event until a snapshot has
+      // first established custody of the same approval.
       waiting.delete(approvalId);
       changed = true;
     }
@@ -158,6 +166,7 @@ export function reconcileWaitingApprovalsFromSnapshot(
       approvalId: approval.id,
       toolCallId: null,
       runId,
+      observedInSnapshot: true,
     });
     changed = true;
   }

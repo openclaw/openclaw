@@ -9,7 +9,7 @@ const suite = createChatFlowE2eSuite();
 let proofDir: string;
 beforeEach(() => {
   if (capture) {
-    proofDir = createControlUiE2eArtifactDir("duplicate-session-naming");
+    proofDir = createControlUiE2eArtifactDir("chat-startup-progress");
   }
 });
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";

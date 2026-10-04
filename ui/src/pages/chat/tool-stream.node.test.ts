@@ -330,6 +330,7 @@ describe("app-tool-stream approval lifecycle", () => {
       approvalId: "approval-1",
       toolCallId: null,
       runId: "run-1",
+      observedInSnapshot: true,
     });
   });
 
@@ -348,8 +349,24 @@ describe("app-tool-stream approval lifecycle", () => {
   it("clears only parked runs whose approvals leave the queue snapshot", () => {
     const host = createHost({
       waitingApprovalStatuses: new Map([
-        ["approval-1", { approvalId: "approval-1", toolCallId: "tool-1", runId: "run-1" }],
-        ["approval-2", { approvalId: "approval-2", toolCallId: "tool-2", runId: "run-2" }],
+        [
+          "approval-1",
+          {
+            approvalId: "approval-1",
+            toolCallId: "tool-1",
+            runId: "run-1",
+            observedInSnapshot: true,
+          },
+        ],
+        [
+          "approval-2",
+          {
+            approvalId: "approval-2",
+            toolCallId: "tool-2",
+            runId: "run-2",
+            observedInSnapshot: true,
+          },
+        ],
       ]),
     });
 
@@ -357,6 +374,27 @@ describe("app-tool-stream approval lifecycle", () => {
       reconcileWaitingApprovalsFromSnapshot(host, [{ ...approval("run-2"), id: "approval-2" }]),
     ).toBe(true);
     expect([...host.waitingApprovalStatuses!.keys()]).toEqual(["approval-2"]);
+  });
+
+  it("does not let a stale empty snapshot erase a newer live waiting event", () => {
+    const host = createHost({ waitingApprovalStatuses: new Map() });
+    learnRun(host, "run-1");
+    handleAgentEvent(
+      host,
+      agentEvent("run-1", 2, "lifecycle", {
+        phase: "waiting-approval",
+        approvalId: "approval-1",
+        toolCallId: "tool-1",
+      }),
+    );
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [])).toBe(false);
+    expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(true);
+
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [approval("run-1")])).toBe(true);
+    expect(host.waitingApprovalStatuses?.get("approval-1")?.observedInSnapshot).toBe(true);
+    expect(reconcileWaitingApprovalsFromSnapshot(host, [])).toBe(true);
+    expect(host.waitingApprovalStatuses?.has("approval-1")).toBe(false);
   });
 
   it("clears hydrated state when the lifecycle resolution arrives", () => {
