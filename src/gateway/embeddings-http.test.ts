@@ -15,6 +15,9 @@ import type {
 import type { MemoryEmbeddingProviderAdapter } from "../plugins/memory-embedding-providers.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startGenericEmbeddingServer } from "./embeddings-http.test-helpers.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
@@ -120,7 +123,8 @@ beforeAll(async () => {
   });
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await writeEmbeddingConfig({});
   const builder = createPluginRegistry({
     logger: {
       info() {},
@@ -551,37 +555,92 @@ describe("OpenAI-compatible embeddings HTTP API (e2e)", () => {
     );
   });
 
-  it("rejects x-openclaw-model for trusted write-only callers", async () => {
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
-    const server = await startOpenAiCompatGatewayServer({
-      startGatewayServer,
-      port: portClaim,
-      auth: { mode: "none" },
-      openAiChatCompletionsEnabled: true,
-    });
-    try {
-      createEmbeddingProviderMock.mockClear();
-      const res = await fetch(`http://127.0.0.1:${port}/v1/embeddings`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          "x-openclaw-scopes": "operator.write",
-          "x-openclaw-model": "openai/text-embedding-3-small",
-        },
-        body: JSON.stringify({
-          model: "openclaw/default",
-          input: "hello",
-        }),
-      });
-      expect(res.status).toBe(403);
-      const json = (await res.json()) as { error?: { type?: string; message?: string } };
-      expect(json.error?.type).toBe("forbidden");
-      expect(json.error?.message).toBe("missing scope: operator.admin");
-      expect(createEmbeddingProviderMock).not.toHaveBeenCalled();
-    } finally {
-      await server.close({ reason: "embeddings model override auth test done" });
-    }
+  it("enforces trusted-proxy embedding scopes before provider work", async () => {
+    await withEnvAsync(
+      { OPENCLAW_GATEWAY_TOKEN: undefined, OPENCLAW_GATEWAY_PASSWORD: undefined },
+      async () => {
+        const previousAuth = testState.gatewayAuth;
+        const auth = {
+          mode: "trusted-proxy" as const,
+          trustedProxy: {
+            userHeader: "x-forwarded-user",
+            requiredHeaders: ["x-forwarded-proto"],
+            allowLoopback: true,
+          },
+        };
+        testState.gatewayAuth = auth;
+        let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
+        try {
+          await writeEmbeddingConfig({
+            gateway: {
+              auth,
+              trustedProxies: ["127.0.0.1"],
+              roles: {
+                default: "reader",
+                definitions: {
+                  reader: { agents: "*", scopes: ["operator.read"], sessions: { others: "view" } },
+                  writer: { agents: "*", scopes: ["operator.write"], sessions: { others: "view" } },
+                },
+              },
+            },
+          });
+          const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+          server = await startOpenAiCompatGatewayServer({
+            startGatewayServer,
+            port: portClaim,
+            auth,
+            openAiChatCompletionsEnabled: true,
+          });
+          registerEmbeddingProvider(openAiAdapter);
+          for (const role of ["reader", "writer"]) {
+            setUserProfileRole(ensureProfileForEmail(`${role}@embeddings.example.test`).id, role);
+          }
+          const post = (role: "reader" | "writer", override?: string) =>
+            fetch(`http://127.0.0.1:${portClaim.port}/v1/embeddings`, {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                "x-forwarded-for": "198.51.100.42",
+                "x-forwarded-proto": "https",
+                "x-forwarded-user": `${role}@embeddings.example.test`,
+                "x-openclaw-scopes": role === "reader" ? "operator.read" : "operator.write",
+                ...(override ? { "x-openclaw-model": override } : {}),
+              },
+              body: JSON.stringify({ model: "openclaw/default", input: "hello" }),
+            });
+          createEmbeddingProviderMock.mockClear();
+          embedBatchMock.mockClear();
+          const denied = await post("reader");
+          expect({
+            status: denied.status,
+            providersCreated: createEmbeddingProviderMock.mock.calls.length,
+            embeddingCalls: embedBatchMock.mock.calls.length,
+          }).toEqual({ status: 403, providersCreated: 0, embeddingCalls: 0 });
+          expect(await denied.json()).toMatchObject({
+            error: { type: "forbidden", message: "missing scope: operator.write" },
+          });
+
+          await expectDefaultEmbeddingResponse(await post("writer"));
+          expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+          expect(embedBatchMock).toHaveBeenCalledOnce();
+
+          const override = await post("writer", "openai/text-embedding-3-small");
+          expect(override.status).toBe(403);
+          expect(await override.json()).toMatchObject({
+            error: { type: "forbidden", message: "missing scope: operator.admin" },
+          });
+          expect(createEmbeddingProviderMock).toHaveBeenCalledOnce();
+          expect(embedBatchMock).toHaveBeenCalledOnce();
+        } finally {
+          try {
+            await server?.close({ reason: "embeddings scope admission test done" });
+          } finally {
+            testState.gatewayAuth = previousAuth;
+            await writeEmbeddingConfig({});
+          }
+        }
+      },
+    );
   });
 
   it("rejects oversized batches", async () => {
