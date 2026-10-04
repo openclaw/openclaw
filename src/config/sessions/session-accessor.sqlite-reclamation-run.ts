@@ -243,6 +243,14 @@ export async function runSqliteSessionReclamation(params: {
         params.plan.databaseOptions,
         async () => {
           assertRequestCurrent();
+          if (
+            params.plan.kind === "maintenance-plan" ||
+            params.plan.kind === "maintenance-statistics" ||
+            params.plan.kind === "maintenance-age"
+          ) {
+            // Metadata uses its worker's generation claim, not a host read admission.
+            return undefined;
+          }
           const database = getOpenClawAgentDatabaseIfOpen(params.plan.databaseOptions);
           // Reuse an already-owned handle, but never open a host connection for reclamation.
           return database && !database.db.isTransaction
