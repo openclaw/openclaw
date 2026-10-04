@@ -3381,16 +3381,17 @@ a:is(
   box-shadow: 0 0 0 2px var(--sidebar-bg);
 }
 
-/* "Pages" section head: zone-style label plus the pin-editor affordance. */
-.sidebar-nav__head {
-  position: absolute;
-  z-index: 1;
-  top: 5px;
-  right: 0;
+.sidebar-nav__lead {
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 8px 0 12px;
+  align-items: flex-start;
+  min-width: 0;
+  min-height: 32px;
+  padding-inline-end: 8px;
+}
+
+.sidebar-nav__lead > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .sidebar-nav__head-action {
@@ -3399,6 +3400,7 @@ a:is(
   justify-content: center;
   width: 22px;
   height: 22px;
+  margin-block-start: 5px;
   flex: none;
   border: none;
   border-radius: var(--radius-md);
@@ -3422,10 +3424,6 @@ a:is(
 @media (hover: none), (pointer: coarse) {
   .sidebar-nav__head-action {
     opacity: 1;
-  }
-
-  .sidebar-home-session-states {
-    transform: translateX(-25px);
   }
 }
 
@@ -3451,14 +3449,6 @@ a:is(
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: transform var(--duration-fast) ease;
-}
-
-/* The Pages editor shares Home's row. Move every trailing state together so
-   its hover/focus hitbox never covers progress, warning, or draft status. */
-.sidebar-nav:hover .sidebar-home-session-states,
-.sidebar-nav:focus-within .sidebar-home-session-states {
-  transform: translateX(-25px);
 }
 
 /* Zone 5: product chrome in one slim footer bar. The shell footer's top

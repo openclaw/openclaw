@@ -325,9 +325,10 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   `;
 }
 
-export function renderAppSidebarPagesHead(host: AppSidebarRenderHost) {
+export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unknown) {
   return html`
-    <div class="sidebar-nav__head">
+    <div class="sidebar-nav__lead">
+      ${row}
       <span class="sidebar-recent-sessions__label-text sr-only">${t("nav.pages")}</span>
       <button
         type="button"
@@ -433,10 +434,8 @@ export function renderAppSidebarZoneEntry(
   entry: SidebarZoneEntry,
   sessionRows: ReadonlyMap<string, SidebarRecentSession>,
   pluginTabs: ReadonlyMap<string, GatewayControlUiPluginTab>,
+  lead: boolean,
 ) {
-  if (entry.type === "route" && !host.sidebarMenus.isRouteEnabled(entry.route)) {
-    return nothing;
-  }
   const serialized = serializeSidebarEntry(entry);
   const dropPosition =
     host.sessionOrganizer.sidebarZoneDropTarget?.entry === serialized
@@ -487,7 +486,7 @@ export function renderAppSidebarZoneEntry(
         host.sessionOrganizer.handleSidebarZoneDragOver(event, serialized)}
       @drop=${(event: DragEvent) => host.sessionOrganizer.handleSidebarZoneDrop(event, serialized)}
     >
-      ${content}
+      ${lead ? renderAppSidebarPagesHead(host, content) : content}
       ${renderSidebarReorderMenu({
         label,
         kind: "entry",

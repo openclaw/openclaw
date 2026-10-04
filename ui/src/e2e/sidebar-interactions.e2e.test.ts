@@ -328,7 +328,7 @@ suite.define(() => {
 
     try {
       const sidebar = page.locator("openclaw-app-sidebar");
-      const moreButton = sidebar.locator(".sidebar-nav__head-action");
+      const moreButton = sidebar.getByRole("button", { name: "Edit pinned items", exact: true });
       const moreMenu = await openSidebarMoreMenu(page);
       await moreMenu.getByRole("menuitem", { name: "Edit pinned items" }).click();
       const pinItems = sidebar
@@ -406,9 +406,9 @@ suite.define(() => {
         .toBe(true);
       await page.keyboard.press("Tab");
       await expect.poll(() => menu.count()).toBe(0);
-      const homeLink = sidebar.locator(".nav-item--home");
+      const nextLink = sidebar.locator('[data-sidebar-entry="route:agents-home"] .nav-item');
       await expect
-        .poll(() => homeLink.evaluate((element) => element === document.activeElement))
+        .poll(() => nextLink.evaluate((element) => element === document.activeElement))
         .toBe(true);
     } finally {
       await suite.closeBrowserContext(context);
