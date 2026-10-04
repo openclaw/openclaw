@@ -16,6 +16,7 @@ const acknowledgedPrefix = "a".repeat(4_000);
 const completeReply = `${acknowledgedPrefix}${"b".repeat(200)}`;
 const replacementReply = "provider-final replacement";
 const requests: TeamsLoopbackRequest[] = [];
+const streamedTextByScenario = new Map<string, string>();
 
 const provider = createServer((request, response) => {
   const chunks: Buffer[] = [];
@@ -27,10 +28,21 @@ const provider = createServer((request, response) => {
       type?: string;
       text?: string;
       entities?: unknown[];
+      channelData?: { streamType?: string };
     };
     const scenario = request.url?.slice(1) ?? "";
     const priorScenarioRequests = requests.filter((entry) => entry.scenario === scenario).length;
+    // Teams requires every streaming update and the final message to extend
+    // the previously streamed text.
+    const streamedText = streamedTextByScenario.get(scenario) ?? "";
+    const carriesStreamedText =
+      activity.type === "message" || activity.channelData?.streamType === "streaming";
+    const prefixViolation =
+      scenario.startsWith("prefix-") &&
+      carriesStreamedText &&
+      !(activity.text ?? "").startsWith(streamedText);
     const rejected =
+      prefixViolation ||
       scenario === "no-ack" ||
       ((scenario === "cancel-replacement" || scenario === "presentation-cancel") &&
         priorScenarioRequests > 0) ||
@@ -38,6 +50,9 @@ const provider = createServer((request, response) => {
       (scenario === "presentation-timeout" && priorScenarioRequests === 2) ||
       (activity.text?.length ?? 0) > 4_000;
     const status = rejected ? 403 : 201;
+    if (!rejected && activity.channelData?.streamType === "streaming") {
+      streamedTextByScenario.set(scenario, activity.text ?? "");
+    }
     requests.push({
       scenario,
       type: activity.type ?? "",
@@ -51,8 +66,9 @@ const provider = createServer((request, response) => {
         rejected
           ? {
               error: {
-                message:
-                  scenario === "presentation-timeout"
+                message: prefixViolation
+                  ? "Request streamed content should contain the previously streamed content"
+                  : scenario === "presentation-timeout"
                     ? "exceeded streaming time"
                     : scenario.startsWith("cancel") || scenario === "presentation-cancel"
                       ? "Content stream was canceled by user"
@@ -395,6 +411,35 @@ describe("Teams native final text preparation", () => {
       .join("\n");
     expect(deliveredText.split("First distinct result.").length - 1).toBe(1);
     expect(deliveredText.split("Second distinct result").length - 1).toBe(1);
+  });
+
+  it("finalizes a progress table reply as an extension of the streamed text", async () => {
+    const scenario = "prefix-progress-table";
+    const text = "Tools found:\n\n| Tool | Scope |\n|---|---|\n| whoami | Graph |\n| list | MCP |";
+    const { controller, firstAcknowledgement, logger } = createLoopbackController(scenario, {
+      streaming: { mode: "progress", progress: { toolProgress: true } },
+    });
+    await controller.pushPlanProgress([{ step: "List tools", status: "in_progress" }]);
+    await firstAcknowledgement;
+
+    expect(controller.preparePayload({ text })).toBeUndefined();
+    const result = await controller.finalize();
+
+    const scenarioRequests = requests.filter((request) => request.scenario === scenario);
+    expect(scenarioRequests.map((request) => request.status)).not.toContain(403);
+    expect(logger.error).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      visibleReplySent: true,
+      content: expect.stringContaining("```"),
+      logicalContent: text,
+      messageId: `stream-${scenario}`,
+    });
+    expect(scenarioRequests.at(-1)).toEqual({
+      scenario,
+      type: "message",
+      text: result.content,
+      status: 201,
+    });
   });
 
   it("preserves required AI metadata when the SDK completes a timed-out stream by update", async () => {

@@ -403,12 +403,22 @@ export function createTeamsReplyStreamController(params: {
       // A native stream owns one final segment. Later progress payloads use
       // block delivery, just like later partial-mode segments after tools.
       if (streamMode === "progress" && payload.text && !nativeDispatchStarted) {
+        // Teams rejects streamed text that does not extend what it already
+        // accepted. Stream the rendered final once so close() resends that
+        // same text instead of replacing an in-flight raw Markdown chunk.
+        const activity = finalStreamActivity(payload.text);
         try {
-          stream.emit(payload.text);
+          replacementTextAwaitingAcknowledgement = {
+            text: activity.text!,
+            logicalText: payload.text,
+          };
+          stream.emit(activity);
+          queuedFinalActivity = activity;
           emittedText = payload.text;
           nativeDispatchStarted = true;
           tokensEmitted = true;
         } catch (err) {
+          replacementTextAwaitingAcknowledgement = undefined;
           if (isStreamCancelledError(err)) {
             canceledLocally = true;
             return undefined;
