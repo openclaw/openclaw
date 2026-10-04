@@ -424,6 +424,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/voice-call/src/runtime.realtime-routing.test.ts",
   "extensions/voice-call/src/webhook.auto-response.lifecycle.test.ts",
   "extensions/voice-call/src/webhook.hangup-once.lifecycle.test.ts",
+  "extensions/voice-call/src/webhook/realtime-handler.transcript-store.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.batched-reply.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.response-prefix.test.ts",
   "extensions/whatsapp/src/send.delivery-recovery.test.ts",
