@@ -665,7 +665,7 @@ export async function clearActivePluginRegistry(
           if (registryHasPluginHostCleanupWork(previousRegistry)) {
             // Gateway shutdown releases runtime resources; only disable/removal erases session state.
             await cleanupWork.track(() =>
-              disposePluginRegistryInstances(previousRegistry, undefined, {
+              disposePluginRegistryInstances(previousRegistry, () => state.activeRegistry, {
                 cfg,
                 runContextCleanup,
               }),
