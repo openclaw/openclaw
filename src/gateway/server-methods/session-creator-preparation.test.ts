@@ -429,7 +429,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
     }, 1);
   });
 
-  it("reselects the current default root after legacy discovery and a new default appears", async () => {
+  it("invalidates creator visibility when the canonical root is replaced", async () => {
     await withCreatorRows(async ({ stateDir, creatorId, keys }) => {
       const sessionKey = keys[0]!;
       const client = eventClients(creatorId)[0]!.client;
@@ -471,7 +471,7 @@ describe("creator preparation at synchronous fan-out boundaries", () => {
       expect(state.db.isOpen).toBe(false);
       const legacyRoot = path.join(path.dirname(stateDir), ".clawdbot");
       fs.renameSync(stateDir, legacyRoot);
-      expect(receive()).toBe(true);
+      expect(receive()).toBe(false);
       fs.mkdirSync(stateDir);
       // Keep the visibility snapshot warm: suggestion roles must still select the new store.
       expect(receive()).toBe(false);
