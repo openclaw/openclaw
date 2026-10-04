@@ -315,19 +315,25 @@ function isBenignDangerousExecMatch(
     String.raw`(?:\brequire\s*\(\s*["'](?:node:)?child_process["']\s*\)|(?:\(\s*)?(?:await\s+)?import\s*\(\s*["'](?:node:)?child_process["']\s*\)\s*\)?)\s*(?:\.\s*|\[\s*)$`,
   ).test(prefix);
   const memberReceiver = prefix.match(/(\w+)\s*\.\s*$/)?.[1];
-  let receiver: string | undefined;
-  // Computed and member calls require a known receiver for every watched
-  // method. This excludes RegExp.exec and similarly named bundled helpers.
+  if (inlineChildProcessReceiver) {
+    return false;
+  }
+  // Computed calls require a known receiver for every watched method. Direct
+  // member calls preserve the existing scanner behavior, with provenance only
+  // for `.exec` so RegExp.exec and similar helpers remain excluded.
   if (charAtMatch === '"' || charAtMatch === "'") {
-    receiver = prefix.match(/(\w+)\s*\[\s*$/)?.[1];
-  } else if (memberReceiver || inlineChildProcessReceiver) {
-    receiver = memberReceiver;
-  } else {
+    const receiver = prefix.match(/(\w+)\s*\[\s*$/)?.[1];
+    return (
+      !receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver))
+    );
+  }
+  if (!memberReceiver) {
     return !methodAliases.has(command);
   }
   return (
-    !inlineChildProcessReceiver &&
-    (!receiver || (!namespaceAliases.has(receiver) && !LITERAL_NAMESPACE_RECEIVERS.has(receiver)))
+    command === "exec" &&
+    !namespaceAliases.has(memberReceiver) &&
+    !LITERAL_NAMESPACE_RECEIVERS.has(memberReceiver)
   );
 }
 
