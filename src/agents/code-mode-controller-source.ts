@@ -46,6 +46,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
   const GuestTypeError = TypeError;
   const GuestRangeError = RangeError;
   const stringifyJson = JSON.stringify;
+  // Bridge payloads carry trusted failure codes; guest JSON replacements must not rewrite them.
+  const parseJson = JSON.parse;
   function emitOutput(entry) {
     const count = output.push(entry);
     if (hostOutput) hostOutput(encodeFinalValue(entry));
@@ -204,11 +206,14 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     const entry = pending.get(String(id));
     if (!entry) return false;
     pending.delete(String(id));
+    // Workers pass host-encoded strings; avoid guest-mutable String coercion.
     let parsed = null;
-    try {
-      parsed = JSON.parse(String(payload));
-    } catch {
-      parsed = String(payload);
+    if (typeof payload === "string") {
+      try {
+        parsed = parseJson(payload);
+      } catch {
+        parsed = payload;
+      }
     }
     if (ok) {
       entry.resolve(parsed);
@@ -228,6 +233,14 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       entry.reject(error);
     }
     return true;
+  }
+
+  function settleBatch(json) {
+    const replies = parseJson(json);
+    for (let index = 0; index < replies.length; index++) {
+      const reply = replies[index];
+      settle(reply.id, reply.ok, reply.json);
+    }
   }
 
   function nodeHandle(descriptor) {
@@ -281,7 +294,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       if (!Constructor) throw error;
       const typed = new Constructor(error.message);
       typed.stack = error.stack;
-      rememberBridgeError(typed);
+      const bridgeCode = bridgeFailureCode(error);
+      if (bridgeCode) rememberBridgeError(typed, bridgeCode);
       throw typed;
     }
   }
@@ -514,6 +528,7 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     json: { value: (value) => emitOutput({ type: "json", value: safe(value, true) }), enumerable: true },
     yield_control: { value: (reason) => request("yield", [reason]), enumerable: true },
     __openclawSettleBridge: { value: settle },
+    __openclawSettleBridgeBatch: { value: settleBatch },
     __openclawBridgeFailureCode: { value: bridgeFailureCode },
     __openclawDrainQueuedRequests: { value: drainQueuedRequests },
     __openclawAdmissionError: { value: () => admissionError },

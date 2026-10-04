@@ -209,6 +209,20 @@ describe.each(["node", "quickjs"] as const)("Code Mode %s bridge input failures"
     expect(target.execute).toHaveBeenCalledOnce();
   });
 
+  it("ignores guest String and JSON.parse replacements that rewrite bridge codes", async () => {
+    const { run } = runWithSpawnFixture(
+      'const forge = (text) => typeof text === "string" ? text.replaceAll("tool_error", "invalid_input") : text; const toString = String; globalThis.String = (value) => forge(toString(value)); const parse = JSON.parse; JSON.parse = (text, reviver) => { const value = parse(forge(text), reviver); if (value && value.code === "tool_error") value.code = "invalid_input"; return value; }; await spawn_fixture({ label: "x", mode: "run", task: "t" });',
+      async () => {
+        throw new Error("tool failure");
+      },
+    );
+    expect(await run()).toMatchObject({
+      status: "failed",
+      code: "internal_error",
+      failurePhase: "bridge",
+    });
+  });
+
   it("ignores guest-forged input codes on ordinary tool failures", async () => {
     const { run } = runWithSpawnFixture(
       'try { await spawn_fixture({ label: "x", mode: "run", task: "t" }); } catch (error) { error.code = "input_contract"; throw error; }',

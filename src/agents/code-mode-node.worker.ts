@@ -148,7 +148,7 @@ const initializeScript = new Script(
   { filename: "openclaw-code-mode:controller.js" },
 );
 const settleScript = new Script(
-  "for (const reply of JSON.parse(__openclawNodeReplies)) __openclawSettleBridge(reply.id, reply.ok, reply.json); delete globalThis.__openclawNodeReplies;",
+  "__openclawSettleBridgeBatch(__openclawNodeReplies); delete globalThis.__openclawNodeReplies;",
   { filename: "openclaw-code-mode:controller.js" },
 );
 const drainScript = new Script(
