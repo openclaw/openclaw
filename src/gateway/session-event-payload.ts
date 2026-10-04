@@ -176,7 +176,11 @@ export function buildGatewaySessionSnapshot(params: {
       eventStartedAt: event.data?.startedAt,
       currentStartedAt: storedRow.startedAt,
     })
-      ? deriveGatewaySessionLifecycleProjectionPatch({ entry: lifecycleRow, event })
+      ? deriveGatewaySessionLifecycleProjectionPatch({
+          entry: lifecycleRow,
+          sessionKey: storedRow.key,
+          event,
+        })
       : {};
   const sessionRow = { ...storedRow, ...patch };
   if (Object.hasOwn(patch, "lastActivityAt")) {

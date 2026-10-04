@@ -139,7 +139,10 @@ function recordLifecycleFence(entry: SessionEntry, run: RestartRecoveryRun): voi
   ]);
 }
 
-export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: string): boolean {
+export function isMainRestartRecoveryCandidate(
+  entry: Pick<SessionEntry, "spawnDepth" | "subagentRole">,
+  sessionKey: string,
+): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
     return false;
   }
@@ -151,6 +154,24 @@ export function isMainRestartRecoveryCandidate(entry: SessionEntry, sessionKey: 
     !isCronSessionKey(sessionKey) &&
     !isAcpSessionKey(sessionKey)
   );
+}
+
+/** A restart ends execution even when another owner decides how to continue the task. */
+export function buildRestartInterruptedSessionPatch(
+  entry: Pick<SessionEntry, "startedAt">,
+  endedAt: number,
+) {
+  return {
+    status: "interrupted" as const,
+    abortedLastRun: true,
+    lastRunError: "Run interrupted by a Gateway restart.",
+    endedAt,
+    runtimeMs:
+      typeof entry.startedAt === "number" && Number.isFinite(entry.startedAt)
+        ? Math.max(0, endedAt - entry.startedAt)
+        : undefined,
+    updatedAt: endedAt,
+  };
 }
 
 export function isMainSessionRecoveryPending(entry: SessionEntry, sessionKey: string): boolean {

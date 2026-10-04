@@ -8,6 +8,10 @@ import {
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
+import {
+  buildRestartInterruptedSessionPatch,
+  isMainRestartRecoveryCandidate,
+} from "../agents/main-session-recovery/main-session-recovery-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import { buildUpdatedSessionGoalStatus } from "../config/sessions/goals-transitions.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
@@ -78,6 +82,8 @@ type PersistedLifecycleSessionShape = Pick<
   | "restartRecoveryForceSafeTools"
   | "mainRestartRecovery"
   | "lifecycleRunId"
+  | "spawnDepth"
+  | "subagentRole"
 >;
 
 type GatewaySessionLifecycleSnapshot = Partial<
@@ -154,7 +160,10 @@ function resolveRuntimeMs(params: {
 }
 
 export function deriveGatewaySessionLifecycleSnapshot(params: {
-  session?: Partial<Pick<SessionEntry, keyof LifecycleSessionShape>> | null;
+  session?: Partial<
+    Pick<SessionEntry, keyof LifecycleSessionShape | "spawnDepth" | "subagentRole">
+  > | null;
+  sessionKey?: string;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const phase = resolveLifecyclePhase(params.event);
@@ -190,6 +199,14 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   // Use the normalized outcome so a prior hard timeout still owns the terminal state.
   const interruptedForRestart =
     terminal?.reason === "cancelled" && terminal.stopReason === "restart";
+  if (
+    interruptedForRestart &&
+    params.sessionKey &&
+    !isMainRestartRecoveryCandidate(existing ?? {}, params.sessionKey) &&
+    endedAt !== undefined
+  ) {
+    return { startedAt, ...buildRestartInterruptedSessionPatch({ startedAt }, endedAt) };
+  }
   const status =
     terminal && !interruptedForRestart
       ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
@@ -218,6 +235,7 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
 
 function derivePersistedSessionLifecyclePatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
+  sessionKey?: string;
   event: LifecycleEventLike;
 }): Partial<PersistedLifecycleSessionShape> {
   const phase = resolveLifecyclePhase(params.event);
@@ -226,12 +244,8 @@ function derivePersistedSessionLifecyclePatch(params: {
     return {};
   }
   const snapshot = deriveGatewaySessionLifecycleSnapshot({
-    session: params.entry
-      ? {
-          ...params.entry,
-          status: params.entry.status === "interrupted" ? "failed" : params.entry.status,
-        }
-      : undefined,
+    sessionKey: params.sessionKey,
+    session: params.entry,
     event: params.event,
   });
   const snapshotPatch: Partial<PersistedLifecycleSessionShape> = {
@@ -239,7 +253,9 @@ function derivePersistedSessionLifecyclePatch(params: {
     updatedAt: typeof snapshot.updatedAt === "number" ? snapshot.updatedAt : undefined,
     ...(snapshot.status === "running" && snapshot.abortedLastRun === true
       ? { restartRecoveryForceSafeTools: true }
-      : {}),
+      : snapshot.status === "interrupted"
+        ? { restartRecoveryForceSafeTools: undefined }
+        : {}),
   };
   const projection = projectMainSessionRecoveryLifecycle({
     currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
@@ -266,6 +282,7 @@ function derivePersistedSessionLifecyclePatch(params: {
 
 export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   entry?: Partial<PersistedLifecycleSessionShape> | null;
+  sessionKey?: string;
   event: LifecycleEventLike;
 }): GatewaySessionLifecycleSnapshot {
   const {
@@ -276,9 +293,7 @@ export function deriveGatewaySessionLifecycleProjectionPatch(params: {
   } = derivePersistedSessionLifecyclePatch(params);
   const { status, ...fields } = patch;
   // Suppressed events are no-ops; present undefined fields still intentionally clear state.
-  return Object.hasOwn(patch, "status")
-    ? { ...fields, status: status === "interrupted" ? "failed" : status }
-    : fields;
+  return Object.hasOwn(patch, "status") ? { ...fields, status } : fields;
 }
 
 /**
@@ -454,6 +469,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       const patch: Partial<PersistedLifecycleSessionShape> &
         Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
         entry,
+        sessionKey: sessionEntry.canonicalKey,
         event: params.event,
       });
       if (providerReview && Object.keys(patch).length > 0) {

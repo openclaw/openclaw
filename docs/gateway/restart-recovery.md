@@ -733,6 +733,7 @@ Subagent runs are persisted in the shared SQLite state database, so the
 subagent registry survives the process. On boot, interrupted child runs settle
 through their normal completion path. They are not automatically relaunched.
 The parent receives the interruption outcome and owns finishing the user's task.
+Restart-aborted child sessions without a retained recovery owner, including dashboard-created children, are recorded as interrupted instead of running, and startup repairs older restart markers before the Gateway reports ready.
 Its recovery input lists current unfinished child session and run identities,
 including children interrupted by the restart. Older runs superseded by a newer
 child run are omitted, as are records from another store, parent session, or

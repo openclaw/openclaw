@@ -19,9 +19,15 @@ import {
   isAgentEventLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
-import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
+import { isAcpSessionKey, isCronSessionKey } from "../../routing/session-key.js";
+import {
+  captureGatewaySessionWorkAdmissions,
+  isSessionWorkAdmissionActive,
+} from "../../sessions/session-lifecycle-admission.js";
+import { hasSubagentSessionRecoveryOwner } from "../subagents/registry/subagent-session-reconciliation.js";
 import { createCurrentProcessOwnerLookup } from "./main-session-recovery-live-owners.js";
 import {
+  buildRestartInterruptedSessionPatch,
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,
   isMainSessionRecoveryReconciliationCandidate,
@@ -58,6 +64,7 @@ async function markRecoveryStore(params: {
         runs?: RestartRecoveryRun[];
       }
     | { action: "retire_terminal" }
+    | { action: "settle_interrupted" }
     | { action: "restore_yielded"; isCurrent: () => boolean }
     | undefined;
 }) {
@@ -80,6 +87,17 @@ async function markRecoveryStore(params: {
       for (const { sessionKey, entry } of entries) {
         const plan = params.plan(entry, sessionKey);
         if (!plan) {
+          continue;
+        }
+        if (plan.action === "settle_interrupted") {
+          Object.assign(entry, buildRestartInterruptedSessionPatch(entry, entry.updatedAt), {
+            activeWriterRunId: undefined,
+            lifecycleRunId: undefined,
+            lastRunId: entry.lifecycleRunId,
+            restartRecoveryForceSafeTools: undefined,
+          });
+          replacements.push({ sessionKey, entry });
+          counts.skipped++;
           continue;
         }
         if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
@@ -286,6 +304,7 @@ export async function markRestartAbortedMainSessions(params: {
 
 type OrphanMarkParams = {
   cfg?: OpenClawConfig;
+  stateDir?: string;
   activeSessionIds?: Iterable<string>;
   activeSessionKeys?: Iterable<string>;
   updatedBeforeMs?: number;
@@ -341,6 +360,37 @@ async function markOrphanedMainSessionStore(
         hasCurrentProcessOwner(entry, sessionKey);
       if (hasLiveOwner()) {
         return undefined;
+      }
+      if (!isMainRestartRecoveryCandidate(entry, sessionKey)) {
+        // Older restart terminals left excluded children running. Their native
+        // registry, when present, still owns completion and parent notification.
+        if (
+          isCronSessionKey(sessionKey) ||
+          isAcpSessionKey(sessionKey) ||
+          entry.abortedLastRun !== true ||
+          entry.restartRecoveryForceSafeTools !== true ||
+          entry.mainRestartRecovery ||
+          entry.restartRecoveryRuns?.length ||
+          entry.subagentRecovery ||
+          entry.pendingFinalDelivery
+        ) {
+          return undefined;
+        }
+        const hasRecoveryOwner = () =>
+          hasLiveOwner() ||
+          isSessionWorkAdmissionActive(params.target.storePath, [sessionKey, entry.sessionId]) ||
+          hasSubagentSessionRecoveryOwner({
+            sessionKey,
+            sessionId: entry.sessionId,
+            env: params.stateDir
+              ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
+              : process.env,
+          });
+        if (hasRecoveryOwner()) {
+          return undefined;
+        }
+        orphanChecks.push(hasRecoveryOwner);
+        return { action: "settle_interrupted" };
       }
       const continuation = captureYieldedMainSessionContinuation({
         storeAgentId: params.target.agentId,
