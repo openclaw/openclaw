@@ -52,8 +52,14 @@ export type WorkboardSessionFacts = {
     assessment?: string;
     revision: number;
   };
-  pullRequests: Array<{ number: number; state: "open" | "draft" | "merged" | "closed" }>;
+  pullRequests: Array<{
+    number: number;
+    state: "open" | "draft" | "merged" | "closed";
+    url?: string;
+    title?: string;
+  }>;
   pullRequestsUnavailable?: boolean;
+  pullRequestsRateLimited?: true;
   archived: boolean;
   lastActivityAt: number;
 };

@@ -16,9 +16,15 @@ export type RuntimeSessionFacts = {
     assessment?: string;
     revision: number;
   };
-  pullRequests: Array<{ number: number; state: "open" | "draft" | "merged" | "closed" }>;
+  pullRequests: Array<{
+    number: number;
+    state: "open" | "draft" | "merged" | "closed";
+    url?: string;
+    title?: string;
+  }>;
   /** Unknown or stale PR state must not be interpreted as a confirmed empty list. */
   pullRequestsUnavailable?: boolean;
+  pullRequestsRateLimited?: true;
   archived: boolean;
   lastActivityAt: number;
 };

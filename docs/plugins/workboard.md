@@ -123,7 +123,9 @@ Set `scope.includeAutomation: true` to include automation and system sessions, o
 options. Existing boards use the same defaults without a migration. Each session appears in
 exactly one column. Open a tile to continue its conversation; the tile also shows
 its agent, run state, observer headline when available, pull requests, and recent
-activity. The agent filter narrows the displayed sessions without changing the
+activity. Message previews are plain text: Markdown formatting and HTML are removed,
+link labels are retained, and whitespace is collapsed before the 400-character limit.
+The agent filter narrows the displayed sessions without changing the
 saved board scope.
 
 **People filter:** Choose **Everyone** (the default), **Involving me**, or a person
