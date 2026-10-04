@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -125,7 +126,12 @@ it.each([false, true])(
       );
       expect(inject).toHaveBeenCalledTimes(successor ? 1 : 0);
       expect(resetIdentities).toEqual(successor ? [] : ["reset"]);
-      expect(readSessionProgressCard(fixture.database.path, reset.sessionKey)).toBeNull();
+      const reader = new DatabaseSync(fixture.database.path, { readOnly: true });
+      try {
+        expect(readSessionProgressCard(reader, reset.sessionKey)).toBeNull();
+      } finally {
+        reader.close();
+      }
       expect(notifications).toEqual([true]);
     });
   },
